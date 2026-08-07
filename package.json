@@ -1,0 +1,12 @@
+{
+  "name": "gkuc-siteops",
+  "private": true,
+  "version": "1.0.0",
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter './frontend' --filter './backend' dev",
+    "build": "pnpm --filter './frontend' build",
+    "start": "pnpm --filter './backend' start",
+    "test": "pnpm --filter './backend' test"
+  }
+}

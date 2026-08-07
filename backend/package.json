@@ -1,0 +1,8 @@
+{
+  "name": "@gkuc/backend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": { "dev": "node --watch src/index.js", "start": "node src/index.js", "test": "node --test" },
+  "dependencies": { "dotenv": "16.4.7", "express": "4.21.2", "helmet": "8.0.0", "mysql2": "3.12.0", "zod": "3.24.2" }
+}

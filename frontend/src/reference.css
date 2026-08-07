@@ -1,0 +1,5 @@
+.site-spotlight {
+  background-image:
+    linear-gradient(180deg, transparent 26%, rgba(10, 35, 53, 0.82)),
+    url('/construction-site.jpg');
+}
