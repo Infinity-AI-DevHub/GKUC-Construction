@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { query, spendSql } from '../db.js';
+import { query, spendSql, today } from '../db.js';
 import { auth, wrap } from '../lib/http.js';
 
 const router = Router();
@@ -9,10 +9,10 @@ const router = Router();
  * spreadsheets compiled by hand from figures that were already out of date.
  */
 const range = req => {
-  const to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : new Date().toISOString().slice(0, 10);
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : today();
   const fallback = new Date(to);
   fallback.setDate(fallback.getDate() - 30);
-  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : fallback.toISOString().slice(0, 10);
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : today(fallback);
   return { from, to };
 };
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Download } from 'lucide-react';
-import { api, todayInput } from '../api.js';
+import { api, localDate, todayInput } from '../api.js';
 import { Field, Page, Row, Table, Tabs } from '../ui.jsx';
 
 const REPORTS = [
@@ -29,7 +29,7 @@ export default function Reports() {
     const to = todayInput();
     const from = new Date();
     from.setDate(from.getDate() - 30);
-    return { from: from.toISOString().slice(0, 10), to };
+    return { from: localDate(from), to };
   });
   const [report, setReport] = useState(null);
   const [error, setError] = useState('');

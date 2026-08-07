@@ -1,4 +1,4 @@
-import { hashPassword, query, transaction } from './db.js';
+import { hashPassword, query, today, transaction } from './db.js';
 
 const DEMO_PASSWORD = process.env.SEED_PASSWORD || 'GKUC@2026';
 
@@ -6,7 +6,7 @@ const DEMO_PASSWORD = process.env.SEED_PASSWORD || 'GKUC@2026';
 const shift = days => {
   const date = new Date();
   date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
+  return today(date);
 };
 
 export async function seedIfEmpty() {

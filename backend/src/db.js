@@ -19,8 +19,20 @@ const config = {
 export const pool = mysql.createPool(config);
 export const query = async (sql, params = []) => (await pool.execute(sql, params))[0];
 export const getOne = async (sql, params = []) => (await query(sql, params))[0];
-export const today = () => new Date().toISOString().slice(0, 10);
-export const clock = () => new Date().toISOString().slice(11, 19);
+/**
+ * "Today" means the local calendar day on the server, which is what MySQL's CURDATE()
+ * returns and what a site means by today. Deriving it from toISOString() would give the
+ * UTC day instead, so east of Greenwich the two disagree for the whole local morning and
+ * queries filtered on CURDATE() would find nothing.
+ */
+const pad = value => String(value).padStart(2, '0');
+export const today = (date = new Date()) =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+export const clock = (date = new Date()) =>
+  `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+
+/** Formats a DATE read back from MySQL, which arrives as UTC midnight. */
+export const isoDate = value => (value ? new Date(value).toISOString().slice(0, 10) : null);
 
 export function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   return `${salt}:${crypto.scryptSync(password, salt, 64).toString('hex')}`;

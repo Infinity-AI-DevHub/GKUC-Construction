@@ -16,24 +16,22 @@ const threshold = () => SEVERITY_ORDER[process.env.NOTIFY_MIN_SEVERITY || 'Warni
 
 const adapters = {
   Email: {
-    configured: () => Boolean(process.env.SMTP_URL || process.env.RESEND_API_KEY),
-    provider: () => (process.env.RESEND_API_KEY ? 'resend' : 'smtp'),
+    /* Only Resend is wired. SMTP would need its own adapter, so it must not report as
+       configured — otherwise every message records as Failed instead of Skipped. */
+    configured: () => Boolean(process.env.RESEND_API_KEY),
+    provider: () => 'resend',
     async send({ recipient, notification }) {
-      if (process.env.RESEND_API_KEY) {
-        const response = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-          body: JSON.stringify({
-            from: process.env.NOTIFY_EMAIL_FROM || 'siteops@gkuc.lk',
-            to: recipient,
-            subject: notification.title,
-            text: notification.message
-          })
-        });
-        if (!response.ok) throw new Error(`Resend responded ${response.status}`);
-        return;
-      }
-      throw new Error('SMTP transport is not implemented; set RESEND_API_KEY or add an SMTP adapter');
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          from: process.env.NOTIFY_EMAIL_FROM || 'siteops@gkuc.lk',
+          to: recipient,
+          subject: notification.title,
+          text: notification.message
+        })
+      });
+      if (!response.ok) throw new Error(`Resend responded ${response.status}`);
     }
   },
 

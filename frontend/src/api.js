@@ -30,8 +30,18 @@ export const money = value => `LKR ${(Number(value || 0) / 1000000).toFixed(1)}M
 export const rupees = value => `LKR ${Number(value || 0).toLocaleString('en-LK', { maximumFractionDigits: 0 })}`;
 export const initials = name => (name || '?').split(' ').map(part => part[0]).slice(0, 2).join('');
 export const shortDate = value => (value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+/* A date read back from the API arrives as UTC midnight, so it formats in UTC. */
 export const inputDate = value => (value ? new Date(value).toISOString().slice(0, 10) : '');
-export const todayInput = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * "Today" is the user's local calendar day, matching what the server stores. Using
+ * toISOString() here would send the UTC day and record work against the wrong date
+ * for anyone east of Greenwich during their morning.
+ */
+const pad = value => String(value).padStart(2, '0');
+export const localDate = (date = new Date()) =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+export const todayInput = () => localDate();
 export const slug = value => String(value || '').toLowerCase().replaceAll(' ', '-').replaceAll('/', '-');
 
 /** Days until a date, used for renewal and deadline copy. */

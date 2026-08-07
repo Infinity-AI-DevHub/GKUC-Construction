@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, getOne, pool, query } from '../db.js';
+import { audit, getOne, pool, query, today } from '../db.js';
 import { auth, permit, roles, validate, wrap } from '../lib/http.js';
 import { dueLabel } from './bootstrap.js';
 
@@ -45,7 +45,7 @@ export function serviceDue(vehicle) {
     dueDate = next.toISOString().slice(0, 10);
   }
   if (byDistance === null && !dueDate) return null;
-  return { kmRemaining: byDistance, dueDate, overdue: (byDistance !== null && byDistance <= 0) || (dueDate && dueDate < new Date().toISOString().slice(0, 10)) };
+  return { kmRemaining: byDistance, dueDate, overdue: (byDistance !== null && byDistance <= 0) || (dueDate && dueDate < today()) };
 }
 
 router.get('/', auth, wrap(async (_req, res) => {

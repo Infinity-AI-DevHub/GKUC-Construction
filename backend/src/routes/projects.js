@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, getOne, pool, query, spendSql } from '../db.js';
+import { audit, getOne, pool, query, spendSql, today } from '../db.js';
 import { auth, permit, roles, validate, wrap } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
 
@@ -99,7 +99,7 @@ router.patch('/milestones/:id', auth, permit(roles.projects), validate(z.object(
 })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM project_milestones WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Milestone not found' });
-  const completed = req.body.status === 'Completed' ? new Date().toISOString().slice(0, 10) : null;
+  const completed = req.body.status === 'Completed' ? today() : null;
   await query('UPDATE project_milestones SET status=?,completed_at=? WHERE id=?', [req.body.status, completed, req.params.id]);
   const after = await getOne('SELECT * FROM project_milestones WHERE id=?', [req.params.id]);
   await audit(pool, req.user.id, 'UPDATE', 'milestone', after.id, before, after, req.ip);

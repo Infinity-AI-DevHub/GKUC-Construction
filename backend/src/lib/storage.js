@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { today } from '../db.js';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -41,7 +42,7 @@ const safeName = name => (name || 'file')
 
 /** Storage keys are opaque and unguessable so a leaked URL cannot be walked. */
 const buildKey = (folder, filename, mime) => {
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = today();
   const extension = ALLOWED.get(mime) || path.extname(filename).replace('.', '').toLowerCase() || 'bin';
   const base = safeName(path.basename(filename, path.extname(filename)));
   return `${folder}/${stamp}/${crypto.randomUUID()}-${base}.${extension}`;

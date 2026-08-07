@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { query, spendSql } from '../db.js';
+import { query, spendSql, today } from '../db.js';
 import { auth, wrap } from '../lib/http.js';
 import { runAlertScan } from '../alerts.js';
 
@@ -10,7 +10,7 @@ export const stockState = material =>
     : Number(material.stock) < Number(material.minimum) * 0.5 ? 'Critical' : 'Low stock';
 
 export const dueLabel = date => {
-  const remaining = Math.ceil((new Date(date) - new Date(new Date().toISOString().slice(0, 10))) / 86400000);
+  const remaining = Math.ceil((new Date(date) - new Date(today())) / 86400000);
   return remaining < 0 ? `Overdue ${Math.abs(remaining)} days` : `${remaining} days`;
 };
 
@@ -65,7 +65,7 @@ router.get('/', auth, wrap(async (req, res) => {
   ]);
 
   /* Delayed = past its target completion date with work outstanding, or flagged at risk. */
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = today();
   const delayed = projects.filter(project =>
     project.health === 'At risk'
     || (project.end_date && new Date(project.end_date).toISOString().slice(0, 10) < todayIso && project.progress < 100));

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowDownToLine, Check, Clock3, PencilLine, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
-import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { api, localDate, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 
@@ -211,7 +211,7 @@ function PayrollForm({ close, reload }) {
     await post('/payroll', { periodStart: values.periodStart, periodEnd: values.periodEnd });
     await reload();
   }}>
-    <Field name="periodStart" label="Period from" type="date" defaultValue={first.toISOString().slice(0, 10)} />
+    <Field name="periodStart" label="Period from" type="date" defaultValue={localDate(first)} />
     <Field name="periodEnd" label="Period to" type="date" defaultValue={todayInput()} />
     <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
       Days present come from recorded attendance, overtime from approved overtime records, and
