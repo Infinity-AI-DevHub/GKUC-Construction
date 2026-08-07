@@ -7,6 +7,6 @@
     "dev": "pnpm --parallel --filter './frontend' --filter './backend' dev",
     "build": "pnpm --filter './frontend' build",
     "start": "pnpm --filter './backend' start",
-    "test": "pnpm --filter './backend' test"
+    "test": "pnpm --filter './backend' test && pnpm --filter './frontend' test"
   }
 }

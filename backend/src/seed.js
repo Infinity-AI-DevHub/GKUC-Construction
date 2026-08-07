@@ -80,6 +80,17 @@ export async function seedIfEmpty() {
       await run(`INSERT INTO attendance (employee_name,role,project_id,work_date,check_in,check_out,state,employee_id)
         VALUES (?,?,?,?,?,?,?,?)`, [name, role, project, shift(0), checkIn, checkOut, state, employeeId]);
     }
+    /* A week of history so the dashboard's activity chart has something real to draw. */
+    for (let back = 1; back <= 6; back += 1) {
+      const day = shift(-back);
+      const weekday = new Date(day).getDay();
+      if (weekday === 0) continue;
+      for (const [name, role, project, checkIn, , , employeeId] of attendance) {
+        if (!checkIn) continue;
+        await run(`INSERT INTO attendance (employee_name,role,project_id,work_date,check_in,check_out,state,employee_id)
+          VALUES (?,?,?,?,?,'16:30','Checked out',?)`, [name, role, project, day, checkIn, employeeId]);
+      }
+    }
 
     const materials = [
       ['Portland cement 50kg', 'bags', 84, 100, 'Riverside Store', 2450],
@@ -134,9 +145,9 @@ export async function seedIfEmpty() {
     const boqId = await insert(`INSERT INTO boqs (project_id,reference,title,status,total,prepared_by,notes)
       VALUES (1,'BOQ-2026-0001','Riverside Residences — structural package','Approved',0,8,'Approved for construction')`, []);
     const boqItems = [
-      [boqId, 'Material', 'Grade 30 concrete supply', 'm³', 1850, 27500],
-      [boqId, 'Material', 'TMT reinforcement steel', 'kg', 96000, 268],
-      [boqId, 'Labour', 'Formwork and shuttering crew', 'day', 420, 22000],
+      [boqId, 'Material', 'Grade 30 concrete supply', 'm³', 720, 27500],
+      [boqId, 'Material', 'TMT reinforcement steel', 'kg', 46000, 268],
+      [boqId, 'Labour', 'Formwork and shuttering crew', 'day', 310, 22000],
       [boqId, 'Equipment', 'Tower crane hire', 'month', 9, 750000],
       [boqId, 'Subcontract', 'Waterproofing works', 'm²', 2400, 1850]
     ];
@@ -147,6 +158,8 @@ export async function seedIfEmpty() {
         [id, category, description, unit, quantity, rate, quantity * rate]);
     }
     await run('UPDATE boqs SET total=?, approved_by=1, approved_at=UTC_TIMESTAMP() WHERE id=?', [boqTotal, boqId]);
+    /* The approved BOQ is the project's budget, exactly as it works once the system is live. */
+    await run('UPDATE projects SET budget=? WHERE id=1', [boqTotal]);
 
     const requestId = await insert(`INSERT INTO purchase_requests (reference,project_id,needed_by,notes,status,requested_by)
       VALUES ('PR-2026-0001',1,?,'Cement stock below minimum at Riverside Store','Pending',5)`, [shift(5)]);
@@ -180,6 +193,12 @@ export async function seedIfEmpty() {
       (1,'Structural frame complete',?,'In progress'),(1,'Roof slab casting',?,'Pending'),
       (2,'Portal frame erection complete',?,'In progress'),(3,'Handover to client',?,'Pending')`,
       [shift(30), shift(75), shift(22), shift(35)]);
+
+    await run(`INSERT INTO inquiries (reference,customer_name,contact_person,phone,location,description,expected_value,expected_start,source,status,created_by)
+      VALUES ('INQ-2026-0001','Silva Holdings','Anura Silva','077 3312450','Nugegoda',
+        'Three-storey office building, approximately 8,500 sq ft.',42000000,?,'Referral','In discussion',1),
+             ('INQ-2026-0002','Perera Enterprises','Nimal Perera','071 8890234','Negombo',
+        'Warehouse extension with loading bay.',18500000,?,'Website','New',1)`, [shift(60), shift(95)]);
 
     await run(`INSERT INTO daily_reports (project_id,supervisor,report_date,workforce,work_completed,issue,weather,delay_hours,created_by)
       VALUES (1,'Dilan Fernando',?,34,'Level 4 columns and stair core','Concrete pump delayed by 55 minutes','Cloudy',0.9,4),

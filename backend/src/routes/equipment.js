@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, transaction } from '../db.js';
@@ -6,13 +7,34 @@ import { auth, permit, roles, validate, wrap } from '../lib/http.js';
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-const select = `SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_date purchaseDate,e.purchase_cost purchaseCost,e.notes,
+const select = `SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_date purchaseDate,e.purchase_cost purchaseCost,e.notes,e.qr_token qrToken,
   (SELECT p.name FROM equipment_assignments a JOIN projects p ON p.id=a.project_id
     WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) project,
   (SELECT a.assigned_to FROM equipment_assignments a WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) holder
   FROM equipment e`;
 
 router.get('/', auth, wrap(async (_req, res) => res.json(await query(`${select} ORDER BY e.code`))));
+
+/**
+ * PID 2.9 "QR Code Support". Each asset carries an opaque token; a label printed with
+ * that token resolves to the asset here, so a phone camera on site answers "what is this
+ * and who has it" without anyone typing an asset code.
+ */
+router.get('/scan/:token', auth, wrap(async (req, res) => {
+  const item = await getOne(`${select} WHERE e.qr_token=?`, [req.params.token]);
+  if (!item) return res.status(404).json({ error: 'No equipment matches that code' });
+  res.json(item);
+}));
+
+/** Issues (or reissues) the token behind an asset's printed label. */
+router.post('/:id/qr', auth, permit(roles.projects), wrap(async (req, res) => {
+  const item = await getOne('SELECT * FROM equipment WHERE id=?', [req.params.id]);
+  if (!item) return res.status(404).json({ error: 'Equipment not found' });
+  const token = crypto.randomBytes(16).toString('hex');
+  await query('UPDATE equipment SET qr_token=? WHERE id=?', [token, item.id]);
+  await audit(pool, req.user.id, 'QR_ISSUED', 'equipment', item.id, { qrToken: item.qr_token }, { qrToken: token }, req.ip);
+  res.json({ id: item.id, code: item.code, qrToken: token });
+}));
 
 router.get('/:id', auth, wrap(async (req, res) => {
   const item = await getOne(`${select} WHERE e.id=?`, [req.params.id]);

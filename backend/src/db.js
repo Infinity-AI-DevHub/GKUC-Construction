@@ -53,6 +53,14 @@ export async function audit(executor, userId, action, entity, entityId, before, 
     VALUES (?,?,?,?,?,?,?)`, [userId || null, action, entity, String(entityId || ''), before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null, ip]);
 }
 
+/**
+ * Total recorded cost for a project: the opening figure carried on the project record
+ * plus every expense captured since. Used everywhere budget-vs-actual is reported so
+ * the dashboard, the finance module and the alert scanner never disagree.
+ */
+export const spendSql = alias =>
+  `(${alias}.actual + COALESCE((SELECT SUM(x.amount) FROM expenses x WHERE x.project_id=${alias}.id),0))`;
+
 /** Reserves the next document number for a series, e.g. PR-2026-0007. */
 export async function nextReference(prefix, table) {
   const row = await getOne(`SELECT reference FROM ${table} ORDER BY id DESC LIMIT 1`);

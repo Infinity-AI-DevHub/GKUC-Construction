@@ -87,8 +87,8 @@
   .timeline-grid{height:165px}
 }
 
-/* 6. Tablet: 768px - 1023px */
-@media (min-width: 768px) and (max-width: 1023px) {
+/* 6. Tablet: 761px - 1023px (below 761px is handled in styles.css) */
+@media (min-width: 761px) and (max-width: 1023px) {
   aside { position:fixed;inset:8px auto 8px 8px;top:8px;width:270px;height:calc(100vh - 16px);margin:0;padding:22px 14px;display:flex;flex-direction:column;align-items:stretch;transform:translateX(-105%);transition:transform .2s; }
   aside.open{transform:translateX(0)}.brand>div{display:block}.brand{padding:0 8px 18px;border-bottom:1px solid #d5e2ea}nav{padding-top:16px;display:flex;flex-direction:column;overflow:visible}nav button{height:46px;padding:0 13px;font-size:12px}nav button svg{display:block}.sidebar-bottom{margin-top:auto;margin-left:0;padding:12px 0 0;border-left:0;border-top:1px solid #d5e2ea;flex-direction:column;align-items:stretch}.sidebar-bottom>button{width:100%;border-radius:7px;font-size:11px;justify-content:flex-start;padding:0 12px}.profile{width:100%;min-width:0}.profile>div,.profile>svg{display:block}
   .workspace header{display:flex;background:rgba(245,250,253,.94);color:#172632}.menu-btn{display:grid;background:white;color:#172632;border-color:#d5e2ea}.mobile-brand{display:block;color:#172632}
@@ -105,3 +105,97 @@
   main{padding:24px 14px 42px}.reference-welcome h1{font-size:27px}.reference-welcome p{font-size:9px}.welcome-counters{gap:12px}.welcome-counters b{font-size:25px}.welcome-counters span{font-size:8px}.project-pulse>span{width:132px;height:38px}.reference-grid{display:flex;flex-direction:column;gap:10px}.site-spotlight,.reference-card{min-height:235px}.site-spotlight h2{font-size:26px}.progress-number>strong{font-size:33px}.bar-chart{height:132px}.attendance-ring{width:142px;height:142px}.quick-control button{height:58px}.priority-board{min-height:385px}.priority-item{height:62px}.priority-item strong{font-size:10px}.priority-item small{font-size:8px}.activity-timeline{min-height:250px;padding-inline:12px}.timeline-grid{height:182px}.event{padding:7px}.event b{font-size:8px}.event small{font-size:7px}
   .page-heading h1{font-size:25px}.page-heading p{font-size:12px}.table-row{font-size:11px}.modal{width:calc(100% - 20px)}
 }
+
+/* 9. Elements introduced by the expanded module set, styled with the existing palette */
+.bell-wrap { position:relative;flex:none }
+.bell-wrap.topbar { display:none }
+.alert-button { position:relative;width:34px;height:34px;padding:0;border:1px solid #35403a;border-radius:50%;background:transparent;color:#aeb8b2;display:grid;place-items:center;flex:none }
+.alert-button:hover { background:#202a25;color:white }
+.alert-button i { position:absolute;top:5px;right:5px;width:8px;height:8px;border-radius:50%;background:var(--red);border:1px solid #111815 }
+.alert-button span { display:none }
+
+/* Alert dropdown — the same card treatment as the tables it summarises. */
+.bell-menu { position:absolute;top:calc(100% + 10px);right:0;z-index:60;width:min(360px,calc(100vw - 32px));background:white;border-radius:8px;box-shadow:0 18px 44px rgba(16,32,24,.22);overflow:hidden;color:#151c19;text-align:left }
+.bell-menu-head { height:48px;padding:0 14px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#f5f7f6 }
+.bell-menu-head h2 { font:700 13px Manrope;margin:0 }
+.bell-menu-head button { border:0;background:transparent;color:#176fda;font-size:10px;font-weight:600;padding:4px }
+.bell-menu-list { max-height:340px;overflow-y:auto }
+.bell-item { width:100%;border:0;border-bottom:1px solid #edf0ed;background:transparent;text-align:left;padding:11px 14px;display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center }
+.bell-item:hover { background:#f5f9fc }
+.bell-item strong { font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+.bell-item small { font-size:9px;color:var(--muted);white-space:nowrap }
+.bell-item p { grid-column:1/-1;margin:0;font-size:10px;color:var(--muted);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden }
+.bell-item.read strong { font-weight:500;color:#5c6b62 }
+.bell-empty { margin:0;padding:22px 14px;font-size:11px;color:var(--muted);text-align:center }
+.bell-menu-foot { width:100%;border:0;border-top:1px solid var(--line);background:#f5f7f6;color:#176fda;font-size:11px;font-weight:600;padding:12px }
+.bell-menu-foot:hover { background:#eef3f7 }
+.toolbar label { font-size:10px;font-weight:700;color:#4d5951;display:grid;gap:6px }
+.toolbar label input,.toolbar label select { border:1px solid var(--line);border-radius:5px;padding:8px 10px;font-size:11px;background:white;outline:none }
+.table-row .status-button { justify-self:start;width:max-content }
+.table-row input[type="number"] { width:100%;border:1px solid var(--line);border-radius:5px;padding:6px 8px;font-size:11px;background:white;outline:none }
+.report-form .table-panel { box-shadow:none;border:1px solid var(--line) }
+.report-form .table-panel .table-row { min-height:46px;padding-inline:12px }
+.report-form .table-head,.report-form .table-row { min-width:0 }
+.report-form textarea[readonly] { background:#f5f7f6;color:#3b463f }
+.badge.pending,.badge.queued,.badge.draft,.badge.issued,.badge.partially-received,.badge.partially-paid,.badge.in-progress,.badge.submitted { background:#f7edd9;color:#a56c12 }
+.badge.approved,.badge.paid,.badge.received,.badge.active,.badge.read { background:#e9f8ca;color:#4f740c }
+.badge.rejected,.badge.unpaid,.badge.delayed,.badge.cancelled,.badge.suspended,.badge.left { background:#f8e7e4;color:#a8443d }
+.badge.maintenance,.badge.on-leave,.badge.retired,.badge.inactive { background:#e8f0f6;color:#3e6e8b }
+@media (max-width:1460px) { .sidebar-bottom .alert-button { order:-1 } }
+@media (max-width:1023px) {
+  .bell-wrap.bar { display:none }
+  .bell-wrap.topbar { display:block }
+  .workspace header .alert-button { border-color:#334039;background:#202a25;color:white;border-radius:7px;width:36px;height:36px }
+  .workspace header .alert-button i { border-color:#202a25 }
+  .sidebar-bottom .profile { padding:0 12px }
+}
+
+/* The compact top bar is used at every width below the horizontal nav bar (<=1023px).
+   The signed-in profile lives in the drawer at these widths, so it is not repeated here. */
+@media (max-width: 1023px) {
+  .workspace header { display:flex;justify-content:space-between;gap:12px;padding:0 16px }
+  .workspace header .header-user { display:none }
+  .workspace header .header-actions { gap:8px;margin-left:auto }
+  .mobile-brand { display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }
+}
+
+/* Attachments — same card language as the tables they sit beside */
+.attachments { background:white;border-radius:8px;box-shadow:0 10px 30px #12241b0b;overflow:hidden }
+.report-form .attachments { box-shadow:none;border:1px solid var(--line) }
+.attachments-head { height:48px;padding:0 14px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#f5f7f6 }
+.attachments-head h2 { font:700 13px Manrope;margin:0 }
+.attachment-add { height:31px;padding:0 11px;font-size:11px;cursor:pointer;gap:7px }
+.attachment-meta { display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;padding:12px 14px;border-bottom:1px solid #edf0ed }
+.attachment-meta label { font-size:10px;font-weight:700;color:#4d5951;display:grid;gap:6px }
+.attachment-meta input { border:1px solid var(--line);border-radius:5px;padding:8px 10px;font-size:11px;outline:none }
+.attachment-list { display:flex;flex-direction:column }
+.attachment-item { display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid #edf0ed }
+.attachment-item:last-child { border-bottom:0 }
+.attachment-item img { width:52px;height:44px;object-fit:cover;border-radius:6px;display:block }
+.attachment-icon { width:52px;height:44px;border-radius:6px;background:#eef3f7;color:#3e6e8b;display:grid;place-items:center }
+.attachment-item strong { display:block;font-size:11px }
+.attachment-item small { display:block;font-size:9px;color:var(--muted);margin:3px 0 4px }
+.attachment-item .badge { margin-right:5px }
+.attachment-empty { margin:0;padding:18px 14px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:7px;justify-content:center }
+.attachments .form-error { margin:10px 14px }
+
+/* Project timeline */
+.timeline-head { display:flex;align-items:center;justify-content:space-between;font-size:10px;color:var(--muted) }
+.timeline-head strong { font:700 12px Manrope;color:#172632 }
+.project-timeline { padding:6px 0 2px }
+.timeline-track { position:relative;height:10px;border-radius:6px;background:#e8edef;margin:14px 0 8px }
+.timeline-progress { position:absolute;inset:0 auto 0 0;border-radius:6px;background:#176fda;display:block }
+.timeline-pin { position:absolute;top:-5px;width:20px;height:20px;border-radius:50%;border:3px solid white;background:#8fa3af;box-shadow:0 2px 6px #12241b26 }
+.timeline-pin.completed { background:#4f740c }
+.timeline-pin.in-progress { background:#176fda }
+.timeline-pin.delayed { background:var(--red) }
+.project-timeline small { font-size:9px;color:var(--muted) }
+
+/* Equipment QR label */
+.qr-panel { display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;background:#f5f7f6;border:1px solid var(--line);border-radius:8px;padding:14px }
+.qr-panel strong { display:block;font-size:12px }
+.qr-panel small { display:block;font-size:10px;color:var(--muted);margin:4px 0 6px }
+.qr-panel code { font-size:9px;color:#3e6e8b;word-break:break-all }
+.qr-panel > button { grid-column:1/-1;justify-self:start }
+.qr-code { border-radius:6px;background:white;flex:none }
+@media (max-width:520px){ .qr-panel { grid-template-columns:1fr;justify-items:center;text-align:center } }

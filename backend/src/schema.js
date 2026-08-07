@@ -394,6 +394,73 @@ async function createReportDetailTables() {
   ) ENGINE=InnoDB`);
 }
 
+/** Uploaded files. One table for every module so storage rules live in one place. */
+async function createAttachmentTables() {
+  await query(`CREATE TABLE IF NOT EXISTS attachments (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    owner_type ENUM('task','project','employee','report','vehicle','equipment') NOT NULL,
+    owner_id BIGINT UNSIGNED NOT NULL, storage_key VARCHAR(400) NOT NULL, url VARCHAR(600) NOT NULL,
+    filename VARCHAR(200) NOT NULL, mime VARCHAR(120) NOT NULL, size_bytes BIGINT UNSIGNED NOT NULL,
+    title VARCHAR(200) NULL, category VARCHAR(80) NULL, kind ENUM('File','Site photo') NOT NULL DEFAULT 'File',
+    expiry_date DATE NULL, uploaded_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_upload_user FOREIGN KEY(uploaded_by) REFERENCES users(id),
+    INDEX idx_attachment_owner(owner_type,owner_id), INDEX idx_attachment_expiry(expiry_date)
+  ) ENGINE=InnoDB`);
+}
+
+/** 2.2 payroll and performance, and PID section 3 step 1 (customer inquiry). */
+async function createLifecycleTables() {
+  await query(`CREATE TABLE IF NOT EXISTS inquiries (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, reference VARCHAR(60) NOT NULL UNIQUE,
+    customer_name VARCHAR(180) NOT NULL, contact_person VARCHAR(120) NULL, phone VARCHAR(40) NULL, email VARCHAR(190) NULL,
+    location VARCHAR(180) NOT NULL, description TEXT NOT NULL, expected_value DECIMAL(15,2) NOT NULL DEFAULT 0,
+    expected_start DATE NULL, source VARCHAR(80) NULL,
+    status ENUM('New','In discussion','Quoted','Won','Lost') NOT NULL DEFAULT 'New',
+    project_id BIGINT UNSIGNED NULL, lost_reason VARCHAR(400) NULL,
+    created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_inquiry_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_inquiry_user FOREIGN KEY(created_by) REFERENCES users(id), INDEX idx_inquiry_status(status)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS payroll_runs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, reference VARCHAR(60) NOT NULL UNIQUE,
+    period_start DATE NOT NULL, period_end DATE NOT NULL, status ENUM('Draft','Approved','Paid') NOT NULL DEFAULT 'Draft',
+    total DECIMAL(15,2) NOT NULL DEFAULT 0, created_by BIGINT UNSIGNED NOT NULL, approved_by BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_payroll_user FOREIGN KEY(created_by) REFERENCES users(id),
+    CONSTRAINT fk_payroll_approver FOREIGN KEY(approved_by) REFERENCES users(id),
+    UNIQUE KEY uq_payroll_period(period_start,period_end)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS payslips (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, run_id BIGINT UNSIGNED NOT NULL, employee_id BIGINT UNSIGNED NOT NULL,
+    days_present DECIMAL(5,1) NOT NULL DEFAULT 0, days_absent DECIMAL(5,1) NOT NULL DEFAULT 0,
+    overtime_hours DECIMAL(7,2) NOT NULL DEFAULT 0, basic DECIMAL(12,2) NOT NULL DEFAULT 0,
+    overtime_pay DECIMAL(12,2) NOT NULL DEFAULT 0, deductions DECIMAL(12,2) NOT NULL DEFAULT 0,
+    net_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
+    CONSTRAINT fk_payslip_run FOREIGN KEY(run_id) REFERENCES payroll_runs(id) ON DELETE CASCADE,
+    CONSTRAINT fk_payslip_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
+    UNIQUE KEY uq_run_employee(run_id,employee_id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS performance_reviews (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_id BIGINT UNSIGNED NOT NULL, review_date DATE NOT NULL,
+    period VARCHAR(60) NOT NULL, quality TINYINT UNSIGNED NOT NULL, productivity TINYINT UNSIGNED NOT NULL,
+    safety TINYINT UNSIGNED NOT NULL, reliability TINYINT UNSIGNED NOT NULL, overall DECIMAL(3,1) NOT NULL,
+    strengths VARCHAR(1000) NULL, improvements VARCHAR(1000) NULL, reviewer_id BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_review_employee FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+    CONSTRAINT fk_review_user FOREIGN KEY(reviewer_id) REFERENCES users(id),
+    CONSTRAINT chk_review_scores CHECK(quality BETWEEN 1 AND 5 AND productivity BETWEEN 1 AND 5
+      AND safety BETWEEN 1 AND 5 AND reliability BETWEEN 1 AND 5)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS notification_deliveries (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, notification_id BIGINT UNSIGNED NOT NULL,
+    channel ENUM('WhatsApp','SMS','Email') NOT NULL, recipient VARCHAR(190) NOT NULL,
+    status ENUM('Queued','Sent','Failed','Skipped') NOT NULL DEFAULT 'Queued', provider VARCHAR(60) NULL,
+    detail VARCHAR(500) NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_delivery_notification FOREIGN KEY(notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
+    INDEX idx_delivery_status(status)
+  ) ENGINE=InnoDB`);
+}
+
 /** Non-destructive upgrades for databases created by an earlier version. */
 async function migrateExistingInstalls() {
   await query(`ALTER TABLE users MODIFY role ENUM(${enumList(ROLES)}) NOT NULL`);
@@ -410,6 +477,15 @@ async function migrateExistingInstalls() {
   await addColumn('notifications', 'dedupe_key', 'VARCHAR(190) NULL');
   await addColumn('notifications', 'audience', 'VARCHAR(120) NULL');
   await addColumn('tasks', 'due_date', 'DATE NULL');
+  await addColumn('fleet', 'driver_employee_id', 'BIGINT UNSIGNED NULL');
+  await addColumn('fleet', 'service_interval_km', 'INT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn('fleet', 'service_interval_months', 'TINYINT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn('fleet', 'last_service_date', 'DATE NULL');
+  await addColumn('fleet', 'last_service_odometer', 'INT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn('equipment', 'qr_token', 'CHAR(32) NULL');
+  await addIndex('equipment', 'uq_equipment_qr', 'UNIQUE KEY uq_equipment_qr(qr_token)');
+  await addColumn('employees', 'photo_url', 'VARCHAR(600) NULL');
+  await addIndex('fleet', 'fk_fleet_driver', 'CONSTRAINT fk_fleet_driver FOREIGN KEY(driver_employee_id) REFERENCES employees(id)');
   await addIndex('notifications', 'uq_notification_dedupe', 'UNIQUE KEY uq_notification_dedupe(dedupe_key)');
   await addIndex('attendance', 'fk_attendance_employee', 'CONSTRAINT fk_attendance_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');
 }
@@ -423,5 +499,7 @@ export async function migrate() {
   await createAssetTables();
   await createFinanceTables();
   await createReportDetailTables();
+  await createAttachmentTables();
+  await createLifecycleTables();
   await migrateExistingInstalls();
 }

@@ -9,7 +9,10 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const DOC_TYPES = ['Insurance', 'Revenue licence', 'Emission test', 'Service', 'Fitness certificate'];
 
 const select = `SELECT f.id,f.vehicle,f.registration reg,f.driver,f.status,f.renewal_type renewal,f.due_date,f.odometer,
-  f.project_id projectId,p.name project FROM fleet f LEFT JOIN projects p ON p.id=f.project_id`;
+  f.project_id projectId,p.name project,f.driver_employee_id driverEmployeeId,e.name driverName,e.phone driverPhone,
+  f.service_interval_km serviceIntervalKm,f.service_interval_months serviceIntervalMonths,
+  f.last_service_date lastServiceDate,f.last_service_odometer lastServiceOdometer
+  FROM fleet f LEFT JOIN projects p ON p.id=f.project_id LEFT JOIN employees e ON e.id=f.driver_employee_id`;
 
 const fleetSchema = z.object({
   vehicle: z.string().min(2).max(180),
@@ -19,12 +22,35 @@ const fleetSchema = z.object({
   renewal: z.string().min(2).max(100),
   dueDate: isoDate,
   projectId: z.number().int().positive().nullable().optional(),
-  odometer: z.number().int().nonnegative().optional()
+  odometer: z.number().int().nonnegative().optional(),
+  driverEmployeeId: z.number().int().positive().nullable().optional(),
+  serviceIntervalKm: z.number().int().nonnegative().optional(),
+  serviceIntervalMonths: z.number().int().min(0).max(60).optional(),
+  lastServiceDate: isoDate.optional(),
+  lastServiceOdometer: z.number().int().nonnegative().optional()
 });
+
+/**
+ * The next service falls due on whichever comes first: the distance interval or the
+ * time interval. Returns null when neither has been configured for the vehicle.
+ */
+export function serviceDue(vehicle) {
+  const byDistance = vehicle.serviceIntervalKm
+    ? Number(vehicle.lastServiceOdometer || 0) + Number(vehicle.serviceIntervalKm) - Number(vehicle.odometer || 0)
+    : null;
+  let dueDate = null;
+  if (vehicle.serviceIntervalMonths && vehicle.lastServiceDate) {
+    const next = new Date(vehicle.lastServiceDate);
+    next.setMonth(next.getMonth() + Number(vehicle.serviceIntervalMonths));
+    dueDate = next.toISOString().slice(0, 10);
+  }
+  if (byDistance === null && !dueDate) return null;
+  return { kmRemaining: byDistance, dueDate, overdue: (byDistance !== null && byDistance <= 0) || (dueDate && dueDate < new Date().toISOString().slice(0, 10)) };
+}
 
 router.get('/', auth, wrap(async (_req, res) => {
   const vehicles = await query(`${select} ORDER BY f.id`);
-  res.json(vehicles.map(vehicle => ({ ...vehicle, due: dueLabel(vehicle.due_date) })));
+  res.json(vehicles.map(vehicle => ({ ...vehicle, due: dueLabel(vehicle.due_date), service: serviceDue(vehicle) })));
 }));
 
 router.get('/:id', auth, wrap(async (req, res) => {
@@ -42,6 +68,7 @@ router.get('/:id', auth, wrap(async (req, res) => {
   res.json({
     ...vehicle,
     due: dueLabel(vehicle.due_date),
+    service: serviceDue(vehicle),
     documents: documents.map(document => ({ ...document, due: dueLabel(document.expiryDate) })),
     fuel,
     maintenance,
@@ -70,7 +97,11 @@ router.post('/', auth, permit(roles.transport), validate(fleetSchema), wrap(asyn
 router.patch('/:id', auth, permit(roles.transport), validate(fleetSchema.partial()), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM fleet WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Asset not found' });
-  const columns = { renewal: 'renewal_type', dueDate: 'due_date', projectId: 'project_id' };
+  const columns = {
+    renewal: 'renewal_type', dueDate: 'due_date', projectId: 'project_id', driverEmployeeId: 'driver_employee_id',
+    serviceIntervalKm: 'service_interval_km', serviceIntervalMonths: 'service_interval_months',
+    lastServiceDate: 'last_service_date', lastServiceOdometer: 'last_service_odometer'
+  };
   const entries = Object.entries(req.body);
   if (entries.length) {
     await query(`UPDATE fleet SET ${entries.map(([key]) => `${columns[key] || key}=?`).join(',')} WHERE id=?`,
@@ -139,6 +170,8 @@ router.post('/:id/maintenance', auth, permit(roles.transport), validate(z.object
   const body = req.body;
   const result = await query('INSERT INTO vehicle_maintenance (vehicle_id,service_date,description,cost,garage,odometer,created_by) VALUES (?,?,?,?,?,?,?)',
     [req.params.id, body.serviceDate, body.description, body.cost, body.garage || null, body.odometer, req.user.id]);
+  await query(`UPDATE fleet SET last_service_date=?, last_service_odometer=?, odometer=GREATEST(odometer,?) WHERE id=?`,
+    [body.serviceDate, body.odometer, body.odometer, req.params.id]);
   const row = await getOne('SELECT * FROM vehicle_maintenance WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'vehicle_maintenance', row.id, null, row, req.ip);
   res.status(201).json(row);

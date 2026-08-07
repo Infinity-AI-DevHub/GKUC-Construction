@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, getOne, pool, query } from '../db.js';
+import { audit, getOne, pool, query, spendSql } from '../db.js';
 import { auth, permit, roles, validate, wrap } from '../lib/http.js';
 
 const router = Router();
@@ -75,7 +75,7 @@ router.post('/income', auth, permit(roles.finance), validate(z.object({
  */
 router.get('/summary', auth, wrap(async (_req, res) => {
   const projects = await query(`SELECT p.id projectId,p.name project,p.budget,p.progress,p.health,
-    COALESCE((SELECT SUM(e.amount) FROM expenses e WHERE e.project_id=p.id),0) expenses,
+    ${spendSql('p')} expenses,
     COALESCE((SELECT SUM(i.amount) FROM incomes i WHERE i.project_id=p.id),0) income
     FROM projects p WHERE p.active=1 ORDER BY p.id`);
   const bySource = await query('SELECT source,COALESCE(SUM(amount),0) total FROM expenses GROUP BY source');

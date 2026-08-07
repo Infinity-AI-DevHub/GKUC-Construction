@@ -1,4 +1,5 @@
-import { pool, query, today } from './db.js';
+import { pool, query, spendSql, today } from './db.js';
+import { dispatchQueued } from './lib/channels.js';
 
 /**
  * PID 2.13 — the Notification Center. Every deadline and threshold in the system is
@@ -59,8 +60,7 @@ async function lowStockAlerts(stamp, alerts) {
 }
 
 async function budgetAlerts(stamp, alerts) {
-  const rows = await query(`SELECT p.id,p.name,p.budget,
-      COALESCE((SELECT SUM(e.amount) FROM expenses e WHERE e.project_id=p.id),0) + p.actual spent
+  const rows = await query(`SELECT p.id,p.name,p.budget,${spendSql('p')} spent
     FROM projects p WHERE p.active=1 AND p.budget > 0`);
   for (const row of rows) {
     const used = (Number(row.spent) / Number(row.budget)) * 100;
@@ -111,8 +111,9 @@ async function milestoneAlerts(stamp, alerts) {
 }
 
 async function employeeDocumentAlerts(stamp, alerts) {
-  const rows = await query(`SELECT d.id,d.title,d.expiry_date,e.name FROM employee_documents d JOIN employees e ON e.id=d.employee_id
-    WHERE d.expiry_date IS NOT NULL AND d.expiry_date <= DATE_ADD(CURDATE(), INTERVAL ? DAY)`, [ALERT_WINDOW_DAYS]);
+  const rows = await query(`SELECT a.id,a.title,a.expiry_date,e.name FROM attachments a JOIN employees e ON e.id=a.owner_id
+    WHERE a.owner_type='employee' AND a.expiry_date IS NOT NULL
+      AND a.expiry_date <= DATE_ADD(CURDATE(), INTERVAL ? DAY)`, [ALERT_WINDOW_DAYS]);
   for (const row of rows) {
     const remaining = days(row.expiry_date);
     alerts.push({
@@ -145,6 +146,36 @@ async function invoiceAlerts(stamp, alerts) {
   }
 }
 
+async function serviceScheduleAlerts(stamp, alerts) {
+  const rows = await query(`SELECT id,vehicle,registration,odometer,service_interval_km,service_interval_months,
+      last_service_date,last_service_odometer FROM fleet
+    WHERE (service_interval_km > 0 OR service_interval_months > 0) AND status <> 'Inactive'`);
+  for (const row of rows) {
+    const kmRemaining = row.service_interval_km
+      ? Number(row.last_service_odometer) + Number(row.service_interval_km) - Number(row.odometer) : null;
+    let dateRemaining = null;
+    if (row.service_interval_months && row.last_service_date) {
+      const next = new Date(row.last_service_date);
+      next.setMonth(next.getMonth() + Number(row.service_interval_months));
+      dateRemaining = days(next.toISOString().slice(0, 10));
+    }
+    const dueByKm = kmRemaining !== null && kmRemaining <= 500;
+    const dueByDate = dateRemaining !== null && dateRemaining <= 14;
+    if (!dueByKm && !dueByDate) continue;
+    const overdue = (kmRemaining !== null && kmRemaining <= 0) || (dateRemaining !== null && dateRemaining < 0);
+    alerts.push({
+      key: `service:${row.id}:${stamp}`,
+      audience: 'Transport Officer',
+      severity: overdue ? 'Critical' : 'Warning',
+      title: `Service ${overdue ? 'overdue' : 'due'} — ${row.registration}`,
+      message: `${row.vehicle}: ${dueByKm ? `${Math.abs(kmRemaining)} km ${kmRemaining <= 0 ? 'past' : 'until'} the next service. ` : ''}` +
+        `${dueByDate ? `Scheduled service ${dateRemaining < 0 ? `${Math.abs(dateRemaining)} day(s) overdue` : `in ${dateRemaining} day(s)`}.` : ''}`.trim(),
+      referenceType: 'fleet',
+      referenceId: row.id
+    });
+  }
+}
+
 async function pendingApprovalAlerts(stamp, alerts) {
   const [requests] = await Promise.all([query("SELECT COUNT(*) count FROM purchase_requests WHERE status='Pending'")]);
   const pending = requests[0].count;
@@ -172,9 +203,11 @@ export async function runAlertScan() {
     milestoneAlerts(stamp, alerts),
     employeeDocumentAlerts(stamp, alerts),
     invoiceAlerts(stamp, alerts),
+    serviceScheduleAlerts(stamp, alerts),
     pendingApprovalAlerts(stamp, alerts)
   ]);
   for (const alert of alerts) await raise(alert);
+  await dispatchQueued().catch(error => console.error('Channel dispatch failed', error));
   return alerts.length;
 }
 

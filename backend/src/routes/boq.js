@@ -11,6 +11,21 @@ const select = `SELECT b.id,b.reference,b.title,b.status,b.version,b.total,b.not
   u.name preparedBy,a.name approvedBy,b.approved_at approvedAt,b.created_at createdAt
   FROM boqs b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=b.prepared_by LEFT JOIN users a ON a.id=b.approved_by`;
 
+/**
+ * A project's approved budget is the sum of its approved BOQ packages plus approved
+ * variation orders. Projects with no approved BOQ keep the figure entered by hand,
+ * so recalculating never wipes a budget that the estimating workflow does not own.
+ */
+async function recalculateBudget(connection, projectId) {
+  const [rows] = await connection.execute(`SELECT
+      (SELECT COUNT(*) FROM boqs WHERE project_id=? AND status='Approved') packages,
+      (SELECT COALESCE(SUM(total),0) FROM boqs WHERE project_id=? AND status='Approved') boqTotal,
+      (SELECT COALESCE(SUM(amount),0) FROM variation_orders WHERE project_id=? AND status='Approved') variations`,
+  [projectId, projectId, projectId]);
+  if (!rows[0].packages) return;
+  await connection.execute('UPDATE projects SET budget=? WHERE id=?', [Number(rows[0].boqTotal) + Number(rows[0].variations), projectId]);
+}
+
 const itemSchema = z.object({
   category: z.enum(CATEGORIES),
   description: z.string().min(2).max(300),
@@ -87,7 +102,7 @@ router.patch('/:id', auth, permit(roles.manage), validate(z.object({
     const approved = req.body.status === 'Approved';
     await connection.execute('UPDATE boqs SET status=?,approved_by=?,approved_at=? WHERE id=?',
       [req.body.status, approved ? req.user.id : null, approved ? new Date() : null, before.id]);
-    if (approved) await connection.execute('UPDATE projects SET budget=? WHERE id=?', [before.total, before.project_id]);
+    await recalculateBudget(connection, before.project_id);
     await audit(connection, req.user.id, req.body.status.toUpperCase(), 'boq', before.id, before, { status: req.body.status }, req.ip);
   });
   if (req.body.status === 'Approved') {
@@ -130,9 +145,7 @@ router.patch('/variations/:id', auth, permit(roles.manage), validate(z.object({
   await transaction(async connection => {
     await connection.execute('UPDATE variation_orders SET status=?,approved_by=? WHERE id=?', [req.body.status, req.user.id, before.id]);
     /* An approved variation moves the approved budget, keeping budget-vs-actual honest. */
-    if (req.body.status === 'Approved' && before.status !== 'Approved') {
-      await connection.execute('UPDATE projects SET budget=budget+? WHERE id=?', [before.amount, before.project_id]);
-    }
+    await recalculateBudget(connection, before.project_id);
     await audit(connection, req.user.id, req.body.status.toUpperCase(), 'variation_order', before.id, before, { status: req.body.status }, req.ip);
   });
   res.json(await getOne('SELECT * FROM variation_orders WHERE id=?', [before.id]));

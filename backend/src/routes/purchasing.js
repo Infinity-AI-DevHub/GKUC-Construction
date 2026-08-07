@@ -31,7 +31,7 @@ router.post('/suppliers', auth, permit(roles.purchasing), validate(z.object({
 /* Purchase requests */
 const requestList = `SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,r.created_at createdAt,
   r.project_id projectId,p.name project,u.name requestedBy,
-  (SELECT COUNT(*) FROM purchase_request_items i WHERE i.request_id=r.id) lines,
+  (SELECT COUNT(*) FROM purchase_request_items i WHERE i.request_id=r.id) lineCount,
   (SELECT COALESCE(SUM(i.quantity*i.estimated_rate),0) FROM purchase_request_items i WHERE i.request_id=r.id) estimate
   FROM purchase_requests r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.requested_by`;
 

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { listAttachments } from './uploads.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -49,7 +50,7 @@ router.get('/:id', auth, wrap(async (req, res) => {
     query('SELECT id,leave_type leaveType,from_date fromDate,to_date toDate,days,reason,status FROM leave_requests WHERE employee_id=? ORDER BY id DESC', [employee.id]),
     query(`SELECT o.id,o.work_date workDate,o.hours,o.rate,o.status,p.name project FROM overtime_records o
       LEFT JOIN projects p ON p.id=o.project_id WHERE o.employee_id=? ORDER BY o.id DESC`, [employee.id]),
-    query('SELECT id,title,doc_type docType,reference,expiry_date expiryDate,file_ref fileRef FROM employee_documents WHERE employee_id=? ORDER BY id DESC', [employee.id]),
+    listAttachments('employee', employee.id),
     query(`SELECT a.id,a.work_date workDate,a.check_in \`in\`,a.check_out \`out\`,a.state,p.name site FROM attendance a
       JOIN projects p ON p.id=a.project_id WHERE a.employee_id=? OR a.employee_name=? ORDER BY a.work_date DESC LIMIT 30`, [employee.id, employee.name]),
     query(`SELECT t.project_role projectRole,p.name project FROM project_team t JOIN projects p ON p.id=t.project_id
@@ -148,20 +149,5 @@ router.patch('/overtime/:id', auth, permit(roles.hr), validate(z.object({ status
   res.json(after);
 }));
 
-/* Employee documents — expiry feeds the notification centre */
-router.post('/:id/documents', auth, permit(roles.hr), validate(z.object({
-  title: z.string().min(2).max(180),
-  docType: z.string().min(2).max(80),
-  reference: z.string().max(180).optional(),
-  expiryDate: isoDate.optional(),
-  fileRef: z.string().max(400).optional()
-})), wrap(async (req, res) => {
-  const body = req.body;
-  const result = await query('INSERT INTO employee_documents (employee_id,title,doc_type,reference,expiry_date,file_ref,uploaded_by) VALUES (?,?,?,?,?,?,?)',
-    [req.params.id, body.title, body.docType, body.reference || null, body.expiryDate || null, body.fileRef || null, req.user.id]);
-  const row = await getOne('SELECT * FROM employee_documents WHERE id=?', [result.insertId]);
-  await audit(pool, req.user.id, 'CREATE', 'employee_document', row.id, null, row, req.ip);
-  res.status(201).json(row);
-}));
 
 export default router;

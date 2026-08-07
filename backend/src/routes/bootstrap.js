@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { query } from '../db.js';
+import { query, spendSql } from '../db.js';
 import { auth, wrap } from '../lib/http.js';
 import { runAlertScan } from '../alerts.js';
 
@@ -19,7 +19,7 @@ router.get('/', auth, wrap(async (req, res) => {
   await runAlertScan().catch(error => console.error('Alert scan failed', error));
 
   const [projects, tasks, attendance, materials, fleet, reports, employees, departments, equipment,
-    suppliers, purchaseRequests, boqs, milestones, notifications, finance] = await Promise.all([
+    suppliers, purchaseRequests, boqs, milestones, notifications, finance, inquiries, weekly] = await Promise.all([
     query('SELECT * FROM projects WHERE active=1 ORDER BY id'),
     query('SELECT t.*,p.name project FROM tasks t JOIN projects p ON p.id=t.project_id ORDER BY t.id'),
     query(`SELECT a.id,a.employee_name name,a.role,p.name site,a.check_in \`in\`,a.check_out \`out\`,a.state,a.work_date workDate
@@ -40,7 +40,7 @@ router.get('/', auth, wrap(async (req, res) => {
       FROM equipment e ORDER BY e.code`),
     query('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE active=1 ORDER BY name'),
     query(`SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,p.name project,u.name requestedBy,
-      (SELECT COUNT(*) FROM purchase_request_items i WHERE i.request_id=r.id) lines,
+      (SELECT COUNT(*) FROM purchase_request_items i WHERE i.request_id=r.id) lineCount,
       (SELECT COALESCE(SUM(i.quantity*i.estimated_rate),0) FROM purchase_request_items i WHERE i.request_id=r.id) estimate
       FROM purchase_requests r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.requested_by ORDER BY r.id DESC`),
     query(`SELECT b.id,b.reference,b.title,b.status,b.total,b.version,p.name project,b.project_id projectId,u.name preparedBy
@@ -50,10 +50,27 @@ router.get('/', auth, wrap(async (req, res) => {
     query(`SELECT id,title,message,severity,status,channel,reference_type referenceType,reference_id referenceId,created_at createdAt
       FROM notifications WHERE user_id IS NULL OR user_id=? OR audience=? ORDER BY id DESC LIMIT 40`, [req.user.id, req.user.role]),
     query(`SELECT p.id projectId,p.name project,p.budget,
-      COALESCE((SELECT SUM(e.amount) FROM expenses e WHERE e.project_id=p.id),0) expenses,
+      ${spendSql('p')} expenses,
       COALESCE((SELECT SUM(i.amount) FROM incomes i WHERE i.project_id=p.id),0) income
-      FROM projects p WHERE p.active=1 ORDER BY p.id`)
+      FROM projects p WHERE p.active=1 ORDER BY p.id`),
+    query(`SELECT i.id,i.reference,i.customer_name customer,i.location,i.status,i.expected_value expectedValue,
+      i.expected_start expectedStart,i.project_id projectId FROM inquiries i ORDER BY i.id DESC LIMIT 40`),
+    /* Real site activity for the last seven days, replacing the placeholder chart. */
+    query(`SELECT DATE_FORMAT(d.day,'%a') label, DATE_FORMAT(d.day,'%Y-%m-%d') day,
+        (SELECT COUNT(*) FROM attendance a WHERE a.work_date=d.day AND a.state IN ('On site','Late','Checked out')) workforce,
+        (SELECT COUNT(*) FROM daily_reports r WHERE r.report_date=d.day) reports
+      FROM (SELECT CURDATE() - INTERVAL n DAY day FROM
+        (SELECT 6 n UNION SELECT 5 UNION SELECT 4 UNION SELECT 3 UNION SELECT 2 UNION SELECT 1 UNION SELECT 0) days) d
+      ORDER BY d.day`)
   ]);
+
+  /* Delayed = past its target completion date with work outstanding, or flagged at risk. */
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const delayed = projects.filter(project =>
+    project.health === 'At risk'
+    || (project.end_date && new Date(project.end_date).toISOString().slice(0, 10) < todayIso && project.progress < 100));
+  const revenue = finance.reduce((sum, row) => sum + Number(row.income), 0);
+  const spend = finance.reduce((sum, row) => sum + Number(row.expenses), 0);
 
   res.json({
     user: req.user,
@@ -72,7 +89,16 @@ router.get('/', auth, wrap(async (req, res) => {
       boqs,
       milestones,
       notifications,
-      finance
+      finance,
+      inquiries,
+      dashboard: {
+        weekly,
+        delayed: delayed.map(project => ({ id: project.id, name: project.name, health: project.health, progress: project.progress })),
+        revenue,
+        spend,
+        margin: revenue - spend,
+        overBudget: finance.filter(row => Number(row.budget) > 0 && Number(row.expenses) > Number(row.budget)).length
+      }
     }
   });
 }));

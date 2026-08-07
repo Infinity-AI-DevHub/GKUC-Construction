@@ -1,0 +1,139 @@
+import React, { useState } from 'react';
+import { Check, ChevronRight, Plus, X } from 'lucide-react';
+import { initials, slug } from './api.js';
+
+export function Badge({ children, tone }) {
+  return <span className={`badge ${tone || slug(children)}`}>{children}</span>;
+}
+
+export function Avatar({ name }) {
+  return <span className="avatar">{initials(name)}</span>;
+}
+
+export function Progress({ value }) {
+  return <div className="progress"><span style={{ width: `${Math.min(100, Math.max(0, value))}%` }} /></div>;
+}
+
+export function Metric({ icon: Icon, label, value, detail, tone }) {
+  return <div className="metric">
+    <span className={`metric-icon ${tone}`}><Icon size={20} /></span>
+    <div><p>{label}</p><strong>{value}</strong><span>{detail}</span></div>
+  </div>;
+}
+
+export function Summary({ label, value, icon: Icon }) {
+  return <div className="summary"><Icon size={19} /><div><strong>{value}</strong><span>{label}</span></div></div>;
+}
+
+export function PanelTitle({ title, action, onClick }) {
+  return <div className="panel-title"><h2>{title}</h2>{onClick && <button onClick={onClick}>{action}<ChevronRight size={15} /></button>}</div>;
+}
+
+export function Page({ title, subtitle, action, children, onAction }) {
+  return <>
+    <div className="page-heading">
+      <div><h1>{title}</h1><p>{subtitle}</p></div>
+      {action && onAction && <button className="primary" onClick={onAction}><Plus size={17} />{action}</button>}
+    </div>
+    {children}
+  </>;
+}
+
+/** Sub-navigation inside a module, using the same segmented control as the task filters. */
+export function Tabs({ tabs, active, onChange }) {
+  return <div className="toolbar"><div className="segments">
+    {tabs.map(tab => <button className={active === tab ? 'active' : ''} onClick={() => onChange(tab)} key={tab}>{tab}</button>)}
+  </div></div>;
+}
+
+export function Modal({ title, close, children }) {
+  return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
+    <div className="modal">
+      <div className="modal-title"><h2>{title}</h2><button className="icon-btn" onClick={close}><X size={18} /></button></div>
+      {children}
+    </div>
+  </div>;
+}
+
+export function EntityForm({ onSubmit, error, children }) {
+  return <form onSubmit={onSubmit} className="report-form">{children}{error && <p className="form-error">{error}</p>}</form>;
+}
+
+export function Field({ name, label, type = 'text', wide = false, required = true, defaultValue, step, min, placeholder }) {
+  return <label className={wide ? 'wide' : ''}>{label}
+    <input name={name} type={type} required={required} defaultValue={defaultValue} step={step} min={min} placeholder={placeholder} />
+  </label>;
+}
+
+export function TextArea({ name, label, required = true, placeholder }) {
+  return <label className="wide">{label}<textarea name={name} required={required} placeholder={placeholder} /></label>;
+}
+
+export function SelectField({ name, label, options, defaultValue, wide = false }) {
+  return <label className={wide ? 'wide' : ''}>{label}
+    <select name={name} defaultValue={defaultValue}>
+      {options.map(option => {
+        const [value, text] = Array.isArray(option) ? option : [option, option];
+        return <option value={value} key={value}>{text}</option>;
+      })}
+    </select>
+  </label>;
+}
+
+export function FormButtons({ close, label, busy }) {
+  return <div className="form-actions">
+    <button type="button" className="secondary" onClick={close}>Cancel</button>
+    <button className="primary" disabled={busy}><Check size={17} />{busy ? 'Saving…' : label}</button>
+  </div>;
+}
+
+export function EmptyState({ children }) {
+  return <p className="empty-state">{children}</p>;
+}
+
+/**
+ * Table shell used by every list in the product. `columns` drives the header and the
+ * grid template, so a new module only supplies its rows.
+ */
+export function Table({ columns, template, children, title, tools, empty = 'Nothing recorded yet.' }) {
+  const style = { gridTemplateColumns: template };
+  const rows = React.Children.toArray(children);
+  return <section className="table-panel">
+    {(title || tools) && <div className="table-tools"><h2>{title}</h2>{tools}</div>}
+    <div className="table-head" style={style}>{columns.map(column => <span key={column}>{column}</span>)}</div>
+    {rows.length ? rows : <div className="table-row" style={{ gridTemplateColumns: '1fr' }}><span>{empty}</span></div>}
+  </section>;
+}
+
+export function Row({ template, children, onClick }) {
+  return <div className="table-row" style={{ gridTemplateColumns: template, cursor: onClick ? 'pointer' : undefined }} onClick={onClick}>{children}</div>;
+}
+
+/**
+ * Wraps a create/edit form in a modal and handles the submit lifecycle, so each module
+ * describes only its fields and the request to send.
+ */
+export function FormModal({ title, close, label, onSubmit, children }) {
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async event => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    const form = new FormData(event.currentTarget);
+    try {
+      await onSubmit(Object.fromEntries(form.entries()), form);
+      close();
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <Modal title={title} close={close}>
+    <EntityForm onSubmit={submit} error={error}>
+      {children}
+      <FormButtons close={close} label={label} busy={busy} />
+    </EntityForm>
+  </Modal>;
+}

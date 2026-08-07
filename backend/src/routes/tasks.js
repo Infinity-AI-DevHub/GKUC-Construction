@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, permit, roles, validate, wrap } from '../lib/http.js';
 import { notify } from '../alerts.js';
+import { listAttachments } from './uploads.js';
 
 const router = Router();
 const STATUSES = ['Not started', 'In progress', 'Blocked', 'Completed', 'Approved'];
@@ -36,8 +37,7 @@ router.get('/:id', auth, wrap(async (req, res) => {
   const [comments, attachments] = await Promise.all([
     query(`SELECT c.id,c.comment,c.created_at createdAt,u.name author FROM task_comments c JOIN users u ON u.id=c.user_id
       WHERE c.task_id=? ORDER BY c.id`, [task.id]),
-    query(`SELECT a.id,a.title,a.kind,a.file_ref fileRef,a.created_at createdAt,u.name uploadedBy
-      FROM task_attachments a JOIN users u ON u.id=a.uploaded_by WHERE a.task_id=? ORDER BY a.id`, [task.id])
+    listAttachments('task', task.id)
   ]);
   res.json({ ...task, comments, attachments });
 }));
@@ -86,17 +86,5 @@ router.post('/:id/comments', auth, validate(z.object({ comment: z.string().min(1
     FROM task_comments c JOIN users u ON u.id=c.user_id WHERE c.id=?`, [result.insertId]));
 }));
 
-router.post('/:id/attachments', auth, permit(roles.site), validate(z.object({
-  title: z.string().min(1).max(180),
-  kind: z.enum(['File', 'Site photo']).default('File'),
-  fileRef: z.string().min(2).max(400)
-})), wrap(async (req, res) => {
-  const task = await getOne('SELECT id FROM tasks WHERE id=?', [req.params.id]);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  const result = await query('INSERT INTO task_attachments (task_id,title,kind,file_ref,uploaded_by) VALUES (?,?,?,?,?)',
-    [task.id, req.body.title, req.body.kind, req.body.fileRef, req.user.id]);
-  await audit(pool, req.user.id, 'CREATE', 'task_attachment', result.insertId, null, req.body, req.ip);
-  res.status(201).json(await getOne('SELECT * FROM task_attachments WHERE id=?', [result.insertId]));
-}));
 
 export default router;
