@@ -47,9 +47,15 @@ router.get('/', auth, wrap(async (req, res) => {
       FROM boqs b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=b.prepared_by ORDER BY b.id DESC`),
     query(`SELECT m.id,m.title,m.due_date dueDate,m.status,m.project_id projectId,p.name project
       FROM project_milestones m JOIN projects p ON p.id=m.project_id ORDER BY m.due_date`),
-    query(`SELECT id,title,message,severity,status,channel,reference_type referenceType,reference_id referenceId,created_at createdAt
-      FROM notifications WHERE user_id IS NULL OR user_id=? OR audience IN (?) ORDER BY id DESC LIMIT 40`,
-      [req.user.id, req.user.permissions.length ? req.user.permissions : ['']]),
+    (async () => {
+      const perms = req.user.permissions.length ? req.user.permissions : [''];
+      const placeholders = perms.map(() => '?').join(',');
+      return query(
+        `SELECT id,title,message,severity,status,channel,reference_type referenceType,reference_id referenceId,created_at createdAt
+      FROM notifications WHERE user_id IS NULL OR user_id=? OR audience IN (${placeholders}) ORDER BY id DESC LIMIT 40`,
+        [req.user.id, ...perms]
+      );
+    })(),
     query(`SELECT p.id projectId,p.name project,p.budget,
       ${spendSql('p')} expenses,
       COALESCE((SELECT SUM(i.amount) FROM incomes i WHERE i.project_id=p.id),0) income
