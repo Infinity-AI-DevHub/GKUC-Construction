@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
 
 const router = Router();
@@ -30,7 +30,7 @@ const listQuery = `SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.sta
 router.get('/departments', auth, wrap(async (_req, res) => res.json(await query(`SELECT d.id,d.name,d.description,
   (SELECT COUNT(*) FROM employees e WHERE e.department_id=d.id) headcount FROM departments d ORDER BY d.name`))));
 
-router.post('/departments', auth, permit(roles.hr), validate(z.object({
+router.post('/departments', auth, permit('hr.manage'), validate(z.object({
   name: z.string().min(2).max(120),
   description: z.string().max(400).optional()
 })), wrap(async (req, res) => {
@@ -59,7 +59,7 @@ router.get('/:id', auth, wrap(async (req, res) => {
   res.json({ ...employee, leave, overtime, documents, attendance, projects });
 }));
 
-router.post('/', auth, permit(roles.hr), validate(employeeSchema), wrap(async (req, res) => {
+router.post('/', auth, permit('hr.manage'), validate(employeeSchema), wrap(async (req, res) => {
   const body = req.body;
   try {
     const result = await query(`INSERT INTO employees (code,name,department_id,designation,phone,email,join_date,basic_salary,daily_rate,overtime_rate,status,notes)
@@ -74,7 +74,7 @@ router.post('/', auth, permit(roles.hr), validate(employeeSchema), wrap(async (r
   }
 }));
 
-router.patch('/:id', auth, permit(roles.hr), validate(employeeSchema.partial()), wrap(async (req, res) => {
+router.patch('/:id', auth, permit('hr.manage'), validate(employeeSchema.partial()), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
   const columns = {
@@ -96,7 +96,7 @@ router.get('/leave/all', auth, wrap(async (_req, res) => res.json(await query(`S
   l.to_date toDate,l.days,l.reason,l.status,l.created_at createdAt,e.name employee,e.code employeeCode,e.id employeeId
   FROM leave_requests l JOIN employees e ON e.id=l.employee_id ORDER BY l.id DESC`))));
 
-router.post('/:id/leave', auth, permit(roles.hr), validate(z.object({
+router.post('/:id/leave', auth, permit('hr.manage'), validate(z.object({
   leaveType: z.enum(['Annual', 'Casual', 'Medical', 'Unpaid', 'Other']),
   fromDate: isoDate,
   toDate: isoDate,
@@ -111,7 +111,7 @@ router.post('/:id/leave', auth, permit(roles.hr), validate(z.object({
   res.status(201).json(row);
 }));
 
-router.patch('/leave/:id', auth, permit(roles.hr), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
+router.patch('/leave/:id', auth, permit('hr.manage'), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM leave_requests WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Leave request not found' });
   await query('UPDATE leave_requests SET status=?,decided_by=?,decided_at=UTC_TIMESTAMP() WHERE id=?', [req.body.status, req.user.id, req.params.id]);
@@ -126,7 +126,7 @@ router.get('/overtime/all', auth, wrap(async (_req, res) => res.json(await query
   e.name employee,e.code employeeCode,p.name project FROM overtime_records o JOIN employees e ON e.id=o.employee_id
   LEFT JOIN projects p ON p.id=o.project_id ORDER BY o.id DESC`))));
 
-router.post('/:id/overtime', auth, permit(roles.site), validate(z.object({
+router.post('/:id/overtime', auth, permit('site.attendance'), validate(z.object({
   projectId: z.number().int().positive().optional(),
   workDate: isoDate,
   hours: z.number().positive().max(24)
@@ -140,7 +140,7 @@ router.post('/:id/overtime', auth, permit(roles.site), validate(z.object({
   res.status(201).json(row);
 }));
 
-router.patch('/overtime/:id', auth, permit(roles.hr), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
+router.patch('/overtime/:id', auth, permit('hr.manage'), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM overtime_records WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Overtime record not found' });
   await query('UPDATE overtime_records SET status=?,approved_by=? WHERE id=?', [req.body.status, req.user.id, req.params.id]);

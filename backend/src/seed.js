@@ -17,19 +17,24 @@ export async function seedIfEmpty() {
     const run = (sql, params = []) => connection.execute(sql, params);
     const insert = async (sql, params) => (await run(sql, params))[0].insertId;
 
+    /* Roles come from the access tables, which migrate() has already populated. */
+    const [roleRows] = await run('SELECT id,name FROM roles');
+    const roleId = name => roleRows.find(row => row.name === name)?.id || null;
+
     const users = [
-      ['Kasun Perera', 'owner@gkuc.lk', 'Owner / Director'],
-      ['Admin User', 'admin@gkuc.lk', 'Administrator'],
-      ['Nadeesha Silva', 'manager@gkuc.lk', 'Project Manager'],
+      ['Kasun Perera', 'owner@gkuc.lk', 'Managing Director'],
+      ['Admin User', 'admin@gkuc.lk', 'Assistant to the MD'],
+      ['Nadeesha Silva', 'manager@gkuc.lk', 'Project Coordinator'],
       ['Dilan Fernando', 'supervisor@gkuc.lk', 'Site Supervisor'],
-      ['Rashmi De Silva', 'store@gkuc.lk', 'Storekeeper'],
-      ['Shalini Peiris', 'finance@gkuc.lk', 'Finance / Accounts'],
-      ['Ishara Gunawardena', 'hr@gkuc.lk', 'HR'],
-      ['Imran Zain', 'qs@gkuc.lk', 'QS / Estimator'],
-      ['Ruwan Jayalath', 'transport@gkuc.lk', 'Transport Officer']
+      ['Rashmi De Silva', 'store@gkuc.lk', 'Store Keeper'],
+      ['Shalini Peiris', 'finance@gkuc.lk', 'Finance Department Head'],
+      ['Ishara Gunawardena', 'hr@gkuc.lk', 'HR Department Head'],
+      ['Imran Zain', 'qs@gkuc.lk', 'QS Department Head'],
+      ['Ruwan Jayalath', 'transport@gkuc.lk', 'Transport Department Head']
     ];
     for (const [name, email, role] of users) {
-      await run('INSERT INTO users (name,email,password_hash,role) VALUES (?,?,?,?)', [name, email, hashPassword(DEMO_PASSWORD), role]);
+      await run('INSERT INTO users (name,email,password_hash,role,role_id) VALUES (?,?,?,?,?)',
+        [name, email, hashPassword(DEMO_PASSWORD), role, roleId(role)]);
     }
 
     const departments = ['Management', 'Site Operations', 'Quantity Surveying', 'Stores', 'Transport', 'Finance', 'Human Resources'];

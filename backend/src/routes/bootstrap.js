@@ -48,7 +48,8 @@ router.get('/', auth, wrap(async (req, res) => {
     query(`SELECT m.id,m.title,m.due_date dueDate,m.status,m.project_id projectId,p.name project
       FROM project_milestones m JOIN projects p ON p.id=m.project_id ORDER BY m.due_date`),
     query(`SELECT id,title,message,severity,status,channel,reference_type referenceType,reference_id referenceId,created_at createdAt
-      FROM notifications WHERE user_id IS NULL OR user_id=? OR audience=? ORDER BY id DESC LIMIT 40`, [req.user.id, req.user.role]),
+      FROM notifications WHERE user_id IS NULL OR user_id=? OR audience IN (?) ORDER BY id DESC LIMIT 40`,
+      [req.user.id, req.user.permissions.length ? req.user.permissions : ['']]),
     query(`SELECT p.id projectId,p.name project,p.budget,
       ${spendSql('p')} expenses,
       COALESCE((SELECT SUM(i.amount) FROM incomes i WHERE i.project_id=p.id),0) income
@@ -73,7 +74,7 @@ router.get('/', auth, wrap(async (req, res) => {
   const spend = finance.reduce((sum, row) => sum + Number(row.expenses), 0);
 
   res.json({
-    user: req.user,
+    user: { ...req.user, permissions: req.user.permissions },
     data: {
       projects,
       tasks,

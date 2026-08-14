@@ -39,19 +39,50 @@ gkuc-construction/
 
 ## Run locally
 
+MySQL must be running first. The app expects it on `127.0.0.1:8889` (MAMP's default);
+change `DB_PORT` in `backend/.env` if yours is on 3306.
+
+First time only:
+
 ```bash
-pnpm install
-pnpm build
-pnpm start
+npm run setup
+```
+
+```bash
+mysql -h127.0.0.1 -P8889 -uroot -proot -e "CREATE DATABASE IF NOT EXISTS gkuc_siteops"
+```
+
+```bash
+npm run seed
+```
+
+The seed is safe to re-run: migrations are idempotent, and it never overwrites role
+permissions the Managing Director has changed.
+
+Then, for development (backend on 4173, frontend on 5173):
+
+```bash
+npm run dev
+```
+
+Open `http://127.0.0.1:5173/`.
+
+To serve the built frontend from the backend on a single port instead:
+
+```bash
+npm run build && npm start
 ```
 
 Open `http://127.0.0.1:4173/`.
+
+`npm` is used rather than `pnpm` throughout: the workspace file remains for reference,
+but the scripts run through `npm --prefix` so no extra package manager is required.
 
 Client review accounts use the temporary password `GKUC@2026`:
 
 | Role | Email |
 | --- | --- |
-| Owner / Director | `owner@gkuc.lk` |
+| Managing Director | `owner@gkuc.lk` |
 | Administrator | `admin@gkuc.lk` |
 | Project Manager | `manager@gkuc.lk` |
 | Site Supervisor | `supervisor@gkuc.lk` |
@@ -160,7 +191,7 @@ test restoration regularly.
 ## Tests
 
 ```bash
-pnpm test
+npm test
 ```
 
 Twenty-one backend tests start the real application against a temporary

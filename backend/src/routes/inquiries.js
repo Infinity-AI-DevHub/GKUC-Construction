@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
@@ -23,7 +23,7 @@ router.get('/', auth, wrap(async (req, res) => {
   res.json(await query(`${select} ${where} ORDER BY i.id DESC`, params));
 }));
 
-router.post('/', auth, permit(roles.projects), validate(z.object({
+router.post('/', auth, permit('enquiries.manage'), validate(z.object({
   customer: z.string().min(2).max(180),
   contact: z.string().max(120).optional(),
   phone: z.string().max(40).optional(),
@@ -44,7 +44,7 @@ router.post('/', auth, permit(roles.projects), validate(z.object({
   const row = await getOne(`${select} WHERE i.id=?`, [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'inquiry', row.id, null, row, req.ip);
   await notify({
-    audience: 'Project Manager',
+    audience: 'enquiries.manage',
     severity: 'Info',
     title: `New customer inquiry — ${body.customer}`,
     message: `${reference}: ${body.location}. ${body.description.slice(0, 200)}`,
@@ -54,7 +54,7 @@ router.post('/', auth, permit(roles.projects), validate(z.object({
   res.status(201).json(row);
 }));
 
-router.patch('/:id', auth, permit(roles.projects), validate(z.object({
+router.patch('/:id', auth, permit('enquiries.manage'), validate(z.object({
   status: z.enum(['New', 'In discussion', 'Quoted', 'Won', 'Lost']),
   lostReason: z.string().max(400).optional()
 })), wrap(async (req, res) => {
@@ -71,7 +71,7 @@ router.patch('/:id', auth, permit(roles.projects), validate(z.object({
  * Winning an inquiry registers the project (step 2) and links the two, so the trail from
  * first contact through to site work stays intact.
  */
-router.post('/:id/convert', auth, permit(roles.projects), validate(z.object({
+router.post('/:id/convert', auth, permit('enquiries.manage'), validate(z.object({
   name: z.string().min(3).max(180),
   manager: z.string().min(2).max(120),
   stage: z.string().min(2).max(150).default('Pre-construction'),

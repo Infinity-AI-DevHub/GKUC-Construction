@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, clock, getOne, pool, query, today } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 
 const router = Router();
 const LATE_AFTER = process.env.ATTENDANCE_LATE_AFTER || '08:00:00';
@@ -14,7 +14,7 @@ router.get('/', auth, wrap(async (req, res) => {
   res.json(await query(`${select} WHERE a.work_date=? ORDER BY a.id`, [date]));
 }));
 
-router.post('/', auth, permit(roles.site), validate(z.object({
+router.post('/', auth, permit('site.attendance'), validate(z.object({
   name: z.string().min(2).max(120),
   role: z.string().min(2).max(100),
   projectId: z.number().int().positive(),
@@ -38,7 +38,7 @@ router.post('/', auth, permit(roles.site), validate(z.object({
 }));
 
 /** One button that checks a worker in, then out — supervisors do not have to pick the action. */
-router.post('/:id/toggle', auth, permit(roles.site), wrap(async (req, res) => {
+router.post('/:id/toggle', auth, permit('site.attendance'), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM attendance WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Attendance record not found' });
   const now = clock();
@@ -54,7 +54,7 @@ router.post('/:id/toggle', auth, permit(roles.site), wrap(async (req, res) => {
 }));
 
 /** Corrections are allowed but always carry a reason and land in the audit log. */
-router.patch('/:id', auth, permit(roles.site), validate(z.object({
+router.patch('/:id', auth, permit('site.attendance'), validate(z.object({
   state: z.enum(['On site', 'Late', 'Checked out', 'Absent', 'On leave']).optional(),
   checkIn: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
   checkOut: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),

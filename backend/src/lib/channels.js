@@ -83,16 +83,25 @@ export const channelStatus = () => Object.entries(adapters).map(([channel, adapt
   provider: adapter.provider()
 }));
 
-/** Who should hear about this alert: the named user, or everyone holding the audience role. */
+/**
+ * Who should hear about this alert: the named user, or everyone who holds the permission it
+ * is addressed to — whether from their role or from a delegation the MD has made.
+ */
 async function recipientsFor(notification) {
   if (notification.user_id) {
     const user = await getOne('SELECT name,email FROM users WHERE id=? AND active=1', [notification.user_id]);
     return user ? [user] : [];
   }
-  if (notification.audience) {
-    return query('SELECT name,email FROM users WHERE role=? AND active=1', [notification.audience]);
-  }
-  return [];
+  if (!notification.audience) return [];
+  return query(`SELECT DISTINCT u.name,u.email FROM users u
+    LEFT JOIN role_permissions rp ON rp.role_id=u.role_id AND rp.permission_key=?
+    LEFT JOIN user_permissions up ON up.user_id=u.id AND up.permission_key=?
+      AND up.effect='Grant' AND (up.expires_at IS NULL OR up.expires_at >= CURDATE())
+    WHERE u.active=1 AND (rp.permission_key IS NOT NULL OR up.permission_key IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM user_permissions r WHERE r.user_id=u.id
+        AND r.permission_key=? AND r.effect='Revoke'
+        AND (r.expires_at IS NULL OR r.expires_at >= CURDATE()))`,
+  [notification.audience, notification.audience, notification.audience]);
 }
 
 const addressFor = (channel, user, employee) =>

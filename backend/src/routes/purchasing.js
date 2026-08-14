@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
@@ -13,7 +13,7 @@ router.get('/suppliers', auth, wrap(async (_req, res) => res.json(await query(`S
   (SELECT COALESCE(SUM(i.amount-i.paid_amount),0) FROM supplier_invoices i WHERE i.supplier_id=s.id AND i.status<>'Paid') outstanding
   FROM suppliers s WHERE s.active=1 ORDER BY s.name`))));
 
-router.post('/suppliers', auth, permit(roles.purchasing), validate(z.object({
+router.post('/suppliers', auth, permit('store.manage', 'finance.pay'), validate(z.object({
   name: z.string().min(2).max(180),
   contact: z.string().max(120).optional(),
   phone: z.string().max(40).optional(),
@@ -49,7 +49,7 @@ router.get('/requests/:id', auth, wrap(async (req, res) => {
   res.json({ ...request, items, quotes });
 }));
 
-router.post('/requests', auth, permit(roles.stock), validate(z.object({
+router.post('/requests', auth, permit('store.manage'), validate(z.object({
   projectId: z.number().int().positive(),
   neededBy: isoDate,
   notes: z.string().max(600).optional(),
@@ -74,7 +74,7 @@ router.post('/requests', auth, permit(roles.stock), validate(z.object({
     return result.insertId;
   });
   await notify({
-    audience: 'Project Manager',
+    audience: 'store.manage',
     severity: 'Info',
     title: `Purchase request ${reference} needs approval`,
     message: `${req.user.name} raised ${reference} for ${body.items.length} line(s), needed by ${body.neededBy}.`,
@@ -84,7 +84,7 @@ router.post('/requests', auth, permit(roles.stock), validate(z.object({
   res.status(201).json(await getOne(`${requestList} WHERE r.id=?`, [id]));
 }));
 
-router.patch('/requests/:id', auth, permit(roles.projects), validate(z.object({
+router.patch('/requests/:id', auth, permit('projects.manage'), validate(z.object({
   status: z.enum(['Pending', 'Approved', 'Rejected'])
 })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM purchase_requests WHERE id=?', [req.params.id]);
@@ -96,7 +96,7 @@ router.patch('/requests/:id', auth, permit(roles.projects), validate(z.object({
   res.json(after);
 }));
 
-router.post('/requests/:id/quotations', auth, permit(roles.purchasing), validate(z.object({
+router.post('/requests/:id/quotations', auth, permit('store.manage', 'finance.pay'), validate(z.object({
   supplierId: z.number().int().positive(),
   amount: z.number().positive(),
   leadTimeDays: z.number().int().nonnegative().default(0),
@@ -133,7 +133,7 @@ router.get('/orders/:id', auth, wrap(async (req, res) => {
   res.json({ ...order, items, invoices });
 }));
 
-router.post('/orders', auth, permit(roles.purchasing), validate(z.object({
+router.post('/orders', auth, permit('store.manage', 'finance.pay'), validate(z.object({
   requestId: z.number().int().positive().optional(),
   supplierId: z.number().int().positive(),
   projectId: z.number().int().positive(),
@@ -167,7 +167,7 @@ router.post('/orders', auth, permit(roles.purchasing), validate(z.object({
  * Goods received: stock rises, the order line records what actually arrived and the
  * project is charged — the three steps that used to be done separately, or not at all.
  */
-router.post('/orders/:id/receive', auth, permit(roles.stock), validate(z.object({
+router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.object({
   lines: z.array(z.object({ itemId: z.number().int().positive(), quantity: z.number().positive() })).min(1),
   notes: z.string().max(500).optional()
 })), wrap(async (req, res) => {
@@ -218,7 +218,7 @@ router.get('/invoices', auth, wrap(async (_req, res) => res.json(await query(`SE
   i.invoice_date invoiceDate,i.due_date dueDate,i.status,s.name supplier,o.reference orderReference
   FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN purchase_orders o ON o.id=i.order_id ORDER BY i.id DESC`))));
 
-router.post('/invoices', auth, permit(roles.finance), validate(z.object({
+router.post('/invoices', auth, permit('finance.pay'), validate(z.object({
   orderId: z.number().int().positive().optional(),
   supplierId: z.number().int().positive(),
   invoiceNo: z.string().min(1).max(80),
@@ -239,7 +239,7 @@ router.post('/invoices', auth, permit(roles.finance), validate(z.object({
   }
 }));
 
-router.post('/invoices/:id/payments', auth, permit(roles.finance), validate(z.object({
+router.post('/invoices/:id/payments', auth, permit('finance.pay'), validate(z.object({
   amount: z.number().positive(),
   paidDate: isoDate,
   method: z.enum(['Cash', 'Cheque', 'Bank transfer', 'Card']).default('Bank transfer'),

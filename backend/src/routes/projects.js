@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, spendSql, today } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
 
 const router = Router();
@@ -52,7 +52,7 @@ router.get('/:id', auth, wrap(async (req, res) => {
   });
 }));
 
-router.post('/', auth, permit(roles.projects), validate(projectSchema), wrap(async (req, res) => {
+router.post('/', auth, permit('projects.manage'), validate(projectSchema), wrap(async (req, res) => {
   const { fields, values } = toRow(req.body);
   const result = await query(`INSERT INTO projects (${fields.join(',')}) VALUES (${fields.map(() => '?').join(',')})`, values);
   const row = await getOne('SELECT * FROM projects WHERE id=?', [result.insertId]);
@@ -60,7 +60,7 @@ router.post('/', auth, permit(roles.projects), validate(projectSchema), wrap(asy
   res.status(201).json(row);
 }));
 
-router.patch('/:id', auth, permit(roles.projects), validate(projectSchema.partial()), wrap(async (req, res) => {
+router.patch('/:id', auth, permit('projects.manage'), validate(projectSchema.partial()), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Project not found' });
   const { fields, values } = toRow(req.body);
@@ -71,7 +71,7 @@ router.patch('/:id', auth, permit(roles.projects), validate(projectSchema.partia
   res.json(after);
 }));
 
-router.delete('/:id', auth, permit(roles.manage), wrap(async (req, res) => {
+router.delete('/:id', auth, permit('projects.manage'), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Project not found' });
   await query('UPDATE projects SET active=0 WHERE id=?', [req.params.id]);
@@ -80,7 +80,7 @@ router.delete('/:id', auth, permit(roles.manage), wrap(async (req, res) => {
 }));
 
 /* Milestones (PID 2.4) */
-router.post('/:id/milestones', auth, permit(roles.projects), validate(z.object({
+router.post('/:id/milestones', auth, permit('projects.manage'), validate(z.object({
   title: z.string().min(2).max(180),
   dueDate: isoDate,
   status: z.enum(['Pending', 'In progress', 'Completed', 'Delayed']).default('Pending'),
@@ -94,7 +94,7 @@ router.post('/:id/milestones', auth, permit(roles.projects), validate(z.object({
   res.status(201).json(row);
 }));
 
-router.patch('/milestones/:id', auth, permit(roles.projects), validate(z.object({
+router.patch('/milestones/:id', auth, permit('projects.manage'), validate(z.object({
   status: z.enum(['Pending', 'In progress', 'Completed', 'Delayed'])
 })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM project_milestones WHERE id=?', [req.params.id]);
@@ -155,7 +155,7 @@ router.get('/:id/completion', auth, wrap(async (req, res) => {
 }));
 
 /* Project team (PID 2.4) */
-router.post('/:id/team', auth, permit(roles.projects), validate(z.object({
+router.post('/:id/team', auth, permit('projects.manage'), validate(z.object({
   employeeId: z.number().int().positive(),
   projectRole: z.string().min(2).max(120)
 })), wrap(async (req, res) => {

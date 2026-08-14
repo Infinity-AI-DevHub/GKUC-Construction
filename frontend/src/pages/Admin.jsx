@@ -2,16 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { BellRing } from 'lucide-react';
 import { api, patch, post, slug } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Page, Row, SelectField, Table, Tabs } from '../ui.jsx';
+import AccessControl from './AccessControl.jsx';
 
-const TABS = ['Users', 'Notifications', 'Audit log', 'My account'];
-
-export const ROLES = [
-  'Owner / Director', 'Administrator', 'Project Manager', 'Site Supervisor', 'Storekeeper',
-  'Finance / Accounts', 'HR', 'QS / Estimator', 'Transport Officer', 'Employee', 'Read-Only Viewer'
-];
+const TABS = ['Users', 'Access control', 'Notifications', 'Audit log', 'My account'];
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
-export default function Admin({ can, initialTab = TABS[0] }) {
+export default function Admin({ can, user, initialTab = TABS[0] }) {
   const [tab, setTab] = useState(TABS.includes(initialTab) ? initialTab : TABS[0]);
   const [creating, setCreating] = useState(false);
 
@@ -22,6 +18,7 @@ export default function Admin({ can, initialTab = TABS[0] }) {
     action={tab === 'Users' && can.manage ? 'Add user' : null} onAction={() => setCreating(true)}>
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
     {tab === 'Users' && <Users can={can} creating={creating} closeCreate={() => setCreating(false)} />}
+    {tab === 'Access control' && <AccessControl user={user} />}
     {tab === 'Notifications' && <Notifications can={can} />}
     {tab === 'Audit log' && <AuditLog />}
     {tab === 'My account' && <Account />}
@@ -147,13 +144,17 @@ function Account() {
 }
 
 function UserForm({ close, reload }) {
+  const [roles, setRoles] = useState([]);
+  useEffect(() => { api('/users/roles').then(setRoles).catch(() => setRoles([])); }, []);
   return <FormModal title="Add user" close={close} label="Create user" onSubmit={async values => {
-    await post('/users', { name: values.name, email: values.email, password: values.password, role: values.role });
+    await post('/users', {
+      name: values.name, email: values.email, password: values.password, roleId: Number(values.roleId)
+    });
     await reload();
   }}>
     <Field name="name" label="Full name" />
     <Field name="email" label="Email" type="email" />
     <Field name="password" label="Temporary password (10+ characters)" type="password" />
-    <SelectField name="role" label="Role" options={ROLES} defaultValue="Employee" />
+    <SelectField name="roleId" label="Role" options={roles.map(role => [role.id, role.name])} />
   </FormModal>;
 }

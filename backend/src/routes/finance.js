@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, spendSql } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -9,7 +9,7 @@ const SOURCES = ['Material', 'Labour', 'Fuel', 'Equipment', 'Subcontractor', 'Ov
 
 router.get('/categories', auth, wrap(async (_req, res) => res.json(await query('SELECT id,name FROM expense_categories ORDER BY name'))));
 
-router.post('/categories', auth, permit(roles.finance), validate(z.object({ name: z.string().min(2).max(120) })), wrap(async (req, res) => {
+router.post('/categories', auth, permit('finance.manage'), validate(z.object({ name: z.string().min(2).max(120) })), wrap(async (req, res) => {
   const result = await query('INSERT INTO expense_categories (name) VALUES (?)', [req.body.name]);
   res.status(201).json(await getOne('SELECT * FROM expense_categories WHERE id=?', [result.insertId]));
 }));
@@ -27,7 +27,7 @@ router.get('/expenses', auth, wrap(async (req, res) => {
     JOIN users u ON u.id=e.created_by ${where} ORDER BY e.expense_date DESC,e.id DESC LIMIT 300`, params));
 }));
 
-router.post('/expenses', auth, permit(roles.finance), validate(z.object({
+router.post('/expenses', auth, permit('finance.manage'), validate(z.object({
   projectId: z.number().int().positive(),
   categoryId: z.number().int().positive().optional(),
   source: z.enum(SOURCES).default('Other'),
@@ -53,7 +53,7 @@ router.get('/income', auth, wrap(async (req, res) => {
     ORDER BY i.received_date DESC,i.id DESC LIMIT 300`, params));
 }));
 
-router.post('/income', auth, permit(roles.finance), validate(z.object({
+router.post('/income', auth, permit('finance.manage'), validate(z.object({
   projectId: z.number().int().positive(),
   description: z.string().min(2).max(400),
   amount: z.number().positive(),

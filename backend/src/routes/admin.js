@@ -1,34 +1,36 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, hashPassword, pool, query } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 import { runAlertScan } from '../alerts.js';
-import { ROLES } from '../schema.js';
+
 
 const router = Router();
 
 /* Users and access (PID 2.14) */
-router.get('/users', auth, permit(roles.manage), wrap(async (_req, res) =>
-  res.json(await query('SELECT id,name,email,role,active,created_at createdAt FROM users ORDER BY name'))));
+router.get('/users', auth, permit('admin.users'), wrap(async (_req, res) =>
+  res.json(await query('SELECT id,name,email,role,role_id roleId,active,created_at createdAt FROM users ORDER BY name'))));
 
-router.get('/users/roles', auth, permit(roles.manage), (_req, res) => res.json(ROLES));
+router.get('/users/roles', auth, wrap(async (_req, res) =>
+  res.json(await query('SELECT id,name,description FROM roles ORDER BY is_system DESC, name'))));
 
-router.post('/users', auth, permit(roles.manage), validate(z.object({
+router.post('/users', auth, permit('admin.users'), validate(z.object({
   name: z.string().min(2).max(120),
   email: z.string().email(),
   password: z.string().min(10),
-  role: z.enum(ROLES)
+  roleId: z.number().int().positive()
 })), wrap(async (req, res) => {
   const body = req.body;
-  const result = await query('INSERT INTO users (name,email,password_hash,role) VALUES (?,?,?,?)',
-    [body.name, body.email.toLowerCase(), hashPassword(body.password), body.role]);
+  const role = await getOne('SELECT id,name FROM roles WHERE id=?', [body.roleId]);
+  if (!role) return res.status(400).json({ error: 'Unknown role' });
+  const result = await query('INSERT INTO users (name,email,password_hash,role,role_id) VALUES (?,?,?,?,?)',
+    [body.name, body.email.toLowerCase(), hashPassword(body.password), role.name, role.id]);
   const row = await getOne('SELECT id,name,email,role,active FROM users WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'user', row.id, null, row, req.ip);
   res.status(201).json(row);
 }));
 
-router.patch('/users/:id', auth, permit(roles.manage), validate(z.object({
-  role: z.enum(ROLES).optional(),
+router.patch('/users/:id', auth, permit('admin.users'), validate(z.object({
   active: z.boolean().optional(),
   password: z.string().min(10).optional()
 })), wrap(async (req, res) => {
@@ -37,7 +39,6 @@ router.patch('/users/:id', auth, permit(roles.manage), validate(z.object({
   if (Number(req.params.id) === req.user.id && req.body.active === false) {
     return res.status(409).json({ error: 'You cannot deactivate your own account' });
   }
-  if (req.body.role) await query('UPDATE users SET role=? WHERE id=?', [req.body.role, req.params.id]);
   if (req.body.active !== undefined) {
     await query('UPDATE users SET active=? WHERE id=?', [req.body.active, req.params.id]);
     if (!req.body.active) await query('DELETE FROM sessions WHERE user_id=?', [req.params.id]);
@@ -52,7 +53,7 @@ router.patch('/users/:id', auth, permit(roles.manage), validate(z.object({
 }));
 
 /* Immutable audit trail */
-router.get('/audit', auth, permit(roles.manage), wrap(async (req, res) => {
+router.get('/audit', auth, permit('admin.users'), wrap(async (req, res) => {
   const filters = [];
   const params = [];
   if (req.query.entity) { filters.push('a.entity=?'); params.push(req.query.entity); }
@@ -69,19 +70,19 @@ router.get('/notifications', auth, wrap(async (req, res) => {
 }));
 
 router.post('/notifications/:id/read', auth, wrap(async (req, res) => {
-  await query("UPDATE notifications SET status='Read' WHERE id=? AND (user_id IS NULL OR user_id=? OR audience=?)",
-    [req.params.id, req.user.id, req.user.role]);
+  await query("UPDATE notifications SET status='Read' WHERE id=? AND (user_id IS NULL OR user_id=? OR audience IN (?))",
+    [req.params.id, req.user.id, req.user.permissions.length ? req.user.permissions : ['']]);
   res.status(204).end();
 }));
 
 router.post('/notifications/read-all', auth, wrap(async (req, res) => {
-  await query("UPDATE notifications SET status='Read' WHERE status<>'Read' AND (user_id IS NULL OR user_id=? OR audience=?)",
-    [req.user.id, req.user.role]);
+  await query("UPDATE notifications SET status='Read' WHERE status<>'Read' AND (user_id IS NULL OR user_id=? OR audience IN (?))",
+    [req.user.id, req.user.permissions.length ? req.user.permissions : ['']]);
   res.status(204).end();
 }));
 
 /** Manual trigger for the deadline/threshold scan; it also runs on a schedule. */
-router.post('/notifications/scan', auth, permit(roles.manage), wrap(async (_req, res) => {
+router.post('/notifications/scan', auth, permit('admin.users'), wrap(async (_req, res) => {
   res.json({ raised: await runAlertScan() });
 }));
 

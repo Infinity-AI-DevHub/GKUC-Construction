@@ -2,6 +2,10 @@ import { pool, query, spendSql, today } from './db.js';
 import { dispatchQueued } from './lib/channels.js';
 
 /**
+ * Alerts are addressed to a *permission*, not a role name. With roles under the MD's
+ * control (PID v3 §2.2), "whoever can manage transport" stays correct after a rename or a
+ * reorganisation, where a hardcoded role name would quietly stop matching anybody.
+ *
  * PID 2.13 — the Notification Center. Every deadline and threshold in the system is
  * converted into a proactive alert rather than something a person has to remember to check.
  *
@@ -31,7 +35,7 @@ async function vehicleComplianceAlerts(stamp, alerts) {
     const remaining = days(row.expiry_date);
     alerts.push({
       key: `vehicle-doc:${row.id}:${stamp}`,
-      audience: 'Transport Officer',
+      audience: 'transport.manage',
       severity: remaining < 0 ? 'Critical' : remaining <= 7 ? 'Critical' : 'Warning',
       title: `${row.doc_type} ${remaining < 0 ? 'expired' : 'expiring'} — ${row.registration}`,
       message: remaining < 0
@@ -49,7 +53,7 @@ async function lowStockAlerts(stamp, alerts) {
     const critical = Number(row.stock) < Number(row.minimum) * 0.5;
     alerts.push({
       key: `material-low:${row.id}:${stamp}`,
-      audience: 'Storekeeper',
+      audience: 'store.manage',
       severity: critical ? 'Critical' : 'Warning',
       title: `${critical ? 'Critical' : 'Low'} stock — ${row.name}`,
       message: `${row.site} holds ${row.stock} ${row.unit} against a minimum of ${row.minimum} ${row.unit}. Raise a purchase request.`,
@@ -67,7 +71,7 @@ async function budgetAlerts(stamp, alerts) {
     if (used < 85) continue;
     alerts.push({
       key: `budget:${row.id}:${stamp}`,
-      audience: 'Finance / Accounts',
+      audience: 'finance.view',
       severity: used >= 100 ? 'Critical' : 'Warning',
       title: `${used >= 100 ? 'Budget exceeded' : 'Budget warning'} — ${row.name}`,
       message: `Recorded cost is ${money(row.spent)} against an approved budget of ${money(row.budget)} (${used.toFixed(1)}% used).`,
@@ -83,7 +87,7 @@ async function overdueTaskAlerts(stamp, alerts) {
   for (const row of rows) {
     alerts.push({
       key: `task-overdue:${row.id}:${stamp}`,
-      audience: 'Project Manager',
+      audience: 'projects.manage',
       severity: 'Warning',
       title: `Overdue task — ${row.title}`,
       message: `${row.assignee} was due to complete this on ${new Date(row.due_date).toISOString().slice(0, 10)} for ${row.project}. It is ${Math.abs(days(row.due_date))} day(s) overdue.`,
@@ -100,7 +104,7 @@ async function milestoneAlerts(stamp, alerts) {
     const remaining = days(row.due_date);
     alerts.push({
       key: `milestone:${row.id}:${stamp}`,
-      audience: 'Project Manager',
+      audience: 'projects.manage',
       severity: remaining < 0 ? 'Critical' : 'Info',
       title: `${remaining < 0 ? 'Milestone delayed' : 'Milestone approaching'} — ${row.title}`,
       message: `${row.project}: milestone due ${new Date(row.due_date).toISOString().slice(0, 10)} (${remaining < 0 ? `${Math.abs(remaining)} day(s) late` : `in ${remaining} day(s)`}).`,
@@ -118,7 +122,7 @@ async function employeeDocumentAlerts(stamp, alerts) {
     const remaining = days(row.expiry_date);
     alerts.push({
       key: `employee-doc:${row.id}:${stamp}`,
-      audience: 'HR',
+      audience: 'hr.manage',
       severity: remaining < 0 ? 'Critical' : 'Warning',
       title: `${row.title} ${remaining < 0 ? 'expired' : 'expiring'} — ${row.name}`,
       message: `${row.name}: ${row.title} ${remaining < 0 ? `expired ${Math.abs(remaining)} day(s) ago` : `expires in ${remaining} day(s)`}.`,
@@ -136,7 +140,7 @@ async function invoiceAlerts(stamp, alerts) {
     const remaining = days(row.due_date);
     alerts.push({
       key: `invoice:${row.id}:${stamp}`,
-      audience: 'Finance / Accounts',
+      audience: 'finance.view',
       severity: remaining < 0 ? 'Critical' : 'Warning',
       title: `${remaining < 0 ? 'Overdue' : 'Upcoming'} supplier payment — ${row.supplier}`,
       message: `Invoice ${row.invoice_no}: ${money(Number(row.amount) - Number(row.paid_amount))} outstanding, due ${new Date(row.due_date).toISOString().slice(0, 10)}.`,
@@ -165,12 +169,51 @@ async function serviceScheduleAlerts(stamp, alerts) {
     const overdue = (kmRemaining !== null && kmRemaining <= 0) || (dateRemaining !== null && dateRemaining < 0);
     alerts.push({
       key: `service:${row.id}:${stamp}`,
-      audience: 'Transport Officer',
+      audience: 'transport.manage',
       severity: overdue ? 'Critical' : 'Warning',
       title: `Service ${overdue ? 'overdue' : 'due'} — ${row.registration}`,
       message: `${row.vehicle}: ${dueByKm ? `${Math.abs(kmRemaining)} km ${kmRemaining <= 0 ? 'past' : 'until'} the next service. ` : ''}` +
         `${dueByDate ? `Scheduled service ${dateRemaining < 0 ? `${Math.abs(dateRemaining)} day(s) overdue` : `in ${dateRemaining} day(s)`}.` : ''}`.trim(),
       referenceType: 'fleet',
+      referenceId: row.id
+    });
+  }
+}
+
+/** PID v3 problem 6 — retention is easy to lose track of across a long project. */
+async function retentionAlerts(stamp, alerts) {
+  const rows = await query(`SELECT r.id,r.description,r.amount,r.released_amount,r.release_date,p.name project
+    FROM retentions r JOIN projects p ON p.id=r.project_id
+    WHERE r.status IN ('Held','Partially released')
+      AND r.release_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)`);
+  for (const row of rows) {
+    const remaining = days(row.release_date);
+    alerts.push({
+      key: `retention:${row.id}:${stamp}`,
+      audience: 'qs.retention',
+      severity: remaining < 0 ? 'Critical' : 'Warning',
+      title: `Retention ${remaining < 0 ? 'overdue for release' : 'release approaching'} — ${row.project}`,
+      message: `${row.description}: ${money(Number(row.amount) - Number(row.released_amount))} still held, due ` +
+        `${remaining < 0 ? `${Math.abs(remaining)} day(s) ago` : `in ${remaining} day(s)`}.`,
+      referenceType: 'retention',
+      referenceId: row.id
+    });
+  }
+}
+
+/** A tender closing date is worth nothing if it passes unnoticed. */
+async function tenderAlerts(stamp, alerts) {
+  const rows = await query(`SELECT id,reference,title,client,closing_date FROM tenders
+    WHERE status IN ('Identified','Preparing') AND closing_date <= DATE_ADD(CURDATE(), INTERVAL 14 DAY)`);
+  for (const row of rows) {
+    const remaining = days(row.closing_date);
+    alerts.push({
+      key: `tender:${row.id}:${stamp}`,
+      audience: 'qs.tender',
+      severity: remaining <= 3 ? 'Critical' : 'Warning',
+      title: `Tender ${remaining < 0 ? 'closed' : 'closing'} — ${row.client}`,
+      message: `${row.reference} ${row.title}: ${remaining < 0 ? `closed ${Math.abs(remaining)} day(s) ago` : `closes in ${remaining} day(s)`}.`,
+      referenceType: 'tender',
       referenceId: row.id
     });
   }
@@ -182,7 +225,7 @@ async function pendingApprovalAlerts(stamp, alerts) {
   if (!pending) return;
   alerts.push({
     key: `purchase-pending:${stamp}`,
-    audience: 'Project Manager',
+    audience: 'projects.manage',
     severity: 'Info',
     title: `${pending} purchase request(s) awaiting approval`,
     message: 'Purchase requests are held until management approves them. Review them so site work is not delayed.',
@@ -204,6 +247,8 @@ export async function runAlertScan() {
     employeeDocumentAlerts(stamp, alerts),
     invoiceAlerts(stamp, alerts),
     serviceScheduleAlerts(stamp, alerts),
+    retentionAlerts(stamp, alerts),
+    tenderAlerts(stamp, alerts),
     pendingApprovalAlerts(stamp, alerts)
   ]);
   for (const alert of alerts) await raise(alert);

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, today } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 import { dueLabel } from './bootstrap.js';
 
 const router = Router();
@@ -76,7 +76,7 @@ router.get('/:id', auth, wrap(async (req, res) => {
   });
 }));
 
-router.post('/', auth, permit(roles.transport), validate(fleetSchema), wrap(async (req, res) => {
+router.post('/', auth, permit('transport.manage'), validate(fleetSchema), wrap(async (req, res) => {
   const body = req.body;
   try {
     const result = await query('INSERT INTO fleet (vehicle,registration,driver,status,renewal_type,due_date,project_id,odometer) VALUES (?,?,?,?,?,?,?,?)',
@@ -94,7 +94,7 @@ router.post('/', auth, permit(roles.transport), validate(fleetSchema), wrap(asyn
   }
 }));
 
-router.patch('/:id', auth, permit(roles.transport), validate(fleetSchema.partial()), wrap(async (req, res) => {
+router.patch('/:id', auth, permit('transport.manage'), validate(fleetSchema.partial()), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM fleet WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Asset not found' });
   const columns = {
@@ -121,7 +121,7 @@ router.get('/documents/expiring', auth, wrap(async (req, res) => {
   res.json(rows.map(row => ({ ...row, due: dueLabel(row.expiryDate) })));
 }));
 
-router.post('/:id/documents', auth, permit(roles.transport), validate(z.object({
+router.post('/:id/documents', auth, permit('transport.manage'), validate(z.object({
   docType: z.enum(DOC_TYPES),
   reference: z.string().max(120).optional(),
   expiryDate: isoDate,
@@ -136,7 +136,7 @@ router.post('/:id/documents', auth, permit(roles.transport), validate(z.object({
   res.status(201).json({ ...row, due: dueLabel(row.expiry_date) });
 }));
 
-router.post('/:id/fuel', auth, permit(roles.transport), validate(z.object({
+router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
   projectId: z.number().int().positive().optional(),
   fuelDate: isoDate,
   litres: z.number().positive().max(2000),
@@ -160,7 +160,7 @@ router.post('/:id/fuel', auth, permit(roles.transport), validate(z.object({
   res.status(201).json(row);
 }));
 
-router.post('/:id/maintenance', auth, permit(roles.transport), validate(z.object({
+router.post('/:id/maintenance', auth, permit('transport.manage'), validate(z.object({
   serviceDate: isoDate,
   description: z.string().min(3).max(400),
   cost: z.number().nonnegative().default(0),

@@ -3,8 +3,9 @@ import { ArrowDownToLine, Check, Clock3, PencilLine, ShieldCheck, UserRoundCheck
 import { api, localDate, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
+import BiometricImport from './BiometricImport.jsx';
 
-const TABS = ['Employees', 'Attendance', 'Leave', 'Overtime', 'Payroll', 'Performance', 'Departments'];
+const TABS = ['Employees', 'Attendance', 'Biometric import', 'Leave', 'Overtime', 'Payroll', 'Performance', 'Departments'];
 
 /** PID 2.2 — one record per employee covering profile, attendance, leave and overtime. */
 export default function People({ data, reload, can }) {
@@ -13,7 +14,8 @@ export default function People({ data, reload, can }) {
 
   const actions = {
     Employees: can.hr && 'Add employee',
-    Attendance: can.site && 'Record attendance',
+    Attendance: can.attendance && 'Record attendance',
+    'Biometric import': null,
     Leave: can.hr && 'Record leave',
     Overtime: can.site && 'Record overtime',
     Payroll: can.hr && 'Run payroll',
@@ -27,6 +29,7 @@ export default function People({ data, reload, can }) {
 
     {tab === 'Employees' && <Employees data={data} can={can} />}
     {tab === 'Attendance' && <Attendance data={data} reload={reload} can={can} />}
+    {tab === 'Biometric import' && <BiometricImport data={data} reload={reload} can={can} />}
     {tab === 'Leave' && <Leave can={can} />}
     {tab === 'Overtime' && <Overtime can={can} />}
     {tab === 'Payroll' && <Payroll can={can} />}

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
@@ -56,7 +56,7 @@ router.get('/:id', auth, wrap(async (req, res) => {
   res.json({ ...boq, items, variations, comparison });
 }));
 
-router.post('/', auth, permit(roles.qs), validate(z.object({
+router.post('/', auth, permit('qs.boq'), validate(z.object({
   projectId: z.number().int().positive(),
   title: z.string().min(3).max(180),
   notes: z.string().max(1000).optional(),
@@ -78,7 +78,7 @@ router.post('/', auth, permit(roles.qs), validate(z.object({
   res.status(201).json(await getOne(`${select} WHERE b.id=?`, [id]));
 }));
 
-router.post('/:id/items', auth, permit(roles.qs), validate(itemSchema), wrap(async (req, res) => {
+router.post('/:id/items', auth, permit('qs.boq'), validate(itemSchema), wrap(async (req, res) => {
   const boq = await getOne('SELECT * FROM boqs WHERE id=?', [req.params.id]);
   if (!boq) return res.status(404).json({ error: 'BOQ not found' });
   if (boq.status === 'Approved') return res.status(409).json({ error: 'An approved BOQ cannot be edited — raise a variation order instead' });
@@ -93,7 +93,7 @@ router.post('/:id/items', auth, permit(roles.qs), validate(itemSchema), wrap(asy
  * Approving a BOQ writes its total onto the project budget, so estimates and actual
  * costs are afterwards tracked in the same place instead of a separate spreadsheet.
  */
-router.patch('/:id', auth, permit(roles.manage), validate(z.object({
+router.patch('/:id', auth, permit('qs.approve'), validate(z.object({
   status: z.enum(['Draft', 'Submitted', 'Approved', 'Rejected'])
 })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM boqs WHERE id=?', [req.params.id]);
@@ -107,7 +107,7 @@ router.patch('/:id', auth, permit(roles.manage), validate(z.object({
   });
   if (req.body.status === 'Approved') {
     await notify({
-      audience: 'Project Manager',
+      audience: 'qs.view',
       severity: 'Info',
       title: `BOQ ${before.reference} approved`,
       message: 'The approved BOQ total is now the project budget. Actual costs are tracked against it from here.',
@@ -123,7 +123,7 @@ router.get('/variations/all', auth, wrap(async (_req, res) => res.json(await que
   v.created_at createdAt,p.name project,u.name raisedBy FROM variation_orders v JOIN projects p ON p.id=v.project_id
   JOIN users u ON u.id=v.raised_by ORDER BY v.id DESC`))));
 
-router.post('/:id/variations', auth, permit(roles.qs), validate(z.object({
+router.post('/:id/variations', auth, permit('qs.boq'), validate(z.object({
   description: z.string().min(3).max(600),
   amount: z.number()
 })), wrap(async (req, res) => {
@@ -137,7 +137,7 @@ router.post('/:id/variations', auth, permit(roles.qs), validate(z.object({
   res.status(201).json(row);
 }));
 
-router.patch('/variations/:id', auth, permit(roles.manage), validate(z.object({
+router.patch('/variations/:id', auth, permit('qs.approve'), validate(z.object({
   status: z.enum(['Pending', 'Approved', 'Rejected'])
 })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM variation_orders WHERE id=?', [req.params.id]);

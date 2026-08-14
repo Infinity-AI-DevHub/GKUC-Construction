@@ -1,4 +1,5 @@
 import { query } from './db.js';
+import { DEFAULT_ROLES, LEGACY_ROLE_MAP, PERMISSIONS } from './lib/permissions.js';
 
 export const ROLES = [
   'Owner / Director', 'Administrator', 'Project Manager', 'Site Supervisor', 'Storekeeper',
@@ -461,9 +462,126 @@ async function createLifecycleTables() {
   ) ENGINE=InnoDB`);
 }
 
+/** PID v3 §2.2 — roles and permissions live in data so the MD can change them at runtime. */
+async function createAccessTables() {
+  await query(`CREATE TABLE IF NOT EXISTS roles (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE,
+    description VARCHAR(400) NULL, is_system BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id BIGINT UNSIGNED NOT NULL, permission_key VARCHAR(80) NOT NULL,
+    PRIMARY KEY(role_id,permission_key),
+    CONSTRAINT fk_roleperm_role FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB`);
+  /* Delegation: the MD hands one authority to one person, optionally for a limited time. */
+  await query(`CREATE TABLE IF NOT EXISTS user_permissions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, user_id BIGINT UNSIGNED NOT NULL,
+    permission_key VARCHAR(80) NOT NULL, effect ENUM('Grant','Revoke') NOT NULL DEFAULT 'Grant',
+    reason VARCHAR(400) NULL, expires_at DATE NULL, granted_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_userperm_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_userperm_granter FOREIGN KEY(granted_by) REFERENCES users(id),
+    UNIQUE KEY uq_user_permission(user_id,permission_key)
+  ) ENGINE=InnoDB`);
+}
+
+/** PID v3 §4.3 — the two-site scheduling problem: status, the reason, and who moved where. */
+async function createSiteOpsTables() {
+  await query(`CREATE TABLE IF NOT EXISTS site_status_log (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
+    from_status VARCHAR(40) NULL, to_status VARCHAR(40) NOT NULL,
+    reason VARCHAR(500) NOT NULL, effective_date DATE NULL,
+    notified INT UNSIGNED NOT NULL DEFAULT 0, changed_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_sitelog_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    CONSTRAINT fk_sitelog_user FOREIGN KEY(changed_by) REFERENCES users(id),
+    INDEX idx_sitelog_project(project_id,created_at)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS resource_reassignments (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    resource_type ENUM('Labour','Driver','Vehicle','Equipment') NOT NULL, resource_id BIGINT UNSIGNED NOT NULL,
+    resource_name VARCHAR(180) NOT NULL, from_project_id BIGINT UNSIGNED NULL, to_project_id BIGINT UNSIGNED NULL,
+    reason VARCHAR(500) NULL, moved_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_reassign_from FOREIGN KEY(from_project_id) REFERENCES projects(id),
+    CONSTRAINT fk_reassign_to FOREIGN KEY(to_project_id) REFERENCES projects(id),
+    CONSTRAINT fk_reassign_user FOREIGN KEY(moved_by) REFERENCES users(id),
+    INDEX idx_reassign_created(created_at)
+  ) ENGINE=InnoDB`);
+}
+
+/** PID v3 §3.3 — QS: quotations built from the BOQ, tender filing, retention, subcontractors. */
+async function createQsTables() {
+  await query(`CREATE TABLE IF NOT EXISTS quotations_client (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, reference VARCHAR(60) NOT NULL UNIQUE,
+    boq_id BIGINT UNSIGNED NULL, project_id BIGINT UNSIGNED NULL, inquiry_id BIGINT UNSIGNED NULL,
+    client_name VARCHAR(180) NOT NULL, title VARCHAR(200) NOT NULL, quote_date DATE NOT NULL,
+    valid_until DATE NULL, subtotal DECIMAL(15,2) NOT NULL DEFAULT 0,
+    markup_percent DECIMAL(6,2) NOT NULL DEFAULT 0, vat_percent DECIMAL(6,2) NOT NULL DEFAULT 0,
+    total DECIMAL(15,2) NOT NULL DEFAULT 0, notes VARCHAR(1000) NULL,
+    status ENUM('Draft','Sent','Accepted','Declined','Expired') NOT NULL DEFAULT 'Draft',
+    prepared_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_quote_boq FOREIGN KEY(boq_id) REFERENCES boqs(id),
+    CONSTRAINT fk_quote_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_quote_inquiry FOREIGN KEY(inquiry_id) REFERENCES inquiries(id),
+    CONSTRAINT fk_quote_user FOREIGN KEY(prepared_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS quotation_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, quotation_id BIGINT UNSIGNED NOT NULL,
+    category VARCHAR(40) NOT NULL, description VARCHAR(300) NOT NULL, unit VARCHAR(30) NOT NULL,
+    quantity DECIMAL(14,3) NOT NULL, rate DECIMAL(14,2) NOT NULL, amount DECIMAL(15,2) NOT NULL,
+    CONSTRAINT fk_quoteitem_quote FOREIGN KEY(quotation_id) REFERENCES quotations_client(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS tenders (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, reference VARCHAR(60) NOT NULL UNIQUE,
+    title VARCHAR(220) NOT NULL, client VARCHAR(180) NOT NULL, source VARCHAR(120) NULL,
+    closing_date DATE NOT NULL, submitted_date DATE NULL, estimated_value DECIMAL(15,2) NOT NULL DEFAULT 0,
+    bid_value DECIMAL(15,2) NOT NULL DEFAULT 0, documents_note VARCHAR(600) NULL,
+    status ENUM('Identified','Preparing','Submitted','Won','Lost','Withdrawn') NOT NULL DEFAULT 'Identified',
+    outcome_note VARCHAR(600) NULL, project_id BIGINT UNSIGNED NULL,
+    owner_id BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_tender_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_tender_user FOREIGN KEY(owner_id) REFERENCES users(id), INDEX idx_tender_closing(closing_date)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS retentions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
+    description VARCHAR(300) NOT NULL, amount DECIMAL(15,2) NOT NULL,
+    percent DECIMAL(6,2) NOT NULL DEFAULT 0, held_from DATE NOT NULL, release_date DATE NOT NULL,
+    defect_liability_ends DATE NULL, released_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    status ENUM('Held','Partially released','Released','Written off') NOT NULL DEFAULT 'Held',
+    notes VARCHAR(600) NULL, created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_retention_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_retention_user FOREIGN KEY(created_by) REFERENCES users(id),
+    INDEX idx_retention_release(release_date)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS subcontractors (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(180) NOT NULL UNIQUE,
+    trade VARCHAR(120) NOT NULL, contact_person VARCHAR(120) NULL, phone VARCHAR(40) NULL,
+    email VARCHAR(190) NULL, notes VARCHAR(600) NULL, active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS subcontractor_bills (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, subcontractor_id BIGINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NOT NULL, reference VARCHAR(80) NOT NULL, description VARCHAR(400) NULL,
+    amount DECIMAL(15,2) NOT NULL, paid_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    bill_date DATE NOT NULL, due_date DATE NULL,
+    status ENUM('Unpaid','Partially paid','Paid') NOT NULL DEFAULT 'Unpaid',
+    created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_subbill_sub FOREIGN KEY(subcontractor_id) REFERENCES subcontractors(id),
+    CONSTRAINT fk_subbill_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_subbill_user FOREIGN KEY(created_by) REFERENCES users(id),
+    UNIQUE KEY uq_sub_bill(subcontractor_id,reference)
+  ) ENGINE=InnoDB`);
+}
+
 /** Non-destructive upgrades for databases created by an earlier version. */
 async function migrateExistingInstalls() {
-  await query(`ALTER TABLE users MODIFY role ENUM(${enumList(ROLES)}) NOT NULL`);
+  /* The role column was an ENUM, which cannot hold roles the MD invents. It becomes a plain
+     name mirroring roles.name, with role_id as the real relationship. */
+  await query('ALTER TABLE users MODIFY role VARCHAR(120) NOT NULL');
+  await addColumn('users', 'role_id', 'BIGINT UNSIGNED NULL');
+  await addIndex('users', 'fk_users_role', 'CONSTRAINT fk_users_role FOREIGN KEY(role_id) REFERENCES roles(id)');
   await query("ALTER TABLE attendance MODIFY state ENUM('On site','Late','Checked out','Absent','On leave') NOT NULL");
   await query("ALTER TABLE stock_movements MODIFY movement_type ENUM('Receipt','Issue','Return','Adjustment','Transfer') NOT NULL");
   await addColumn('materials', 'unit_cost', 'DECIMAL(14,2) NOT NULL DEFAULT 0');
@@ -477,6 +595,12 @@ async function migrateExistingInstalls() {
   await addColumn('notifications', 'dedupe_key', 'VARCHAR(190) NULL');
   await addColumn('notifications', 'audience', 'VARCHAR(120) NULL');
   await addColumn('tasks', 'due_date', 'DATE NULL');
+  /* A site is Active or Rescheduled; the reason for the last change travels with it. */
+  await addColumn('projects', 'site_status', "ENUM('Active','Rescheduled','On hold','Completed') NOT NULL DEFAULT 'Active'");
+  await addColumn('projects', 'status_reason', 'VARCHAR(500) NULL');
+  await addColumn('projects', 'status_changed_at', 'DATETIME NULL');
+  await addColumn('employees', 'current_project_id', 'BIGINT UNSIGNED NULL');
+  await addIndex('employees', 'fk_employee_project', 'CONSTRAINT fk_employee_project FOREIGN KEY(current_project_id) REFERENCES projects(id)');
   await addColumn('fleet', 'driver_employee_id', 'BIGINT UNSIGNED NULL');
   await addColumn('fleet', 'service_interval_km', 'INT UNSIGNED NOT NULL DEFAULT 0');
   await addColumn('fleet', 'service_interval_months', 'TINYINT UNSIGNED NOT NULL DEFAULT 0');
@@ -490,6 +614,41 @@ async function migrateExistingInstalls() {
   await addIndex('attendance', 'fk_attendance_employee', 'CONSTRAINT fk_attendance_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');
 }
 
+/**
+ * Writes the starting roles once. It never rewrites an existing role's permissions, so a
+ * change the MD makes in the product is permanent and survives every future deployment.
+ */
+async function seedAccessControl() {
+  const [{ count }] = await query('SELECT COUNT(*) count FROM roles');
+  if (!count) {
+    for (const role of DEFAULT_ROLES) {
+      const result = await query('INSERT INTO roles (name,description,is_system) VALUES (?,?,?)',
+        [role.name, role.description, role.system ? 1 : 0]);
+      for (const key of role.permissions()) {
+        await query('INSERT IGNORE INTO role_permissions (role_id,permission_key) VALUES (?,?)', [result.insertId, key]);
+      }
+    }
+  }
+
+  /* A role created before a permission existed should still receive it if it holds
+     everything else — this keeps the MD's "full access" role genuinely full. */
+  const systemRoles = await query('SELECT id FROM roles WHERE is_system=1');
+  for (const role of systemRoles) {
+    for (const permission of PERMISSIONS) {
+      await query('INSERT IGNORE INTO role_permissions (role_id,permission_key) VALUES (?,?)', [role.id, permission.key]);
+    }
+  }
+
+  /* Point every account at a real role, translating the names used by the previous build. */
+  const unassigned = await query('SELECT id,role FROM users WHERE role_id IS NULL');
+  for (const user of unassigned) {
+    const target = LEGACY_ROLE_MAP[user.role] || user.role;
+    const role = (await query('SELECT id,name FROM roles WHERE name=?', [target]))[0]
+      || (await query('SELECT id,name FROM roles WHERE name=?', ['Read-Only Viewer']))[0];
+    if (role) await query('UPDATE users SET role_id=?, role=? WHERE id=?', [role.id, role.name, user.id]);
+  }
+}
+
 export async function migrate() {
   await createCoreTables();
   await createHrTables();
@@ -501,5 +660,9 @@ export async function migrate() {
   await createReportDetailTables();
   await createAttachmentTables();
   await createLifecycleTables();
+  await createAccessTables();
+  await createSiteOpsTables();
+  await createQsTables();
   await migrateExistingInstalls();
+  await seedAccessControl();
 }

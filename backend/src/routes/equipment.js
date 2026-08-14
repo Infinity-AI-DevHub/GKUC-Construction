@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, transaction } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -27,7 +27,7 @@ router.get('/scan/:token', auth, wrap(async (req, res) => {
 }));
 
 /** Issues (or reissues) the token behind an asset's printed label. */
-router.post('/:id/qr', auth, permit(roles.projects), wrap(async (req, res) => {
+router.post('/:id/qr', auth, permit('store.lending'), wrap(async (req, res) => {
   const item = await getOne('SELECT * FROM equipment WHERE id=?', [req.params.id]);
   if (!item) return res.status(404).json({ error: 'Equipment not found' });
   const token = crypto.randomBytes(16).toString('hex');
@@ -47,7 +47,7 @@ router.get('/:id', auth, wrap(async (req, res) => {
   res.json({ ...item, assignments, maintenance });
 }));
 
-router.post('/', auth, permit(roles.projects), validate(z.object({
+router.post('/', auth, permit('store.lending'), validate(z.object({
   code: z.string().min(2).max(40),
   name: z.string().min(2).max(180),
   category: z.string().min(2).max(100),
@@ -70,7 +70,7 @@ router.post('/', auth, permit(roles.projects), validate(z.object({
 }));
 
 /** Assigning marks the asset as held by a site, so it cannot be double-committed. */
-router.post('/:id/assign', auth, permit(roles.projects), validate(z.object({
+router.post('/:id/assign', auth, permit('store.lending'), validate(z.object({
   projectId: z.number().int().positive(),
   assignedTo: z.string().min(2).max(120),
   assignedAt: isoDate,
@@ -96,7 +96,7 @@ router.post('/:id/assign', auth, permit(roles.projects), validate(z.object({
   }
 }));
 
-router.post('/:id/return', auth, permit(roles.site), validate(z.object({
+router.post('/:id/return', auth, permit('store.lending'), validate(z.object({
   returnedAt: isoDate,
   conditionNote: z.string().max(500).optional(),
   status: z.enum(['Available', 'Maintenance', 'Retired']).default('Available')
@@ -110,7 +110,7 @@ router.post('/:id/return', auth, permit(roles.site), validate(z.object({
   res.json(await getOne(`${select} WHERE e.id=?`, [req.params.id]));
 }));
 
-router.post('/:id/maintenance', auth, permit(roles.projects), validate(z.object({
+router.post('/:id/maintenance', auth, permit('store.lending'), validate(z.object({
   maintenanceType: z.enum(['Service', 'Repair', 'Inspection']),
   performedAt: isoDate,
   cost: z.number().nonnegative().default(0),

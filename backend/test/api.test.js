@@ -62,7 +62,8 @@ test('authenticates and returns database-backed operational data', async () => {
   assert.equal(body.data.tasks.length, 5);
   assert.equal(body.data.employees.length, 8);
   assert.equal(body.data.equipment.length, 5);
-  assert.equal(body.user.role, 'Owner / Director');
+  assert.equal(body.user.role, 'Managing Director', 'PID v3 §2.1 role names');
+  assert.ok(body.user.permissions.length > 30, 'the MD holds every permission');
 });
 
 test('enforces role permissions and records authorized changes', async () => {
@@ -375,8 +376,11 @@ test('performance reviews average their four scores', async () => {
 
 test('deactivating a user ends their session', async () => {
   const owner = await login();
+  /* Roles are data now, so a new account is created against a role id. */
+  const roles = await call(owner, 'GET', '/users/roles');
+  const viewerRole = roles.body.find(role => role.name === 'Read-Only Viewer');
   const created = await call(owner, 'POST', '/users', {
-    name: 'Temporary Viewer', email: 'temp.viewer@gkuc.lk', password: 'TempPass2026!', role: 'Read-Only Viewer'
+    name: 'Temporary Viewer', email: 'temp.viewer@gkuc.lk', password: 'TempPass2026!', roleId: viewerRole.id
   });
   assert.equal(created.status, 201);
 

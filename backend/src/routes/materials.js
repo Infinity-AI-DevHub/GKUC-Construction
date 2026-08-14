@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, transaction } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 import { stockState } from './bootstrap.js';
 
 const router = Router();
@@ -26,7 +26,7 @@ router.get('/movements', auth, wrap(async (req, res) => {
     LEFT JOIN projects p ON p.id=m.project_id ${where} ORDER BY m.id DESC LIMIT 200`, params));
 }));
 
-router.post('/', auth, permit(roles.stock), validate(z.object({
+router.post('/', auth, permit('store.manage'), validate(z.object({
   name: z.string().min(2).max(180),
   unit: z.string().min(1).max(30),
   stock: z.number().nonnegative().default(0),
@@ -43,7 +43,7 @@ router.post('/', auth, permit(roles.stock), validate(z.object({
   res.status(201).json({ ...row, state: stockState(row) });
 }));
 
-router.patch('/:id', auth, permit(roles.stock), validate(z.object({
+router.patch('/:id', auth, permit('store.manage'), validate(z.object({
   minimum: z.number().nonnegative().optional(),
   site: z.string().min(2).max(180).optional(),
   unitCost: z.number().nonnegative().optional(),
@@ -66,7 +66,7 @@ router.patch('/:id', auth, permit(roles.stock), validate(z.object({
  * Stock movements are transactional: the balance, the movement row and the audit entry
  * either all commit or none do, so recorded stock can never drift from its history.
  */
-router.post('/:id/movements', auth, permit(roles.stock), validate(z.object({
+router.post('/:id/movements', auth, permit('store.manage'), validate(z.object({
   type: z.enum(['Receipt', 'Issue', 'Return', 'Adjustment', 'Transfer']),
   quantity: z.number().positive().max(1000000),
   reference: z.string().max(120).optional(),

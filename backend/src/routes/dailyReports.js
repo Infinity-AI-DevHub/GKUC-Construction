@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, query, today, transaction } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 import { notify } from '../alerts.js';
 import { listAttachments } from './uploads.js';
 
@@ -34,7 +34,7 @@ router.get('/:id', auth, wrap(async (req, res) => {
  * A daily report is the site's record for the day: workforce, work done, materials and
  * equipment used, delays and photos — captured once, visible to management immediately.
  */
-router.post('/', auth, permit(roles.site), validate(z.object({
+router.post('/', auth, permit('site.reports'), validate(z.object({
   projectId: z.number().int().positive(),
   reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   workforce: z.number().int().min(0).max(10000),
@@ -68,7 +68,7 @@ router.post('/', auth, permit(roles.site), validate(z.object({
     /* A reported issue or delay is escalated the same day rather than surfacing in a weekly review. */
     if (body.issue || body.delayHours > 0) {
       await notify({
-        audience: 'Project Manager',
+        audience: 'projects.view',
         severity: body.delayHours >= 2 ? 'Warning' : 'Info',
         title: `Site issue reported — ${date}`,
         message: `${req.user.name}: ${body.issue || 'Delay recorded'}${body.delayHours ? ` (${body.delayHours}h delay)` : ''}.`,

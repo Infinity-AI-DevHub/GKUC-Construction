@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, can, permit, validate, wrap } from '../lib/http.js';
 import { notify } from '../alerts.js';
 import { listAttachments } from './uploads.js';
 
@@ -42,14 +42,14 @@ router.get('/:id', auth, wrap(async (req, res) => {
   res.json({ ...task, comments, attachments });
 }));
 
-router.post('/', auth, permit(roles.site), validate(taskSchema), wrap(async (req, res) => {
+router.post('/', auth, permit('site.tasks'), validate(taskSchema), wrap(async (req, res) => {
   const body = req.body;
   const result = await query('INSERT INTO tasks (title,project_id,assignee,due,due_date,priority,status,notes) VALUES (?,?,?,?,?,?,?,?)',
     [body.title, body.projectId, body.assignee, body.due, body.dueDate || null, body.priority, body.status, body.notes]);
   const row = await withProject(result.insertId);
   await audit(pool, req.user.id, 'CREATE', 'task', row.id, null, row, req.ip);
   await notify({
-    audience: 'Site Supervisor',
+    audience: 'site.tasks',
     severity: body.priority === 'High' ? 'Warning' : 'Info',
     title: `Task assigned — ${body.title}`,
     message: `${body.assignee} is responsible for this ${body.priority.toLowerCase()}-priority task on ${row.project}, due ${body.due}.`,
@@ -59,10 +59,10 @@ router.post('/', auth, permit(roles.site), validate(taskSchema), wrap(async (req
   res.status(201).json(row);
 }));
 
-router.patch('/:id', auth, permit(roles.site), validate(taskSchema.partial()), wrap(async (req, res) => {
+router.patch('/:id', auth, permit('site.tasks'), validate(taskSchema.partial()), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM tasks WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Task not found' });
-  if (req.body.status === 'Approved' && !roles.projects.includes(req.user.role)) {
+  if (req.body.status === 'Approved' && !can(req, 'projects.manage')) {
     return res.status(403).json({ error: 'Only management can approve completed work' });
   }
   const columns = { projectId: 'project_id', dueDate: 'due_date' };

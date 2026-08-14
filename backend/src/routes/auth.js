@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, verifyPassword } from '../db.js';
-import { auth, bearer, tokenHash, validate, wrap } from '../lib/http.js';
+import { auth, bearer, permissionsFor, tokenHash, validate, wrap } from '../lib/http.js';
 
 const SESSION_HOURS = 12;
 const router = Router();
@@ -22,7 +22,13 @@ router.post('/login', validate(z.object({ email: z.string().email(), password: z
   }
   const session = await issueSession(user.id);
   await audit(pool, user.id, 'LOGIN', 'session', '', null, { expires: session.expires }, req.ip);
-  res.json({ token: session.token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  res.json({
+    token: session.token,
+    user: {
+      id: user.id, name: user.name, email: user.email, role: user.role,
+      permissions: await permissionsFor(user.id, user.role_id)
+    }
+  });
 }));
 
 router.post('/logout', auth, wrap(async (req, res) => {

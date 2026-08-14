@@ -1,19 +1,19 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
-import { auth, permit, roles, wrap } from '../lib/http.js';
+import { auth, can, permit, wrap } from '../lib/http.js';
 import { FOLDERS, allowedExtensions, MAX_UPLOAD_BYTES, readUpload, remove, storageDriver, store } from '../lib/storage.js';
 
 const router = Router();
 
 /** Uploading against a record needs the same permission as editing that record. */
 const WRITERS = {
-  task: roles.site,
-  project: roles.projects,
-  employee: roles.hr,
-  report: roles.site,
-  vehicle: roles.transport,
-  equipment: roles.projects
+  task: 'site.tasks',
+  project: 'projects.manage',
+  employee: 'hr.manage',
+  report: 'site.reports',
+  vehicle: 'transport.manage',
+  equipment: 'store.lending'
 };
 
 /** Each owner type points at the table its id must exist in. */
@@ -55,7 +55,7 @@ router.get('/:ownerType/:ownerId', auth, wrap(async (req, res) => {
 router.post('/:ownerType/:ownerId', auth, wrap(async (req, res, next) => {
   const { ownerType, ownerId } = req.params;
   if (!FOLDERS.includes(ownerType)) return res.status(404).json({ error: 'Unknown record type' });
-  if (!WRITERS[ownerType].includes(req.user.role)) {
+  if (!can(req, WRITERS[ownerType])) {
     return res.status(403).json({ error: 'You do not have permission to attach files to this record' });
   }
   const owner = await getOne(`SELECT id FROM ${OWNER_TABLES[ownerType]} WHERE id=?`, [ownerId]);
@@ -84,7 +84,7 @@ router.post('/:ownerType/:ownerId', auth, wrap(async (req, res, next) => {
   }
 }));
 
-router.delete('/:id', auth, permit(roles.projects), wrap(async (req, res) => {
+router.delete('/:id', auth, permit('projects.manage'), wrap(async (req, res) => {
   const attachment = await getOne('SELECT * FROM attachments WHERE id=?', [req.params.id]);
   if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
   await query('DELETE FROM attachments WHERE id=?', [attachment.id]);

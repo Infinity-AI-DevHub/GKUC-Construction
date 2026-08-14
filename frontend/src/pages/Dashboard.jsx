@@ -95,10 +95,13 @@ export default function Dashboard({ data, go, user }) {
 
       <section className="reference-card quick-control">
         <h2>Operations</h2>
-        <button onClick={() => go('Materials')}><Boxes size={17} /><span>Low-stock materials</span><b>{lowStock}</b><ChevronRight size={15} /></button>
-        <button onClick={() => go('Fleet')}><Truck size={17} /><span>Fleet renewals</span><b>{renewals}</b><ChevronRight size={15} /></button>
-        <button onClick={() => go('Daily reports')}><FileText size={17} /><span>Daily reports</span><b>{data.reports.length}</b><ChevronRight size={15} /></button>
-        <button onClick={() => go('Projects')}><AlertTriangle size={17} /><span>Delayed projects</span><b>{board.delayed.length}</b><ChevronRight size={15} /></button>
+        {/* The card sits in a fixed-height grid row, so the list scrolls rather than clipping. */}
+        <div className="quick-control-list">
+          <button onClick={() => go('Materials')}><Boxes size={17} /><span>Low-stock materials</span><b>{lowStock}</b><ChevronRight size={15} /></button>
+          <button onClick={() => go('Fleet')}><Truck size={17} /><span>Fleet renewals</span><b>{renewals}</b><ChevronRight size={15} /></button>
+          <button onClick={() => go('Daily reports')}><FileText size={17} /><span>Daily reports</span><b>{data.reports.length}</b><ChevronRight size={15} /></button>
+          <button onClick={() => go('Projects')}><AlertTriangle size={17} /><span>Delayed projects</span><b>{board.delayed.length}</b><ChevronRight size={15} /></button>
+        </div>
       </section>
 
       <section className="reference-card activity-timeline">

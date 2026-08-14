@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  Building2, ChevronDown, CircleDollarSign, ClipboardCheck, ClipboardList, FileText,
-  LayoutDashboard, LogIn, LogOut, Menu, ShieldCheck, Truck, Users, Warehouse
+  Building2, Calculator, ChevronDown, CircleDollarSign, ClipboardCheck, ClipboardList, FileText,
+  LayoutDashboard, LogIn, LogOut, Menu, Radar, ShieldCheck, Truck, Users, Warehouse
 } from 'lucide-react';
 import './styles.css';
 import './theme.css';
@@ -22,35 +22,61 @@ import Finance from './pages/Finance.jsx';
 import DailyReports from './pages/DailyReports.jsx';
 import Reports from './pages/Reports.jsx';
 import Admin from './pages/Admin.jsx';
+import Coordination from './pages/Coordination.jsx';
+import QuantitySurveying from './pages/QuantitySurveying.jsx';
 
 const NAV = [
-  ['Dashboard', LayoutDashboard],
-  ['Projects', Building2],
-  ['Tasks', ClipboardCheck],
-  ['People', Users],
-  ['Materials', Warehouse],
-  ['Fleet', Truck],
-  ['Finance', CircleDollarSign],
-  ['Daily reports', FileText],
-  ['Reports', ClipboardList],
-  ['Administration', ShieldCheck]
+  ['Dashboard', LayoutDashboard, null],
+  ['Coordination', Radar, 'projects.view'],
+  ['Projects', Building2, 'projects.view'],
+  ['Tasks', ClipboardCheck, 'projects.view'],
+  ['Quantity Surveying', Calculator, 'qs.view'],
+  ['People', Users, 'hr.view'],
+  ['Materials', Warehouse, 'store.view'],
+  ['Fleet', Truck, 'transport.view'],
+  ['Finance', CircleDollarSign, 'finance.view'],
+  ['Daily reports', FileText, 'projects.view'],
+  ['Reports', ClipboardList, null],
+  ['Administration', ShieldCheck, 'admin.users']
 ];
 
 /**
- * Write permissions mirror the server's role table (PID 2.14). The UI hides actions a
- * role cannot perform; the API refuses them regardless, so this is convenience, not security.
+ * Capability comes from the server, not from a list kept in the client. With roles under
+ * the MD's control (PID v3 §2.2), any hardcoded mapping here would be wrong the moment a
+ * role changed. The API enforces the same grants regardless — this only decides what to show.
  */
-const permissionsFor = role => ({
-  manage: ['Owner / Director', 'Administrator'].includes(role),
-  projects: ['Owner / Director', 'Administrator', 'Project Manager'].includes(role),
-  site: ['Owner / Director', 'Administrator', 'Project Manager', 'Site Supervisor'].includes(role),
-  stock: ['Owner / Director', 'Administrator', 'Project Manager', 'Site Supervisor', 'Storekeeper'].includes(role),
-  purchasing: ['Owner / Director', 'Administrator', 'Project Manager', 'Storekeeper', 'Finance / Accounts'].includes(role),
-  finance: ['Owner / Director', 'Administrator', 'Finance / Accounts'].includes(role),
-  hr: ['Owner / Director', 'Administrator', 'HR'].includes(role),
-  qs: ['Owner / Director', 'Administrator', 'Project Manager', 'QS / Estimator'].includes(role),
-  transport: ['Owner / Director', 'Administrator', 'Project Manager', 'Transport Officer'].includes(role)
-});
+const capabilities = permissions => {
+  const held = new Set(permissions || []);
+  const any = (...keys) => keys.some(key => held.has(key));
+  return {
+    has: key => held.has(key),
+    manage: any('admin.users'),
+    roles: any('admin.roles'),
+    audit: any('admin.audit'),
+    projects: any('projects.manage'),
+    schedule: any('projects.schedule'),
+    resources: any('resources.view'),
+    reassign: any('resources.reassign'),
+    enquiries: any('enquiries.manage'),
+    site: any('site.tasks'),
+    reports: any('site.reports'),
+    attendance: any('site.attendance'),
+    stock: any('store.manage'),
+    lending: any('store.lending'),
+    purchasing: any('store.manage', 'finance.pay'),
+    finance: any('finance.manage'),
+    invoice: any('finance.invoice'),
+    hr: any('hr.manage'),
+    hrImport: any('hr.attendance'),
+    payroll: any('hr.payroll'),
+    qs: any('qs.boq'),
+    quotation: any('qs.quotation'),
+    tender: any('qs.tender'),
+    retention: any('qs.retention'),
+    subcontractors: any('subcontractors.manage'),
+    transport: any('transport.manage')
+  };
+};
 
 function Login({ onLogin }) {
   const [error, setError] = useState('');
@@ -145,7 +171,7 @@ function App() {
     else setLoading(false);
   }, []);
 
-  const can = useMemo(() => permissionsFor(user?.role), [user?.role]);
+  const can = useMemo(() => capabilities(user?.permissions), [user?.permissions]);
 
   const logout = async () => {
     try { await post('/auth/logout'); } finally {
@@ -162,6 +188,8 @@ function App() {
   const shared = { data, reload, can, user };
   const content = {
     Dashboard: <Dashboard {...shared} go={setPage} />,
+    Coordination: <Coordination {...shared} />,
+    'Quantity Surveying': <QuantitySurveying {...shared} />,
     Projects: <Projects {...shared} />,
     Tasks: <Tasks {...shared} />,
     People: <People {...shared} />,
@@ -173,7 +201,7 @@ function App() {
     Administration: <Admin {...shared} initialTab={adminTab} />
   }[page] || <Dashboard {...shared} go={setPage} />;
 
-  const visibleNav = NAV.filter(([name]) => name !== 'Administration' || can.manage);
+  const visibleNav = NAV.filter(([, , permission]) => !permission || can.has(permission));
   const openTasks = data.tasks.filter(task => task.status !== 'Completed' && task.status !== 'Approved').length;
   const openNotifications = () => {
     setAdminTab('Notifications');

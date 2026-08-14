@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { auth, permit, roles, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap } from '../lib/http.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -16,9 +16,9 @@ const select = `SELECT r.id,r.reference,r.period_start periodStart,r.period_end 
   (SELECT COUNT(*) FROM payslips s WHERE s.run_id=r.id) employees
   FROM payroll_runs r JOIN users u ON u.id=r.created_by LEFT JOIN users a ON a.id=r.approved_by`;
 
-router.get('/', auth, permit(roles.hr), wrap(async (_req, res) => res.json(await query(`${select} ORDER BY r.id DESC`))));
+router.get('/', auth, permit('hr.payroll'), wrap(async (_req, res) => res.json(await query(`${select} ORDER BY r.id DESC`))));
 
-router.get('/:id', auth, permit(roles.hr), wrap(async (req, res) => {
+router.get('/:id', auth, permit('hr.payroll'), wrap(async (req, res) => {
   const run = await getOne(`${select} WHERE r.id=?`, [req.params.id]);
   if (!run) return res.status(404).json({ error: 'Payroll run not found' });
   const payslips = await query(`SELECT s.id,s.days_present daysPresent,s.days_absent daysAbsent,s.overtime_hours overtimeHours,
@@ -31,7 +31,7 @@ router.get('/:id', auth, permit(roles.hr), wrap(async (req, res) => {
  * Builds a draft run for the period: days present come from attendance, overtime from
  * approved overtime records, and unpaid leave is deducted at the daily rate.
  */
-router.post('/', auth, permit(roles.hr), validate(z.object({
+router.post('/', auth, permit('hr.payroll'), validate(z.object({
   periodStart: isoDate,
   periodEnd: isoDate
 })), wrap(async (req, res) => {
@@ -81,7 +81,7 @@ router.post('/', auth, permit(roles.hr), validate(z.object({
 }));
 
 /** Approving locks the run; marking it paid posts the wage bill as a labour cost. */
-router.patch('/:id', auth, permit(roles.hr), validate(z.object({ status: z.enum(['Draft', 'Approved', 'Paid']) })), wrap(async (req, res) => {
+router.patch('/:id', auth, permit('hr.payroll'), validate(z.object({ status: z.enum(['Draft', 'Approved', 'Paid']) })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM payroll_runs WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Payroll run not found' });
   await query('UPDATE payroll_runs SET status=?,approved_by=? WHERE id=?',
@@ -97,7 +97,7 @@ const reviewSelect = `SELECT r.id,r.review_date reviewDate,r.period,r.quality,r.
 
 router.get('/reviews/all', auth, wrap(async (_req, res) => res.json(await query(`${reviewSelect} ORDER BY r.id DESC`))));
 
-router.post('/reviews/:employeeId', auth, permit(roles.hr), validate(z.object({
+router.post('/reviews/:employeeId', auth, permit('hr.payroll'), validate(z.object({
   reviewDate: isoDate,
   period: z.string().min(2).max(60),
   quality: z.number().int().min(1).max(5),
