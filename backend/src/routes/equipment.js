@@ -13,14 +13,14 @@ const select = `SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_date pu
   (SELECT a.assigned_to FROM equipment_assignments a WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) holder
   FROM equipment e`;
 
-router.get('/', auth, wrap(async (_req, res) => res.json(await query(`${select} ORDER BY e.code`))));
+router.get('/', auth, permit('store.view','store.manage'), wrap(async (_req, res) => res.json(await query(`${select} ORDER BY e.code`))));
 
 /**
  * PID 2.9 "QR Code Support". Each asset carries an opaque token; a label printed with
  * that token resolves to the asset here, so a phone camera on site answers "what is this
  * and who has it" without anyone typing an asset code.
  */
-router.get('/scan/:token', auth, wrap(async (req, res) => {
+router.get('/scan/:token', auth, permit('store.view','store.manage','store.lending'), wrap(async (req, res) => {
   const item = await getOne(`${select} WHERE e.qr_token=?`, [req.params.token]);
   if (!item) return res.status(404).json({ error: 'No equipment matches that code' });
   res.json(item);
@@ -36,7 +36,7 @@ router.post('/:id/qr', auth, permit('store.lending'), wrap(async (req, res) => {
   res.json({ id: item.id, code: item.code, qrToken: token });
 }));
 
-router.get('/:id', auth, wrap(async (req, res) => {
+router.get('/:id', auth, permit('store.view','store.manage'), wrap(async (req, res) => {
   const item = await getOne(`${select} WHERE e.id=?`, [req.params.id]);
   if (!item) return res.status(404).json({ error: 'Equipment not found' });
   const [assignments, maintenance] = await Promise.all([

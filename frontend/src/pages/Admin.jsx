@@ -3,6 +3,7 @@ import { BellRing } from 'lucide-react';
 import { api, patch, post, slug } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Page, Row, SelectField, Table, Tabs } from '../ui.jsx';
 import AccessControl from './AccessControl.jsx';
+import AccountPanel from '../AccountPanel.jsx';
 
 const TABS = ['Users', 'Access control', 'Notifications', 'Audit log', 'My account'];
 
@@ -21,7 +22,10 @@ export default function Admin({ can, user, initialTab = TABS[0] }) {
     {tab === 'Access control' && <AccessControl user={user} />}
     {tab === 'Notifications' && <Notifications can={can} />}
     {tab === 'Audit log' && <AuditLog />}
-    {tab === 'My account' && <Account />}
+    {tab === 'My account' && <section className="table-panel">
+      <div className="table-tools"><h2>Change your password</h2></div>
+      <AccountPanel />
+    </section>}
   </Page>;
 }
 
@@ -99,48 +103,6 @@ function AuditLog() {
       <span>{entry.ip || '—'}</span>
     </Row>)}
   </Table>;
-}
-
-/** Everyone can change their own password; doing so signs out other sessions. */
-function Account() {
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const submit = async event => {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    setMessage('');
-    const form = new FormData(event.currentTarget);
-    if (form.get('password') !== form.get('confirm')) {
-      setError('The new passwords do not match');
-      setBusy(false);
-      return;
-    }
-    try {
-      await post('/auth/password', { current: form.get('current'), password: form.get('password') });
-      setMessage('Password changed. Any other sessions have been signed out.');
-      event.target.reset();
-    } catch (failure) {
-      setError(failure.message);
-    } finally { setBusy(false); }
-  };
-
-  return <section className="table-panel">
-    <div className="table-tools"><h2>Change your password</h2></div>
-    <form className="report-form" onSubmit={submit}>
-      <Field name="current" label="Current password" type="password" />
-      <div />
-      <Field name="password" label="New password (10+ characters)" type="password" />
-      <Field name="confirm" label="Confirm new password" type="password" />
-      {error && <p className="form-error">{error}</p>}
-      {message && <p className="wide" style={{ margin: 0, fontSize: '11px', color: '#4f740c' }}>{message}</p>}
-      <div className="form-actions">
-        <button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Change password'}</button>
-      </div>
-    </form>
-  </section>;
 }
 
 function UserForm({ close, reload }) {

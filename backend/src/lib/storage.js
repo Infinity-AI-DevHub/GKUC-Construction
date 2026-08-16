@@ -142,12 +142,21 @@ export async function readUpload(req) {
   /* Buffered rather than streamed so the size ceiling is enforced before any parsing work. */
   const chunks = [];
   let received = 0;
+  let tooBig = false;
   for await (const chunk of req) {
     received += chunk.length;
     if (received > MAX_UPLOAD_BYTES + 8192) {
-      throw Object.assign(new Error(`Files must be ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB or smaller`), { status: 413 });
+      /* Stop keeping the data, but keep reading it. Memory stays bounded either way, and
+         draining the rest is what lets the refusal reach a client that is still sending —
+         hanging up early reaches it as a connection reset instead of a reason. */
+      tooBig = true;
+      chunks.length = 0;
+      continue;
     }
-    chunks.push(chunk);
+    if (!tooBig) chunks.push(chunk);
+  }
+  if (tooBig) {
+    throw Object.assign(new Error(`Files must be ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB or smaller`), { status: 413 });
   }
   const form = await new Response(Buffer.concat(chunks), { headers: { 'content-type': contentType } }).formData();
   const file = form.get('file');

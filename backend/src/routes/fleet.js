@@ -48,12 +48,12 @@ export function serviceDue(vehicle) {
   return { kmRemaining: byDistance, dueDate, overdue: (byDistance !== null && byDistance <= 0) || (dueDate && dueDate < today()) };
 }
 
-router.get('/', auth, wrap(async (_req, res) => {
+router.get('/', auth, permit('transport.view','transport.manage'), wrap(async (_req, res) => {
   const vehicles = await query(`${select} ORDER BY f.id`);
   res.json(vehicles.map(vehicle => ({ ...vehicle, due: dueLabel(vehicle.due_date), service: serviceDue(vehicle) })));
 }));
 
-router.get('/:id', auth, wrap(async (req, res) => {
+router.get('/:id', auth, permit('transport.view','transport.manage'), wrap(async (req, res) => {
   const vehicle = await getOne(`${select} WHERE f.id=?`, [req.params.id]);
   if (!vehicle) return res.status(404).json({ error: 'Asset not found' });
   const [documents, fuel, maintenance, running] = await Promise.all([
@@ -113,7 +113,7 @@ router.patch('/:id', auth, permit('transport.manage'), validate(fleetSchema.part
 }));
 
 /** Compliance documents — the expiry dates that the PID names as a recurring GKUC risk. */
-router.get('/documents/expiring', auth, wrap(async (req, res) => {
+router.get('/documents/expiring', auth, permit('transport.view','transport.manage'), wrap(async (req, res) => {
   const window = Number(req.query.days || 60);
   const rows = await query(`SELECT d.id,d.doc_type docType,d.reference,d.expiry_date expiryDate,d.cost,f.vehicle,f.registration,f.id vehicleId
     FROM vehicle_documents d JOIN fleet f ON f.id=d.vehicle_id
@@ -147,6 +147,13 @@ router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
   const body = req.body;
   const vehicle = await getOne('SELECT * FROM fleet WHERE id=?', [req.params.id]);
   if (!vehicle) return res.status(404).json({ error: 'Asset not found' });
+  /* An odometer cannot run backwards, so a lower reading is a typo. Catching it here keeps
+     the fuel-per-kilometre figures honest instead of quietly poisoning them. */
+  if (body.odometer && body.odometer < Number(vehicle.odometer)) {
+    return res.status(409).json({
+      error: `The odometer cannot go backwards — ${vehicle.registration} was last recorded at ${vehicle.odometer} km`
+    });
+  }
   const result = await query('INSERT INTO fuel_records (vehicle_id,project_id,fuel_date,litres,cost,odometer,driver,created_by) VALUES (?,?,?,?,?,?,?,?)',
     [vehicle.id, body.projectId || null, body.fuelDate, body.litres, body.cost, body.odometer, body.driver || vehicle.driver, req.user.id]);
   if (body.odometer > vehicle.odometer) await query('UPDATE fleet SET odometer=? WHERE id=?', [body.odometer, vehicle.id]);

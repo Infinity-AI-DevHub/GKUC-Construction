@@ -38,6 +38,20 @@ const frontendDist = path.join(workspaceRoot, 'frontend', 'dist');
 const port = Number(process.env.PORT || 4173);
 
 app.use(helmet({ contentSecurityPolicy: false }));
+
+/*
+ * A request refused before its body was read — the wrong file type, a record that does not
+ * exist, no permission — leaves the client still sending into a socket nobody is reading.
+ * The refusal itself gets through, but the connection is left mid-request, and the next
+ * request to reuse it fails with a reset. Draining whatever is left once the reply has gone
+ * out keeps the connection usable, which matters most for uploads: those are the requests
+ * large enough for the client to still be writing when the answer comes back.
+ */
+app.use((req, res, next) => {
+  res.on('finish', () => { if (!req.complete) req.resume(); });
+  next();
+});
+
 app.use((req, res, next) => (
   req.headers['content-type']?.startsWith('multipart/form-data') ? next() : express.json({ limit: '2mb' })(req, res, next)
 ));
@@ -80,7 +94,7 @@ app.use('/uploads', express.static(UPLOAD_ROOT, { maxAge: '1y', index: false, do
 app.use(express.static(frontendDist));
 app.get('*', (_req, res) => res.sendFile(path.join(frontendDist, 'index.html')));
 
-app.use((error, _req, res, _next) => {
+app.use((error, req, res, _next) => {
   console.error(error);
   if (error.status) return res.status(error.status).json({ error: error.message });
   if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This record already exists' });

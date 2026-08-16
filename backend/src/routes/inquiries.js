@@ -17,7 +17,7 @@ const select = `SELECT i.id,i.reference,i.customer_name customer,i.contact_perso
   i.project_id projectId,p.name project,u.name createdBy,i.created_at createdAt
   FROM inquiries i LEFT JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=i.created_by`;
 
-router.get('/', auth, wrap(async (req, res) => {
+router.get('/', auth, permit('enquiries.manage','projects.view'), wrap(async (req, res) => {
   const where = req.query.status ? 'WHERE i.status=?' : '';
   const params = req.query.status ? [req.query.status] : [];
   res.json(await query(`${select} ${where} ORDER BY i.id DESC`, params));

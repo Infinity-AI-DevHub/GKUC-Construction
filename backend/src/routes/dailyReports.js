@@ -11,13 +11,13 @@ const select = `SELECT r.id,r.project_id projectId,p.name site,r.supervisor,DATE
   r.report_date reportDate,r.workforce,r.work_completed work,r.issue,r.weather,r.delay_hours delayHours
   FROM daily_reports r JOIN projects p ON p.id=r.project_id`;
 
-router.get('/', auth, wrap(async (req, res) => {
+router.get('/', auth, permit('site.reports','projects.view'), wrap(async (req, res) => {
   const where = req.query.projectId ? 'WHERE r.project_id=?' : '';
   const params = req.query.projectId ? [req.query.projectId] : [];
   res.json(await query(`${select} ${where} ORDER BY r.report_date DESC,r.id DESC LIMIT 120`, params));
 }));
 
-router.get('/:id', auth, wrap(async (req, res) => {
+router.get('/:id', auth, permit('site.reports','projects.view'), wrap(async (req, res) => {
   const report = await getOne(`${select} WHERE r.id=?`, [req.params.id]);
   if (!report) return res.status(404).json({ error: 'Report not found' });
   const [materials, equipment, photos, attendance] = await Promise.all([

@@ -14,7 +14,7 @@ router.post('/categories', auth, permit('finance.manage'), validate(z.object({ n
   res.status(201).json(await getOne('SELECT * FROM expense_categories WHERE id=?', [result.insertId]));
 }));
 
-router.get('/expenses', auth, wrap(async (req, res) => {
+router.get('/expenses', auth, permit('finance.view','finance.manage'), wrap(async (req, res) => {
   const filters = [];
   const params = [];
   if (req.query.projectId) { filters.push('e.project_id=?'); params.push(req.query.projectId); }
@@ -45,7 +45,7 @@ router.post('/expenses', auth, permit('finance.manage'), validate(z.object({
   res.status(201).json(row);
 }));
 
-router.get('/income', auth, wrap(async (req, res) => {
+router.get('/income', auth, permit('finance.view','finance.manage'), wrap(async (req, res) => {
   const where = req.query.projectId ? 'WHERE i.project_id=?' : '';
   const params = req.query.projectId ? [req.query.projectId] : [];
   res.json(await query(`SELECT i.id,i.description,i.amount,i.received_date receivedDate,i.method,i.reference,p.name project,i.project_id projectId,u.name recordedBy
@@ -73,7 +73,7 @@ router.post('/income', auth, permit('finance.manage'), validate(z.object({
  * Budget monitoring (PID 2.10): every project's approved budget beside what has actually
  * been spent and received, so an overrun is visible while it can still be acted on.
  */
-router.get('/summary', auth, wrap(async (_req, res) => {
+router.get('/summary', auth, permit('finance.view','finance.manage'), wrap(async (_req, res) => {
   const projects = await query(`SELECT p.id projectId,p.name project,p.budget,p.progress,p.health,
     ${spendSql('p')} expenses,
     COALESCE((SELECT SUM(i.amount) FROM incomes i WHERE i.project_id=p.id),0) income

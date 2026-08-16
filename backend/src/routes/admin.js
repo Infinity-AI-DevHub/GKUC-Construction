@@ -11,7 +11,7 @@ const router = Router();
 router.get('/users', auth, permit('admin.users'), wrap(async (_req, res) =>
   res.json(await query('SELECT id,name,email,role,role_id roleId,active,created_at createdAt FROM users ORDER BY name'))));
 
-router.get('/users/roles', auth, wrap(async (_req, res) =>
+router.get('/users/roles', auth, permit('admin.users', 'admin.roles'), wrap(async (_req, res) =>
   res.json(await query('SELECT id,name,description FROM roles ORDER BY is_system DESC, name'))));
 
 router.post('/users', auth, permit('admin.users'), validate(z.object({

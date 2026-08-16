@@ -9,7 +9,7 @@ const LATE_AFTER = process.env.ATTENDANCE_LATE_AFTER || '08:00:00';
 const select = `SELECT a.id,a.employee_name name,a.role,p.name site,a.project_id projectId,a.check_in \`in\`,a.check_out \`out\`,
   a.state,a.work_date workDate,a.employee_id employeeId FROM attendance a JOIN projects p ON p.id=a.project_id`;
 
-router.get('/', auth, wrap(async (req, res) => {
+router.get('/', auth, permit('hr.view','site.attendance','hr.attendance'), wrap(async (req, res) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : today();
   res.json(await query(`${select} WHERE a.work_date=? ORDER BY a.id`, [date]));
 }));

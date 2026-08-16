@@ -26,9 +26,9 @@ const toRow = body => {
   return { fields: entries.map(([key]) => key), values: entries.map(([, value]) => value) };
 };
 
-router.get('/', auth, wrap(async (_req, res) => res.json(await query('SELECT * FROM projects WHERE active=1 ORDER BY id'))));
+router.get('/', auth, permit('projects.view'), wrap(async (_req, res) => res.json(await query('SELECT * FROM projects WHERE active=1 ORDER BY id'))));
 
-router.get('/:id', auth, wrap(async (req, res) => {
+router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
   const project = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   const [milestones, documents, team, tasks, expenses, incomes, boqs] = await Promise.all([
@@ -110,7 +110,7 @@ router.patch('/milestones/:id', auth, permit('projects.manage'), validate(z.obje
  * PID 2.4 "Completion Reports" and section 3 step 10 — the close-out pack, generated
  * from what the system already holds rather than compiled by hand at the end.
  */
-router.get('/:id/completion', auth, wrap(async (req, res) => {
+router.get('/:id/completion', auth, permit('projects.view'), wrap(async (req, res) => {
   const project = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   const [cost, income, byCategory, tasks, milestones, labour, materials, equipment, reports, boq] = await Promise.all([

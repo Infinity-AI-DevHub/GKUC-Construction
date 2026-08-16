@@ -16,6 +16,20 @@ const WRITERS = {
   equipment: 'store.lending'
 };
 
+/**
+ * Reading what is attached to a record needs the permission to see that record. An
+ * employee's file is their contract and their identity documents; listing them is as
+ * revealing as opening the employee page itself.
+ */
+const READERS = {
+  task: ['site.tasks', 'projects.view'],
+  project: ['projects.view'],
+  employee: ['hr.view', 'hr.manage'],
+  report: ['site.reports', 'projects.view'],
+  vehicle: ['transport.view', 'transport.manage'],
+  equipment: ['store.view', 'store.manage']
+};
+
 /** Each owner type points at the table its id must exist in. */
 const OWNER_TABLES = {
   task: 'tasks', project: 'projects', employee: 'employees',
@@ -45,6 +59,9 @@ router.get('/limits', auth, (_req, res) => res.json({
 
 router.get('/:ownerType/:ownerId', auth, wrap(async (req, res) => {
   if (!FOLDERS.includes(req.params.ownerType)) return res.status(404).json({ error: 'Unknown record type' });
+  if (!READERS[req.params.ownerType].some(key => can(req, key))) {
+    return res.status(403).json({ error: 'You do not have permission to see files on this record' });
+  }
   res.json(await listAttachments(req.params.ownerType, req.params.ownerId));
 }));
 

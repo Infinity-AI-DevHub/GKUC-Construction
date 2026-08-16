@@ -8,7 +8,7 @@ const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 /* Suppliers */
-router.get('/suppliers', auth, wrap(async (_req, res) => res.json(await query(`SELECT s.id,s.name,s.contact_person contact,s.phone,s.email,s.address,
+router.get('/suppliers', auth, permit('store.view','store.manage','finance.pay'), wrap(async (_req, res) => res.json(await query(`SELECT s.id,s.name,s.contact_person contact,s.phone,s.email,s.address,
   (SELECT COUNT(*) FROM purchase_orders o WHERE o.supplier_id=s.id) orders,
   (SELECT COALESCE(SUM(i.amount-i.paid_amount),0) FROM supplier_invoices i WHERE i.supplier_id=s.id AND i.status<>'Paid') outstanding
   FROM suppliers s WHERE s.active=1 ORDER BY s.name`))));
@@ -35,9 +35,9 @@ const requestList = `SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.not
   (SELECT COALESCE(SUM(i.quantity*i.estimated_rate),0) FROM purchase_request_items i WHERE i.request_id=r.id) estimate
   FROM purchase_requests r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.requested_by`;
 
-router.get('/requests', auth, wrap(async (_req, res) => res.json(await query(`${requestList} ORDER BY r.id DESC`))));
+router.get('/requests', auth, permit('store.view','store.manage'), wrap(async (_req, res) => res.json(await query(`${requestList} ORDER BY r.id DESC`))));
 
-router.get('/requests/:id', auth, wrap(async (req, res) => {
+router.get('/requests/:id', auth, permit('store.view','store.manage'), wrap(async (req, res) => {
   const request = await getOne(`${requestList} WHERE r.id=?`, [req.params.id]);
   if (!request) return res.status(404).json({ error: 'Purchase request not found' });
   const [items, quotes] = await Promise.all([
@@ -120,9 +120,9 @@ const orderList = `SELECT o.id,o.reference,o.status,o.order_date orderDate,o.tot
   p.name project,s.name supplier,s.id supplierId,u.name issuedBy,o.request_id requestId
   FROM purchase_orders o JOIN projects p ON p.id=o.project_id JOIN suppliers s ON s.id=o.supplier_id JOIN users u ON u.id=o.issued_by`;
 
-router.get('/orders', auth, wrap(async (_req, res) => res.json(await query(`${orderList} ORDER BY o.id DESC`))));
+router.get('/orders', auth, permit('store.view','store.manage','finance.pay'), wrap(async (_req, res) => res.json(await query(`${orderList} ORDER BY o.id DESC`))));
 
-router.get('/orders/:id', auth, wrap(async (req, res) => {
+router.get('/orders/:id', auth, permit('store.view','store.manage','finance.pay'), wrap(async (req, res) => {
   const order = await getOne(`${orderList} WHERE o.id=?`, [req.params.id]);
   if (!order) return res.status(404).json({ error: 'Purchase order not found' });
   const [items, invoices] = await Promise.all([
@@ -214,7 +214,7 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
 }));
 
 /* Supplier invoices and payments */
-router.get('/invoices', auth, wrap(async (_req, res) => res.json(await query(`SELECT i.id,i.invoice_no invoiceNo,i.amount,i.paid_amount paidAmount,
+router.get('/invoices', auth, permit('finance.view','finance.pay'), wrap(async (_req, res) => res.json(await query(`SELECT i.id,i.invoice_no invoiceNo,i.amount,i.paid_amount paidAmount,
   i.invoice_date invoiceDate,i.due_date dueDate,i.status,s.name supplier,o.reference orderReference
   FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN purchase_orders o ON o.id=i.order_id ORDER BY i.id DESC`))));
 

@@ -19,19 +19,22 @@ const taskSchema = z.object({
   notes: z.string().max(3000).default('')
 });
 
-const withProject = id => getOne('SELECT t.*,p.name project FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?', [id]);
+/* Named columns rather than t.*, so the shape matches the camelCase every other endpoint returns. */
+const TASK_COLUMNS = `t.id,t.title,t.project_id projectId,t.assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project`;
 
-router.get('/', auth, wrap(async (req, res) => {
+const withProject = id => getOne(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?`, [id]);
+
+router.get('/', auth, permit('site.tasks','projects.view'), wrap(async (req, res) => {
   const filters = [];
   const params = [];
   if (req.query.projectId) { filters.push('t.project_id=?'); params.push(req.query.projectId); }
   if (req.query.status) { filters.push('t.status=?'); params.push(req.query.status); }
   if (req.query.assignee) { filters.push('t.assignee=?'); params.push(req.query.assignee); }
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-  res.json(await query(`SELECT t.*,p.name project FROM tasks t JOIN projects p ON p.id=t.project_id ${where} ORDER BY t.id`, params));
+  res.json(await query(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id ${where} ORDER BY t.id`, params));
 }));
 
-router.get('/:id', auth, wrap(async (req, res) => {
+router.get('/:id', auth, permit('site.tasks','projects.view'), wrap(async (req, res) => {
   const task = await withProject(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   const [comments, attachments] = await Promise.all([
@@ -78,7 +81,7 @@ router.patch('/:id', auth, permit('site.tasks'), validate(taskSchema.partial()),
   res.json(after);
 }));
 
-router.post('/:id/comments', auth, validate(z.object({ comment: z.string().min(1).max(2000) })), wrap(async (req, res) => {
+router.post('/:id/comments', auth, permit('site.tasks','projects.view'), validate(z.object({ comment: z.string().min(1).max(2000) })), wrap(async (req, res) => {
   const task = await getOne('SELECT id FROM tasks WHERE id=?', [req.params.id]);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   const result = await query('INSERT INTO task_comments (task_id,user_id,comment) VALUES (?,?,?)', [task.id, req.user.id, req.body.comment]);

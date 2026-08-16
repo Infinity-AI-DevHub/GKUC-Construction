@@ -9,12 +9,12 @@ const router = Router();
 /** Receipts and returns add to stock; issues, transfers and negative adjustments remove from it. */
 const INBOUND = ['Receipt', 'Return'];
 
-router.get('/', auth, wrap(async (_req, res) => {
+router.get('/', auth, permit('store.view','store.manage'), wrap(async (_req, res) => {
   const materials = await query('SELECT * FROM materials WHERE active=1 ORDER BY id');
   res.json(materials.map(material => ({ ...material, state: stockState(material) })));
 }));
 
-router.get('/movements', auth, wrap(async (req, res) => {
+router.get('/movements', auth, permit('store.view','store.manage'), wrap(async (req, res) => {
   const filters = [];
   const params = [];
   if (req.query.materialId) { filters.push('m.material_id=?'); params.push(req.query.materialId); }

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query, spendSql, today } from '../db.js';
-import { auth, wrap } from '../lib/http.js';
+import { auth, can, wrap } from '../lib/http.js';
 
 const router = Router();
 
@@ -101,11 +101,36 @@ const builders = {
 
 export const REPORT_TYPES = Object.keys(builders);
 
-router.get('/', auth, (_req, res) => res.json(REPORT_TYPES));
+/**
+ * A report is a view of a department's data, so it answers to that department's
+ * permission. Anything else would let a report hand over figures the same person is
+ * refused when they ask for them directly.
+ */
+const REPORT_PERMISSIONS = {
+  attendance: ['hr.view', 'site.attendance', 'hr.attendance'],
+  employees: ['hr.view', 'hr.manage'],
+  projects: ['projects.view'],
+  tasks: ['site.tasks', 'projects.view'],
+  materials: ['store.view', 'store.manage'],
+  purchases: ['store.view', 'store.manage', 'finance.pay'],
+  vehicles: ['transport.view', 'transport.manage'],
+  equipment: ['store.view', 'store.manage'],
+  budget: ['finance.view', 'finance.manage', 'qs.view'],
+  profit: ['finance.view', 'finance.manage'],
+  progress: ['projects.view', 'site.reports']
+};
+
+const allowed = req => REPORT_TYPES.filter(type => REPORT_PERMISSIONS[type].some(key => can(req, key)));
+
+/* The list only offers what this person may actually open. */
+router.get('/', auth, (req, res) => res.json(allowed(req)));
 
 router.get('/:type', auth, wrap(async (req, res) => {
   const build = builders[req.params.type];
   if (!build) return res.status(404).json({ error: 'Unknown report' });
+  if (!REPORT_PERMISSIONS[req.params.type].some(key => can(req, key))) {
+    return res.status(403).json({ error: 'You do not have permission for this report' });
+  }
   const window = range(req);
   const report = await build(window);
   res.json({ type: req.params.type, ...window, ...report });

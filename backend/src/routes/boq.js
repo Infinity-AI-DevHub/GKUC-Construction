@@ -35,9 +35,9 @@ const itemSchema = z.object({
   materialId: z.number().int().positive().optional()
 });
 
-router.get('/', auth, wrap(async (_req, res) => res.json(await query(`${select} ORDER BY b.id DESC`))));
+router.get('/', auth, permit('qs.view','qs.boq'), wrap(async (_req, res) => res.json(await query(`${select} ORDER BY b.id DESC`))));
 
-router.get('/:id', auth, wrap(async (req, res) => {
+router.get('/:id', auth, permit('qs.view','qs.boq'), wrap(async (req, res) => {
   const boq = await getOne(`${select} WHERE b.id=?`, [req.params.id]);
   if (!boq) return res.status(404).json({ error: 'BOQ not found' });
   const [items, variations, actual] = await Promise.all([
@@ -119,7 +119,7 @@ router.patch('/:id', auth, permit('qs.approve'), validate(z.object({
 }));
 
 /* Variation orders */
-router.get('/variations/all', auth, wrap(async (_req, res) => res.json(await query(`SELECT v.id,v.reference,v.description,v.amount,v.status,
+router.get('/variations/all', auth, permit('qs.view','qs.boq'), wrap(async (_req, res) => res.json(await query(`SELECT v.id,v.reference,v.description,v.amount,v.status,
   v.created_at createdAt,p.name project,u.name raisedBy FROM variation_orders v JOIN projects p ON p.id=v.project_id
   JOIN users u ON u.id=v.raised_by ORDER BY v.id DESC`))));
 

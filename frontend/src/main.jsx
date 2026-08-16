@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  Building2, Calculator, ChevronDown, CircleDollarSign, ClipboardCheck, ClipboardList, FileText,
-  LayoutDashboard, LogIn, LogOut, Menu, Radar, ShieldCheck, Truck, Users, Warehouse
+  Building2, Calculator, CircleDollarSign, ClipboardCheck, ClipboardList, FileText,
+  LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse
 } from 'lucide-react';
 import './styles.css';
 import './theme.css';
@@ -12,6 +12,9 @@ import './responsive.css';
 import { api, post, token } from './api.js';
 import { Avatar, Modal } from './ui.jsx';
 import NotificationBell from './NotificationBell.jsx';
+import NavBar from './NavBar.jsx';
+import AccountMenu from './AccountMenu.jsx';
+import AccountPanel from './AccountPanel.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Projects from './pages/Projects.jsx';
 import Tasks from './pages/Tasks.jsx';
@@ -65,6 +68,7 @@ const capabilities = permissions => {
     lending: any('store.lending'),
     purchasing: any('store.manage', 'finance.pay'),
     finance: any('finance.manage'),
+    money: any('finance.view', 'finance.manage'),
     invoice: any('finance.invoice'),
     hr: any('hr.manage'),
     hrImport: any('hr.attendance'),
@@ -99,7 +103,10 @@ function Login({ onLogin }) {
   };
 
   return <div className="login-page">
-    <div className="login-brand"><span><Building2 size={28} /></span><strong>GKUC</strong><small>CONSTRUCTION SITEOPS</small></div>
+    <div className="login-brand">
+      <span><img src="/brand/gkuc-mark-256.png" alt="" width="34" height="37" /></span>
+      <strong>GKUC</strong><small>CONSTRUCTION SITEOPS</small>
+    </div>
     <form className="login-panel" onSubmit={submit}>
       <div>
         <p className="eyebrow">SECURE OPERATIONS PORTAL</p>
@@ -149,6 +156,7 @@ function App() {
   const scan = useScanTarget();
   const [scanned, setScanned] = useState(true);
   const [menu, setMenu] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -178,6 +186,7 @@ function App() {
       token.clear();
       setUser(null);
       setData(null);
+      setPage('Dashboard');
     }
   };
 
@@ -186,6 +195,17 @@ function App() {
 
   const reload = () => load(user);
   const shared = { data, reload, can, user };
+
+  const visibleNav = NAV.filter(([, , permission]) => !permission || can.has(permission));
+  /*
+   * The page being viewed is state, but whether it may be viewed is not — it follows the
+   * permissions, which can change underneath it: signing in as someone else, or the MD
+   * turning a permission off while the person is looking at that very screen. Deriving the
+   * active page from what is currently visible means those cases land on the dashboard
+   * instead of a screen that will only ever sit there loading.
+   */
+  const activePage = visibleNav.some(([name]) => name === page) ? page : 'Dashboard';
+
   const content = {
     Dashboard: <Dashboard {...shared} go={setPage} />,
     Coordination: <Coordination {...shared} />,
@@ -199,10 +219,11 @@ function App() {
     'Daily reports': <DailyReports {...shared} />,
     Reports: <Reports {...shared} />,
     Administration: <Admin {...shared} initialTab={adminTab} />
-  }[page] || <Dashboard {...shared} go={setPage} />;
-
-  const visibleNav = NAV.filter(([, , permission]) => !permission || can.has(permission));
+  }[activePage] || <Dashboard {...shared} go={setPage} />;
   const openTasks = data.tasks.filter(task => task.status !== 'Completed' && task.status !== 'Approved').length;
+  /* A dialog rather than a page, because everyone may change their own password but most
+     people cannot open the Administration page it would otherwise live on. */
+  const openAccount = () => { setAccountOpen(true); setMenu(false); };
   const openNotifications = () => {
     setAdminTab('Notifications');
     setPage('Administration');
@@ -214,40 +235,37 @@ function App() {
 
   return <div className="app">
     {scan.token && scanned && <ScanResult token={scan.token} onClose={() => { setScanned(false); scan.clear(); }} />}
+    {accountOpen && (
+      <Modal title="My account" close={() => setAccountOpen(false)}>
+        <AccountPanel onDone={() => setAccountOpen(false)} />
+      </Modal>
+    )}
     <aside className={menu ? 'open' : ''}>
       <div className="brand">
-        <span><Building2 size={22} /></span>
+        <span><img src="/brand/gkuc-mark-128.png" alt="" width="26" height="29" /></span>
         <div><strong>GKUC</strong><small>SITEOPS</small></div>
       </div>
-      <nav>
-        {visibleNav.map(([name, Icon]) => (
-          <button className={page === name ? 'active' : ''} key={name} onClick={() => { setPage(name); setMenu(false); }}>
-            <Icon size={18} /><span>{name}</span>
-            {name === 'Tasks' && openTasks > 0 && <b>{openTasks}</b>}
-          </button>
-        ))}
-      </nav>
+      <NavBar
+        items={visibleNav}
+        activePage={activePage}
+        openTasks={openTasks}
+        onSelect={name => { setPage(name); setMenu(false); }}
+      />
       <div className="sidebar-bottom">
         {bell('bar')}
-        <button onClick={logout} title="Sign out"><LogOut size={18} />Sign out</button>
-        <div className="profile">
-          <Avatar name={user.name} />
-          <div><strong>{user.name}</strong><span>{user.role}</span></div>
-          <ChevronDown size={15} />
-        </div>
+        <AccountMenu user={user} onLogout={logout} onAccount={openAccount} />
       </div>
     </aside>
 
     <div className="workspace">
       <header>
         <button className="menu-btn" aria-label="Menu" title="Menu" onClick={() => setMenu(!menu)}><Menu size={20} /></button>
-        <div className="mobile-brand">GKUC SITEOPS</div>
+        <div className="mobile-brand">
+          <img src="/brand/gkuc-mark-128.png" alt="" width="22" height="24" />GKUC SITEOPS
+        </div>
         <div className="header-actions">
           {bell('topbar')}
-          <div className="header-user">
-            <Avatar name={user.name} />
-            <div><strong>{user.name}</strong><span>{user.role}</span></div>
-          </div>
+          <AccountMenu user={user} onLogout={logout} onAccount={openAccount} />
         </div>
       </header>
       <main>{content}</main>

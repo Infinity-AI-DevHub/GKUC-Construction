@@ -7,7 +7,7 @@ import { daysUntil, money } from '../api.js';
  * PID 2.1 — the state of the business at a glance, so managers stop chasing
  * status updates across departments.
  */
-export default function Dashboard({ data, go, user }) {
+export default function Dashboard({ data, go, user, can }) {
   const openTasks = data.tasks.filter(task => task.status !== 'Completed' && task.status !== 'Approved');
   const present = data.attendance.filter(row => row.state === 'On site' || row.state === 'Late').length;
   const lowStock = data.materials.filter(material => material.state !== 'Available').length;
@@ -41,8 +41,12 @@ export default function Dashboard({ data, go, user }) {
         <span key={project.id}><small>{project.name.split(' ')[0]}</small><b>{project.progress}%</b></span>
       ))}
       <span className="pulse-output"><small>Portfolio output</small><b>{portfolio}%</b></span>
-      <span className="pulse-output"><small>Income received</small><b>{money(board.revenue)}</b></span>
-      <span className="pulse-output"><small>Cost recorded</small><b>{money(board.spend)}</b></span>
+      {/* Money is only shown to those allowed it — the figures arrive empty otherwise, and
+          a zero here reads as "nothing came in" rather than "you cannot see this". */}
+      {can.money && <>
+        <span className="pulse-output"><small>Income received</small><b>{money(board.revenue)}</b></span>
+        <span className="pulse-output"><small>Cost recorded</small><b>{money(board.spend)}</b></span>
+      </>}
     </div>
 
     <div className="reference-grid">

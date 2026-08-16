@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query, spendSql, today } from '../db.js';
-import { auth, wrap } from '../lib/http.js';
+import { auth, can, wrap } from '../lib/http.js';
 import { runAlertScan } from '../alerts.js';
 
 const router = Router();
@@ -14,39 +14,49 @@ export const dueLabel = date => {
   return remaining < 0 ? `Overdue ${Math.abs(remaining)} days` : `${remaining} days`;
 };
 
-/** Everything the signed-in workspace renders on first paint, in one round trip. */
+/**
+ * Everything the signed-in workspace renders on first paint, in one round trip.
+ *
+ * Each dataset answers to the same permission as the endpoint that serves it. This is the
+ * first payload a session receives, so leaving it open would hand a Store Keeper every
+ * salary and every invoice before they had clicked anything — the screens would be hidden
+ * but the data would already be on the machine.
+ */
 router.get('/', auth, wrap(async (req, res) => {
   await runAlertScan().catch(error => console.error('Alert scan failed', error));
 
+  /* Runs the query only for those allowed the data; everyone else gets an empty set. */
+  const gated = (keys, run) => (keys.some(key => can(req, key)) ? run() : Promise.resolve([]));
+
   const [projects, tasks, attendance, materials, fleet, reports, employees, departments, equipment,
     suppliers, purchaseRequests, boqs, milestones, notifications, finance, inquiries, weekly] = await Promise.all([
-    query('SELECT * FROM projects WHERE active=1 ORDER BY id'),
-    query('SELECT t.*,p.name project FROM tasks t JOIN projects p ON p.id=t.project_id ORDER BY t.id'),
-    query(`SELECT a.id,a.employee_name name,a.role,p.name site,a.check_in \`in\`,a.check_out \`out\`,a.state,a.work_date workDate
-      FROM attendance a JOIN projects p ON p.id=a.project_id WHERE a.work_date=CURDATE() ORDER BY a.id`),
-    query('SELECT * FROM materials WHERE active=1 ORDER BY id'),
-    query(`SELECT f.id,f.vehicle,f.registration reg,f.driver,f.status,f.renewal_type renewal,f.due_date,f.odometer,p.name project
-      FROM fleet f LEFT JOIN projects p ON p.id=f.project_id ORDER BY f.id`),
-    query(`SELECT r.id,r.project_id projectId,p.name site,r.supervisor,DATE_FORMAT(r.report_date,'%d %b %Y') date,
+    gated(['projects.view'], () => query('SELECT * FROM projects WHERE active=1 ORDER BY id')),
+    gated(['site.tasks','projects.view'], () => query(`SELECT t.id,t.title,t.project_id projectId,t.assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project FROM tasks t JOIN projects p ON p.id=t.project_id ORDER BY t.id`)),
+    gated(['hr.view','site.attendance','hr.attendance'], () => query(`SELECT a.id,a.employee_name name,a.role,p.name site,a.check_in \`in\`,a.check_out \`out\`,a.state,a.work_date workDate
+      FROM attendance a JOIN projects p ON p.id=a.project_id WHERE a.work_date=CURDATE() ORDER BY a.id`)),
+    gated(['store.view','store.manage'], () => query('SELECT * FROM materials WHERE active=1 ORDER BY id')),
+    gated(['transport.view','transport.manage'], () => query(`SELECT f.id,f.vehicle,f.registration reg,f.driver,f.status,f.renewal_type renewal,f.due_date,f.odometer,p.name project
+      FROM fleet f LEFT JOIN projects p ON p.id=f.project_id ORDER BY f.id`)),
+    gated(['site.reports','projects.view'], () => query(`SELECT r.id,r.project_id projectId,p.name site,r.supervisor,DATE_FORMAT(r.report_date,'%d %b %Y') date,
       r.workforce,r.work_completed work,r.issue,r.weather,r.delay_hours delayHours
-      FROM daily_reports r JOIN projects p ON p.id=r.project_id ORDER BY r.report_date DESC,r.id DESC LIMIT 60`),
-    query(`SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,e.basic_salary basicSalary,e.daily_rate dailyRate,
+      FROM daily_reports r JOIN projects p ON p.id=r.project_id ORDER BY r.report_date DESC,r.id DESC LIMIT 60`)),
+    gated(['hr.view','hr.manage'], () => query(`SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,e.basic_salary basicSalary,e.daily_rate dailyRate,
       e.overtime_rate overtimeRate,e.join_date joinDate,d.name department,e.department_id departmentId
-      FROM employees e LEFT JOIN departments d ON d.id=e.department_id ORDER BY e.code`),
-    query('SELECT id,name,description FROM departments ORDER BY name'),
-    query(`SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_cost purchaseCost,
+      FROM employees e LEFT JOIN departments d ON d.id=e.department_id ORDER BY e.code`)),
+    gated(['hr.view','hr.manage'], () => query('SELECT id,name,description FROM departments ORDER BY name')),
+    gated(['store.view','store.manage'], () => query(`SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_cost purchaseCost,
       (SELECT p.name FROM equipment_assignments a JOIN projects p ON p.id=a.project_id
         WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) project
-      FROM equipment e ORDER BY e.code`),
-    query('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE active=1 ORDER BY name'),
-    query(`SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,p.name project,u.name requestedBy,
+      FROM equipment e ORDER BY e.code`)),
+    gated(['store.view','store.manage','finance.pay'], () => query('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE active=1 ORDER BY name')),
+    gated(['store.view','store.manage'], () => query(`SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,p.name project,u.name requestedBy,
       (SELECT COUNT(*) FROM purchase_request_items i WHERE i.request_id=r.id) lineCount,
       (SELECT COALESCE(SUM(i.quantity*i.estimated_rate),0) FROM purchase_request_items i WHERE i.request_id=r.id) estimate
-      FROM purchase_requests r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.requested_by ORDER BY r.id DESC`),
-    query(`SELECT b.id,b.reference,b.title,b.status,b.total,b.version,p.name project,b.project_id projectId,u.name preparedBy
-      FROM boqs b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=b.prepared_by ORDER BY b.id DESC`),
-    query(`SELECT m.id,m.title,m.due_date dueDate,m.status,m.project_id projectId,p.name project
-      FROM project_milestones m JOIN projects p ON p.id=m.project_id ORDER BY m.due_date`),
+      FROM purchase_requests r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.requested_by ORDER BY r.id DESC`)),
+    gated(['qs.view','qs.boq'], () => query(`SELECT b.id,b.reference,b.title,b.status,b.total,b.version,p.name project,b.project_id projectId,u.name preparedBy
+      FROM boqs b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=b.prepared_by ORDER BY b.id DESC`)),
+    gated(['projects.view'], () => query(`SELECT m.id,m.title,m.due_date dueDate,m.status,m.project_id projectId,p.name project
+      FROM project_milestones m JOIN projects p ON p.id=m.project_id ORDER BY m.due_date`)),
     (async () => {
       const perms = req.user.permissions.length ? req.user.permissions : [''];
       const placeholders = perms.map(() => '?').join(',');
@@ -56,19 +66,19 @@ router.get('/', auth, wrap(async (req, res) => {
         [req.user.id, ...perms]
       );
     })(),
-    query(`SELECT p.id projectId,p.name project,p.budget,
+    gated(['finance.view','finance.manage'], () => query(`SELECT p.id projectId,p.name project,p.budget,
       ${spendSql('p')} expenses,
       COALESCE((SELECT SUM(i.amount) FROM incomes i WHERE i.project_id=p.id),0) income
-      FROM projects p WHERE p.active=1 ORDER BY p.id`),
-    query(`SELECT i.id,i.reference,i.customer_name customer,i.location,i.status,i.expected_value expectedValue,
-      i.expected_start expectedStart,i.project_id projectId FROM inquiries i ORDER BY i.id DESC LIMIT 40`),
+      FROM projects p WHERE p.active=1 ORDER BY p.id`)),
+    gated(['enquiries.manage','projects.view'], () => query(`SELECT i.id,i.reference,i.customer_name customer,i.location,i.status,i.expected_value expectedValue,
+      i.expected_start expectedStart,i.project_id projectId FROM inquiries i ORDER BY i.id DESC LIMIT 40`)),
     /* Real site activity for the last seven days, replacing the placeholder chart. */
-    query(`SELECT DATE_FORMAT(d.day,'%a') label, DATE_FORMAT(d.day,'%Y-%m-%d') day,
+    gated(['projects.view','site.reports'], () => query(`SELECT DATE_FORMAT(d.day,'%a') label, DATE_FORMAT(d.day,'%Y-%m-%d') day,
         (SELECT COUNT(*) FROM attendance a WHERE a.work_date=d.day AND a.state IN ('On site','Late','Checked out')) workforce,
         (SELECT COUNT(*) FROM daily_reports r WHERE r.report_date=d.day) reports
       FROM (SELECT CURDATE() - INTERVAL n DAY day FROM
         (SELECT 6 n UNION SELECT 5 UNION SELECT 4 UNION SELECT 3 UNION SELECT 2 UNION SELECT 1 UNION SELECT 0) days) d
-      ORDER BY d.day`)
+      ORDER BY d.day`))
   ]);
 
   /* Delayed = past its target completion date with work outstanding, or flagged at risk. */
