@@ -11,6 +11,8 @@
  * record that quietly vanishes is worse than one that is flagged.
  */
 
+import { isWorkbook, parseAttendanceWorkbook } from './workbook-attendance.js';
+
 const DELIMITERS = ['\t', ',', ';', '|'];
 
 /** Column aliases seen across common device exports (ZKTeco, eSSL, Hikvision, Suprema). */
@@ -150,4 +152,21 @@ export function parseBiometricExport(text) {
   }).sort((a, b) => (a.date === b.date ? String(a.code).localeCompare(String(b.code)) : a.date.localeCompare(b.date)));
 
   return { rows, problems, columns: header };
+}
+
+
+/**
+ * The entry point for an uploaded export, whichever shape it arrives in.
+ *
+ * GKUC's own terminal writes an .xlsx workbook laid out as a calendar; other devices write
+ * delimited text. The file decides which reader is used, so neither the person uploading
+ * nor the rest of the system has to know or care which device produced it.
+ */
+export function parseBiometricFile(file) {
+  const buffer = file?.buffer;
+  if (!buffer?.length) {
+    return { rows: [], problems: ['That file is empty.'], columns: [] };
+  }
+  if (isWorkbook(buffer, file.filename)) return parseAttendanceWorkbook(buffer);
+  return parseBiometricExport(buffer.toString('utf8'));
 }

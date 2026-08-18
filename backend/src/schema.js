@@ -609,6 +609,18 @@ async function migrateExistingInstalls() {
   await addColumn('equipment', 'qr_token', 'CHAR(32) NULL');
   await addIndex('equipment', 'uq_equipment_qr', 'UNIQUE KEY uq_equipment_qr(qr_token)');
   await addColumn('employees', 'photo_url', 'VARCHAR(600) NULL');
+  /*
+   * The fingerprint terminal knows people by its own enrolment number, which has nothing to
+   * do with GKUC's employee codes. Recording it once against the employee is what lets an
+   * export be matched without anybody retyping names — and the mapping is remembered, so it
+   * only has to be done for a person once.
+   */
+  await addColumn('employees', 'biometric_id', 'VARCHAR(40) NULL');
+  await addIndex('employees', 'uq_employee_biometric', 'UNIQUE KEY uq_employee_biometric(biometric_id)');
+  /* A day with a single punch cannot say whether the person arrived or left; it is imported
+     but flagged, so payroll is never quietly built on a guess. */
+  await addColumn('attendance', 'needs_review', 'TINYINT(1) NOT NULL DEFAULT 0');
+  await addColumn('attendance', 'source', "VARCHAR(20) NOT NULL DEFAULT 'Manual'");
   await addIndex('fleet', 'fk_fleet_driver', 'CONSTRAINT fk_fleet_driver FOREIGN KEY(driver_employee_id) REFERENCES employees(id)');
   await addIndex('notifications', 'uq_notification_dedupe', 'UNIQUE KEY uq_notification_dedupe(dedupe_key)');
   await addIndex('attendance', 'fk_attendance_employee', 'CONSTRAINT fk_attendance_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');
