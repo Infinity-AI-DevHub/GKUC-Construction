@@ -221,6 +221,95 @@
 .qr-code { border-radius:6px;background:white;flex:none }
 @media (max-width:520px){ .qr-panel { grid-template-columns:1fr;justify-items:center;text-align:center } }
 
+/* 10. Global responsive containment for the full app.
+   Wide tables, tab strips, and action toolbars should scroll inside their own panel instead
+   of increasing the page width. These rules apply to every module that uses the shared UI. */
+html,body,#root { width:100%;max-width:100%;overflow-x:hidden }
+.app,.workspace,main,.page-heading,.panel,.table-panel,.toolbar,.report-form { min-width:0;max-width:100% }
+main { width:100% }
+.page-heading > div { min-width:0 }
+.page-heading h1,.page-heading p { overflow-wrap:anywhere }
+.toolbar { width:100%;overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:thin }
+.toolbar .segments { flex:none;min-width:max-content }
+.table-panel { width:100%;overflow-x:auto;overscroll-behavior-inline:contain }
+.table-head,.table-row { width:max-content;min-width:100% }
+.table-row > * { min-width:0 }
+.table-row strong,.table-row small,.table-row span { overflow-wrap:anywhere }
+.person span { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+.table-tools { min-width:0;gap:10px }
+.table-tools h2 { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
+.report-form .table-head,.report-form .table-row { width:max-content;min-width:100% }
+
+@media (max-width: 767px) {
+  .app { display:block;background:#eaf0f2 }
+  .workspace { grid-column:auto;width:100% }
+  aside {
+    position:fixed;
+    inset:0 auto 0 0;
+    width:min(280px,82vw);
+    height:100dvh;
+    margin:0;
+    padding:22px 14px;
+    display:flex;
+    flex-direction:column;
+    align-items:stretch;
+    transform:translateX(-105%);
+    transition:transform .2s;
+  }
+  aside.open { transform:translateX(0) }
+  .brand>div { display:block }
+  .brand { padding:0 8px 18px;border-bottom:1px solid #2d3732 }
+  nav { padding-top:16px;display:flex;flex-direction:column;justify-content:flex-start;overflow:visible }
+  nav button { height:42px;padding:0 12px }
+  .sidebar-bottom {
+    margin-top:auto;
+    margin-left:0;
+    padding:12px 0 0;
+    border-left:0;
+    border-top:1px solid #2d3732;
+    flex-direction:column;
+    align-items:stretch;
+  }
+  .sidebar-bottom>button { width:100%;border-radius:7px;font-size:11px;justify-content:flex-start;padding:0 12px }
+  .profile { width:100%;min-width:0 }
+  .profile>div,.profile>svg { display:block }
+  .workspace > header {
+    display:flex;
+    background:rgba(245,250,253,.94);
+    border-bottom:1px solid var(--line);
+    color:#172632;
+    height:60px;
+    padding:0 12px;
+    justify-content:space-between;
+  }
+  .mobile-brand { display:flex;color:#172632;font:800 12px Manrope;min-width:0 }
+  .mobile-brand img { width:22px;height:24px }
+  .menu-btn { display:grid;width:34px;height:34px;background:white;border-color:#d5e2ea;color:#172632 }
+  .header-actions { flex:none;gap:8px }
+  main { padding:22px 12px 42px }
+  .page-heading { flex-direction:column;align-items:stretch;gap:14px;margin-bottom:18px;color:#151c19 }
+  .page-heading h1 { font-size:24px;color:#151c19 }
+  .page-heading p { color:var(--muted);max-width:none }
+  .page-heading .primary { width:100%;align-self:stretch }
+  .metric-grid,.attendance-summary { grid-template-columns:1fr 1fr }
+  .project-cards,.fleet-grid,.dashboard-grid,.inventory-top { grid-template-columns:1fr }
+  .report-body { grid-template-columns:1fr }
+  .report-row { grid-template-columns:42px minmax(0,1fr) }
+  .report-row>svg { display:none }
+  .attachments-head,.table-tools { height:auto;min-height:48px;padding:10px 12px;align-items:flex-start;flex-direction:column }
+  .attachments-head .primary,.attachments-head .secondary,.table-tools .primary,.table-tools .secondary { width:100% }
+}
+
+@media (max-width: 430px) {
+  main { padding-inline:10px }
+  .metric-grid,.attendance-summary { grid-template-columns:1fr }
+  .toolbar { padding:5px }
+  .segments button { padding-inline:10px }
+  .project-stats { grid-template-columns:1fr;gap:10px }
+  .project-stats div+div { border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px }
+  .modal-backdrop { padding:10px }
+}
+
 /* 10. Overflow containment — content that outgrows a fixed-height shell must scroll,
    not disappear. Both of these sit in containers whose height is set by layout. */
 
