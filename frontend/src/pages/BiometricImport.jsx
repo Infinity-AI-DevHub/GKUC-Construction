@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Upload } from 'lucide-react';
-import { post, shortDate, slug, token } from '../api.js';
+import { api, post, shortDate, slug, token } from '../api.js';
 import { Badge, Row, SelectField, Summary, Table } from '../ui.jsx';
 
 /**
@@ -18,10 +18,9 @@ export default function BiometricImport({ data, can, reload }) {
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const input = useRef(null);
+  const lastFile = useRef(null);
 
-  const choose = async event => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  const read = async file => {
     setBusy(true); setError(''); setResult(null); setPreview(null);
     try {
       const form = new FormData();
@@ -47,6 +46,28 @@ export default function BiometricImport({ data, can, reload }) {
     }
   };
 
+  const choose = event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    lastFile.current = file;
+    read(file);
+  };
+
+  /*
+   * Naming a device number is a one-off: it is stored against the employee, so the file is
+   * simply read again and everything that person has ever punched now matches.
+   */
+  const identify = async (code, employeeId) => {
+    if (!employeeId) return;
+    setBusy(true); setError('');
+    try {
+      await post('/biometric/mappings', { code, employeeId: Number(employeeId) });
+      if (lastFile.current) await read(lastFile.current);
+    } catch (failure) {
+      setError(failure.message);
+    } finally { setBusy(false); }
+  };
+
   const commit = async () => {
     setBusy(true); setError('');
     try {
@@ -56,7 +77,8 @@ export default function BiometricImport({ data, can, reload }) {
         filename: preview.filename,
         rows: usable.map(row => ({
           employeeId: row.employeeId, code: row.code, name: row.name,
-          date: row.date, checkIn: row.checkIn, checkOut: row.checkOut
+          date: row.date, checkIn: row.checkIn, checkOut: row.checkOut,
+          needsReview: Boolean(row.needsReview)
         }))
       });
       setResult(outcome);
@@ -69,7 +91,7 @@ export default function BiometricImport({ data, can, reload }) {
 
   if (!can.hrImport) return <p className="empty-state">You do not have permission to import attendance.</p>;
 
-  const template = 'minmax(160px,1.3fr) 120px 100px 100px 120px 110px';
+  const template = 'minmax(160px,1.3fr) 120px 100px 100px 130px 110px';
   const matched = preview?.rows.filter(row => row.employeeId).length || 0;
 
   return <>
@@ -114,8 +136,32 @@ export default function BiometricImport({ data, can, reload }) {
         <Summary label="Days read" value={preview.summary.rows} icon={CheckCircle2} />
         <Summary label="Matched to staff" value={preview.summary.matched} icon={CheckCircle2} />
         <Summary label="Unmatched" value={preview.summary.unmatched} icon={AlertTriangle} />
-        <Summary label="Already recorded" value={preview.summary.duplicates} icon={AlertTriangle} />
+        <Summary label="Need review" value={preview.summary.needsReview || 0} icon={AlertTriangle} />
       </div>
+
+      {preview.unknownDevices?.length > 0 && (
+        <section className="table-panel device-map">
+          <div className="table-tools">
+            <h2>Who are these? — {preview.unknownDevices.length} unrecognised device number(s)</h2>
+            <small>Name someone once and every export after this recognises them.</small>
+          </div>
+          {preview.unknownDevices.map(device => (
+            <div className="device-row" key={device.code}>
+              <div>
+                <strong>{device.name || `Device ${device.code}`}</strong>
+                <small>#{device.code}{device.department ? ` · ${device.department}` : ''} · {device.days} day(s) in this file</small>
+              </div>
+              <select className="status-button" defaultValue=""
+                onChange={event => identify(device.code, event.target.value)} disabled={busy}>
+                <option value="">This is…</option>
+                {(data.employees || []).map(person => (
+                  <option value={person.id} key={person.id}>{person.name} ({person.code})</option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </section>
+      )}
 
       <div className="import-commit">
         <SelectField name="projectId" label="Record this attendance against"
@@ -138,7 +184,10 @@ export default function BiometricImport({ data, can, reload }) {
             <span>{shortDate(row.date)}</span>
             <span>{row.checkIn || '—'}</span>
             <span>{row.checkOut || '—'}</span>
-            <Badge tone={slug(row.state)}>{row.state}</Badge>
+            <div>
+              <Badge tone={slug(row.state)}>{row.state}</Badge>
+              {row.needsReview && <small className="needs-review">One punch only — confirm</small>}
+            </div>
             {row.employeeId
               ? <Badge tone={row.duplicate ? 'watch' : 'on-track'}>{row.duplicate ? 'Will update' : 'New'}</Badge>
               : <Badge tone="at-risk">No match</Badge>}

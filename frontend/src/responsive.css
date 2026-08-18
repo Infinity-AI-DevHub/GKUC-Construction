@@ -545,3 +545,31 @@ nav.measuring .nav-overflowed { display: flex; visibility: hidden; position: abs
   .header-actions .account-trigger { padding: 0 4px; gap: 4px; }
   .account-menu > button small { display: none; }
 }
+
+/* ============================================================================
+   15. Biometric device mapping
+   Naming an unrecognised enrolment number, once per person.
+   ============================================================================ */
+
+.device-map .table-tools { flex-direction: column; align-items: flex-start; gap: 3px; height: auto; padding: 13px 17px; }
+.device-map .table-tools small { color: var(--muted); font-size: 10px; }
+
+.device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 17px;
+  border-top: 1px solid #edf0ed;
+}
+.device-row > div { min-width: 0; }
+.device-row strong { display: block; font-size: 12px; }
+.device-row small { display: block; font-size: 10px; color: var(--muted); margin-top: 2px; }
+.device-row select { max-width: 260px; }
+
+.needs-review { display: block; font-size: 9px; color: var(--amber); font-weight: 700; margin-top: 4px; }
+
+@media (max-width: 620px) {
+  .device-row { flex-direction: column; align-items: stretch; }
+  .device-row select { max-width: none; width: 100%; }
+}
