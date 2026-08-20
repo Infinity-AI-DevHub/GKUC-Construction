@@ -75,3 +75,55 @@ export const del = path => api(path, { method: 'DELETE' });
 export const fileSize = bytes => (bytes >= 1048576
   ? `${(bytes / 1048576).toFixed(1)} MB`
   : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+
+/**
+ * Opens a server-rendered document (a quotation, an invoice) in its own tab, ready to print
+ * or save as a PDF.
+ *
+ * The document endpoint needs the session token, which a plain link cannot carry — so the
+ * page is fetched here and handed to the new tab. The tab is opened first, on the click
+ * itself, because a browser only trusts a window opened directly from a person's action;
+ * opening it after the fetch returns would be blocked as a popup.
+ */
+export const openDocument = async path => {
+  const tab = window.open('', '_blank');
+  if (tab) tab.document.write('<p style="font:14px sans-serif;padding:20px">Preparing the document…</p>');
+  try {
+    const stored = token.get();
+    const response = await fetch(`/api${path}`, {
+      headers: stored ? { Authorization: `Bearer ${stored}` } : {}
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || 'That document could not be produced');
+    }
+    const html = await response.text();
+    if (!tab) throw new Error('Allow pop-ups for this site to open the document');
+    tab.document.open();
+    tab.document.write(html);
+    tab.document.close();
+  } catch (failure) {
+    tab?.close();
+    throw failure;
+  }
+};
+
+
+/**
+ * A note that something in the data has changed.
+ *
+ * Screens are built from two sources: the bootstrap payload the workspace holds, and lists
+ * each panel fetches for itself. A form that creates something refreshes the first, but had
+ * no way to tell the second — so a new quotation, tender or retention was saved and then
+ * simply did not appear until the page was reloaded. This lets the refresh reach both.
+ */
+const dataListeners = new Set();
+
+export const onDataChanged = listener => {
+  dataListeners.add(listener);
+  return () => dataListeners.delete(listener);
+};
+
+export const announceDataChanged = () => {
+  for (const listener of [...dataListeners]) listener();
+};

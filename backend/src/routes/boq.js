@@ -2,12 +2,13 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
+import { boqDocument, documentContext } from '../lib/documents.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
 const CATEGORIES = ['Material', 'Labour', 'Equipment', 'Subcontract', 'Overhead'];
 
-const select = `SELECT b.id,b.reference,b.title,b.status,b.version,b.total,b.notes,b.project_id projectId,p.name project,
+const select = `SELECT b.id,b.reference,b.title,b.status,b.version,b.total,b.notes,b.terms,b.project_id projectId,p.name project,
   u.name preparedBy,a.name approvedBy,b.approved_at approvedAt,b.created_at createdAt
   FROM boqs b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=b.prepared_by LEFT JOIN users a ON a.id=b.approved_by`;
 
@@ -36,6 +37,22 @@ const itemSchema = z.object({
 });
 
 router.get('/', auth, permit('qs.view','qs.boq'), wrap(async (_req, res) => res.json(await query(`${select} ORDER BY b.id DESC`))));
+
+/** The bill as a document — for issuing, filing with a tender, or signing off. */
+router.get('/:id/document', auth, permit('qs.view', 'qs.boq'), wrap(async (req, res) => {
+  const boq = await getOne(`${select} WHERE b.id=?`, [req.params.id]);
+  if (!boq) return res.status(404).json({ error: 'BOQ not found' });
+
+  const [items, variations, context] = await Promise.all([
+    query(`SELECT category,description,unit,quantity,rate,amount FROM boq_items
+      WHERE boq_id=? ORDER BY id`, [boq.id]),
+    query(`SELECT reference,description,amount,status FROM variation_orders
+      WHERE boq_id=? ORDER BY id`, [boq.id]),
+    documentContext(getOne)
+  ]);
+
+  res.type('html').send(boqDocument({ ...context, boq, items, variations }));
+}));
 
 router.get('/:id', auth, permit('qs.view','qs.boq'), wrap(async (req, res) => {
   const boq = await getOne(`${select} WHERE b.id=?`, [req.params.id]);
@@ -93,6 +110,35 @@ router.post('/:id/items', auth, permit('qs.boq'), validate(itemSchema), wrap(asy
  * Approving a BOQ writes its total onto the project budget, so estimates and actual
  * costs are afterwards tracked in the same place instead of a separate spreadsheet.
  */
+/**
+ * The wording on the printed bill — its title, notes and any terms particular to this job.
+ *
+ * Separate from the status route because approving a BOQ and correcting a heading are
+ * different acts by different people: preparing is the QS's, approving is not. Once
+ * approved the wording is fixed, since the document has become the agreed record.
+ */
+router.patch('/:id/wording', auth, permit('qs.boq'), validate(z.object({
+  title: z.string().min(3).max(180).optional(),
+  notes: z.string().max(1000).nullable().optional(),
+  terms: z.string().max(2000).nullable().optional()
+}).refine(value => Object.keys(value).length > 0, { message: 'Nothing to change' })),
+wrap(async (req, res) => {
+  const before = await getOne('SELECT * FROM boqs WHERE id=?', [req.params.id]);
+  if (!before) return res.status(404).json({ error: 'BOQ not found' });
+  if (before.status === 'Approved') {
+    return res.status(409).json({ error: 'An approved BOQ cannot be reworded. Raise a revision instead.' });
+  }
+
+  const columns = { title: 'title', notes: 'notes', terms: 'terms' };
+  const edits = Object.entries(columns).filter(([key]) => req.body[key] !== undefined);
+  await query(`UPDATE boqs SET ${edits.map(([, column]) => `${column}=?`).join(',')} WHERE id=?`,
+    [...edits.map(([key]) => req.body[key]), before.id]);
+
+  const after = await getOne(`${select} WHERE b.id=?`, [before.id]);
+  await audit(pool, req.user.id, 'UPDATE', 'boq', before.id, before, after, req.ip);
+  res.json(after);
+}));
+
 router.patch('/:id', auth, permit('qs.approve'), validate(z.object({
   status: z.enum(['Draft', 'Submitted', 'Approved', 'Rejected'])
 })), wrap(async (req, res) => {

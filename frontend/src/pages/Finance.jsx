@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
 import { api, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Badge, Field, FormModal, Page, Progress, Row, SelectField, Summary, Table, Tabs } from '../ui.jsx';
+import { Badge, Field, FormModal, Page, Progress, Row, SelectField, Summary, Table, Tabs, useLiveList } from '../ui.jsx';
 
 const TABS = ['Budget monitoring', 'Expenses', 'Income', 'Supplier invoices', 'Categories'];
 
@@ -12,7 +12,7 @@ export default function Finance({ data, reload, can }) {
   const [summary, setSummary] = useState(null);
 
   const load = () => api('/finance/summary').then(setSummary).catch(() => setSummary(null));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
 
   const actions = {
     'Budget monitoring': null,
@@ -116,7 +116,7 @@ function Invoices({ can, refresh }) {
   const [rows, setRows] = useState([]);
   const [paying, setPaying] = useState(null);
   const load = () => api('/purchasing/invoices').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
 
   return <>
     <Table columns={INVOICE_COLUMNS} template={INVOICE_TEMPLATE} title="Supplier invoices" empty="No invoices recorded.">

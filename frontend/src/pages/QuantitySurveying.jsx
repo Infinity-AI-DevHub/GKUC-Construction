@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Download } from 'lucide-react';
-import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea } from '../ui.jsx';
+import { Download, FileText } from 'lucide-react';
+import { api, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 
 const TABS = ['Quotations', 'Tenders', 'Retention', 'Subcontractors'];
 
@@ -33,16 +33,19 @@ export default function QuantitySurveying({ data, reload, can }) {
   </Page>;
 }
 
-const QUOTE_TEMPLATE = 'minmax(120px,.8fr) minmax(180px,1.5fr) minmax(140px,1fr) 140px 120px 150px';
+const QUOTE_TEMPLATE = 'minmax(115px,.75fr) minmax(150px,1.2fr) minmax(120px,.9fr) 125px 100px 235px';
 
 function Quotations({ can, reload }) {
   const [rows, setRows] = useState([]);
   const [detail, setDetail] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [error, setError] = useState('');
   const load = () => api('/qs/quotations').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
   const setStatus = async (id, status) => { await patch(`/qs/quotations/${id}`, { status }); await load(); await reload(); };
 
   return <>
+    {error && <p className="form-error">{error}</p>}
     <Table columns={['Reference', 'Title', 'Client', 'Total', 'Status', '']} template={QUOTE_TEMPLATE}
       title="Client quotations" empty="No quotations yet. Create one from an approved BOQ.">
       {rows.map(row => <Row template={QUOTE_TEMPLATE} key={row.id}>
@@ -53,6 +56,14 @@ function Quotations({ can, reload }) {
         <Badge tone={slug(row.status)}>{row.status}</Badge>
         <span style={{ display: 'flex', gap: '6px' }}>
           <button className="status-button" onClick={async () => setDetail(await api(`/qs/quotations/${row.id}`))}>Open</button>
+          <button className="status-button" title="Open the client-ready document"
+            onClick={() => openDocument(`/qs/quotations/${row.id}/document`).catch(failure => setError(failure.message))}>
+            <FileText size={13} />PDF
+          </button>
+          {can.quotation && row.status !== 'Accepted' && (
+            <button className="status-button" title="Change the wording on the document"
+              onClick={() => setEditing(row)}>Edit</button>
+          )}
           {can.quotation && row.status !== 'Accepted' && (
             <button className="status-button" onClick={() => setStatus(row.id, 'Accepted')}>Accept</button>
           )}
@@ -60,6 +71,7 @@ function Quotations({ can, reload }) {
       </Row>)}
     </Table>
     {detail && <QuotationDetail quotation={detail} close={() => setDetail(null)} />}
+    {editing && <QuotationWording quotation={editing} close={() => setEditing(null)} reload={async () => { await load(); await reload(); }} />}
   </>;
 }
 
@@ -127,7 +139,7 @@ const TENDER_STATUSES = ['Identified', 'Preparing', 'Submitted', 'Won', 'Lost', 
 function Tenders({ can }) {
   const [rows, setRows] = useState([]);
   const load = () => api('/qs/tenders').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
   const setStatus = async (id, status) => { await patch(`/qs/tenders/${id}`, { status }); await load(); };
   const days = value => Math.ceil((new Date(value) - new Date()) / 86400000);
 
@@ -156,7 +168,7 @@ function Retention({ can }) {
   const [rows, setRows] = useState([]);
   const [releasing, setReleasing] = useState(null);
   const load = () => api('/qs/retentions').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
   const held = rows.reduce((sum, row) => sum + (Number(row.amount) - Number(row.releasedAmount)), 0);
 
   return <>
@@ -194,7 +206,7 @@ function Subcontractors({ can, data }) {
     api('/qs/subcontractors').then(setRows).catch(() => setRows([]));
     api('/qs/subcontractor-bills').then(setBills).catch(() => setBills([]));
   };
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
   const template = 'minmax(180px,1.4fr) minmax(140px,1fr) 140px 120px 140px';
   const billTemplate = 'minmax(130px,.9fr) minmax(170px,1.3fr) minmax(140px,1fr) 130px 120px';
 
@@ -256,6 +268,35 @@ function QuotationForm({ data, close, reload }) {
     <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
       Every priced line is copied from the BOQ, so nothing is retyped. If the client accepts,
       the quoted total becomes the project budget.
+    </p>
+  </FormModal>;
+}
+
+/**
+ * The wording that appears on one quotation's document — not the figures, which come from
+ * the BOQ, and not the standing terms every other document carries.
+ */
+function QuotationWording({ quotation, close, reload }) {
+  return <FormModal title={`Edit ${quotation.reference}`} close={close} label="Save wording" onSubmit={async values => {
+    await patch(`/qs/quotations/${quotation.id}`, {
+      title: values.title,
+      clientName: values.clientName,
+      validUntil: values.validUntil || null,
+      notes: values.notes || null,
+      terms: values.terms || null
+    });
+    await reload();
+  }}>
+    <Field name="title" label="Quotation title" wide defaultValue={quotation.title} />
+    <Field name="clientName" label="Client, as it should appear" defaultValue={quotation.client} />
+    <Field name="validUntil" label="Valid until" type="date" required={false}
+      defaultValue={quotation.validUntil ? quotation.validUntil.slice(0, 10) : ''} />
+    <TextArea name="notes" label="Note to the client" rows={3} required={false} defaultValue={quotation.notes || ''} />
+    <TextArea name="terms" label="Terms for this quotation only (leave blank to use the standing terms)"
+      rows={3} required={false} defaultValue={quotation.terms || ''} />
+    <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
+      The priced lines come from the BOQ and are not edited here. An accepted quotation can no
+      longer be reworded — raise a new one instead.
     </p>
   </FormModal>;
 }

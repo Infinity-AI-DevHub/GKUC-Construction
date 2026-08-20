@@ -73,10 +73,42 @@ export async function audit(executor, userId, action, entity, entityId, before, 
 export const spendSql = alias =>
   `(${alias}.actual + COALESCE((SELECT SUM(x.amount) FROM expenses x WHERE x.project_id=${alias}.id),0))`;
 
-/** Reserves the next document number for a series, e.g. PR-2026-0007. */
+/**
+ * Reserves the next document number in a series, e.g. PR-2026-0007.
+ *
+ * The number is handed out by a counter row updated in one atomic statement, rather than by
+ * reading the last reference and adding one. Reading first is a race: two people creating a
+ * quotation in the same second both read the same last number, both build the same
+ * reference, and the second is refused with a duplicate-key error that says nothing about
+ * what went wrong. Two of three simultaneous attempts failed that way.
+ *
+ * MySQL's LAST_INSERT_ID(expr) is what makes it atomic — it both sets the new value and
+ * reports it back, so the reservation and the read are a single statement no other
+ * connection can interleave with.
+ *
+ * A series is scoped to its year, so numbering restarts each January without a reference
+ * from December being consulted.
+ */
 export async function nextReference(prefix, table) {
-  const row = await getOne(`SELECT reference FROM ${table} ORDER BY id DESC LIMIT 1`);
   const year = new Date().getFullYear();
-  const sequence = row?.reference?.startsWith(`${prefix}-${year}-`) ? Number(row.reference.split('-')[2]) + 1 : 1;
+  const scope = `${prefix}-${year}`;
+
+  /*
+   * The first document of a series continues from whatever is already in the table, so
+   * numbering does not restart over references that have already been issued. Taking the
+   * highest of this year's rather than the newest row: references are not always created in
+   * order, and one left over from last year must not reset the count.
+   */
+  const [existing] = await query(
+    `SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(reference,'-',-1) AS UNSIGNED)),0) high
+     FROM ${table} WHERE reference LIKE ?`, [`${scope}-%`]);
+
+  const result = await query(
+    `INSERT INTO document_sequences (scope,next_value) VALUES (?, LAST_INSERT_ID(?))
+     ON DUPLICATE KEY UPDATE next_value = LAST_INSERT_ID(next_value + 1)`,
+    [scope, Number(existing.high) + 1]);
+
+  /* insertId carries whatever LAST_INSERT_ID() was set to, on either branch. */
+  const sequence = Number(result.insertId);
   return `${prefix}-${year}-${String(sequence).padStart(4, '0')}`;
 }

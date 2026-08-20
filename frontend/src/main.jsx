@@ -9,7 +9,7 @@ import './theme.css';
 import './reference.css';
 import './responsive.css';
 
-import { api, post, token } from './api.js';
+import { announceDataChanged, api, post, token } from './api.js';
 import { Avatar, Modal } from './ui.jsx';
 import NotificationBell from './NotificationBell.jsx';
 import NavBar from './NavBar.jsx';
@@ -166,6 +166,9 @@ function App() {
       const result = await api('/bootstrap');
       setUser(currentUser || result.user);
       setData(result.data);
+      /* Panels that fetch their own rows listen for this, so a record created on one of
+         them appears straight away rather than after a page reload. */
+      announceDataChanged();
     } catch {
       token.clear();
       setUser(null);

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, today, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
+import { documentContext, quotationDocument } from '../lib/documents.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
@@ -10,7 +11,7 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 /* ------------------------------------------------------------------ Quotations */
 
 const quoteSelect = `SELECT q.id,q.reference,q.title,q.client_name client,q.quote_date quoteDate,q.valid_until validUntil,
-  q.subtotal,q.markup_percent markupPercent,q.vat_percent vatPercent,q.total,q.status,q.notes,
+  q.subtotal,q.markup_percent markupPercent,q.vat_percent vatPercent,q.total,q.status,q.notes,q.terms,
   q.boq_id boqId,b.reference boqReference,q.project_id projectId,p.name project,q.inquiry_id inquiryId,u.name preparedBy
   FROM quotations_client q LEFT JOIN boqs b ON b.id=q.boq_id LEFT JOIN projects p ON p.id=q.project_id
   JOIN users u ON u.id=q.prepared_by`;
@@ -32,6 +33,40 @@ router.get('/quotations/:id', auth, permit('qs.view'), wrap(async (req, res) => 
  * retyped." Because the figures come from the BOQ rather than a separate document, the
  * quoted price and the working budget cannot quietly drift apart.
  */
+/**
+ * The quotation as a client-ready document. PID v3 §3.3 — "generated in a clean, consistent
+ * GKUC format, ready to send to the client". It is produced from the record itself, so the
+ * figure quoted and the figure the project is measured against cannot drift apart.
+ */
+router.get('/quotations/:id/document', auth, permit('qs.view'), wrap(async (req, res) => {
+  const quotation = await getOne(`${quoteSelect} WHERE q.id=?`, [req.params.id]);
+  if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
+
+  const [items, context] = await Promise.all([
+    query(`SELECT category,description,unit,quantity,rate,amount
+      FROM quotation_items WHERE quotation_id=? ORDER BY id`, [quotation.id]),
+    documentContext(getOne)
+  ]);
+
+  const page = quotationDocument({
+    ...context,
+    /* The select names the client column `client`; the document speaks in client names. */
+    quotation: { ...quotation, clientName: quotation.client },
+    items: items.map((item, index) => ({ ...item, reference: index + 1 }))
+  });
+
+  res.type('html').send(page);
+}));
+
+/*
+ * A BOQ is usually titled with the site already in it — "Riverside Residences — structural
+ * package". Prefixing the project name again produced "Riverside Residences — Riverside
+ * Residences — structural package" on the client's quotation.
+ */
+const describe = boq => (boq.title?.toLowerCase().includes(String(boq.project || '').toLowerCase())
+  ? boq.title
+  : `${boq.project} — ${boq.title}`);
+
 router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
   boqId: z.number().int().positive(),
   clientName: z.string().min(2).max(180).optional(),
@@ -60,7 +95,7 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
        markup_percent,vat_percent,total,notes,prepared_by)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [reference, boq.id, boq.project_id, req.body.inquiryId || null,
-      req.body.clientName || boq.client, req.body.title || `${boq.project} — ${boq.title}`,
+      req.body.clientName || boq.client, req.body.title || describe(boq),
       req.body.quoteDate || today(), req.body.validUntil || null, subtotal,
       req.body.markupPercent, req.body.vatPercent, total, req.body.notes || null, req.user.id]);
     /* The lines are copied, not referenced: a later BOQ edit must not silently restate a
@@ -80,22 +115,57 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
  * Accepting a quotation makes it the project's budget — "what the client agreed to is
  * exactly what the project is measured against".
  */
+/**
+ * Amends a quotation. Beyond its status, the wording that appears on the client's document
+ * can be corrected here — a title, the client's name, the covering note and terms specific
+ * to this one job — without touching the priced lines or the standing terms every other
+ * document carries.
+ */
 router.patch('/quotations/:id', auth, permit('qs.quotation'), validate(z.object({
-  status: z.enum(['Draft', 'Sent', 'Accepted', 'Declined', 'Expired'])
-})), wrap(async (req, res) => {
+  status: z.enum(['Draft', 'Sent', 'Accepted', 'Declined', 'Expired']).optional(),
+  title: z.string().min(3).max(200).optional(),
+  clientName: z.string().min(2).max(180).optional(),
+  quoteDate: isoDate.optional(),
+  validUntil: isoDate.nullable().optional(),
+  notes: z.string().max(1000).nullable().optional(),
+  terms: z.string().max(2000).nullable().optional()
+}).refine(value => Object.keys(value).length > 0, { message: 'Nothing to change' })),
+wrap(async (req, res) => {
   const quotation = await getOne('SELECT * FROM quotations_client WHERE id=?', [req.params.id]);
   if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
 
+  /* An accepted quotation is what the client agreed to; its wording stops being ours to
+     rewrite, though its status can still move on. */
+  const rewording = ['title', 'clientName', 'quoteDate', 'validUntil', 'notes', 'terms']
+    .some(field => req.body[field] !== undefined);
+  if (rewording && quotation.status === 'Accepted') {
+    return res.status(409).json({ error: 'An accepted quotation cannot be reworded. Raise a new one instead.' });
+  }
+
+  const columns = {
+    title: 'title', clientName: 'client_name', quoteDate: 'quote_date',
+    validUntil: 'valid_until', notes: 'notes', terms: 'terms'
+  };
+  const edits = Object.entries(columns).filter(([key]) => req.body[key] !== undefined);
+
   await transaction(async connection => {
-    await connection.execute('UPDATE quotations_client SET status=? WHERE id=?', [req.body.status, quotation.id]);
+    if (edits.length) {
+      await connection.execute(
+        `UPDATE quotations_client SET ${edits.map(([, column]) => `${column}=?`).join(',')} WHERE id=?`,
+        [...edits.map(([key]) => req.body[key]), quotation.id]);
+    }
+    if (req.body.status) {
+      await connection.execute('UPDATE quotations_client SET status=? WHERE id=?', [req.body.status, quotation.id]);
+    }
     if (req.body.status === 'Accepted' && quotation.project_id) {
       await connection.execute('UPDATE projects SET budget=? WHERE id=?', [quotation.total, quotation.project_id]);
       if (quotation.inquiry_id) {
         await connection.execute("UPDATE inquiries SET status='Won' WHERE id=?", [quotation.inquiry_id]);
       }
     }
-    await audit(connection, req.user.id, req.body.status.toUpperCase(), 'quotation', quotation.id,
-      { status: quotation.status }, { status: req.body.status }, req.ip);
+    /* A wording change carries no status, so the action reflects what actually happened. */
+    await audit(connection, req.user.id, req.body.status ? req.body.status.toUpperCase() : 'UPDATE',
+      'quotation', quotation.id, quotation, { ...quotation, ...req.body }, req.ip);
   });
 
   if (req.body.status === 'Accepted') {

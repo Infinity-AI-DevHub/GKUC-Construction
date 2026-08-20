@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Check, PackageCheck } from 'lucide-react';
 import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea } from '../ui.jsx';
+import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 
 const TABS = ['Stock', 'Movements', 'Purchase requests', 'Orders', 'Suppliers'];
 
@@ -90,7 +90,7 @@ function Requests({ reload, can }) {
   const [rows, setRows] = useState([]);
   const [detail, setDetail] = useState(null);
   const load = () => api('/purchasing/requests').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
   const decide = async (id, status) => { await patch(`/purchasing/requests/${id}`, { status }); await load(); await reload(); };
 
   return <>
@@ -191,7 +191,7 @@ function Orders({ reload, can }) {
   const [rows, setRows] = useState([]);
   const [detail, setDetail] = useState(null);
   const load = () => api('/purchasing/orders').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
 
   return <>
     <Table columns={ORDER_COLUMNS} template={ORDER_TEMPLATE} title="Purchase orders" empty="No purchase orders issued.">

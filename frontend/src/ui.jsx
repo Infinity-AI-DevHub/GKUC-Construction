@@ -1,6 +1,21 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronRight, Plus, X } from 'lucide-react';
-import { initials, slug } from './api.js';
+import { initials, onDataChanged, slug } from './api.js';
+
+/**
+ * Loads a panel's own list, and loads it again whenever anything in the system changes.
+ *
+ * Panels fetch their own rows, so without this a record created on the same screen is saved
+ * but not shown until the page is reloaded — the create appears to have done nothing.
+ */
+export function useLiveList(load) {
+  const latest = useRef(load);
+  latest.current = load;
+  useEffect(() => {
+    latest.current();
+    return onDataChanged(() => latest.current());
+  }, []);
+}
 
 export function Badge({ children, tone }) {
   return <span className={`badge ${tone || slug(children)}`}>{children}</span>;
@@ -65,8 +80,10 @@ export function Field({ name, label, type = 'text', wide = false, required = tru
   </label>;
 }
 
-export function TextArea({ name, label, required = true, placeholder }) {
-  return <label className="wide">{label}<textarea name={name} required={required} placeholder={placeholder} /></label>;
+export function TextArea({ name, label, required = true, placeholder, defaultValue, rows }) {
+  return <label className="wide">{label}
+    <textarea name={name} required={required} placeholder={placeholder} defaultValue={defaultValue} rows={rows} />
+  </label>;
 }
 
 export function SelectField({ name, label, options, defaultValue, wide = false }) {
