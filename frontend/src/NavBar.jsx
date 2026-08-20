@@ -39,7 +39,15 @@ export default function NavBar({ items, activePage, openTasks, onSelect }) {
     nav.classList.remove('measuring');
 
     const totalWithGaps = widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1);
-    if (totalWithGaps <= available) { setVisibleCount(items.length); return; }
+
+    /*
+     * A little slack before everything comes back out of the menu.
+     *
+     * Showing the menu costs width, and hiding it frees width again — so at the exact
+     * boundary the bar can flip between the two states on every measurement, taking the
+     * open menu with it. Requiring room to spare before collapsing the menu settles it.
+     */
+    if (totalWithGaps + 8 <= available) { setVisibleCount(items.length); return; }
 
     /* Something has to move into the menu, so the menu's own width has to fit too. */
     let used = moreWidth + gap;
@@ -53,6 +61,11 @@ export default function NavBar({ items, activePage, openTasks, onSelect }) {
     setVisibleCount(Math.max(1, fits));
   }, [items.length]);
 
+  /* Keyed by what the links actually are, not by the array holding them: the parent builds
+     a fresh array on every render, which had this tearing down and rebuilding the observer
+     continuously. */
+  const signature = items.map(([name]) => name).join('|');
+
   useLayoutEffect(() => {
     measure();
     const nav = navRef.current;
@@ -61,7 +74,7 @@ export default function NavBar({ items, activePage, openTasks, onSelect }) {
     observer.observe(nav);
     if (nav.parentElement) observer.observe(nav.parentElement);
     return () => observer.disconnect();
-  }, [measure, items]);
+  }, [measure, signature]);
 
   /* Fonts land after first paint and change how wide the links are. */
   useEffect(() => {
@@ -87,8 +100,6 @@ export default function NavBar({ items, activePage, openTasks, onSelect }) {
 
   const overflow = items.slice(visibleCount);
   const activeIsHidden = overflow.some(([name]) => name === activePage);
-
-  useEffect(() => { if (!overflow.length) setMenuOpen(false); }, [overflow.length]);
 
   const badge = name => (name === 'Tasks' && openTasks > 0 ? <b>{openTasks}</b> : null);
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowDownToLine, Check, Clock3, PencilLine, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
 import { api, localDate, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea } from '../ui.jsx';
+import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import BiometricImport from './BiometricImport.jsx';
 
@@ -136,7 +136,7 @@ function Payroll({ can }) {
   const [rows, setRows] = useState([]);
   const [detail, setDetail] = useState(null);
   const load = () => api('/payroll').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
   const setStatus = async (id, status) => { await patch(`/payroll/${id}`, { status }); await load(); };
 
   return <>
@@ -311,7 +311,7 @@ const LEAVE_TEMPLATE = 'minmax(170px,1.2fr) 110px 120px 120px 70px 110px 150px';
 function Leave({ can }) {
   const [rows, setRows] = useState([]);
   const load = () => api('/employees/leave/all').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
   const decide = async (id, status) => { await patch(`/employees/leave/${id}`, { status }); await load(); };
 
   return <Table columns={LEAVE_COLUMNS} template={LEAVE_TEMPLATE} title="Leave requests" empty="No leave requested.">
@@ -338,7 +338,7 @@ const OVERTIME_TEMPLATE = 'minmax(170px,1.2fr) minmax(150px,1fr) 120px 80px 100p
 function Overtime({ can }) {
   const [rows, setRows] = useState([]);
   const load = () => api('/employees/overtime/all').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
   const decide = async (id, status) => { await patch(`/employees/overtime/${id}`, { status }); await load(); };
 
   return <Table columns={OVERTIME_COLUMNS} template={OVERTIME_TEMPLATE} title="Overtime records" empty="No overtime recorded.">

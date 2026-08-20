@@ -511,6 +511,86 @@ async function createSiteOpsTables() {
 }
 
 /** PID v3 §3.3 — QS: quotations built from the BOQ, tender filing, retention, subcontractors. */
+/**
+ * Who GKUC is, as it should appear on anything sent to a client.
+ *
+ * Kept as one editable record rather than constants in the code: a TIN, an address or a
+ * bank account changes without a developer, and every document has to change with it. One
+ * row, so there is never a question of which set of details is current.
+ */
+/**
+ * One counter per document series and year. Exists so a reference can be reserved in a
+ * single atomic statement rather than by reading the last one and adding to it.
+ */
+async function createSequenceTable() {
+  await query(`CREATE TABLE IF NOT EXISTS document_sequences (
+    scope VARCHAR(40) PRIMARY KEY,
+    next_value INT UNSIGNED NOT NULL DEFAULT 1
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+}
+
+async function createCompanyTable() {
+  await query(`CREATE TABLE IF NOT EXISTS company_settings (
+    id TINYINT UNSIGNED PRIMARY KEY DEFAULT 1,
+    name VARCHAR(180) NOT NULL,
+    address VARCHAR(400) NOT NULL DEFAULT '',
+    telephone VARCHAR(120) NOT NULL DEFAULT '',
+    email VARCHAR(180) NOT NULL DEFAULT '',
+    tin VARCHAR(40) NOT NULL DEFAULT '',
+    vat_number VARCHAR(40) NOT NULL DEFAULT '',
+    bank_details VARCHAR(400) NOT NULL DEFAULT '',
+    quotation_terms TEXT NULL,
+    vat_percent DECIMAL(6,2) NOT NULL DEFAULT 18,
+    updated_by BIGINT UNSIGNED NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT one_company CHECK (id = 1)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  /* Seeded with what is publicly known and blanks for the rest, so the document renders
+     from day one and the MD fills in the tax numbers when they have them. */
+  await query(`INSERT IGNORE INTO company_settings (id,name,address,telephone,email,quotation_terms)
+    VALUES (1,'G.K.U.C. Construction (Pvt) Ltd','','','',?)`,
+  ['Validity: 30 days from the date of this quotation.\nPayment: as per the agreed payment schedule.\nThis quotation is subject to the conditions of contract agreed between both parties.']);
+}
+
+/**
+ * How documents should look and what they should say.
+ *
+ * Separate from the company's identity because these are presentation choices GKUC will
+ * want to change — the accent colour to match their letterhead, whether a bill of
+ * quantities carries signature lines, what standing text sits under each type. Kept as one
+ * row for the same reason as the company details: there is only ever one current answer.
+ */
+async function createDocumentSettingsTable() {
+  await query(`CREATE TABLE IF NOT EXISTS document_settings (
+    id TINYINT UNSIGNED PRIMARY KEY DEFAULT 1,
+    accent_colour CHAR(7) NOT NULL DEFAULT '#16305c',
+    paper_size ENUM('A4','Letter') NOT NULL DEFAULT 'A4',
+    show_logo TINYINT(1) NOT NULL DEFAULT 1,
+    show_signatures TINYINT(1) NOT NULL DEFAULT 1,
+    show_amount_in_words TINYINT(1) NOT NULL DEFAULT 1,
+    show_bank_details TINYINT(1) NOT NULL DEFAULT 1,
+    footer_note VARCHAR(300) NOT NULL DEFAULT '',
+    quotation_terms TEXT NULL,
+    boq_terms TEXT NULL,
+    invoice_terms TEXT NULL,
+    updated_by BIGINT UNSIGNED NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT one_document_settings CHECK (id = 1)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await query('INSERT IGNORE INTO document_settings (id) VALUES (1)');
+  /* The whole design — page, palette, type, and the order and styling of every block — as
+     one document, because it is edited as one thing and read as one thing. */
+  await addColumn('document_settings', 'design', 'JSON NULL');
+
+  /* The terms already typed against the company move across, so nothing is lost. */
+  await query(`UPDATE document_settings d
+    JOIN company_settings c ON c.id=1
+    SET d.quotation_terms = COALESCE(d.quotation_terms, c.quotation_terms)
+    WHERE d.id=1 AND d.quotation_terms IS NULL`);
+}
+
 async function createQsTables() {
   await query(`CREATE TABLE IF NOT EXISTS quotations_client (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, reference VARCHAR(60) NOT NULL UNIQUE,
@@ -615,6 +695,10 @@ async function migrateExistingInstalls() {
    * export be matched without anybody retyping names — and the mapping is remembered, so it
    * only has to be done for a person once.
    */
+  /* Wording for one document, overriding the standing text — a quotation with unusual
+     payment terms should not require changing the terms every other document carries. */
+  await addColumn('quotations_client', 'terms', 'TEXT NULL');
+  await addColumn('boqs', 'terms', 'TEXT NULL');
   await addColumn('employees', 'biometric_id', 'VARCHAR(40) NULL');
   await addIndex('employees', 'uq_employee_biometric', 'UNIQUE KEY uq_employee_biometric(biometric_id)');
   /* A day with a single punch cannot say whether the person arrived or left; it is imported
@@ -674,6 +758,9 @@ export async function migrate() {
   await createLifecycleTables();
   await createAccessTables();
   await createSiteOpsTables();
+  await createSequenceTable();
+  await createCompanyTable();
+  await createDocumentSettingsTable();
   await createQsTables();
   await migrateExistingInstalls();
   await seedAccessControl();

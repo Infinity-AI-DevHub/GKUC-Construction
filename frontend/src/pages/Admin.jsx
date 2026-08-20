@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { BellRing } from 'lucide-react';
 import { api, patch, post, slug } from '../api.js';
-import { Avatar, Badge, Field, FormModal, Page, Row, SelectField, Table, Tabs } from '../ui.jsx';
+import { Avatar, Badge, Field, FormModal, Page, Row, SelectField, Table, Tabs, useLiveList } from '../ui.jsx';
 import AccessControl from './AccessControl.jsx';
 import AccountPanel from '../AccountPanel.jsx';
+import CompanySettings from '../CompanySettings.jsx';
+import DocumentSettings from '../DocumentSettings.jsx';
 
-const TABS = ['Users', 'Access control', 'Notifications', 'Audit log', 'My account'];
+const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Notifications', 'Audit log', 'My account'];
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
 export default function Admin({ can, user, initialTab = TABS[0] }) {
@@ -20,6 +22,8 @@ export default function Admin({ can, user, initialTab = TABS[0] }) {
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
     {tab === 'Users' && <Users can={can} creating={creating} closeCreate={() => setCreating(false)} />}
     {tab === 'Access control' && <AccessControl user={user} />}
+    {tab === 'Company' && <CompanySettings can={can} />}
+    {tab === 'Documents' && <DocumentSettings can={can} />}
     {tab === 'Notifications' && <Notifications can={can} />}
     {tab === 'Audit log' && <AuditLog />}
     {tab === 'My account' && <section className="table-panel">
@@ -36,7 +40,7 @@ function Users({ can, creating, closeCreate }) {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
   const load = () => api('/users').then(setRows).catch(failure => setError(failure.message));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
 
   const toggle = async user => { await patch(`/users/${user.id}`, { active: !user.active }); await load(); };
 
@@ -62,7 +66,7 @@ const NOTIFICATION_TEMPLATE = '110px minmax(220px,1.4fr) minmax(240px,2fr) 160px
 function Notifications({ can }) {
   const [rows, setRows] = useState([]);
   const load = () => api('/notifications').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
 
   const markRead = async id => { await post(`/notifications/${id}/read`); await load(); };
   const rescan = async () => { await post('/notifications/scan'); await load(); };

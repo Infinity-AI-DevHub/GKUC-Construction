@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { BriefcaseBusiness, Building2, Check } from 'lucide-react';
-import { api, money, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Avatar, Badge, FormModal, Field, Page, Progress, Row, SelectField, Table, Tabs, TextArea } from '../ui.jsx';
+import { BriefcaseBusiness, Building2, Check, FileText } from 'lucide-react';
+import { api, money, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { Avatar, Badge, Field, FormModal, Page, Progress, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import ProjectDetail from './ProjectDetail.jsx';
 
 const TABS = ['Projects', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquiries'];
@@ -89,14 +89,17 @@ function Milestones({ data, reload, can }) {
 }
 
 const BOQ_COLUMNS = ['Reference', 'Project', 'Title', 'Estimated total', 'Status', ''];
-const BOQ_TEMPLATE = 'minmax(130px,.8fr) minmax(150px,1fr) minmax(200px,1.4fr) 150px 110px 120px';
+const BOQ_TEMPLATE = 'minmax(130px,.8fr) minmax(140px,1fr) minmax(180px,1.3fr) 140px 105px 165px';
 
 function BoqList({ data, reload, can }) {
   const [detail, setDetail] = useState(null);
+  const [wording, setWording] = useState(null);
+  const [error, setError] = useState('');
   const openDetail = async id => setDetail(await api(`/boq/${id}`));
   const decide = async (id, status) => { await patch(`/boq/${id}`, { status }); await reload(); setDetail(null); };
 
   return <>
+    {error && <p className="form-error">{error}</p>}
     <Table columns={BOQ_COLUMNS} template={BOQ_TEMPLATE} title="Bills of quantities"
       empty="No BOQ prepared yet. Create one to set a project budget.">
       {data.boqs.map(boq => <Row template={BOQ_TEMPLATE} key={boq.id}>
@@ -105,14 +108,43 @@ function BoqList({ data, reload, can }) {
         <span>{boq.title}</span>
         <strong>{rupees(boq.total)}</strong>
         <Badge tone={slug(boq.status)}>{boq.status}</Badge>
-        <button className="status-button" onClick={() => openDetail(boq.id)}>Open</button>
+        <span style={{ display: 'flex', gap: '6px' }}>
+          <button className="status-button" onClick={() => openDetail(boq.id)}>Open</button>
+          <button className="status-button" title="Open the printable bill of quantities"
+            onClick={() => openDocument(`/boq/${boq.id}/document`).catch(failure => setError(failure.message))}>
+            <FileText size={13} />PDF
+          </button>
+        </span>
       </Row>)}
     </Table>
-    {detail && <BoqDetail boq={detail} close={() => setDetail(null)} decide={decide} can={can} />}
+    {detail && <BoqDetail boq={detail} close={() => setDetail(null)} decide={decide} can={can}
+      edit={() => { setWording(detail); setDetail(null); }} />}
+    {wording && <BoqWording boq={wording} close={() => setWording(null)}
+      reload={async () => { await reload(); setWording(null); }} />}
   </>;
 }
 
-function BoqDetail({ boq, close, decide, can }) {
+/** The wording on the printed bill — the priced lines are not touched here. */
+function BoqWording({ boq, close, reload }) {
+  return <FormModal title={`Edit ${boq.reference}`} close={close} label="Save wording" onSubmit={async values => {
+    await patch(`/boq/${boq.id}/wording`, {
+      title: values.title,
+      notes: values.notes || null,
+      terms: values.terms || null
+    });
+    await reload();
+  }}>
+    <Field name="title" label="Title" wide defaultValue={boq.title} />
+    <TextArea name="notes" label="Notes printed under the bill" rows={3} required={false} defaultValue={boq.notes || ''} />
+    <TextArea name="terms" label="Terms for this bill only (leave blank to use the standing terms)"
+      rows={3} required={false} defaultValue={boq.terms || ''} />
+    <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
+      An approved BOQ cannot be reworded — raise a revision instead.
+    </p>
+  </FormModal>;
+}
+
+function BoqDetail({ boq, close, decide, can, edit }) {
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
     <div className="modal">
       <div className="modal-title"><h2>{boq.reference} — {boq.title}</h2><button className="icon-btn" onClick={close}>✕</button></div>
@@ -144,6 +176,11 @@ function BoqDetail({ boq, close, decide, can }) {
         </div>
         <div className="form-actions">
           <button type="button" className="secondary" onClick={close}>Close</button>
+          <button type="button" className="secondary"
+            onClick={() => openDocument(`/boq/${boq.id}/document`)}><FileText size={16} />Print / PDF</button>
+          {can.qs && boq.status !== 'Approved' && (
+            <button type="button" className="secondary" onClick={edit}>Edit wording</button>
+          )}
           {can.manage && boq.status !== 'Approved' && (
             <button type="button" className="primary" onClick={() => decide(boq.id, 'Approved')}><Check size={17} />Approve BOQ</button>
           )}
@@ -159,7 +196,7 @@ const VARIATION_TEMPLATE = 'minmax(120px,.8fr) minmax(150px,1fr) minmax(220px,2f
 function Variations({ can, reload }) {
   const [rows, setRows] = useState([]);
   const load = () => api('/boq/variations/all').then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
   const decide = async (id, status) => { await patch(`/boq/variations/${id}`, { status }); await load(); await reload(); };
 
   return <Table columns={['Reference', 'Project', 'Description', 'Amount', 'Status', '']} template={VARIATION_TEMPLATE}

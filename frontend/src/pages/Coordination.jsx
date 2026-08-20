@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, ArrowRightLeft, CloudRain, HardHat, Truck, Wrench } from 'lucide-react';
 import { api, post, shortDate, slug, todayInput } from '../api.js';
-import { Avatar, Badge, Field, FormModal, Page, Row, SelectField, Summary, Table, Tabs, TextArea } from '../ui.jsx';
+import { Avatar, Badge, Field, FormModal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 
 const TABS = ['Live sites', 'Resource availability', 'Movement history'];
 
@@ -25,7 +25,7 @@ export default function Coordination({ data, reload, can }) {
     setBoard(sites);
     setResources(availability);
   };
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
   const refresh = async () => { await load(); await reload(); };
 
   return <Page title="Coordination" subtitle="Both active sites, who is on them, and what moves when plans change.">

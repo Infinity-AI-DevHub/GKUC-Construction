@@ -386,6 +386,28 @@ main { width:100% }
 .access-intro h2 { font:700 15px Manrope;margin:0 0 5px;display:flex;align-items:center;gap:7px }
 .access-intro p { margin:0;font-size:11px;color:var(--muted);max-width:640px }
 .access-matrix { overflow-x:auto }
+
+/*
+ * The heading strip and every row are separate grids that must line up exactly.
+ *
+ * A grid track is never smaller than its content, so the long role names in the heading were
+ * widening its columns while the rows — holding only a switch — stayed narrow. The two grids
+ * then disagreed: the heading resolved to 271px + 169px columns, the rows to 240px + 150px,
+ * and every switch sat to the left of the role it belonged to.
+ *
+ * Letting the cells shrink below their content is what keeps the two in step: with no
+ * content minimum to inflate them, both grids resolve the same track sizes from the same
+ * available width. The names wrap instead of stretching the column.
+ */
+.access-matrix .table-head > *,
+.access-matrix .table-row > * { min-width: 0 }
+.access-role { overflow-wrap: anywhere }
+
+/* Every strip is as wide as the columns themselves, and fills the panel when there is room
+   to spare — so the heading and the rows are always the same width as each other. */
+.access-matrix .table-head,
+.access-matrix .table-row,
+.access-matrix .access-group { width: max-content; min-width: 100% }
 .access-matrix .table-head { align-items:end;height:auto;padding-top:10px;padding-bottom:10px }
 .access-role { position:relative;display:block;text-transform:none;letter-spacing:0;font-size:10px;font-weight:700;color:#243b4a;line-height:1.3 }
 .access-role small { display:block;font-weight:500;font-size:8px;color:var(--muted);margin-top:2px }
@@ -662,3 +684,17 @@ nav.measuring .nav-overflowed { display: flex; visibility: hidden; position: abs
   .device-row { flex-direction: column; align-items: stretch; }
   .device-row select { max-width: none; width: 100%; }
 }
+
+/* ============================================================================
+   16. Document settings
+   ============================================================================ */
+
+.document-toggles { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 9px 18px; }
+.document-toggles label {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 11px; font-weight: 500; color: #33424c;
+}
+.document-toggles input { flex: none; width: 15px; height: 15px; }
+.document-credit { margin: 0; font-size: 10px; color: var(--muted); }
+
+@media (max-width: 620px) { .document-toggles { grid-template-columns: 1fr; } }

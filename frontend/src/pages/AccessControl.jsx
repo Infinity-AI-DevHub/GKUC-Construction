@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { KeyRound, ShieldCheck, UserCog } from 'lucide-react';
 import { api, del, patch, post, shortDate } from '../api.js';
-import { Avatar, Badge, EmptyState, Field, FormModal, Modal, Row, Table } from '../ui.jsx';
+import { Avatar, Badge, EmptyState, Field, FormModal, Modal, Row, Table, useLiveList } from '../ui.jsx';
 
 /**
  * PID v3 §2.2 — "The MD opens a simple settings screen showing every role and every
@@ -30,7 +30,7 @@ export default function AccessControl({ user }) {
     setRoles(roleRows);
     setUsers(userRows);
   };
-  useEffect(() => { load(); }, []);
+  useLiveList(load);
 
   if (!catalogue) return <EmptyState>You do not have access to the access-control screen.</EmptyState>;
 
@@ -55,7 +55,16 @@ export default function AccessControl({ user }) {
     try { await del(`/access/roles/${role.id}`); await load(); } catch (failure) { setError(failure.message); }
   };
 
-  const template = `minmax(240px, 1.6fr) repeat(${roles.length}, minmax(84px, 1fr))`;
+  /*
+   * Fixed track widths, not fractions.
+   *
+   * The heading strip and every row are separate grids inside a horizontally scrolling
+   * panel. A fractional track resolves against whatever width that particular grid happens
+   * to have — and the heading, holding long role names, stretched wider than the rows,
+   * which hold only a switch. The two then disagreed and every switch sat left of the role
+   * it belonged to. Fixed widths resolve identically no matter what a row contains.
+   */
+  const template = `260px repeat(${roles.length}, 128px)`;
 
   return <>
     <div className="access-intro">
