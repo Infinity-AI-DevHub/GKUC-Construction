@@ -6,8 +6,9 @@ import AccessControl from './AccessControl.jsx';
 import AccountPanel from '../AccountPanel.jsx';
 import CompanySettings from '../CompanySettings.jsx';
 import DocumentSettings from '../DocumentSettings.jsx';
+import DocumentDesigner from '../DocumentDesigner.jsx';
 
-const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Notifications', 'Audit log', 'My account'];
+const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Audit log', 'My account'];
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
 export default function Admin({ can, user, initialTab = TABS[0] }) {
@@ -24,6 +25,7 @@ export default function Admin({ can, user, initialTab = TABS[0] }) {
     {tab === 'Access control' && <AccessControl user={user} />}
     {tab === 'Company' && <CompanySettings can={can} />}
     {tab === 'Documents' && <DocumentSettings can={can} />}
+    {tab === 'Designer' && <DocumentDesigner can={can} />}
     {tab === 'Notifications' && <Notifications can={can} />}
     {tab === 'Audit log' && <AuditLog />}
     {tab === 'My account' && <section className="table-panel">

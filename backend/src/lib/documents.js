@@ -60,25 +60,33 @@ function stylesheet(design) {
   const { page, type, table, totals } = design;
   return `
   *{box-sizing:border-box}
+  /*
+   * Print the colours as designed.
+   *
+   * A browser drops background colours when printing unless it is told not to — the
+   * "Background graphics" tick in the print dialogue. Without this the navy table header and
+   * the total bar came out blank, and because their text is white it disappeared with them:
+   * the total, the one figure that matters most, printed invisibly. Asking for exact colour
+   * makes it independent of a tick box nobody should have to know about.
+   */
+  *,*::before,*::after{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{margin:0;background:#eef1f3;color:${type.colour};
     font:${type.size}px/1.5 ${fontStack(type.font)}}
   .sheet{width:${page.size === 'Letter' ? '216mm' : '210mm'};
     min-height:${page.size === 'Letter' ? '279mm' : '297mm'};
-    margin:16px auto;background:${page.background};padding:${page.margin}mm;
+    margin:16px auto;background:${page.background};
+    padding:${page.margins.top}mm ${page.margins.right}mm ${page.margins.bottom}mm ${page.margins.left}mm;
     box-shadow:0 6px 26px rgba(0,0,0,.14);position:relative}
   .watermark{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;
     font-weight:800;letter-spacing:6px;text-transform:uppercase;z-index:0}
   .sheet > *:not(.watermark){position:relative;z-index:1}
-  .head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;
-    border-bottom:2px solid ${design.accent};padding-bottom:12px}
-  .head img.mark{height:${design.logo.height}px;width:auto;object-fit:contain;flex:none}
-  .head.logo-centre{justify-content:center;flex-wrap:wrap;text-align:center}
-  .head.logo-right{flex-direction:row-reverse}
-  .company h1{font-size:${(type.size * 1.42).toFixed(1)}px;margin:0 0 4px;color:${type.headingColour};letter-spacing:.2px}
-  .company p{margin:1px 0;font-size:${(type.size * 0.875).toFixed(1)}px;color:${type.colour};opacity:.8}
-  .title{text-align:right}
-  .title h2{margin:0;font-size:${(type.size * 1.67).toFixed(1)}px;letter-spacing:3px;color:${type.headingColour};text-transform:uppercase}
-  .title p{margin:3px 0 0;font-size:${(type.size * 0.92).toFixed(1)}px}
+  /* A band placed by coordinate. It appears once and never paginates, so nothing in it
+     can be pushed out of place by content further down the page. */
+  .head{position:relative;margin-bottom:14px}
+  .head.ruled{border-bottom:2px solid ${design.accent}}
+  .head .piece{position:absolute;margin:0}
+  .head .piece img{width:100%;height:100%;object-fit:contain;object-position:left center;display:block}
+  .head .piece[data-piece="docTitle"]{letter-spacing:3px;text-transform:uppercase}
   .parties{display:flex;gap:18px;margin:16px 0 14px}
   .party{flex:1;border:1px solid ${table.border};border-radius:3px;padding:9px 11px}
   .party h3{margin:0 0 5px;font-size:${(type.size * 0.75).toFixed(1)}px;letter-spacing:1.1px;text-transform:uppercase;opacity:.62}
@@ -118,15 +126,21 @@ function stylesheet(design) {
   .bar button{font:inherit;font-weight:600;border:0;border-radius:5px;padding:7px 15px;
     background:#b7f334;color:#12200a;cursor:pointer}
   [data-block]{scroll-margin-top:60px}
+  /* The positioning wrapper carries the offset only; the block inside keeps its own layout. */
+  .placed{display:block}
+  .placed > table{width:100%}
+  .placed > .parties,.placed > .sign{display:flex}
   @media print{
-    body{background:#fff}
+    html,body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .bar{display:none}
+    /* The printed page gets its margins from @page, so the sheet itself drops its padding. */
     .sheet{margin:0;box-shadow:none;width:auto;min-height:0;padding:0}
     thead{display:table-header-group}
     tr{page-break-inside:avoid}
     .sign,.words{page-break-inside:avoid}
   }
-  @page{size:${page.size};margin:${page.margin}mm}
+  @page{size:${page.size};
+    margin:${page.margins.top}mm ${page.margins.right}mm ${page.margins.bottom}mm ${page.margins.left}mm}
 `;
 }
 
@@ -141,30 +155,73 @@ function footer(company, reference, settings) {
   <p class="builder">${BUILDER}</p>`;
 }
 
-/** The letterhead, shared by every document type. */
+/**
+ * The letterhead band.
+ *
+ * Everything in it is placed by coordinate rather than by flow, because the band appears
+ * once at the top of the document and never runs onto a second page — so a position set by
+ * dragging stays where it was put. Each piece is marked up for the designer to grab.
+ */
 function letterhead(company, heading, reference, date, design = DEFAULT_DESIGN) {
-  return `<div class="head logo-${design.logo.align}" data-block="letterhead">
-    ${design.logo.show ? '<img class="mark" src="/brand/gkuc-mark-256.png" alt="">' : ''}
-    <div class="company">
-      <h1>${escape(company.name)}</h1>
-      ${lines(company.address).map(line => `<p>${line}</p>`).join('')}
-      ${company.telephone ? `<p>Telephone: ${escape(company.telephone)}</p>` : ''}
-      ${company.email ? `<p>${escape(company.email)}</p>` : ''}
-      ${company.tin ? `<p>TIN: ${escape(company.tin)}</p>` : ''}
-      ${company.vatNumber ? `<p>VAT Reg. No: ${escape(company.vatNumber)}</p>` : ''}
-    </div>
-    <div class="title">
-      <h2>${escape(heading)}</h2>
-      <p><strong>No:</strong> ${escape(reference)}</p>
-      <p><strong>Date:</strong> ${escape(longDate(date))}</p>
-    </div>
+  const header = design.header;
+
+  const contents = {
+    logo: design.logo.show === false
+      ? ''
+      : '<img src="/brand/gkuc-mark-256.png" alt="">',
+    companyName: escape(company.name),
+    companyDetails: [
+      ...lines(company.address),
+      company.telephone ? `Telephone: ${escape(company.telephone)}` : '',
+      company.email ? escape(company.email) : '',
+      company.tin ? `TIN: ${escape(company.tin)}` : '',
+      company.vatNumber ? `VAT Reg. No: ${escape(company.vatNumber)}` : ''
+    ].filter(Boolean).join('<br>'),
+    /* Left in its real case: uppercasing is presentation, and the words themselves
+       should stay searchable and copyable as written. */
+    docTitle: escape(heading),
+    reference: `<strong>No:</strong> ${escape(reference)}`,
+    docDate: `<strong>Date:</strong> ${escape(longDate(date))}`
+  };
+
+  const pieces = header.elements.filter(element => element.show).map(element => {
+    const body = element.custom ? escape(element.text) : contents[element.id];
+    if (body === undefined || body === '') return '';
+    const align = element.align === 'centre' ? 'center' : element.align;
+    /* The logo is sized by its element size; text by its font size. */
+    const type = element.id === 'logo'
+      ? `height:${element.size}px`
+      : `font-size:${element.size}px;font-weight:${element.weight};line-height:1.35`;
+    return `<div class="piece" data-piece="${escape(element.id)}"
+      style="left:${element.x}%;top:${element.y}px;width:${element.width}%;
+        color:${element.colour};text-align:${align};${type}">${body}</div>`;
+  }).join('\n    ');
+
+  return `<div class="head${header.rule ? ' ruled' : ''}" data-block="letterhead"
+    style="height:${header.height}px">
+    ${pieces}
   </div>`;
 }
 
 /** Wraps a document's blocks in the page, in the order the designer put them. */
 function page({ design, company, title, heading, reference, date, blocks, settings }) {
+  /*
+   * Position is applied here rather than baked into each block, so a block does not need to
+   * know where in the document it ended up. Space is added above whatever the layout already
+   * gives it, which is what makes it useful for nudging one block clear of another.
+   */
   const drawn = orderedBlocks(design)
-    .map(block => blocks[block.id])
+    .map(block => {
+      const html = blocks[block.id];
+      if (!html) return null;
+      const style = [
+        block.space ? `margin-top:${block.space}px` : '',
+        block.align && block.align !== 'left'
+          ? `text-align:${block.align === 'centre' ? 'center' : 'right'}`
+          : ''
+      ].filter(Boolean).join(';');
+      return style ? `<div class="placed" style="${style}">${html}</div>` : html;
+    })
     .filter(Boolean)
     .join('\n  ');
 

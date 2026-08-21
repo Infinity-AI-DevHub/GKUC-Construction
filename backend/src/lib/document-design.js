@@ -29,8 +29,40 @@ export const FONTS = [
   { id: 'system', label: 'System UI', stack: 'system-ui,-apple-system,"Segoe UI",sans-serif' }
 ];
 
+/**
+ * The pieces that make up the letterhead band.
+ *
+ * The band is a fixed area at the top of the page that appears once and never flows onto a
+ * second page — which is what makes it safe to place things in it by coordinate. Each piece
+ * carries its own position, size and styling, and can be dragged anywhere within the band.
+ */
+export const HEADER_PIECES = [
+  { id: 'logo', label: 'Logo' },
+  { id: 'companyName', label: 'Company name' },
+  { id: 'companyDetails', label: 'Address & contact' },
+  { id: 'docTitle', label: 'Document title' },
+  { id: 'reference', label: 'Reference number' },
+  { id: 'docDate', label: 'Date' }
+];
+
+const DEFAULT_HEADER = {
+  height: 120,
+  rule: true,
+  elements: [
+    { id: 'logo', show: true, x: 2, y: 6, width: 14, size: 56, colour: '#111111', weight: 700, align: 'left' },
+    { id: 'companyName', show: true, x: 19, y: 10, width: 46, size: 17, colour: '#16305c', weight: 800, align: 'left' },
+    { id: 'companyDetails', show: true, x: 19, y: 40, width: 46, size: 10, colour: '#333333', weight: 400, align: 'left' },
+    { id: 'docTitle', show: true, x: 66, y: 8, width: 32, size: 20, colour: '#16305c', weight: 800, align: 'right' },
+    { id: 'reference', show: true, x: 66, y: 46, width: 32, size: 11, colour: '#111111', weight: 400, align: 'right' },
+    { id: 'docDate', show: true, x: 66, y: 66, width: 32, size: 11, colour: '#111111', weight: 400, align: 'right' }
+  ]
+};
+
 export const DEFAULT_DESIGN = {
-  page: { size: 'A4', margin: 14, background: '#ffffff' },
+  header: DEFAULT_HEADER,
+  /* Each edge is set on its own: a letterhead usually wants more room at the top than at
+     the sides, and printers differ in what they can reach at the bottom. */
+  page: { size: 'A4', margin: 14, margins: { top: 14, right: 15, bottom: 14, left: 15 }, background: '#ffffff' },
   type: { font: 'sans', size: 12, colour: '#111111', headingColour: '#16305c' },
   accent: '#16305c',
   logo: { show: true, height: 52, align: 'left' },
@@ -40,7 +72,7 @@ export const DEFAULT_DESIGN = {
     stripe: '#ffffff', fontSize: 10.5, padding: 6
   },
   totals: { barBackground: '#16305c', barText: '#ffffff' },
-  blocks: BLOCKS.map(block => ({ id: block.id, show: true }))
+  blocks: BLOCKS.map(block => ({ id: block.id, show: true, space: 0, align: 'left' }))
 };
 
 const clampNumber = (value, low, high, fallback) => {
@@ -57,6 +89,55 @@ const hex = (value, fallback) => (/^#[0-9a-fA-F]{6}$/.test(String(value || '')) 
  * visually and stored as one document, so a single unknown value should not cost somebody
  * the rest of their layout — and nothing here may reach the stylesheet unchecked.
  */
+/** Keeps a dragged piece inside the band, whatever the browser sent. */
+function normaliseHeader(given) {
+  const header = given && typeof given === 'object' ? given : {};
+  const height = clampNumber(header.height, 60, 320, DEFAULT_HEADER.height);
+  const known = new Map(HEADER_PIECES.map(piece => [piece.id, piece]));
+  const submitted = Array.isArray(header.elements) ? header.elements : [];
+
+  const elements = [];
+  for (const piece of HEADER_PIECES) {
+    const entry = submitted.find(item => item?.id === piece.id) || {};
+    const fallback = DEFAULT_HEADER.elements.find(item => item.id === piece.id);
+    const width = clampNumber(entry.width, 5, 100, fallback.width);
+    elements.push({
+      id: piece.id,
+      show: entry.show !== false,
+      /* Position is a percentage across and pixels down, so the band keeps its proportions
+         at any paper size while heights stay predictable. */
+      x: clampNumber(entry.x, 0, 100 - width, fallback.x),
+      y: clampNumber(entry.y, 0, Math.max(0, height - 12), fallback.y),
+      width,
+      size: clampNumber(entry.size, 6, 90, fallback.size),
+      colour: hex(entry.colour, fallback.colour),
+      weight: [400, 600, 700, 800].includes(Number(entry.weight)) ? Number(entry.weight) : fallback.weight,
+      align: ['left', 'centre', 'right'].includes(entry.align) ? entry.align : fallback.align
+    });
+  }
+
+  /* Text boxes somebody added themselves, which carry their own words. */
+  for (const entry of submitted) {
+    if (known.has(entry?.id) || !String(entry?.id || '').startsWith('text:')) continue;
+    const width = clampNumber(entry.width, 5, 100, 30);
+    elements.push({
+      id: String(entry.id).slice(0, 60),
+      custom: true,
+      text: String(entry.text || '').slice(0, 200),
+      show: entry.show !== false,
+      x: clampNumber(entry.x, 0, 100 - width, 5),
+      y: clampNumber(entry.y, 0, Math.max(0, height - 12), 10),
+      width,
+      size: clampNumber(entry.size, 6, 90, 12),
+      colour: hex(entry.colour, '#111111'),
+      weight: [400, 600, 700, 800].includes(Number(entry.weight)) ? Number(entry.weight) : 400,
+      align: ['left', 'centre', 'right'].includes(entry.align) ? entry.align : 'left'
+    });
+  }
+
+  return { height, rule: header.rule !== false, elements };
+}
+
 export function normaliseDesign(given) {
   const design = given && typeof given === 'object' ? given : {};
   const base = DEFAULT_DESIGN;
@@ -68,16 +149,33 @@ export function normaliseDesign(given) {
     const block = known.get(entry?.id);
     if (!block || ordered.some(item => item.id === block.id)) continue;
     /* A block the document cannot do without stays visible whatever was submitted. */
-    ordered.push({ id: block.id, show: block.fixed ? true : entry.show !== false });
+    ordered.push({
+      id: block.id,
+      show: block.fixed ? true : entry.show !== false,
+      /* Extra room above this block, on top of whatever the layout already gives it. */
+      space: clampNumber(entry.space, -20, 80, 0),
+      align: ['left', 'centre', 'right'].includes(entry.align) ? entry.align : 'left'
+    });
   }
   for (const block of BLOCKS) {
-    if (!ordered.some(item => item.id === block.id)) ordered.push({ id: block.id, show: true });
+    if (!ordered.some(item => item.id === block.id)) {
+      ordered.push({ id: block.id, show: true, space: 0, align: 'left' });
+    }
   }
 
   return {
+    header: normaliseHeader(design.header),
     page: {
       size: design.page?.size === 'Letter' ? 'Letter' : 'A4',
-      margin: clampNumber(design.page?.margin, 5, 30, base.page.margin),
+      /* A design saved before the edges were separable carries a single margin; it seeds
+         all four so nothing shifts underneath an existing layout. */
+      margin: clampNumber(design.page?.margin, 3, 40, base.page.margin),
+      margins: {
+        top: clampNumber(design.page?.margins?.top ?? design.page?.margin, 3, 60, base.page.margins.top),
+        right: clampNumber(design.page?.margins?.right ?? design.page?.margin, 3, 40, base.page.margins.right),
+        bottom: clampNumber(design.page?.margins?.bottom ?? design.page?.margin, 3, 40, base.page.margins.bottom),
+        left: clampNumber(design.page?.margins?.left ?? design.page?.margin, 3, 40, base.page.margins.left)
+      },
       background: hex(design.page?.background, base.page.background)
     },
     type: {

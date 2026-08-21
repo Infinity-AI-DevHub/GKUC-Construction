@@ -1,14 +1,8 @@
 import React, { useState } from 'react';
 import { FileText } from 'lucide-react';
 import { api } from './api.js';
-import { Field, SelectField, TextArea, useLiveList } from './ui.jsx';
+import { Field, TextArea, useLiveList } from './ui.jsx';
 
-const TOGGLES = [
-  ['showLogo', 'Show the company mark on the letterhead'],
-  ['showSignatures', 'Include signature lines'],
-  ['showAmountInWords', 'State the total in words'],
-  ['showBankDetails', 'Print bank details on quotations']
-];
 
 /**
  * How every generated document looks and what standing text it carries.
@@ -34,12 +28,6 @@ export default function DocumentSettings({ can }) {
       const saved = await api('/document-settings', {
         method: 'PUT',
         body: JSON.stringify({
-          accentColour: form.get('accentColour'),
-          paperSize: form.get('paperSize'),
-          showLogo: form.get('showLogo') === 'on',
-          showSignatures: form.get('showSignatures') === 'on',
-          showAmountInWords: form.get('showAmountInWords') === 'on',
-          showBankDetails: form.get('showBankDetails') === 'on',
           footerNote: form.get('footerNote') || '',
           quotationTerms: form.get('quotationTerms') || '',
           boqTerms: form.get('boqTerms') || '',
@@ -56,18 +44,13 @@ export default function DocumentSettings({ can }) {
   if (!settings) return <p className="empty-state">{error || 'Loading document settings…'}</p>;
 
   return <section className="table-panel">
-    <div className="table-tools"><h2><FileText size={16} /> How generated documents look</h2></div>
+    <div className="table-tools"><h2><FileText size={16} /> Wording on generated documents</h2></div>
     <form className="report-form" onSubmit={submit}>
-      <Field name="accentColour" label="Accent colour (e.g. #16305c)" defaultValue={settings.accentColour} />
-      <SelectField name="paperSize" label="Paper size" options={['A4', 'Letter']} defaultValue={settings.paperSize} />
-
-      <div className="wide document-toggles">
-        {TOGGLES.map(([name, label]) => (
-          <label key={name}>
-            <input type="checkbox" name={name} defaultChecked={settings[name]} />{label}
-          </label>
-        ))}
-      </div>
+      <p className="wide designer-pointer">
+        Colours, typeface, paper size and which blocks appear are set on the
+        <strong> Designer</strong> tab, where you can see the page as you change it.
+        What follows is the wording those documents carry.
+      </p>
 
       <Field name="footerNote" label="Extra footer line (optional)" wide
         defaultValue={settings.footerNote} required={false} />
