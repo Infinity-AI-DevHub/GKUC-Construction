@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Eye, EyeOff, GripVertical, PaintBucket, RotateCcw, Save, Type, Undo2, Redo2
+  Eye, EyeOff, GripVertical, Move, PaintBucket, RotateCcw, Save, Type, Undo2, Redo2
 } from 'lucide-react';
 import { api, token } from './api.js';
 
@@ -67,11 +67,15 @@ export default function DocumentDesigner({ can }) {
   const [design, setDesign] = useState(null);
   const [catalogue, setCatalogue] = useState({ blocks: [], fonts: [], defaults: null });
   const [selected, setSelected] = useState(null);
+  const [piece, setPiece] = useState(null);
   const [preview, setPreview] = useState('');
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  /* The index being dragged is held in a ref as well as in state: state updates on the next
+     render, and a quick drag can fire dragover before that lands — which drops the move. */
   const [dragging, setDragging] = useState(null);
+  const draggingRef = useRef(null);
 
   /* Every change is kept so it can be walked back — a design is fiddled with, not filled in. */
   const history = useRef({ past: [], future: [] });
@@ -118,20 +122,102 @@ export default function DocumentDesigner({ can }) {
     return () => clearTimeout(timer);
   }, [design]);
 
-  /* Clicking a block on the page selects it, the way one would expect of a canvas. */
+  /* The design as it stands, for handlers that run outside React's render. */
+  const live = useRef(design);
+  live.current = design;
+
+  /* Every hook must run on every render, so this sits above the early return below. */
+  const midDrag = useRef(false);
+
+  /**
+   * Makes the page itself the canvas: blocks are selected by clicking, and the pieces of the
+   * letterhead are dragged and resized directly where they sit.
+   *
+   * The work happens against the frame's own document because the preview is same-origin,
+   * so a drag can be followed at the pointer rather than guessed at from outside.
+   */
   const onFrameLoad = event => {
     const frame = event.target.contentDocument;
     if (!frame) return;
+
     for (const node of frame.querySelectorAll('[data-block]')) {
       node.style.cursor = 'pointer';
       node.addEventListener('click', clicked => {
+        if (clicked.target.closest('[data-piece]')) return;
         clicked.stopPropagation();
         setSelected(node.getAttribute('data-block'));
+        setPiece(null);
       });
     }
+
+    const band = frame.querySelector('.head');
+
+    for (const node of frame.querySelectorAll('[data-piece]')) {
+      const id = node.getAttribute('data-piece');
+      node.style.cursor = 'move';
+
+      /* A handle on the trailing edge widens or narrows the piece. */
+      const handle = frame.createElement('i');
+      handle.className = 'piece-handle';
+      node.appendChild(handle);
+
+      const start = down => {
+        down.preventDefault();
+        down.stopPropagation();
+        setSelected(null);
+        setPiece(id);
+
+        const resizing = down.target === handle;
+        const bandBox = band.getBoundingClientRect();
+        /* Where the pointer started, and where the piece started — kept apart, because one
+           is measured in screen pixels and the other in percent across the band. */
+        const grabbedAt = { x: down.clientX, y: down.clientY };
+        const from = { ...live.current.header.elements.find(item => item.id === id) };
+
+        const moveTo = at => {
+          const dx = ((at.clientX - grabbedAt.x) / bandBox.width) * 100;
+          const dy = at.clientY - grabbedAt.y;
+          if (resizing) {
+            const width = Math.min(100 - from.x, Math.max(5, from.width + dx));
+            /* Applied to the element as well as to the design: the page is redrawn a moment
+               after the last adjustment, and the piece should not lag behind the pointer
+               until then. */
+            node.style.width = `${width}%`;
+            setPieceValue(id, { width: Math.round(width * 10) / 10 });
+          } else {
+            const x = Math.min(100 - from.width, Math.max(0, from.x + dx));
+            const y = Math.min(live.current.header.height - 12, Math.max(0, from.y + dy));
+            node.style.left = `${x}%`;
+            node.style.top = `${y}px`;
+            setPieceValue(id, { x: Math.round(x * 10) / 10, y: Math.round(y) });
+          }
+        };
+
+        const stop = () => {
+          frame.removeEventListener('pointermove', moveTo);
+          frame.removeEventListener('pointerup', stop);
+          frame.removeEventListener('pointercancel', stop);
+        };
+        frame.addEventListener('pointermove', moveTo);
+        frame.addEventListener('pointerup', stop);
+        frame.addEventListener('pointercancel', stop);
+      };
+
+      node.addEventListener('pointerdown', start);
+    }
+
     const style = frame.createElement('style');
-    style.textContent = `[data-block]:hover{outline:2px dashed ${design.accent}66;outline-offset:3px}
-      [data-block="${selected}"]{outline:2px solid ${design.accent};outline-offset:3px}`;
+    style.textContent = `
+      [data-block]:hover{outline:2px dashed ${design.accent}55;outline-offset:3px}
+      [data-block="${selected}"]{outline:2px solid ${design.accent};outline-offset:3px}
+      [data-piece]{outline:1px dashed transparent;outline-offset:2px}
+      [data-piece]:hover{outline-color:${design.accent}88}
+      [data-piece="${piece}"]{outline:2px solid ${design.accent};outline-offset:2px}
+      .piece-handle{position:absolute;right:-5px;top:50%;transform:translateY(-50%);
+        width:10px;height:22px;border-radius:3px;background:${design.accent};
+        opacity:0;cursor:ew-resize}
+      [data-piece]:hover .piece-handle,[data-piece="${piece}"] .piece-handle{opacity:1}
+      .head{outline:1px dashed ${design.accent}44;outline-offset:4px}`;
     frame.head.appendChild(style);
   };
 
@@ -162,6 +248,47 @@ export default function DocumentDesigner({ can }) {
     target[keys[0]] = value;
     return next;
   });
+
+  /*
+   * A drag produces a stream of changes; only the first is recorded so that one undo takes
+   * back the whole movement rather than a single pixel of it.
+   */
+  const setPieceValue = (id, patch) => {
+    const record = !midDrag.current;
+    midDrag.current = true;
+    clearTimeout(setPieceValue.timer);
+    setPieceValue.timer = setTimeout(() => { midDrag.current = false; }, 400);
+    change(current => ({
+      ...current,
+      header: {
+        ...current.header,
+        elements: current.header.elements.map(item => (item.id === id ? { ...item, ...patch } : item))
+      }
+    }), { record });
+  };
+
+  const addTextBox = () => change(current => ({
+    ...current,
+    header: {
+      ...current.header,
+      elements: [...current.header.elements, {
+        id: `text:${Date.now()}`, custom: true, text: 'New text', show: true,
+        x: 5, y: 10, width: 30, size: 12, colour: '#111111', weight: 400, align: 'left'
+      }]
+    }
+  }));
+
+  const selectedPiece = piece ? design.header.elements.find(item => item.id === piece) : null;
+  const pieceLabel = id => (catalogue.pieces?.find(p => p.id === id)?.label
+    || (String(id).startsWith('text:') ? 'Text box' : id));
+
+  /* Placement belongs to the block, so it travels with it when the order changes. */
+  const place = (id, key, value) => change(current => ({
+    ...current,
+    blocks: current.blocks.map(block => (block.id === id ? { ...block, [key]: value } : block))
+  }));
+
+  const placement = selected ? design.blocks.find(block => block.id === selected) : null;
 
   const save = async () => {
     setBusy(true); setError(''); setStatus('');
@@ -205,12 +332,24 @@ export default function DocumentDesigner({ can }) {
             key={block.id}
             className={`design-block${selected === block.id ? ' selected' : ''}${block.show ? '' : ' hidden'}${dragging === index ? ' dragging' : ''}`}
             draggable
-            onDragStart={() => setDragging(index)}
-            onDragEnd={() => setDragging(null)}
+            onDragStart={event => {
+              draggingRef.current = index;
+              setDragging(index);
+              /* Firefox refuses to start a drag unless something is carried. */
+              event.dataTransfer?.setData('text/plain', block.id);
+              if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+            }}
+            onDragEnd={() => { draggingRef.current = null; setDragging(null); }}
             onDragOver={event => {
               event.preventDefault();
-              if (dragging !== null && dragging !== index) { move(dragging, index); setDragging(index); }
+              const from = draggingRef.current;
+              if (from !== null && from !== index) {
+                move(from, index);
+                draggingRef.current = index;
+                setDragging(index);
+              }
             }}
+            onDrop={event => { event.preventDefault(); draggingRef.current = null; setDragging(null); }}
             onClick={() => setSelected(block.id)}
           >
             <GripVertical size={14} className="grip" />
@@ -229,19 +368,65 @@ export default function DocumentDesigner({ can }) {
       </div>
 
       <aside className="designer-properties">
-        <h3>{selected ? labels[selected] || selected : 'Page & palette'}</h3>
+        <h3>{piece ? pieceLabel(piece) : selected ? labels[selected] || selected : 'Page & palette'}</h3>
+
+        {selectedPiece && <>
+          <Slider label="Across" value={selectedPiece.x} min={0} max={100 - selectedPiece.width} step={0.5} suffix="%"
+            onChange={value => setPieceValue(piece, { x: value })} />
+          <Slider label="Down" value={selectedPiece.y} min={0} max={Math.max(0, design.header.height - 12)} suffix="px"
+            onChange={value => setPieceValue(piece, { y: value })} />
+          <Slider label="Width" value={selectedPiece.width} min={5} max={100 - selectedPiece.x} step={0.5} suffix="%"
+            onChange={value => setPieceValue(piece, { width: value })} />
+          <Slider label={selectedPiece.id === 'logo' ? 'Logo height' : 'Text size'} value={selectedPiece.size}
+            min={6} max={90} suffix="px" onChange={value => setPieceValue(piece, { size: value })} />
+          {selectedPiece.id !== 'logo' && <>
+            <Colour label="Colour" value={selectedPiece.colour}
+              onChange={value => setPieceValue(piece, { colour: value })} />
+            <Choice label="Weight" value={String(selectedPiece.weight)}
+              options={[['400', 'Regular'], ['600', 'Medium'], ['700', 'Bold'], ['800', 'Heavy']]}
+              onChange={value => setPieceValue(piece, { weight: Number(value) })} />
+          </>}
+          <Choice label="Align" value={selectedPiece.align}
+            options={[['left', 'Left'], ['centre', 'Centre'], ['right', 'Right']]}
+            onChange={value => setPieceValue(piece, { align: value })} />
+          {selectedPiece.custom && <label className="design-field">
+            <span>Words</span>
+            <input value={selectedPiece.text}
+              onChange={event => setPieceValue(piece, { text: event.target.value })} />
+          </label>}
+          <Choice label="Shown" value={selectedPiece.show ? 'yes' : 'no'}
+            options={[['yes', 'Shown'], ['no', 'Hidden']]}
+            onChange={value => setPieceValue(piece, { show: value === 'yes' })} />
+          <button className="status-button designer-clear" onClick={() => setPiece(null)}>
+            <Type size={13} />Back to page &amp; palette
+          </button>
+        </>}
+
+        {placement && <>
+          <h4><Move size={13} /> Position</h4>
+          <Slider label="Space above" value={placement.space} min={-20} max={80} suffix="px"
+            onChange={value => place(selected, 'space', value)} />
+          <Choice label="Align" value={placement.align}
+            options={[['left', 'Left'], ['centre', 'Centre'], ['right', 'Right']]}
+            onChange={value => place(selected, 'align', value)} />
+        </>}
 
         {selected === 'letterhead' && <>
-          <Choice label="Logo position" value={design.logo.align}
-            options={[['left', 'Left'], ['centre', 'Centre'], ['right', 'Right']]}
-            onChange={value => set('logo.align', value)} />
-          <Slider label="Logo size" value={design.logo.height} min={20} max={120} suffix="px"
-            onChange={value => set('logo.height', value)} />
+          <p className="designer-hint">
+            Drag anything in the letterhead straight on the page; the handle on its edge
+            changes its width.
+          </p>
+          <Slider label="Band height" value={design.header.height} min={60} max={320} suffix="px"
+            onChange={value => set('header.height', value)} />
+          <Choice label="Rule beneath" value={design.header.rule ? 'yes' : 'no'}
+            options={[['yes', 'Shown'], ['no', 'Hidden']]}
+            onChange={value => set('header.rule', value === 'yes')} />
           <Choice label="Show logo" value={design.logo.show ? 'yes' : 'no'}
             options={[['yes', 'Shown'], ['no', 'Hidden']]}
             onChange={value => set('logo.show', value === 'yes')} />
-          <Colour label="Heading colour" value={design.type.headingColour}
-            onChange={value => set('type.headingColour', value)} />
+          <button className="status-button designer-clear" onClick={addTextBox}>
+            <Type size={13} />Add a text box
+          </button>
         </>}
 
         {selected === 'table' && <>
@@ -266,7 +451,7 @@ export default function DocumentDesigner({ can }) {
             onChange={value => set('totals.barText', value)} />
         </>}
 
-        {!['letterhead', 'table', 'totals'].includes(selected) && <>
+        {!selected && !piece && <>
           <Colour label="Accent" value={design.accent} onChange={value => set('accent', value)} />
           <Colour label="Body text" value={design.type.colour} onChange={value => set('type.colour', value)} />
           <Colour label="Headings" value={design.type.headingColour}
@@ -279,8 +464,16 @@ export default function DocumentDesigner({ can }) {
             onChange={value => set('type.size', value)} />
           <Choice label="Paper size" value={design.page.size} options={['A4', 'Letter']}
             onChange={value => set('page.size', value)} />
-          <Slider label="Page margin" value={design.page.margin} min={5} max={30} suffix="mm"
-            onChange={value => set('page.margin', value)} />
+
+          <h4><Move size={13} /> Page margins</h4>
+          <Slider label="Top" value={design.page.margins.top} min={3} max={60} suffix="mm"
+            onChange={value => set('page.margins.top', value)} />
+          <Slider label="Bottom" value={design.page.margins.bottom} min={3} max={40} suffix="mm"
+            onChange={value => set('page.margins.bottom', value)} />
+          <Slider label="Left" value={design.page.margins.left} min={3} max={40} suffix="mm"
+            onChange={value => set('page.margins.left', value)} />
+          <Slider label="Right" value={design.page.margins.right} min={3} max={40} suffix="mm"
+            onChange={value => set('page.margins.right', value)} />
 
           <h4><PaintBucket size={13} /> Watermark</h4>
           <label className="design-field">

@@ -4,7 +4,7 @@ import { audit, getOne, hashPassword, pool, query } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
 import { runAlertScan } from '../alerts.js';
 import { documentContext, quotationDocument } from '../lib/documents.js';
-import { BLOCKS, DEFAULT_DESIGN, FONTS, normaliseDesign } from '../lib/document-design.js';
+import { BLOCKS, DEFAULT_DESIGN, FONTS, HEADER_PIECES, normaliseDesign } from '../lib/document-design.js';
 
 
 const router = Router();
@@ -102,7 +102,7 @@ router.get('/document-design', auth, wrap(async (_req, res) => {
   const stored = typeof row?.design === 'string'
     ? (() => { try { return JSON.parse(row.design); } catch { return null; } })()
     : row?.design;
-  res.json({ design: normaliseDesign(stored), blocks: BLOCKS, fonts: FONTS, defaults: DEFAULT_DESIGN });
+  res.json({ design: normaliseDesign(stored), blocks: BLOCKS, pieces: HEADER_PIECES, fonts: FONTS, defaults: DEFAULT_DESIGN });
 }));
 
 router.put('/document-design', auth, permit('admin.users'), wrap(async (req, res) => {

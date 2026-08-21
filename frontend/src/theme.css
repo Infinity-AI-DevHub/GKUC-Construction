@@ -17,7 +17,7 @@ body {
     linear-gradient(180deg, #0f1713 0, #16231d 194px, #e7edef 194px, #dfe8e9 100%);
 }
 
-aside {
+.app > aside {
   top: 10px;
   width: calc(100% - 24px);
   height: 62px;
@@ -158,7 +158,7 @@ main {
       linear-gradient(180deg, #0f1713 0, #16231d 172px, #e7edef 172px, #dfe8e9 100%);
   }
 
-  aside {
+  .app > aside {
     inset: 8px auto 8px 8px;
     top: 8px;
     width: 250px;
@@ -185,7 +185,7 @@ main {
 /* Reference-inspired light dashboard */
 body { background: #edf5fa; }
 .app { background: linear-gradient(145deg,#edf7ff 0,#f7fbfd 48%,#eaf3f8 100%); }
-aside { background: rgba(247,251,253,.88);border-color:rgba(255,255,255,.95);box-shadow:0 12px 36px rgba(53,93,120,.12); }
+.app > aside { background: rgba(247,251,253,.88);border-color:rgba(255,255,255,.95);box-shadow:0 12px 36px rgba(53,93,120,.12); }
 .brand>span { background:transparent;border:1px solid #aabac5;color:#1b2d3b; }
 .brand strong { color:#172633; }.brand small{color:#758b9a}
 nav button { color:#526775; }nav button:hover{background:rgba(32,111,183,.08);color:#1d5f9d}nav button.active{background:#1e65a7;color:white}nav button.active svg{color:white}nav button b{background:#d8edff;color:#17568f}
