@@ -119,14 +119,86 @@ router.post('/projects/:id/reschedule', auth, permit('projects.schedule'), valid
       `INSERT INTO site_status_log (project_id,from_status,to_status,reason,effective_date,notified,changed_by)
        VALUES (?,?,?,?,?,?,?)`,
       [project.id, project.site_status, req.body.status, req.body.reason, effectiveDate, headcount, req.user.id]);
+
+    /*
+     * Move what was on the site, and write down that it moved.
+     *
+     * The notices below tell the crew to report to the other site and the transport officer
+     * that a lorry has been reassigned. Those messages were going out while the records
+     * still showed everything sitting on the site that had just stopped — so the movement
+     * history stayed empty and the destination never showed the people who had been sent
+     * there. Saying it and doing it are now the same step.
+     */
+    if (destination) {
+      const record = (type, id, name, reason) => connection.execute(
+        `INSERT INTO resource_reassignments (resource_type,resource_id,resource_name,from_project_id,to_project_id,reason,moved_by)
+         VALUES (?,?,?,?,?,?,?)`,
+        [type, id, name, project.id, destination.id, reason, req.user.id]);
+
+      const because = `${project.name} is ${req.body.status.toLowerCase()}: ${req.body.reason}`;
+
+      for (const person of affected.labour) {
+        await connection.execute('UPDATE project_team SET released_at=CURDATE() WHERE project_id=? AND employee_id=? AND released_at IS NULL',
+          [project.id, person.id]);
+        await connection.execute(
+          `INSERT INTO project_team (project_id,employee_id,project_role) VALUES (?,?,?)
+           ON DUPLICATE KEY UPDATE released_at=NULL`,
+          [destination.id, person.id, person.projectRole || person.designation]);
+        await connection.execute('UPDATE employees SET current_project_id=? WHERE id=?', [destination.id, person.id]);
+        await record('Labour', person.id, person.name, because);
+      }
+
+      for (const vehicle of affected.vehicles) {
+        await connection.execute("UPDATE fleet SET project_id=?, status='Assigned' WHERE id=?", [destination.id, vehicle.id]);
+        await record('Vehicle', vehicle.id, `${vehicle.vehicle} (${vehicle.registration})`, because);
+      }
+
+      for (const item of affected.equipment) {
+        await connection.execute('UPDATE equipment_assignments SET returned_at=CURDATE() WHERE id=?', [item.assignmentId]);
+        await connection.execute(
+          `INSERT INTO equipment_assignments (equipment_id,project_id,assigned_to,assigned_at,created_by)
+           VALUES (?,?,?,CURDATE(),?)`, [item.id, destination.id, item.assignedTo || 'Site team', req.user.id]);
+        await record('Equipment', item.id, `${item.code} ${item.name}`, because);
+      }
+    }
+
     await audit(connection, req.user.id, 'RESCHEDULE', 'project', project.id,
       { siteStatus: project.site_status }, { siteStatus: req.body.status, reason: req.body.reason }, req.ip);
     return log.insertId;
   });
 
-  /* Tell everyone assigned. Nobody has to be called individually. */
   const where = destination ? ` Report to ${destination.name} instead.` : '';
   const notices = [];
+
+  /*
+   * The site itself changed, so say so.
+   *
+   * The notices below reach whoever is rostered to the site — but a site with nobody
+   * assigned yet would change status in silence, and that is exactly when the supervisors
+   * and the coordinator need telling. This one is about the site, not about a person.
+   */
+  if (req.body.status !== 'Active') {
+    notices.push(notify({
+      audience: 'site.reports',
+      severity: 'Warning',
+      title: `${project.name} is ${req.body.status.toLowerCase()}`,
+      message: `${req.body.reason}.${where} Effective ${effectiveDate}.`,
+      referenceType: 'site_status',
+      referenceId: logId,
+      key: `site-move:${logId}:site`
+    }));
+    notices.push(notify({
+      audience: 'projects.manage',
+      severity: 'Warning',
+      title: `${project.name} is ${req.body.status.toLowerCase()}`,
+      message: `${req.body.reason}.${where} Effective ${effectiveDate}.`,
+      referenceType: 'site_status',
+      referenceId: logId,
+      key: `site-move:${logId}:management`
+    }));
+  }
+
+  /* Then everyone assigned. Nobody has to be called individually. */
   if (req.body.status !== 'Active') {
     for (const person of affected.labour) {
       notices.push(notify({

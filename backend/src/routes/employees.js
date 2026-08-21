@@ -26,6 +26,24 @@ const listQuery = `SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.sta
   e.basic_salary basicSalary,e.daily_rate dailyRate,e.overtime_rate overtimeRate,e.department_id departmentId,d.name department
   FROM employees e LEFT JOIN departments d ON d.id=e.department_id`;
 
+/*
+ * What someone earns is not part of "view employee records".
+ *
+ * hr.view is held widely — a storekeeper or a site clerk needs to look up a phone number
+ * or check who is on the books. Pay is a separate matter, and the permission list already
+ * separates it: running payroll and maintaining the register are their own rights. So the
+ * rates travel only to people who hold one of those, and everyone else gets the record
+ * without them rather than a different, second endpoint to keep in step.
+ */
+const PAY_FIELDS = ['basicSalary', 'dailyRate', 'overtimeRate'];
+const seesPay = req => ['hr.payroll', 'hr.manage'].some(key => req.user.permissions.includes(key));
+const withoutPay = row => {
+  const copy = { ...row };
+  for (const field of PAY_FIELDS) delete copy[field];
+  return copy;
+};
+const forViewer = (req, rows) => (seesPay(req) ? rows : (Array.isArray(rows) ? rows.map(withoutPay) : withoutPay(rows)));
+
 /* Departments */
 router.get('/departments', auth, permit('hr.view','hr.manage'), wrap(async (_req, res) => res.json(await query(`SELECT d.id,d.name,d.description,
   (SELECT COUNT(*) FROM employees e WHERE e.department_id=d.id) headcount FROM departments d ORDER BY d.name`))));
@@ -41,11 +59,13 @@ router.post('/departments', auth, permit('hr.manage'), validate(z.object({
 }));
 
 /* Employees */
-router.get('/', auth, permit('hr.view','hr.manage'), wrap(async (_req, res) => res.json(await query(`${listQuery} ORDER BY e.code`))));
+router.get('/', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
+  res.json(forViewer(req, await query(`${listQuery} ORDER BY e.code`)))));
 
 router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) => {
-  const employee = await getOne(`${listQuery} WHERE e.id=?`, [req.params.id]);
-  if (!employee) return res.status(404).json({ error: 'Employee not found' });
+  const found = await getOne(`${listQuery} WHERE e.id=?`, [req.params.id]);
+  if (!found) return res.status(404).json({ error: 'Employee not found' });
+  const employee = forViewer(req, found);
   const [leave, overtime, documents, attendance, projects] = await Promise.all([
     query('SELECT id,leave_type leaveType,from_date fromDate,to_date toDate,days,reason,status FROM leave_requests WHERE employee_id=? ORDER BY id DESC', [employee.id]),
     query(`SELECT o.id,o.work_date workDate,o.hours,o.rate,o.status,p.name project FROM overtime_records o

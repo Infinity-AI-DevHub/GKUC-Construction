@@ -103,9 +103,18 @@ router.post('/requests/:id/quotations', auth, permit('store.manage', 'finance.pa
   notes: z.string().max(600).optional()
 })), wrap(async (req, res) => {
   const body = req.body;
+
+  /* Both ends have to exist before a price is filed against them — otherwise a stale link
+     or a mistyped id reaches the database as a foreign-key failure. */
+  const request = await getOne('SELECT id,status FROM purchase_requests WHERE id=?', [req.params.id]);
+  if (!request) return res.status(404).json({ error: 'Purchase request not found' });
+  if (!await getOne('SELECT id FROM suppliers WHERE id=?', [body.supplierId])) {
+    return res.status(404).json({ error: 'Supplier not found' });
+  }
+
   try {
     const result = await query('INSERT INTO quotations (request_id,supplier_id,amount,lead_time_days,notes) VALUES (?,?,?,?,?)',
-      [req.params.id, body.supplierId, body.amount, body.leadTimeDays, body.notes || null]);
+      [request.id, body.supplierId, body.amount, body.leadTimeDays, body.notes || null]);
     const row = await getOne('SELECT * FROM quotations WHERE id=?', [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'quotation', row.id, null, row, req.ip);
     res.status(201).json(row);
@@ -166,6 +175,12 @@ router.post('/orders', auth, permit('store.manage', 'finance.pay'), validate(z.o
 /**
  * Goods received: stock rises, the order line records what actually arrived and the
  * project is charged — the three steps that used to be done separately, or not at all.
+ *
+ * What is charged needs care. A line that goes into the store is not a cost yet, it is
+ * stock; it becomes a cost when it is issued to a site, which is where materials.js books
+ * it. Charging it here as well billed the project twice for the same tonne of asphalt.
+ * So only the lines that never touch the store — hire, one-off items, anything without a
+ * material behind it — are expensed on receipt.
  */
 router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.object({
   lines: z.array(z.object({ itemId: z.number().int().positive(), quantity: z.number().positive() })).min(1),
@@ -186,7 +201,7 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
         const outstanding = Number(item.quantity) - Number(item.received_quantity);
         if (line.quantity > outstanding) throw Object.assign(new Error(`Cannot receive more than the ${outstanding} ${item.unit} outstanding on "${item.description}"`), { status: 409 });
         await connection.execute('UPDATE purchase_order_items SET received_quantity=received_quantity+? WHERE id=?', [line.quantity, item.id]);
-        receivedValue += line.quantity * Number(item.rate);
+        if (!item.material_id) receivedValue += line.quantity * Number(item.rate);
         if (item.material_id) {
           await connection.execute('UPDATE materials SET stock=stock+?, unit_cost=? WHERE id=?', [line.quantity, item.rate, item.material_id]);
           await connection.execute(`INSERT INTO stock_movements (material_id,movement_type,quantity,reference,notes,project_id,user_id)
@@ -201,7 +216,7 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
       if (receivedValue > 0) {
         await connection.execute(`INSERT INTO expenses (project_id,source,description,amount,expense_date,reference,origin_type,origin_id,created_by)
           VALUES (?,'Material',?,?,CURDATE(),?, 'purchase_order', ?, ?)`,
-        [current.project_id, `Goods received against ${current.reference}`, receivedValue, current.reference, String(current.id), req.user.id]);
+        [current.project_id, `Non-stock items received against ${current.reference}`, receivedValue, current.reference, String(current.id), req.user.id]);
       }
       await audit(connection, req.user.id, 'GOODS_RECEIVED', 'purchase_order', current.id, current, { status, receivedValue }, req.ip);
       return { ...current, status };

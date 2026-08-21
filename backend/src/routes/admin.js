@@ -190,21 +190,43 @@ router.get('/audit', auth, permit('admin.users'), wrap(async (req, res) => {
     FROM audit_logs a LEFT JOIN users u ON u.id=a.user_id ${where} ORDER BY a.id DESC LIMIT 500`, params));
 }));
 
+/*
+ * Whose notification is it?
+ *
+ * One addressed to a person is theirs alone. One addressed to nobody in particular is for
+ * whoever holds the permission it was sent to — or for everyone, if it names no audience.
+ *
+ * This used to read `user_id IS NULL OR ...`, which is true of every audience-addressed
+ * alert and so let all of them through to everybody: a Store Keeper could read the budget
+ * warnings meant for Finance. The audience is only a filter if it actually filters.
+ */
+const addressedToMe = user => {
+  const held = user.permissions?.length ? user.permissions : [''];
+  return {
+    clause: `(n.user_id = ? OR (n.user_id IS NULL AND (n.audience IS NULL
+      OR n.audience IN (${held.map(() => '?').join(',')}))))`,
+    params: [user.id, ...held]
+  };
+};
+
 /* Notification centre */
 router.get('/notifications', auth, wrap(async (req, res) => {
-  res.json(await query(`SELECT id,title,message,severity,status,channel,reference_type referenceType,reference_id referenceId,created_at createdAt
-    FROM notifications WHERE user_id IS NULL OR user_id=? OR audience=? ORDER BY id DESC LIMIT 100`, [req.user.id, req.user.role]));
+  const mine = addressedToMe(req.user);
+  res.json(await query(`SELECT n.id,n.title,n.message,n.severity,n.status,n.channel,
+    n.reference_type referenceType,n.reference_id referenceId,n.created_at createdAt
+    FROM notifications n WHERE ${mine.clause} ORDER BY n.id DESC LIMIT 100`, mine.params));
 }));
 
 router.post('/notifications/:id/read', auth, wrap(async (req, res) => {
-  await query("UPDATE notifications SET status='Read' WHERE id=? AND (user_id IS NULL OR user_id=? OR audience IN (?))",
-    [req.params.id, req.user.id, req.user.permissions.length ? req.user.permissions : ['']]);
+  const mine = addressedToMe(req.user);
+  await query(`UPDATE notifications n SET n.status='Read' WHERE n.id=? AND ${mine.clause}`,
+    [req.params.id, ...mine.params]);
   res.status(204).end();
 }));
 
 router.post('/notifications/read-all', auth, wrap(async (req, res) => {
-  await query("UPDATE notifications SET status='Read' WHERE status<>'Read' AND (user_id IS NULL OR user_id=? OR audience IN (?))",
-    [req.user.id, req.user.permissions.length ? req.user.permissions : ['']]);
+  const mine = addressedToMe(req.user);
+  await query(`UPDATE notifications n SET n.status='Read' WHERE n.status<>'Read' AND ${mine.clause}`, mine.params);
   res.status(204).end();
 }));
 

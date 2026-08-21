@@ -139,17 +139,35 @@ export function parseBiometricExport(text) {
 
   const rows = [...days.values()].map(day => {
     const punches = day.punches.sort();
-    const checkIn = day.checkIn || punches[0] || null;
-    const checkOut = day.checkOut || (punches.length > 1 ? punches[punches.length - 1] : null);
+    /* A row that already told us which end is which needs no guessing. */
+    const labelled = Boolean(day.checkIn || day.checkOut);
+    let checkIn = day.checkIn || punches[0] || null;
+    let checkOut = day.checkOut || (punches.length > 1 ? punches[punches.length - 1] : null);
+
+    /*
+     * One punch, unlabelled, cannot say whether the person arrived or left. It is put on
+     * the side it most likely belongs to and marked for someone to confirm — the same
+     * honesty the workbook reader applies, and what §1.2 asks for: flag it rather than
+     * guess. Reading a lone evening punch as an arrival would credit a full day wrongly.
+     */
+    const ambiguous = !labelled && punches.length === 1;
+    if (ambiguous && Number(punches[0].slice(0, 2)) >= 12) { checkOut = punches[0]; checkIn = null; }
+
     return {
       code: day.code || null,
       name: day.name || null,
       date: day.date,
       checkIn,
       checkOut: checkOut && checkOut !== checkIn ? checkOut : null,
+      needsReview: ambiguous,
       punches: punches.length || (day.checkIn ? 1 : 0) + (day.checkOut ? 1 : 0)
     };
   }).sort((a, b) => (a.date === b.date ? String(a.code).localeCompare(String(b.code)) : a.date.localeCompare(b.date)));
+
+  const reviews = rows.filter(row => row.needsReview).length;
+  if (reviews) {
+    problems.push(`${reviews} day(s) have only one punch, so it is unclear whether the person arrived or left. Each is marked for review.`);
+  }
 
   return { rows, problems, columns: header };
 }

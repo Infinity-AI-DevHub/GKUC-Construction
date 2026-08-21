@@ -7,7 +7,7 @@ import { listAttachments } from './uploads.js';
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-const projectSchema = z.object({
+const projectShape = z.object({
   name: z.string().min(3).max(180),
   client: z.string().min(2).max(180),
   manager: z.string().min(2).max(120),
@@ -19,6 +19,13 @@ const projectSchema = z.object({
   startDate: isoDate.optional(),
   endDate: isoDate.optional()
 });
+
+/* A programme that finishes before it starts is a typo, not a plan. */
+const runsForwards = value => !value.startDate || !value.endDate || value.endDate >= value.startDate;
+const backwards = { message: 'Target completion cannot be before the start date', path: ['endDate'] };
+
+const projectSchema = projectShape.refine(runsForwards, backwards);
+const projectPatch = projectShape.partial().refine(runsForwards, backwards);
 
 const columns = { startDate: 'start_date', endDate: 'end_date' };
 const toRow = body => {
@@ -60,9 +67,18 @@ router.post('/', auth, permit('projects.manage'), validate(projectSchema), wrap(
   res.status(201).json(row);
 }));
 
-router.patch('/:id', auth, permit('projects.manage'), validate(projectSchema.partial()), wrap(async (req, res) => {
+router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Project not found' });
+
+  /* Only one end of the range may be in the request, so the other comes from the record. */
+  const asDate = value => (value instanceof Date ? value.toISOString().slice(0, 10) : value);
+  const startDate = req.body.startDate ?? asDate(before.start_date);
+  const endDate = req.body.endDate ?? asDate(before.end_date);
+  if (startDate && endDate && endDate < startDate) {
+    return res.status(400).json({ error: 'Invalid data', issues: { formErrors: [], fieldErrors: { endDate: [backwards.message] } } });
+  }
+
   const { fields, values } = toRow(req.body);
   if (!fields.length) return res.json(before);
   await query(`UPDATE projects SET ${fields.map(key => `${key}=?`).join(',')} WHERE id=?`, [...values, req.params.id]);

@@ -79,7 +79,7 @@ const LEDGER_TEMPLATE = '120px minmax(200px,1.6fr) minmax(150px,1fr) 130px 130px
 
 function Expenses() {
   const [rows, setRows] = useState([]);
-  useEffect(() => { api('/finance/expenses').then(setRows).catch(() => setRows([])); }, []);
+  useLiveList(() => api('/finance/expenses').then(setRows).catch(() => setRows([])));
   return <Table columns={['Date', 'Description', 'Project', 'Category', 'Amount', 'Recorded by']} template={LEDGER_TEMPLATE}
     title="Project expenses" empty="No expenses recorded.">
     {rows.map(row => <Row template={LEDGER_TEMPLATE} key={row.id}>
@@ -95,7 +95,7 @@ function Expenses() {
 
 function Income() {
   const [rows, setRows] = useState([]);
-  useEffect(() => { api('/finance/income').then(setRows).catch(() => setRows([])); }, []);
+  useLiveList(() => api('/finance/income').then(setRows).catch(() => setRows([])));
   return <Table columns={['Date', 'Description', 'Project', 'Method', 'Amount', 'Recorded by']} template={LEDGER_TEMPLATE}
     title="Income received" empty="No income recorded.">
     {rows.map(row => <Row template={LEDGER_TEMPLATE} key={row.id}>
@@ -142,10 +142,10 @@ function Invoices({ can, refresh }) {
 function Categories() {
   const [rows, setRows] = useState([]);
   const [expenses, setExpenses] = useState([]);
-  useEffect(() => {
+  useLiveList(() => {
     api('/finance/categories').then(setRows).catch(() => setRows([]));
     api('/finance/expenses').then(setExpenses).catch(() => setExpenses([]));
-  }, []);
+  });
   const template = 'minmax(200px,1.4fr) 140px 180px';
   return <Table columns={['Category', 'Entries', 'Total recorded']} template={template} title="Expense categories"
     empty="No categories defined.">

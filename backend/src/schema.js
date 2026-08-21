@@ -34,6 +34,29 @@ async function addIndex(table, name, definition) {
   await query(`ALTER TABLE ${table} ADD ${definition}`);
 }
 
+async function constraintExists(table, name) {
+  const rows = await query(
+    `SELECT 1 FROM information_schema.table_constraints
+     WHERE table_schema=DATABASE() AND table_name=? AND constraint_name=? AND constraint_type='FOREIGN KEY'`,
+    [table, name]
+  );
+  return rows.length > 0;
+}
+
+/*
+ * Foreign keys have to be looked for as constraints, not as indexes.
+ *
+ * MySQL usually creates an index named after the constraint, which made indexExists() a
+ * near-enough proxy — until a table already carried a suitable index of its own. Then
+ * MySQL reuses that one, no index by the constraint's name ever appears, and every
+ * subsequent startup tries to add the key again and dies on the duplicate name. That is a
+ * migration that only fails the *second* time it runs, which is the worst kind.
+ */
+async function addForeignKey(table, name, definition) {
+  if (await constraintExists(table, name)) return;
+  await query(`ALTER TABLE ${table} ADD ${definition}`);
+}
+
 /** Core tables that existed before the module expansion. */
 async function createCoreTables() {
   await query(`CREATE TABLE IF NOT EXISTS users (
@@ -591,6 +614,77 @@ async function createDocumentSettingsTable() {
     WHERE d.id=1 AND d.quotation_terms IS NULL`);
 }
 
+/**
+ * The methods GKUC sells, and what each one costs.
+ *
+ * Their small-works quotations are not built from a bill of quantities at all: the same
+ * yard can be surfaced by tarring, by asphalt carpet, by cold mix or in concrete, and a
+ * quotation usually offers two or three of those side by side so the client can choose. So
+ * the quotation is assembled from a catalogue of methods rather than from measured items —
+ * each carrying its own unit, its usual rate, the steps it involves, and how it is paid for.
+ *
+ * The rate is a starting point, not a fixed price: the same method was quoted at 350, 380,
+ * 390 and 400 a square foot across these jobs, because area and location move it.
+ */
+/**
+ * PID v3 §3.5 — "Client coordination and communication history".
+ *
+ * Every call, message, meeting and site visit against the client it concerns, so a
+ * relationship is not held in one person's memory or their own phone. A record attaches to
+ * an enquiry, to a project, or to both: an enquiry that becomes a project should not lose
+ * the conversations that won it, so once converted the earlier history follows the project.
+ */
+async function createCommunicationTable() {
+  await query(`CREATE TABLE IF NOT EXISTS client_communications (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    inquiry_id BIGINT UNSIGNED NULL,
+    project_id BIGINT UNSIGNED NULL,
+    direction ENUM('Incoming','Outgoing') NOT NULL DEFAULT 'Outgoing',
+    channel ENUM('Call','WhatsApp','Email','Meeting','Site visit','Letter') NOT NULL DEFAULT 'Call',
+    contact_person VARCHAR(120) NULL,
+    summary VARCHAR(1000) NOT NULL,
+    happened_at DATETIME NOT NULL,
+    follow_up_date DATE NULL,
+    logged_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_communication_inquiry (inquiry_id),
+    KEY idx_communication_project (project_id),
+    KEY idx_communication_followup (follow_up_date)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await addForeignKey('client_communications', 'fk_communication_inquiry',
+    'CONSTRAINT fk_communication_inquiry FOREIGN KEY(inquiry_id) REFERENCES inquiries(id)');
+  await addForeignKey('client_communications', 'fk_communication_project',
+    'CONSTRAINT fk_communication_project FOREIGN KEY(project_id) REFERENCES projects(id)');
+  await addForeignKey('client_communications', 'fk_communication_user',
+    'CONSTRAINT fk_communication_user FOREIGN KEY(logged_by) REFERENCES users(id)');
+}
+
+async function createMethodTables() {
+  await query(`CREATE TABLE IF NOT EXISTS work_methods (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    code VARCHAR(20) NOT NULL,
+    name VARCHAR(180) NOT NULL,
+    category VARCHAR(60) NOT NULL DEFAULT 'Surfacing',
+    description VARCHAR(600) NOT NULL DEFAULT '',
+    unit VARCHAR(20) NOT NULL,
+    default_rate DECIMAL(14,2) NOT NULL DEFAULT 0,
+    method_statement TEXT NULL,
+    payment_terms TEXT NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_work_method (name)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  /* A quotation records which methods it offered, so the reference and the method
+     statements on the page follow from the work rather than being typed again. */
+  await addColumn('quotations_client', 'method_codes', 'VARCHAR(120) NULL');
+  await addColumn('quotations_client', 'location', 'VARCHAR(180) NULL');
+  await addColumn('quotations_client', 'contact', 'VARCHAR(120) NULL');
+  await addColumn('quotations_client', 'payment_terms', 'TEXT NULL');
+  await addColumn('quotation_items', 'method_id', 'BIGINT UNSIGNED NULL');
+}
+
 async function createQsTables() {
   await query(`CREATE TABLE IF NOT EXISTS quotations_client (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, reference VARCHAR(60) NOT NULL UNIQUE,
@@ -661,7 +755,7 @@ async function migrateExistingInstalls() {
      name mirroring roles.name, with role_id as the real relationship. */
   await query('ALTER TABLE users MODIFY role VARCHAR(120) NOT NULL');
   await addColumn('users', 'role_id', 'BIGINT UNSIGNED NULL');
-  await addIndex('users', 'fk_users_role', 'CONSTRAINT fk_users_role FOREIGN KEY(role_id) REFERENCES roles(id)');
+  await addForeignKey('users', 'fk_users_role', 'CONSTRAINT fk_users_role FOREIGN KEY(role_id) REFERENCES roles(id)');
   await query("ALTER TABLE attendance MODIFY state ENUM('On site','Late','Checked out','Absent','On leave') NOT NULL");
   await query("ALTER TABLE stock_movements MODIFY movement_type ENUM('Receipt','Issue','Return','Adjustment','Transfer') NOT NULL");
   await addColumn('materials', 'unit_cost', 'DECIMAL(14,2) NOT NULL DEFAULT 0');
@@ -680,7 +774,7 @@ async function migrateExistingInstalls() {
   await addColumn('projects', 'status_reason', 'VARCHAR(500) NULL');
   await addColumn('projects', 'status_changed_at', 'DATETIME NULL');
   await addColumn('employees', 'current_project_id', 'BIGINT UNSIGNED NULL');
-  await addIndex('employees', 'fk_employee_project', 'CONSTRAINT fk_employee_project FOREIGN KEY(current_project_id) REFERENCES projects(id)');
+  await addForeignKey('employees', 'fk_employee_project', 'CONSTRAINT fk_employee_project FOREIGN KEY(current_project_id) REFERENCES projects(id)');
   await addColumn('fleet', 'driver_employee_id', 'BIGINT UNSIGNED NULL');
   await addColumn('fleet', 'service_interval_km', 'INT UNSIGNED NOT NULL DEFAULT 0');
   await addColumn('fleet', 'service_interval_months', 'TINYINT UNSIGNED NOT NULL DEFAULT 0');
@@ -705,15 +799,56 @@ async function migrateExistingInstalls() {
      but flagged, so payroll is never quietly built on a guess. */
   await addColumn('attendance', 'needs_review', 'TINYINT(1) NOT NULL DEFAULT 0');
   await addColumn('attendance', 'source', "VARCHAR(20) NOT NULL DEFAULT 'Manual'");
-  await addIndex('fleet', 'fk_fleet_driver', 'CONSTRAINT fk_fleet_driver FOREIGN KEY(driver_employee_id) REFERENCES employees(id)');
+  await addForeignKey('fleet', 'fk_fleet_driver', 'CONSTRAINT fk_fleet_driver FOREIGN KEY(driver_employee_id) REFERENCES employees(id)');
   await addIndex('notifications', 'uq_notification_dedupe', 'UNIQUE KEY uq_notification_dedupe(dedupe_key)');
-  await addIndex('attendance', 'fk_attendance_employee', 'CONSTRAINT fk_attendance_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');
+  await addForeignKey('attendance', 'fk_attendance_employee', 'CONSTRAINT fk_attendance_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');
 }
 
 /**
  * Writes the starting roles once. It never rewrites an existing role's permissions, so a
  * change the MD makes in the product is permanent and survives every future deployment.
  */
+/**
+ * The catalogue as it stands in GKUC's own quotations from July and August 2026 — the rates
+ * are the ones they actually quoted, so the price book is useful on the first day rather
+ * than an empty table somebody has to fill in before the feature does anything.
+ */
+async function seedWorkMethods() {
+  const [{ count }] = await query('SELECT COUNT(*) count FROM work_methods');
+  if (count) return;
+
+  const methods = [
+    ['Tar', 'Tar Laying', 'Surfacing', '', 'Sq.ft', 390,
+      'Clearing the surface\nABC laying & compaction (4" loose thickness)\n1½" & ¾" metal laying & compaction\nBitumen 1st coat laying & chip sealing\nBitumen 2nd coat laying & sand sealing',
+      '70% - Advance payment\n20% - After ABC laying\n10% - Before Bitumen 2nd coat laying'],
+    ['Asp', 'Asphalt Carpet Laying', 'Surfacing', '', 'Sq.ft', 530,
+      'Clearing the surface\nRemoving the existing base failures in required areas\nABC laying & compaction for required areas\nTack coat laying\nAsphalt carpet laying using paver (2" loose thickness)\nRoller compaction',
+      '60% - Advance payment\n30% - After ABC laying\n10% - Before asphalt carpet laying'],
+    ['Col', 'Cold Mix / Asphalt Carpet Laying', 'Surfacing', '', 'Sq.ft', 700,
+      'Clearing the surface\nABC laying & compaction (4" loose thickness)\nTack coat laying\nCold mix / asphalt carpet laying manually (2" loose thickness)\nRoller compaction',
+      '70% - Advance payment\n20% - After ABC laying\n10% - Before cold mix laying'],
+    ['Con', 'Concrete Laying', 'Surfacing', '', 'Sq.ft', 550, '', ''],
+    ['Asp', '50mm thick Asphalt layer', 'Surfacing', '', 'M2', 7000, '', ''],
+    ['CRS-01', 'Supplying CRS-01', 'Supply', 'Cationic rapid setting bitumen emulsion', 'Ltr', 370,
+      '', '100% - Full payment before supply'],
+    ['CSS-1', 'Prime coat bitumen emulsion CSS-1', 'Preparation',
+      'At the rate of 1 Ltr/Sqm, blinding with sand', 'Ltr', 370, '', ''],
+    ['CSS-1', 'Tack coat bitumen emulsion CSS-1', 'Preparation',
+      'At the rate of 0.5 Ltr/Sqm', 'Ltr', 300, '', ''],
+    ['Disp', 'Disposal of excavated material off-site', 'Earthworks',
+      'To an approved tipping location outside the premises, including loading, haulage, tipping fees and compliance with environmental regulations; measured per trip or load',
+      'Cu.m', 550, '', ''],
+    ['Drain', 'Construction of 600mm x 600mm U-drain with cover slab', 'Drainage', '', 'L.m', 38000, '', '']
+  ];
+
+  for (const [code, name, category, description, unit, rate, statement, terms] of methods) {
+    await query(`INSERT IGNORE INTO work_methods
+      (code,name,category,description,unit,default_rate,method_statement,payment_terms)
+      VALUES (?,?,?,?,?,?,?,?)`,
+    [code, name, category, description, unit, rate, statement || null, terms || null]);
+  }
+}
+
 async function seedAccessControl() {
   const [{ count }] = await query('SELECT COUNT(*) count FROM roles');
   if (!count) {
@@ -762,6 +897,10 @@ export async function migrate() {
   await createCompanyTable();
   await createDocumentSettingsTable();
   await createQsTables();
+  /* After the QS tables: this adds columns to quotations_client. */
+  await createMethodTables();
+  await createCommunicationTable();
   await migrateExistingInstalls();
+  await seedWorkMethods();
   await seedAccessControl();
 }
