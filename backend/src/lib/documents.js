@@ -86,7 +86,10 @@ function stylesheet(design) {
   .head.ruled{border-bottom:2px solid ${design.accent}}
   .head .piece{position:absolute;margin:0}
   .head .piece img{width:100%;height:100%;object-fit:contain;object-position:left center;display:block}
-  .head .piece[data-piece="docTitle"]{letter-spacing:3px;text-transform:uppercase}
+  /* Never wrapped: a two-line title drops onto the reference number sitting below it, and
+     the letterhead is a free canvas, so nothing reflows out of its way. Right-aligned
+     overflow runs left into the gap beside the company name. */
+  .head .piece[data-piece="docTitle"]{letter-spacing:3px;text-transform:uppercase;white-space:nowrap}
   .parties{display:flex;gap:18px;margin:16px 0 14px}
   .party{flex:1;border:1px solid ${table.border};border-radius:3px;padding:9px 11px}
   .party h3{margin:0 0 5px;font-size:${(type.size * 0.75).toFixed(1)}px;letter-spacing:1.1px;text-transform:uppercase;opacity:.62}

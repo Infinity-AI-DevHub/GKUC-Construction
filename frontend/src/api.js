@@ -6,19 +6,63 @@ export const token = {
   clear: () => sessionStorage.removeItem(TOKEN_KEY)
 };
 
+/**
+ * What actually went wrong, in words the person filling the form can act on.
+ *
+ * A failed validation answers with `error: 'Invalid data'` and an `issues` object holding
+ * the real reasons per field. Only the headline was being shown, so every rejected form —
+ * a leave request ending before it starts, a quantity out of range — said nothing more
+ * than "Invalid data" and left the person to guess which box was wrong.
+ */
+function readableError(body) {
+  /* "endDate" reads as "End date", so the message names the box to go and look at. */
+  const label = name => name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, first => first.toUpperCase());
+
+  const fields = body?.issues?.fieldErrors || {};
+  const reasons = Object.entries(fields).flatMap(([name, list]) => (list || []).filter(Boolean)
+    /* Messages written as whole sentences already say which field they mean. */
+    .map(text => (/\s/.test(text.trim()) ? text : `${label(name)}: ${text}`)));
+  const form = body?.issues?.formErrors?.filter(Boolean) || [];
+  const all = [...form, ...reasons];
+  if (all.length) return all.slice(0, 3).join('. ');
+  return body?.error || 'Request failed';
+}
+
 export const api = async (path, options = {}) => {
   const stored = token.get();
-  const response = await fetch(`/api${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(stored ? { Authorization: `Bearer ${stored}` } : {}),
-      ...options.headers
-    }
-  });
+  let response;
+  try {
+    response = await fetch(`/api${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(stored ? { Authorization: `Bearer ${stored}` } : {}),
+        ...options.headers
+      }
+    });
+  } catch {
+    /* The server is down or the network dropped. Saying so is more use than the browser's
+       own wording, which talks about fetch rather than about the system. */
+    throw new Error('Could not reach the server. Check that SiteOps is running, then try again.');
+  }
+
   if (response.status === 204) return null;
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error || 'Request failed');
+
+  /* Not every reply carries JSON — a gateway error, a restart mid-request, or a crash can
+     answer with nothing at all, and parsing that threw "Unexpected end of JSON input" at
+     the person instead of telling them what happened. */
+  const text = await response.text();
+  let body = null;
+  if (text) {
+    try { body = JSON.parse(text); } catch { body = null; }
+  }
+  if (!response.ok) {
+    if (body === null) throw new Error(`The server answered with an error (${response.status}).`);
+    throw new Error(readableError(body));
+  }
+  if (body === null && text) throw new Error('The server sent a reply that could not be read.');
   return body;
 };
 

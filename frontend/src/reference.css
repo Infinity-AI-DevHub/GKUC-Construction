@@ -1,5 +1,19 @@
+/*
+ * The live-site card puts white type over a photograph. The overlay used to be fully
+ * transparent for the top quarter, which is exactly where the site name sits, so the
+ * heading was landing on whatever the picture happened to be — bright sky, in practice.
+ * The overlay now darkens the whole card, most heavily behind the text at the bottom.
+ */
 .site-spotlight {
   background-image:
-    linear-gradient(180deg, transparent 26%, rgba(10, 35, 53, 0.82)),
+    linear-gradient(180deg, rgba(8, 26, 40, 0.55) 0, rgba(8, 26, 40, 0.3) 40%, rgba(8, 26, 40, 0.9)),
     url('/construction-site.jpg');
+}
+
+/* Over a photograph, a shadow does what contrast ratios alone cannot. */
+.site-spotlight h2,
+.site-spotlight p,
+.site-spotlight b,
+.site-spotlight small {
+  text-shadow: 0 1px 3px rgba(6, 18, 28, 0.75);
 }

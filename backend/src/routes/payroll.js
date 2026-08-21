@@ -59,15 +59,28 @@ router.post('/', auth, permit('hr.payroll'), validate(z.object({
 
       let total = 0;
       for (const employee of employees) {
+        const basicSalary = Number(employee.basic_salary);
+        const dailyRate = Number(employee.daily_rate);
         const overtimePay = Number(employee.overtime_hours) * Number(employee.overtime_rate);
-        const deductions = Number(employee.unpaid_days) * Number(employee.daily_rate);
-        const net = Math.max(0, Number(employee.basic_salary) + overtimePay - deductions);
+
+        /*
+         * GKUC pays two ways, and the run has to know which is which.
+         *
+         * Staff on a monthly salary are paid that salary, less a day's pay for each day of
+         * unpaid leave. Site workers are on a daily rate and are paid for the days they
+         * actually worked — there is nothing to deduct, because a day not worked was never
+         * going to be paid. Earnings used to be the monthly salary in both cases, so every
+         * mason and labourer on the books came out of the run with a payslip for nothing.
+         */
+        const earnings = basicSalary > 0 ? basicSalary : dailyRate * Number(employee.days_present);
+        const deductions = basicSalary > 0 ? Number(employee.unpaid_days) * dailyRate : 0;
+        const net = Math.max(0, earnings + overtimePay - deductions);
         total += net;
         await connection.execute(`INSERT INTO payslips
           (run_id,employee_id,days_present,days_absent,overtime_hours,basic,overtime_pay,deductions,net_pay)
           VALUES (?,?,?,?,?,?,?,?,?)`,
         [run.insertId, employee.id, employee.days_present, employee.days_absent, employee.overtime_hours,
-          employee.basic_salary, overtimePay, deductions, net]);
+          earnings, overtimePay, deductions, net]);
       }
       await connection.execute('UPDATE payroll_runs SET total=? WHERE id=?', [total, run.insertId]);
       await audit(connection, req.user.id, 'CREATE', 'payroll_run', run.insertId, null, { reference, total }, req.ip);

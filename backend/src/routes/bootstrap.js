@@ -40,8 +40,11 @@ router.get('/', auth, wrap(async (req, res) => {
     gated(['site.reports','projects.view'], () => query(`SELECT r.id,r.project_id projectId,p.name site,r.supervisor,DATE_FORMAT(r.report_date,'%d %b %Y') date,
       r.workforce,r.work_completed work,r.issue,r.weather,r.delay_hours delayHours
       FROM daily_reports r JOIN projects p ON p.id=r.project_id ORDER BY r.report_date DESC,r.id DESC LIMIT 60`)),
-    gated(['hr.view','hr.manage'], () => query(`SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,e.basic_salary basicSalary,e.daily_rate dailyRate,
-      e.overtime_rate overtimeRate,e.join_date joinDate,d.name department,e.department_id departmentId
+    /* Pay travels only to the people who maintain it — see routes/employees.js. */
+    gated(['hr.view','hr.manage'], () => query(`SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,
+      ${['hr.payroll', 'hr.manage'].some(key => req.user.permissions.includes(key))
+    ? 'e.basic_salary basicSalary,e.daily_rate dailyRate,e.overtime_rate overtimeRate,' : ''}
+      e.join_date joinDate,d.name department,e.department_id departmentId
       FROM employees e LEFT JOIN departments d ON d.id=e.department_id ORDER BY e.code`)),
     gated(['hr.view','hr.manage'], () => query('SELECT id,name,description FROM departments ORDER BY name')),
     gated(['store.view','store.manage'], () => query(`SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_cost purchaseCost,
@@ -58,11 +61,15 @@ router.get('/', auth, wrap(async (req, res) => {
     gated(['projects.view'], () => query(`SELECT m.id,m.title,m.due_date dueDate,m.status,m.project_id projectId,p.name project
       FROM project_milestones m JOIN projects p ON p.id=m.project_id ORDER BY m.due_date`)),
     (async () => {
+      /* Addressed to this person, or to nobody in particular and to a permission they
+         hold. See the note in admin.js: `user_id IS NULL OR …` showed everyone everything. */
       const perms = req.user.permissions.length ? req.user.permissions : [''];
       const placeholders = perms.map(() => '?').join(',');
       return query(
         `SELECT id,title,message,severity,status,channel,reference_type referenceType,reference_id referenceId,created_at createdAt
-      FROM notifications WHERE user_id IS NULL OR user_id=? OR audience IN (${placeholders}) ORDER BY id DESC LIMIT 40`,
+      FROM notifications
+      WHERE (user_id = ? OR (user_id IS NULL AND (audience IS NULL OR audience IN (${placeholders}))))
+      ORDER BY id DESC LIMIT 40`,
         [req.user.id, ...perms]
       );
     })(),

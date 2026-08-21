@@ -70,7 +70,7 @@ const MOVEMENT_TEMPLATE = '150px minmax(180px,1.3fr) 110px 110px minmax(140px,1f
 
 function Movements() {
   const [rows, setRows] = useState([]);
-  useEffect(() => { api('/materials/movements').then(setRows).catch(() => setRows([])); }, []);
+  useLiveList(() => api('/materials/movements').then(setRows).catch(() => setRows([])));
   return <Table columns={MOVEMENT_COLUMNS} template={MOVEMENT_TEMPLATE} title="Stock movement history" empty="No movements recorded.">
     {rows.map(row => <Row template={MOVEMENT_TEMPLATE} key={row.id}>
       <span>{new Date(row.createdAt).toLocaleString('en-GB')}</span>
@@ -268,7 +268,7 @@ function OrderDetail({ order, close, done, can }) {
 function Suppliers() {
   const [rows, setRows] = useState([]);
   const template = 'minmax(190px,1.4fr) minmax(150px,1fr) 140px minmax(170px,1.1fr) 90px 140px';
-  useEffect(() => { api('/purchasing/suppliers').then(setRows).catch(() => setRows([])); }, []);
+  useLiveList(() => api('/purchasing/suppliers').then(setRows).catch(() => setRows([])));
   return <Table columns={['Supplier', 'Contact', 'Phone', 'Email', 'Orders', 'Outstanding']} template={template}
     title="Suppliers" empty="No suppliers recorded.">
     {rows.map(row => <Row template={template} key={row.id}>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { ArrowDownToLine, Check, Clock3, PencilLine, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
 import { api, localDate, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
@@ -9,7 +9,10 @@ const TABS = ['Employees', 'Attendance', 'Biometric import', 'Leave', 'Overtime'
 
 /** PID 2.2 — one record per employee covering profile, attendance, leave and overtime. */
 export default function People({ data, reload, can }) {
-  const [tab, setTab] = useState(TABS[0]);
+  /* Payroll is a tab of its own permission: offering it to someone the server will refuse
+     only sends them into an error they can do nothing about. */
+  const tabs = TABS.filter(name => name !== 'Payroll' || can.payroll);
+  const [tab, setTab] = useState(tabs[0]);
   const [open, setOpen] = useState('');
 
   const actions = {
@@ -18,14 +21,14 @@ export default function People({ data, reload, can }) {
     'Biometric import': null,
     Leave: can.hr && 'Record leave',
     Overtime: can.site && 'Record overtime',
-    Payroll: can.hr && 'Run payroll',
+    Payroll: can.payroll && 'Run payroll',
     Performance: can.hr && 'Add review',
     Departments: can.hr && 'Add department'
   };
 
   return <Page title="People" subtitle="Employee records, live workforce presence, leave and overtime."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
-    <Tabs tabs={TABS} active={tab} onChange={setTab} />
+    <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
     {tab === 'Employees' && <Employees data={data} can={can} />}
     {tab === 'Attendance' && <Attendance data={data} reload={reload} can={can} />}
@@ -49,8 +52,17 @@ export default function People({ data, reload, can }) {
 const EMPLOYEE_COLUMNS = ['Employee', 'Department', 'Designation', 'Basic salary', 'Daily rate', 'Status'];
 const EMPLOYEE_TEMPLATE = 'minmax(190px,1.4fr) minmax(140px,1fr) minmax(140px,1fr) 130px 110px 100px';
 
+/* The server withholds pay from anyone who does not maintain it, so the columns come and
+   go with the data. Showing them as "LKR 0" would read as a wage of nothing. */
+const PAY_COLUMNS = ['Basic salary', 'Daily rate'];
+const NO_PAY_COLUMNS = EMPLOYEE_COLUMNS.filter(column => !PAY_COLUMNS.includes(column));
+const NO_PAY_TEMPLATE = 'minmax(190px,1.4fr) minmax(140px,1fr) minmax(140px,1fr) 100px';
+
 function Employees({ data, can }) {
   const [detail, setDetail] = useState(null);
+  const showsPay = data.employees.some(employee => employee.basicSalary !== undefined);
+  const columns = showsPay ? EMPLOYEE_COLUMNS : NO_PAY_COLUMNS;
+  const template = showsPay ? EMPLOYEE_TEMPLATE : NO_PAY_TEMPLATE;
   return <>
     <div className="attendance-summary">
       <Summary label="Employees" value={data.employees.length} icon={UserRoundCheck} />
@@ -58,14 +70,14 @@ function Employees({ data, can }) {
       <Summary label="On leave" value={data.employees.filter(row => row.status === 'On leave').length} icon={Clock3} />
       <Summary label="Departments" value={data.departments.length} icon={ShieldCheck} />
     </div>
-    <Table columns={EMPLOYEE_COLUMNS} template={EMPLOYEE_TEMPLATE} title="Employee register">
-      {data.employees.map(employee => <Row template={EMPLOYEE_TEMPLATE} key={employee.id}
+    <Table columns={columns} template={template} title="Employee register">
+      {data.employees.map(employee => <Row template={template} key={employee.id}
         onClick={async () => setDetail(await api(`/employees/${employee.id}`))}>
         <div className="person"><Avatar name={employee.name} /><div><strong>{employee.name}</strong><small>{employee.code}</small></div></div>
         <span>{employee.department || '—'}</span>
         <span>{employee.designation}</span>
-        <span>{rupees(employee.basicSalary)}</span>
-        <span>{rupees(employee.dailyRate)}</span>
+        {showsPay && <span>{rupees(employee.basicSalary)}</span>}
+        {showsPay && <span>{rupees(employee.dailyRate)}</span>}
         <Badge tone={slug(employee.status)}>{employee.status}</Badge>
       </Row>)}
     </Table>
@@ -191,7 +203,7 @@ const REVIEW_TEMPLATE = 'minmax(170px,1.2fr) 130px 120px 90px 90px 90px 90px 90p
 /** PID 2.2 "Performance Reports". */
 function Performance() {
   const [rows, setRows] = useState([]);
-  useEffect(() => { api('/payroll/reviews/all').then(setRows).catch(() => setRows([])); }, []);
+  useLiveList(() => api('/payroll/reviews/all').then(setRows).catch(() => setRows([])));
   return <Table columns={['Employee', 'Period', 'Reviewed', 'Quality', 'Output', 'Safety', 'Reliability', 'Overall']}
     template={REVIEW_TEMPLATE} title="Performance reviews" empty="No reviews recorded.">
     {rows.map(row => <Row template={REVIEW_TEMPLATE} key={row.id}>

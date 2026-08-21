@@ -11,7 +11,7 @@ import DocumentDesigner from '../DocumentDesigner.jsx';
 const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Audit log', 'My account'];
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
-export default function Admin({ can, user, initialTab = TABS[0] }) {
+export default function Admin({ can, user, reload, initialTab = TABS[0] }) {
   const [tab, setTab] = useState(TABS.includes(initialTab) ? initialTab : TABS[0]);
   const [creating, setCreating] = useState(false);
 
@@ -26,7 +26,7 @@ export default function Admin({ can, user, initialTab = TABS[0] }) {
     {tab === 'Company' && <CompanySettings can={can} />}
     {tab === 'Documents' && <DocumentSettings can={can} />}
     {tab === 'Designer' && <DocumentDesigner can={can} />}
-    {tab === 'Notifications' && <Notifications can={can} />}
+    {tab === 'Notifications' && <Notifications can={can} reload={reload} />}
     {tab === 'Audit log' && <AuditLog />}
     {tab === 'My account' && <section className="table-panel">
       <div className="table-tools"><h2>Change your password</h2></div>
@@ -65,17 +65,23 @@ function Users({ can, creating, closeCreate }) {
 
 const NOTIFICATION_TEMPLATE = '110px minmax(220px,1.4fr) minmax(240px,2fr) 160px 110px';
 
-function Notifications({ can }) {
+function Notifications({ can, reload }) {
   const [rows, setRows] = useState([]);
   const load = () => api('/notifications').then(setRows).catch(() => setRows([]));
   useLiveList(load);
 
-  const markRead = async id => { await post(`/notifications/${id}/read`); await load(); };
-  const rescan = async () => { await post('/notifications/scan'); await load(); };
+  /* The bell in the top bar counts the same alerts, but from the bootstrap data rather
+     than from this list — so marking them read here has to refresh that too, or the dot
+     stays lit over a centre that has just been emptied. */
+  const refresh = async () => { await load(); await reload?.(); };
+
+  const markRead = async id => { await post(`/notifications/${id}/read`); await refresh(); };
+  const rescan = async () => { await post('/notifications/scan'); await refresh(); };
+  const markAll = async () => { await post('/notifications/read-all'); await refresh(); };
 
   return <>
     <div className="toolbar" style={{ marginBottom: '14px' }}>
-      <button className="secondary" onClick={() => post('/notifications/read-all').then(load)}>Mark all read</button>
+      <button className="secondary" onClick={markAll}>Mark all read</button>
       {can.manage && <button className="secondary" onClick={rescan}><BellRing size={15} /> Run deadline scan</button>}
     </div>
     <Table columns={['Severity', 'Alert', 'Detail', 'Raised', 'Status']} template={NOTIFICATION_TEMPLATE}
@@ -97,7 +103,7 @@ const AUDIT_TEMPLATE = '190px minmax(150px,1fr) 140px minmax(150px,1fr) 130px';
 function AuditLog() {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
-  useEffect(() => { api('/audit').then(setRows).catch(failure => setError(failure.message)); }, []);
+  useLiveList(() => api('/audit').then(setRows).catch(failure => setError(failure.message)));
   if (error) return <p className="empty-state">{error}</p>;
   return <Table columns={['Date and time', 'User', 'Action', 'Record', 'From']} template={AUDIT_TEMPLATE}
     title="Immutable audit trail" empty="No activity recorded yet.">

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
+import { audit, clock, getOne, nextReference, pool, query, today, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
 import { notify } from '../alerts.js';
 
@@ -16,6 +16,66 @@ const select = `SELECT i.id,i.reference,i.customer_name customer,i.contact_perso
   i.description,i.expected_value expectedValue,i.expected_start expectedStart,i.source,i.status,i.lost_reason lostReason,
   i.project_id projectId,p.name project,u.name createdBy,i.created_at createdAt
   FROM inquiries i LEFT JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=i.created_by`;
+
+/**
+ * The history of dealings with a client — PID v3 §3.5.
+ *
+ * Held against the enquiry and, once it is won, against the project as well, so the
+ * conversations that won the work stay with the work rather than ending at conversion.
+ */
+const communicationSelect = `SELECT c.id,c.inquiry_id inquiryId,c.project_id projectId,c.direction,c.channel,
+  c.contact_person contactPerson,c.summary,c.happened_at happenedAt,c.follow_up_date followUpDate,
+  u.name loggedBy,i.reference inquiryReference,i.customer_name customer,p.name project
+  FROM client_communications c JOIN users u ON u.id=c.logged_by
+  LEFT JOIN inquiries i ON i.id=c.inquiry_id LEFT JOIN projects p ON p.id=c.project_id`;
+
+/** Everything logged lately, newest first — the coordinator's own record of who said what. */
+router.get('/communications/all', auth, permit('enquiries.manage', 'projects.view'), wrap(async (req, res) => {
+  const filters = [];
+  const params = [];
+  if (req.query.projectId) { filters.push('c.project_id=?'); params.push(req.query.projectId); }
+  if (req.query.followUp === 'due') { filters.push('c.follow_up_date IS NOT NULL AND c.follow_up_date <= CURDATE()'); }
+  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  res.json(await query(`${communicationSelect} ${where} ORDER BY c.happened_at DESC, c.id DESC LIMIT 200`, params));
+}));
+
+/**
+ * One client's history. Where an enquiry has become a project, anything logged against
+ * that project is shown alongside — it is the same relationship either way.
+ */
+router.get('/:id/communications', auth, permit('enquiries.manage', 'projects.view'), wrap(async (req, res) => {
+  const inquiry = await getOne('SELECT id,project_id FROM inquiries WHERE id=?', [req.params.id]);
+  if (!inquiry) return res.status(404).json({ error: 'Enquiry not found' });
+  const rows = inquiry.project_id
+    ? await query(`${communicationSelect} WHERE c.inquiry_id=? OR c.project_id=? ORDER BY c.happened_at DESC, c.id DESC`,
+      [inquiry.id, inquiry.project_id])
+    : await query(`${communicationSelect} WHERE c.inquiry_id=? ORDER BY c.happened_at DESC, c.id DESC`, [inquiry.id]);
+  res.json(rows);
+}));
+
+router.post('/:id/communications', auth, permit('enquiries.manage'), validate(z.object({
+  direction: z.enum(['Incoming', 'Outgoing']).default('Outgoing'),
+  channel: z.enum(['Call', 'WhatsApp', 'Email', 'Meeting', 'Site visit', 'Letter']).default('Call'),
+  contactPerson: z.string().max(120).optional(),
+  summary: z.string().min(3).max(1000),
+  happenedAt: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/)).optional(),
+  followUpDate: isoDate.optional()
+})), wrap(async (req, res) => {
+  const inquiry = await getOne('SELECT id,project_id FROM inquiries WHERE id=?', [req.params.id]);
+  if (!inquiry) return res.status(404).json({ error: 'Enquiry not found' });
+
+  const body = req.body;
+  const happened = (body.happenedAt || `${today()} ${clock()}`).replace('T', ' ').slice(0, 19);
+  const result = await query(`INSERT INTO client_communications
+    (inquiry_id,project_id,direction,channel,contact_person,summary,happened_at,follow_up_date,logged_by)
+    VALUES (?,?,?,?,?,?,?,?,?)`,
+  [inquiry.id, inquiry.project_id || null, body.direction, body.channel,
+    body.contactPerson || null, body.summary, happened, body.followUpDate || null, req.user.id]);
+
+  const row = await getOne(`${communicationSelect} WHERE c.id=?`, [result.insertId]);
+  await audit(pool, req.user.id, 'CREATE', 'client_communication', row.id, null, row, req.ip);
+  res.status(201).json(row);
+}));
 
 router.get('/', auth, permit('enquiries.manage','projects.view'), wrap(async (req, res) => {
   const where = req.query.status ? 'WHERE i.status=?' : '';
@@ -89,6 +149,10 @@ router.post('/:id/convert', auth, permit('enquiries.manage'), validate(z.object(
       VALUES (?,?,?,?,?,?,?,?)`, [body.name, inquiry.customer_name, body.manager, inquiry.location, body.stage,
       body.budget || inquiry.expected_value, body.startDate || null, body.endDate || null]);
     await connection.execute("UPDATE inquiries SET status='Won', project_id=? WHERE id=?", [result.insertId, inquiry.id]);
+    /* The conversations that won the work belong to the project from here on. */
+    await connection.execute(
+      'UPDATE client_communications SET project_id=? WHERE inquiry_id=? AND project_id IS NULL',
+      [result.insertId, inquiry.id]);
     await audit(connection, req.user.id, 'CONVERT', 'inquiry', inquiry.id, inquiry, { projectId: result.insertId }, req.ip);
     return result.insertId;
   });

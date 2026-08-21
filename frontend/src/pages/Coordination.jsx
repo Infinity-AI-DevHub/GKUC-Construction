@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, ArrowRightLeft, CloudRain, HardHat, Truck, Wrench } from 'lucide-react';
-import { api, post, shortDate, slug, todayInput } from '../api.js';
-import { Avatar, Badge, Field, FormModal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { AlertTriangle, ArrowRightLeft, CloudRain, HardHat, MessageSquare, Truck, Wrench } from 'lucide-react';
+import { api, daysUntil, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 
-const TABS = ['Live sites', 'Resource availability', 'Movement history'];
+const TABS = ['Live sites', 'Resource availability', 'Enquiries', 'Movement history'];
 
 /**
  * PID v3 §3.5 and §4.3 — the Project Coordinator's screen. GKUC runs two sites at a time,
@@ -33,6 +33,7 @@ export default function Coordination({ data, reload, can }) {
 
     {tab === 'Live sites' && <LiveSites board={board} can={can} onReschedule={setRescheduling} />}
     {tab === 'Resource availability' && <Availability resources={resources} can={can} onMove={setMoving} />}
+    {tab === 'Enquiries' && <Enquiries can={can} reload={reload} />}
     {tab === 'Movement history' && <MovementHistory />}
 
     {rescheduling && <RescheduleForm site={rescheduling} sites={board?.sites || []}
@@ -153,7 +154,7 @@ function Availability({ resources, can, onMove }) {
 
 function MovementHistory() {
   const [rows, setRows] = useState([]);
-  useEffect(() => { api('/resources/reassignments').then(setRows).catch(() => setRows([])); }, []);
+  useLiveList(() => api('/resources/reassignments').then(setRows).catch(() => setRows([])));
   const template = '150px minmax(170px,1.3fr) minmax(140px,1fr) minmax(140px,1fr) minmax(160px,1.2fr)';
   return <Table columns={['When', 'Resource', 'From', 'To', 'Reason']} template={template}
     title="Everything that has moved" empty="Nothing has been reassigned yet.">
@@ -212,4 +213,123 @@ function ReassignForm({ resource, sites, close, reload }) {
       Both sites update together, so nobody is left double-booked or forgotten.
     </p>
   </FormModal>;
+}
+
+const ENQUIRY_TEMPLATE = 'minmax(120px,.8fr) minmax(150px,1.2fr) minmax(140px,1fr) 130px 110px 130px';
+
+/**
+ * PID v3 §3.5 — every enquiry, and the history of dealings with the client it came from.
+ *
+ * The list and the history sit together because that is how the Coordinator works: the
+ * question is rarely "what enquiries are open" on its own, but "where did we get to with
+ * this one, and who said what".
+ */
+function Enquiries({ can, reload }) {
+  const [rows, setRows] = useState([]);
+  const [open, setOpen] = useState(null);
+  const load = () => api('/inquiries').then(setRows).catch(() => setRows([]));
+  useLiveList(load);
+
+  const setStatus = async (id, status) => { await patch(`/inquiries/${id}`, { status }); await load(); await reload(); };
+
+  return <>
+    <Table columns={['Reference', 'Client', 'Location', 'Expected', 'Status', '']} template={ENQUIRY_TEMPLATE}
+      title="Enquiries" empty="No enquiries logged yet.">
+      {rows.map(row => <Row template={ENQUIRY_TEMPLATE} key={row.id}>
+        <div><strong>{row.reference}</strong><small>{shortDate(row.createdAt)}</small></div>
+        <div><strong>{row.customer}</strong><small>{row.contact || row.phone || '—'}</small></div>
+        <span>{row.location}</span>
+        <strong>{rupees(row.expectedValue)}</strong>
+        <Badge tone={slug(row.status)}>{row.status}</Badge>
+        <span style={{ display: 'flex', gap: '6px' }}>
+          <button className="status-button" onClick={() => setOpen(row)}>
+            <MessageSquare size={13} />History
+          </button>
+          {can.enquiries && row.status === 'New' && (
+            <button className="status-button" onClick={() => setStatus(row.id, 'Quoted')}>Quoted</button>
+          )}
+        </span>
+      </Row>)}
+    </Table>
+
+    {open && <ClientHistory enquiry={open} can={can} close={() => setOpen(null)} />}
+  </>;
+}
+
+const CHANNELS = ['Call', 'WhatsApp', 'Email', 'Meeting', 'Site visit', 'Letter'];
+
+/** The record of contact with one client, and the means to add to it. */
+function ClientHistory({ enquiry, can, close }) {
+  const [entries, setEntries] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api(`/inquiries/${enquiry.id}/communications`).then(setEntries).catch(() => setEntries([]));
+  useEffect(() => { load(); }, [enquiry.id]);
+
+  const add = async event => {
+    event.preventDefault();
+    setBusy(true); setError('');
+    const form = new FormData(event.currentTarget);
+    try {
+      await post(`/inquiries/${enquiry.id}/communications`, {
+        direction: form.get('direction'),
+        channel: form.get('channel'),
+        contactPerson: form.get('contactPerson') || undefined,
+        summary: form.get('summary'),
+        followUpDate: form.get('followUpDate') || undefined
+      });
+      event.target.reset();
+      await load();
+    } catch (failure) { setError(failure.message); } finally { setBusy(false); }
+  };
+
+  const template = '150px 110px minmax(220px,2fr) 130px';
+
+  return <Modal title={`${enquiry.customer} — ${enquiry.reference}`} close={close}>
+    <div className="report-form">
+      <div className="project-stats wide">
+        <div><span>Location</span><strong>{enquiry.location || '—'}</strong></div>
+        <div><span>Contact</span><strong>{enquiry.contact || enquiry.phone || '—'}</strong></div>
+      </div>
+
+      <div className="wide">
+        <Table columns={['When', 'How', 'What was said', 'Follow up']} template={template}
+          title="History with this client"
+          empty="Nothing logged yet. Every call, message and visit belongs here.">
+          {(entries || []).map(entry => <Row template={template} key={entry.id}>
+            <div>
+              <strong>{shortDate(entry.happenedAt)}</strong>
+              <small>{entry.loggedBy}</small>
+            </div>
+            <div>
+              <Badge tone={entry.direction === 'Incoming' ? 'watch' : 'low'}>{entry.channel}</Badge>
+              <small>{entry.direction}</small>
+            </div>
+            <div>
+              <span>{entry.summary}</span>
+              {entry.contactPerson && <small>with {entry.contactPerson}</small>}
+            </div>
+            <span className={entry.followUpDate && daysUntil(entry.followUpDate) < 0 ? 'overdue' : ''}>
+              {entry.followUpDate ? shortDate(entry.followUpDate) : '—'}
+            </span>
+          </Row>)}
+        </Table>
+      </div>
+
+      {can.enquiries && <form onSubmit={add} className="wide delegate-form">
+        <label>Direction<select name="direction"><option>Incoming</option><option>Outgoing</option></select></label>
+        <label>How<select name="channel">{CHANNELS.map(one => <option key={one}>{one}</option>)}</select></label>
+        <label>Who<input name="contactPerson" placeholder="Person spoken to" /></label>
+        <label>Follow up<input type="date" name="followUpDate" /></label>
+        <label className="wide">What was said
+          <input name="summary" required placeholder="Asked for a price to surface the yard, about 1,987 m2" />
+        </label>
+        <button className="secondary" disabled={busy}>{busy ? 'Saving…' : 'Log this contact'}</button>
+      </form>}
+
+      {error && <p className="form-error">{error}</p>}
+      <div className="form-actions"><button type="button" className="secondary" onClick={close}>Close</button></div>
+    </div>
+  </Modal>;
 }

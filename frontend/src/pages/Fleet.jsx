@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, QrCode, Truck, Wrench } from 'lucide-react';
 import { api, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea } from '../ui.jsx';
+import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { toSvg } from '../qr.js';
 
 const TABS = ['Vehicles', 'Compliance', 'Fuel & service', 'Equipment'];
@@ -152,7 +152,7 @@ const COMPLIANCE_TEMPLATE = 'minmax(180px,1.3fr) 160px minmax(140px,1fr) 130px 1
 /** The renewals that most commonly get missed, listed soonest-first. */
 function Compliance() {
   const [rows, setRows] = useState([]);
-  useEffect(() => { api('/fleet/documents/expiring?days=120').then(setRows).catch(() => setRows([])); }, []);
+  useLiveList(() => api('/fleet/documents/expiring?days=120').then(setRows).catch(() => setRows([])));
   return <Table columns={COMPLIANCE_COLUMNS} template={COMPLIANCE_TEMPLATE} title="Renewals due"
     empty="Nothing expiring in the next 120 days.">
     {rows.map(row => <Row template={COMPLIANCE_TEMPLATE} key={row.id}>
@@ -328,8 +328,6 @@ function VehicleForm({ data, close, reload }) {
     <Field name="dueDate" label="Renewal due date" type="date" defaultValue={todayInput()} />
     <SelectField name="projectId" label="Assigned site" options={[['', 'Yard'], ...data.projects.map(project => [project.id, project.name])]} />
     <Field name="odometer" label="Odometer" type="number" min="0" defaultValue="0" required={false} />
-    <Field name="serviceIntervalKm" label="Service every (km)" type="number" min="0" defaultValue="5000" required={false} />
-    <Field name="serviceIntervalMonths" label="Service every (months)" type="number" min="0" max="60" defaultValue="6" required={false} />
   </FormModal>;
 }
 
@@ -368,8 +366,6 @@ function FuelForm({ data, close, reload }) {
     <Field name="litres" label="Litres" type="number" step="any" min="0" />
     <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" />
     <Field name="odometer" label="Odometer" type="number" min="0" defaultValue="0" required={false} />
-    <Field name="serviceIntervalKm" label="Service every (km)" type="number" min="0" defaultValue="5000" required={false} />
-    <Field name="serviceIntervalMonths" label="Service every (months)" type="number" min="0" max="60" defaultValue="6" required={false} />
   </FormModal>;
 }
 
