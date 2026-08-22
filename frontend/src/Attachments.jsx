@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FileText, Paperclip, Trash2, Upload } from 'lucide-react';
-import { api, del, fileSize, shortDate, upload } from './api.js';
+import { api, del, fetchAttachment, fileSize, openAttachment, shortDate, upload } from './api.js';
 import { Badge } from './ui.jsx';
 
 /**
@@ -79,8 +79,11 @@ export default function Attachments({
     <div className="attachment-list">
       {items.map(item => <div className="attachment-item" key={item.id}>
         {item.mime.startsWith('image/')
-          ? <a href={item.url} target="_blank" rel="noreferrer"><img src={item.url} alt={item.title} /></a>
-          : <a className="attachment-icon" href={item.url} target="_blank" rel="noreferrer"><FileText size={20} /></a>}
+          ? <AttachmentThumbnail item={item} />
+          : <button type="button" className="attachment-icon" title="Open this file"
+            onClick={() => openAttachment(item.id).catch(failure => setError(failure.message))}>
+            <FileText size={20} />
+          </button>}
         <div>
           <strong>{item.title || item.filename}</strong>
           <small>{fileSize(item.size)} · {item.uploadedBy} · {shortDate(item.createdAt)}</small>
@@ -94,4 +97,36 @@ export default function Attachments({
       {!items.length && <p className="attachment-empty"><Paperclip size={14} /> No files attached yet.</p>}
     </div>
   </section>;
+}
+
+/**
+ * A site photo, fetched with the session rather than linked to.
+ *
+ * The store is not public, so the browser cannot load the image by URL on its own. The
+ * bytes are fetched once and held as an object URL for as long as the thumbnail is on
+ * screen, then released — otherwise every listing would leak a blob per photo.
+ */
+function AttachmentThumbnail({ item }) {
+  const [source, setSource] = useState(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    let created = null;
+    fetchAttachment(item.id)
+      .then(url => {
+        if (!live) { URL.revokeObjectURL(url); return; }
+        created = url;
+        setSource(url);
+      })
+      .catch(() => { if (live) setFailed(true); });
+    return () => { live = false; if (created) URL.revokeObjectURL(created); };
+  }, [item.id]);
+
+  if (failed) return <span className="attachment-icon" title="This photo could not be loaded"><FileText size={20} /></span>;
+  if (!source) return <span className="attachment-icon" aria-busy="true" />;
+  return <button type="button" className="attachment-thumb" title="Open this photo"
+    onClick={() => openAttachment(item.id).catch(() => setFailed(true))}>
+    <img src={source} alt={item.title || item.filename} />
+  </button>;
 }

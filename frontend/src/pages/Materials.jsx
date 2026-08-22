@@ -102,7 +102,7 @@ function Requests({ reload, can }) {
       <span>{row.lineCount}</span>
       <span>{rupees(row.estimate)}</span>
       <Badge tone={slug(row.status)}>{row.status}</Badge>
-      <span style={{ display: 'flex', gap: '6px' }}>
+      <span className="row-actions">
         <button className="status-button" onClick={async () => setDetail(await api(`/purchasing/requests/${row.id}`))}>Open</button>
         {can.projects && row.status === 'Pending' && <>
           <button className="status-button" onClick={() => decide(row.id, 'Approved')}>Approve</button>

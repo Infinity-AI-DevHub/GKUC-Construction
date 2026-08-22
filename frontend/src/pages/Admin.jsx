@@ -8,19 +8,23 @@ import CompanySettings from '../CompanySettings.jsx';
 import DocumentSettings from '../DocumentSettings.jsx';
 import DocumentDesigner from '../DocumentDesigner.jsx';
 
-const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Audit log', 'My account'];
+export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Audit log', 'My account'];
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
-export default function Admin({ can, user, reload, initialTab = TABS[0] }) {
+export default function Admin({ can, user, reload, initialTab = TABS[0], onTabChange }) {
   const [tab, setTab] = useState(TABS.includes(initialTab) ? initialTab : TABS[0]);
   const [creating, setCreating] = useState(false);
 
   /* Arriving from the alert bell should land on Notifications, not the last tab used. */
   useEffect(() => { if (TABS.includes(initialTab)) setTab(initialTab); }, [initialTab]);
 
+  /* This is the one tab set that lives in the address bar, because alerts elsewhere link
+     straight to the notification centre — so choosing a tab has to update the URL too. */
+  const chooseTab = next => { setTab(next); onTabChange?.(next); };
+
   return <Page title="Administration" subtitle="Manage staff accounts, role-based permissions, alerts and the audit trail."
     action={tab === 'Users' && can.manage ? 'Add user' : null} onAction={() => setCreating(true)}>
-    <Tabs tabs={TABS} active={tab} onChange={setTab} />
+    <Tabs tabs={TABS} active={tab} onChange={chooseTab} />
     {tab === 'Users' && <Users can={can} creating={creating} closeCreate={() => setCreating(false)} />}
     {tab === 'Access control' && <AccessControl user={user} />}
     {tab === 'Company' && <CompanySettings can={can} />}

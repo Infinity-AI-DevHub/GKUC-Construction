@@ -165,6 +165,28 @@ function footer(company, reference, settings) {
  * once at the top of the document and never runs onto a second page — so a position set by
  * dragging stays where it was put. Each piece is marked up for the designer to grab.
  */
+/*
+ * A long document title is shrunk to fit its box rather than allowed to run out of it.
+ *
+ * The title never wraps — a second line drops onto the reference number below it — so a
+ * heading wider than its box overflows sideways instead, and "Contract Commitments" is
+ * half again as wide as "Quotation". Rather than let it slide across the company name, the
+ * type is stepped down until it fits. The width is estimated from the character count:
+ * these are uppercase, letter-spaced and bold, which is regular enough to predict.
+ */
+const TITLE_TRACKING = 3;
+const TITLE_BAND_WIDTH = 680;
+
+function titleSize(element, heading) {
+  const text = String(heading || '');
+  if (!text) return element.size;
+  const available = (element.width / 100) * TITLE_BAND_WIDTH;
+  const widthAt = size => text.length * (size * 0.62 + TITLE_TRACKING);
+  if (widthAt(element.size) <= available) return element.size;
+  const fitted = (available / text.length - TITLE_TRACKING) / 0.62;
+  return Math.max(11, Math.floor(fitted * 10) / 10);
+}
+
 function letterhead(company, heading, reference, date, design = DEFAULT_DESIGN) {
   const header = design.header;
 
@@ -192,9 +214,10 @@ function letterhead(company, heading, reference, date, design = DEFAULT_DESIGN) 
     if (body === undefined || body === '') return '';
     const align = element.align === 'centre' ? 'center' : element.align;
     /* The logo is sized by its element size; text by its font size. */
+    const size = element.id === 'docTitle' ? titleSize(element, heading) : element.size;
     const type = element.id === 'logo'
       ? `height:${element.size}px`
-      : `font-size:${element.size}px;font-weight:${element.weight};line-height:1.35`;
+      : `font-size:${size}px;font-weight:${element.weight};line-height:1.35`;
     return `<div class="piece" data-piece="${escape(element.id)}"
       style="left:${element.x}%;top:${element.y}px;width:${element.width}%;
         color:${element.colour};text-align:${align};${type}">${body}</div>`;
@@ -445,6 +468,75 @@ export function boqDocument({ company, boq, items, variations = [], settings: gi
   };
 
   return page({ design, company, blocks, settings, title: `${boq.reference} — ${boq.title || 'Bill of quantities'}` });
+}
+
+/**
+ * The affidavit of outstanding contract commitments.
+ *
+ * Every public bid has to declare what the bidder already has on its hands: each live
+ * contract by specialty, its initial amount and the value still outstanding, sworn before
+ * a Justice of the Peace. The Sabaragamuwa document is blunt about it — "bidders who do
+ * not provide all contract commitment shall be treated as non-responsive".
+ *
+ * The figures come from the live project register rather than from memory, which is the
+ * whole reason for producing it here: the declaration and the accounts cannot disagree.
+ */
+export function commitmentsDocument({ company, tender, commitments, totals, asAt, settings: given, design: givenDesign }) {
+  const settings = settingsFor(given);
+  const design = normaliseDesign(givenDesign);
+
+  const bySpecialty = new Map();
+  for (const row of commitments) {
+    const key = row.specialty || tender?.specialty || 'Buildings';
+    if (!bySpecialty.has(key)) bySpecialty.set(key, []);
+    bySpecialty.get(key).push(row);
+  }
+
+  const groups = [...bySpecialty.entries()].map(([specialty, rows]) => `
+    <tr class="section"><td colspan="4">${escape(specialty)}</td></tr>
+    ${rows.map(row => `<tr>
+      <td>${escape(row.project)}</td>
+      <td>${escape(row.client || '')}</td>
+      <td class="num">${money(row.initialAmount)}</td>
+      <td class="num">${money(row.outstanding)}</td>
+    </tr>`).join('')}`).join('');
+
+  const blocks = {
+    letterhead: letterhead(company, 'Commitments', tender?.reference || 'Declaration', asAt, design),
+
+    /* The declaration introduces the table, so it travels with the subject line rather than
+       in the "terms" block, which every other document places after the figures. */
+    subject: `<div class="subject" data-block="subject">
+      <p><strong>Subject:</strong> Details of on-going jobs and awarded jobs as at ${escape(longDate(asAt))}
+      ${tender ? `— for ${escape(tender.contractNo || tender.reference)}` : ''}</p>
+      <p>In accordance with Clause 4.4 of the Instructions to Bidders, I / We declare that the outstanding
+      contract commitments of <strong>${escape(tender?.biddingEntity || company.name)}</strong> are as set out
+      below, and I / We further declare that all outstanding contract commitments are listed.</p>
+    </div>`,
+
+    table: `<table data-block="table">
+      <thead><tr>
+        <th>Name of the contract</th><th>Name of the client</th>
+        <th class="num">Initial contract amount (Rs.)</th><th class="num">Outstanding work (Rs.)</th>
+      </tr></thead>
+      <tbody>${groups || '<tr><td colspan="4">No contracts are outstanding at this date.</td></tr>'}</tbody>
+      <tfoot><tr class="grand">
+        <td colspan="2" class="num">Total</td>
+        <td class="num">${money(totals.initialAmount)}</td>
+        <td class="num">${money(totals.outstanding)}</td>
+      </tr></tfoot>
+    </table>`,
+
+    signatures: `<div class="signatures" data-block="signatures">
+      <div>Signature of the Bidder<br><br>Date</div>
+      <div>The foregoing affidavit having been read over and explained to the affirmant,
+        signed before me at<br><br>Justice of the Peace</div>
+    </div>`,
+
+    footer: footer(company, tender?.reference || 'Contract commitments', settings)
+  };
+
+  return page({ design, company, blocks, settings, title: `Contract commitments — ${asAt}` });
 }
 
 /** The company identity and presentation settings a document needs, in one call. */

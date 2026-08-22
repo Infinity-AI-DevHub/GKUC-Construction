@@ -241,7 +241,7 @@ function Enquiries({ can, reload }) {
         <span>{row.location}</span>
         <strong>{rupees(row.expectedValue)}</strong>
         <Badge tone={slug(row.status)}>{row.status}</Badge>
-        <span style={{ display: 'flex', gap: '6px' }}>
+        <span className="row-actions">
           <button className="status-button" onClick={() => setOpen(row)}>
             <MessageSquare size={13} />History
           </button>

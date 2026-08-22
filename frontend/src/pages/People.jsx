@@ -161,7 +161,7 @@ function Payroll({ can }) {
         <span>{row.employees}</span>
         <strong>{rupees(row.total)}</strong>
         <Badge tone={slug(row.status)}>{row.status}</Badge>
-        <span style={{ display: 'flex', gap: '6px' }}>
+        <span className="row-actions">
           <button className="status-button" onClick={async () => setDetail(await api(`/payroll/${row.id}`))}>Open</button>
           {can.hr && row.status === 'Draft' && <button className="status-button" onClick={() => setStatus(row.id, 'Approved')}>Approve</button>}
           {can.hr && row.status === 'Approved' && <button className="status-button" onClick={() => setStatus(row.id, 'Paid')}>Mark paid</button>}
@@ -286,7 +286,7 @@ function Attendance({ data, reload, can }) {
         <span>{row.out || '—'}</span>
         <Badge tone={slug(row.state)}>{row.state}</Badge>
         {can.site
-          ? <span style={{ display: 'flex', gap: '6px' }}>
+          ? <span className="row-actions">
             <button className="icon-btn" onClick={() => toggle(row.id)} title={row.in && !row.out ? 'Check out' : 'Check in'}>
               {row.in && !row.out ? <ArrowDownToLine size={17} /> : <Check size={17} />}
             </button>
@@ -335,7 +335,7 @@ function Leave({ can }) {
       <span>{row.days}</span>
       <Badge tone={slug(row.status)}>{row.status}</Badge>
       {can.hr && row.status === 'Pending'
-        ? <span style={{ display: 'flex', gap: '6px' }}>
+        ? <span className="row-actions">
           <button className="status-button" onClick={() => decide(row.id, 'Approved')}>Approve</button>
           <button className="status-button" onClick={() => decide(row.id, 'Rejected')}>Reject</button>
         </span>

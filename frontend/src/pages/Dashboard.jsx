@@ -1,13 +1,13 @@
 import React from 'react';
 import { AlertTriangle, Boxes, CheckCircle2, ChevronRight, FileText, Truck } from 'lucide-react';
 import { Avatar, Badge, PanelTitle } from '../ui.jsx';
-import { daysUntil, money } from '../api.js';
+import { daysUntil, money, slug } from '../api.js';
 
 /**
  * PID 2.1 — the state of the business at a glance, so managers stop chasing
  * status updates across departments.
  */
-export default function Dashboard({ data, go, user, can }) {
+export default function Dashboard({ data, go, user, can, onViewAlerts }) {
   const openTasks = data.tasks.filter(task => task.status !== 'Completed' && task.status !== 'Approved');
   const present = data.attendance.filter(row => row.state === 'On site' || row.state === 'Late').length;
   const lowStock = data.materials.filter(material => material.state !== 'Available').length;
@@ -20,7 +20,15 @@ export default function Dashboard({ data, go, user, can }) {
   const board = data.dashboard;
   /* The chart shows real workforce attendance for the last seven days. */
   const peak = Math.max(1, ...board.weekly.map(day => day.workforce));
-  const alerts = data.notifications.filter(item => item.status !== 'Read').slice(0, 3);
+  /*
+   * The worst news first, and only as much as the card can show without hiding anything
+   * silently — what does not fit is counted underneath rather than left below the fold.
+   */
+  const SEVERITY_ORDER = { Critical: 0, Warning: 1, Info: 2 };
+  const unread = [...data.notifications.filter(item => item.status !== 'Read')]
+    .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3));
+  const alerts = unread.slice(0, 2);
+  const moreAlerts = unread.length - alerts.length;
 
   return <div className="reference-dashboard">
     <div className="reference-welcome">
@@ -114,20 +122,30 @@ export default function Dashboard({ data, go, user, can }) {
           <h2>Needs attention</h2>
           <span>{new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}</span>
         </div>
-        <div className="timeline-grid">
-          <div className="time-labels">{alerts.map(alert => <span key={alert.id}>{alert.severity}</span>)}</div>
-          <div className="timeline-events">
-            {alerts.map((alert, index) => (
-              <i className={`event ${['concrete', 'inspection', 'delivery'][index]}`} key={alert.id}
-                style={{ top: `${8 + index * 52}px`, left: '4%', width: '92%' }}>
-                <b>{alert.title}</b><small>{alert.message}</small>
-              </i>
-            ))}
-            {!alerts.length && <i className="event concrete" style={{ top: '8px', left: '4%', width: '92%' }}>
-              <b>Nothing needs attention</b><small>No open alerts across projects, stores or fleet</small>
-            </i>}
-          </div>
+        {/*
+          * Alerts are laid out in normal flow rather than positioned by index.
+          *
+          * They used to be absolutely placed 52px apart inside a fixed-height box, which
+          * only held while every message fitted one line — a tender alert naming a road and
+          * a date wraps to three, and the text simply ran out of its own highlight. The
+          * colour came from the position in the list too, so the third alert was painted
+          * the same pale blue whether it was routine or critical.
+          */}
+        <div className="alert-list">
+          {alerts.map(alert => (
+            <div className={`alert-line ${slug(alert.severity)}`} key={alert.id}>
+              <b><span className="alert-severity">{alert.severity}</span>{alert.title}</b>
+              <small>{alert.message}</small>
+            </div>
+          ))}
+          {!alerts.length && <div className="alert-line info">
+            <b><span className="alert-severity">Clear</span>Nothing needs attention</b>
+            <small>No open alerts across projects, stores or fleet</small>
+          </div>}
         </div>
+        {moreAlerts > 0 && <button type="button" className="alert-more" onClick={onViewAlerts}>
+          {moreAlerts} more alert{moreAlerts === 1 ? '' : 's'} — open the notification centre
+        </button>}
       </section>
     </div>
   </div>;

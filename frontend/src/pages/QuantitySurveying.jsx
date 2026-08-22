@@ -12,7 +12,7 @@ export default function QuantitySurveying({ data, reload, can }) {
 
   const actions = {
     Quotations: can.quotation && 'Create quotation',
-    Tenders: can.tender && 'File a tender',
+    Tenders: can.tender && 'Track a tender',
     Retention: can.retention && 'Record retention',
     Subcontractors: can.subcontractors && 'Add subcontractor'
   };
@@ -54,7 +54,7 @@ function Quotations({ can, reload }) {
         <span>{row.client}</span>
         <strong>{rupees(row.total)}</strong>
         <Badge tone={slug(row.status)}>{row.status}</Badge>
-        <span style={{ display: 'flex', gap: '6px' }}>
+        <span className="row-actions">
           <button className="status-button" onClick={async () => setDetail(await api(`/qs/quotations/${row.id}`))}>Open</button>
           <button className="status-button" title="Open the client-ready document"
             onClick={() => openDocument(`/qs/quotations/${row.id}/document`).catch(failure => setError(failure.message))}>
@@ -133,33 +133,299 @@ function QuotationDetail({ quotation, close }) {
   </Modal>;
 }
 
-const TENDER_TEMPLATE = 'minmax(120px,.8fr) minmax(200px,1.6fr) minmax(140px,1fr) 120px 130px 130px';
-const TENDER_STATUSES = ['Identified', 'Preparing', 'Submitted', 'Won', 'Lost', 'Withdrawn'];
+/* Modest flex weights: the row sizes to its content so that it keeps its backgrounds when
+   it scrolls, and a heavy fr on the title track inflates the whole table past the panel. */
+const TENDER_TEMPLATE = 'minmax(140px,.85fr) minmax(210px,1.2fr) minmax(120px,.8fr) 140px 125px 118px';
+const TENDER_STATUSES = ['Identified', 'Document purchased', 'Preparing', 'Submitted', 'Opened', 'Won', 'Lost', 'Withdrawn', 'Cancelled'];
+const OPEN_STATUSES = ['Identified', 'Document purchased', 'Preparing'];
+
+const daysUntil = value => (value ? Math.ceil((new Date(value) - new Date(new Date().toDateString())) / 86400000) : null);
+
+/** "in 6 days", "today", "closed 2 days ago" — the phrasing a person would use. */
+function Countdown({ date, time, live }) {
+  const left = daysUntil(date);
+  if (left === null) return <span>—</span>;
+  const at = time ? String(time).slice(0, 5) : '';
+  const urgent = live && left <= 3;
+  const wording = left < 0 ? `closed ${Math.abs(left)} day${Math.abs(left) === 1 ? '' : 's'} ago`
+    : left === 0 ? `today${at ? ` at ${at}` : ''}`
+      : `in ${left} day${left === 1 ? '' : 's'}${at ? ` at ${at}` : ''}`;
+  return <div>
+    <strong className={urgent || left < 0 ? 'overdue' : undefined}>{shortDate(date)}</strong>
+    <small className={urgent || left < 0 ? 'overdue' : undefined}>{wording}</small>
+  </div>;
+}
 
 function Tenders({ can }) {
   const [rows, setRows] = useState([]);
+  const [detailId, setDetailId] = useState(null);
   const load = () => api('/qs/tenders').then(setRows).catch(() => setRows([]));
   useLiveList(load);
-  const setStatus = async (id, status) => { await patch(`/qs/tenders/${id}`, { status }); await load(); };
-  const days = value => Math.ceil((new Date(value) - new Date()) / 86400000);
 
-  return <Table columns={['Reference', 'Tender', 'Client', 'Closes', 'Value', 'Status']} template={TENDER_TEMPLATE}
-    title="Our tender submissions" empty="No tenders filed.">
-    {rows.map(row => <Row template={TENDER_TEMPLATE} key={row.id}>
-      <strong>{row.reference}</strong>
-      <div><strong>{row.title}</strong><small>{row.source || '—'}</small></div>
-      <span>{row.client}</span>
-      <span className={days(row.closingDate) < 3 && !['Submitted', 'Won', 'Lost'].includes(row.status) ? 'overdue' : ''}>
-        {shortDate(row.closingDate)}
-      </span>
-      <span>{rupees(row.bidValue || row.estimatedValue)}</span>
-      {can.tender
-        ? <select className="status-button" value={row.status} onChange={event => setStatus(row.id, event.target.value)}>
+  const live = rows.filter(row => OPEN_STATUSES.includes(row.status));
+  const awaiting = rows.filter(row => ['Submitted', 'Opened'].includes(row.status));
+  const won = rows.filter(row => row.status === 'Won');
+
+  return <>
+    <div className="attendance-summary">
+      <Summary label="Being prepared" value={live.length} icon={FileText} />
+      <Summary label="Awaiting the outcome" value={awaiting.length} icon={FileText} />
+      <Summary label="Won" value={won.length} icon={FileText} />
+      <Summary label="Closing within a week"
+        value={live.filter(row => { const d = daysUntil(row.closingDate); return d !== null && d <= 7; }).length}
+        icon={FileText} />
+    </div>
+
+    <div className="toolbar" style={{ marginBottom: '14px' }}>
+      <button className="secondary" onClick={() => openDocument('/qs/tenders/blank/commitments/document')}>
+        <FileText size={15} />Contract commitments declaration
+      </button>
+    </div>
+
+    <Table columns={['Reference', 'Tender', 'Employer', 'Closes', 'Our bid', 'Papers']} template={TENDER_TEMPLATE}
+      title="Tenders" empty="No tenders being tracked.">
+      {rows.map(row => <Row template={TENDER_TEMPLATE} key={row.id} onClick={() => setDetailId(row.id)}>
+        <div>
+          <strong>{row.reference}</strong>
+          <small>{row.contractNo || row.procurementMethod}</small>
+        </div>
+        <div>
+          <strong>{row.title}</strong>
+          <small>{[row.specialty, row.cidaGrade && `Grade ${row.cidaGrade}`, row.biddingEntity]
+            .filter(Boolean).join(' · ')}</small>
+        </div>
+        <span>{row.client}</span>
+        <Countdown date={row.closingDate} time={row.closingTime} live={OPEN_STATUSES.includes(row.status)} />
+        <div>
+          {/* Once it is decided, the figure that matters is what it was awarded at. */}
+          <strong>{rupees(row.awardValue || row.bidValue || row.estimatedValue)}</strong>
+          <small>{row.awardValue > 0 ? 'awarded' : row.bidValue > 0 ? 'bid' : 'estimate'}</small>
+        </div>
+        <div>
+          <Badge tone={slug(row.status)}>{row.status}</Badge>
+          {row.checklistTotal > 0 && <small className={row.checklistOutstanding > 0 ? 'overdue' : undefined}>
+            {row.checklistDone}/{row.checklistTotal} documents
+          </small>}
+        </div>
+      </Row>)}
+    </Table>
+
+    {detailId && <TenderDetail tenderId={detailId} can={can} close={() => setDetailId(null)} reload={load} />}
+  </>;
+}
+
+const DETAIL_TABS = ['Bid', 'Documents required', 'Outcome'];
+
+/** Everything one bid turns on, in the order the QS works through it. */
+function TenderDetail({ tenderId, can, close, reload }) {
+  const [tab, setTab] = useState(DETAIL_TABS[0]);
+  const [tender, setTender] = useState(null);
+  const [error, setError] = useState('');
+
+  const load = () => api(`/qs/tenders/${tenderId}`).then(setTender).catch(failure => setError(failure.message));
+  useEffect(() => { load(); }, [tenderId]);
+
+  if (!tender) return <Modal title="Loading tender…" close={close}><div className="report-form" /></Modal>;
+
+  /* Clearing the error here matters: the usual reason for one is a document that was
+     missing, and it is confusing to still be told so after it has been ticked off. */
+  const refresh = async () => { setError(''); await load(); await reload(); };
+
+  const setStatus = async status => {
+    setError('');
+    try { await patch(`/qs/tenders/${tender.id}`, { status }); await refresh(); }
+    catch (failure) { setError(failure.message); }
+  };
+
+  const validityEnds = tender.closingDate
+    ? new Date(new Date(tender.closingDate).getTime() + tender.validityDays * 86400000).toISOString().slice(0, 10)
+    : null;
+
+  return <Modal title={`${tender.reference} — ${tender.title}`} close={close}>
+    <div className="report-form">
+      <div className="wide"><Tabs tabs={DETAIL_TABS} active={tab} onChange={setTab} /></div>
+      {error && <p className="wide form-error">{error}</p>}
+
+      {tab === 'Bid' && <>
+        <Detail label="Employer" value={tender.client} />
+        <Detail label="Contract number" value={tender.contractNo} />
+        <Detail label="Bidding as" value={tender.biddingEntity} />
+        <Detail label="Procurement" value={tender.procurementMethod} />
+        <Detail label="Specialty" value={tender.specialty} />
+        <Detail label="CIDA grade required" value={tender.cidaGrade} />
+        <Detail label="Employer's office" value={tender.employerOffice} wide />
+        <Detail label="Contact" value={tender.employerContact} wide />
+
+        <div className="wide"><h3 className="detail-heading">The clocks</h3></div>
+        <Detail label="Documents on sale"
+          value={tender.docsFrom ? `${shortDate(tender.docsFrom)} — ${shortDate(tender.docsUntil)}` : null}
+          note={tender.documentFee > 0 ? `Fee ${rupees(tender.documentFee)}` : null} />
+        <Detail label="Document bought"
+          value={tender.purchasedDate ? shortDate(tender.purchasedDate) : 'Not yet'}
+          note={tender.receiptNo ? `Receipt ${tender.receiptNo}` : null} />
+        <Detail label="Bids close"
+          value={`${shortDate(tender.closingDate)}${tender.closingTime ? ` at ${String(tender.closingTime).slice(0, 5)}` : ''}`} />
+        <Detail label="Our offer stands until" value={validityEnds ? shortDate(validityEnds) : null}
+          note={`${tender.validityDays} days from closing`} />
+
+        <div className="wide"><h3 className="detail-heading">Bid security</h3></div>
+        <Detail label="Amount" value={tender.securityAmount > 0 ? rupees(tender.securityAmount) : 'Not required'} />
+        <Detail label="Form" value={tender.securityForm} />
+        <Detail label="In favour of" value={tender.securityInFavourOf} />
+        <Detail label="Valid until" value={tender.securityValidUntil ? shortDate(tender.securityValidUntil) : null}
+          note={tender.securityReleasedOn ? `Released ${shortDate(tender.securityReleasedOn)}` : null} />
+
+        <div className="wide"><h3 className="detail-heading">Money</h3></div>
+        <Detail label="Employer's ceiling" value={tender.maxContractValue > 0 ? rupees(tender.maxContractValue) : null} />
+        <Detail label="Our estimate" value={rupees(tender.estimatedValue)} />
+        <Detail label="Our bid (excluding VAT)" value={tender.bidValue > 0 ? rupees(tender.bidValue) : 'Not priced yet'} />
+        <Detail label="VAT" value={tender.vatAmount > 0 ? rupees(tender.vatAmount) : '—'} />
+        {tender.documentsNote && <Detail label="Notes" value={tender.documentsNote} wide />}
+      </>}
+
+      {tab === 'Documents required' && <div className="wide">
+        <Checklist tender={tender} can={can} refresh={refresh} />
+      </div>}
+
+      {tab === 'Outcome' && <div className="wide">
+        <Outcome tender={tender} can={can} refresh={refresh} onDone={close} />
+      </div>}
+
+      <div className="form-actions">
+        {can.tender && <select className="status-button" value={tender.status}
+          onChange={event => setStatus(event.target.value)}>
           {TENDER_STATUSES.map(status => <option key={status}>{status}</option>)}
-        </select>
-        : <Badge tone={slug(row.status)}>{row.status}</Badge>}
-    </Row>)}
-  </Table>;
+        </select>}
+        <button type="button" className="secondary"
+          onClick={() => openDocument(`/qs/tenders/${tender.id}/commitments/document`)}>
+          <FileText size={15} />Commitments declaration
+        </button>
+        <button type="button" className="secondary" onClick={close}>Close</button>
+      </div>
+    </div>
+  </Modal>;
+}
+
+function Detail({ label, value, note, wide }) {
+  return <label className={wide ? 'wide' : undefined}>
+    {label}
+    <div className="detail-value">
+      <strong>{value || '—'}</strong>
+      {note && <small>{note}</small>}
+    </div>
+  </label>;
+}
+
+/**
+ * The envelope contents, item by item.
+ *
+ * A bid short of its PCA-03 certificate cannot be awarded however good the price, and a
+ * missing commitments affidavit makes the bid non-responsive outright — so the system
+ * refuses to mark a tender submitted while anything mandatory is still outstanding.
+ */
+function Checklist({ tender, can, refresh }) {
+  const [adding, setAdding] = useState('');
+  const outstanding = tender.checklist.filter(row => !row.done && row.mandatory).length;
+
+  const toggle = async row => { await patch(`/qs/tenders/checklist/${row.id}`, { done: !row.done }); await refresh(); };
+  /* Standing a requirement down is the honest way past something this employer does not
+     ask for; ticking it would claim a certificate is in the envelope when it is not. */
+  const setRequired = async (row, mandatory) => {
+    await patch(`/qs/tenders/checklist/${row.id}`, { mandatory });
+    await refresh();
+  };
+  const add = async event => {
+    event.preventDefault();
+    if (!adding.trim()) return;
+    await post(`/qs/tenders/${tender.id}/checklist`, { item: adding.trim() });
+    setAdding('');
+    await refresh();
+  };
+
+  return <>
+    <p className={outstanding ? 'form-error' : 'form-success'}>
+      {outstanding
+        ? `${outstanding} required document(s) still outstanding. The bid cannot be marked submitted until they are in.`
+        : 'Every required document is accounted for. The bid can be submitted.'}
+    </p>
+    <div className="tender-checklist">
+      {tender.checklist.map(row => <label key={row.id} className={row.done ? 'done' : undefined}>
+        <input type="checkbox" checked={Boolean(row.done)} disabled={!can.tender} onChange={() => toggle(row)} />
+        <span>
+          {row.item}
+          {!row.mandatory && <em> — not required by this employer</em>}
+          {/* MySQL hands booleans back as 0 and 1, and React renders a leading 0 quite
+              happily — so the guard is made an explicit boolean. */}
+          {Boolean(row.done) && row.doneBy ? <small>Confirmed by {row.doneBy}</small> : null}
+        </span>
+        {can.tender && <button type="button" className="link-button"
+          title={row.mandatory ? 'This employer does not ask for it' : 'Require it again'}
+          onClick={event => { event.preventDefault(); setRequired(row, !row.mandatory); }}>
+          {row.mandatory ? 'Not required' : 'Require'}
+        </button>}
+      </label>)}
+    </div>
+    {can.tender && <form className="checklist-add" onSubmit={add}>
+      <input value={adding} onChange={event => setAdding(event.target.value)}
+        placeholder="Anything else this employer asks for" />
+      <button className="secondary" type="submit">Add</button>
+    </form>}
+  </>;
+}
+
+/** Recording what the opening produced, and turning a win into a live project. */
+function Outcome({ tender, can, refresh, onDone }) {
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  if (tender.projectId) {
+    return <p className="form-success">
+      Awarded and registered as the project “{tender.project}”.
+      {tender.awardValue > 0 && ` Award value ${rupees(tender.awardValue)}.`}
+    </p>;
+  }
+  if (!can.tender) return <p>Only the QS team can record a tender outcome.</p>;
+
+  const submit = async event => {
+    event.preventDefault();
+    setBusy(true); setError('');
+    const form = new FormData(event.currentTarget);
+    try {
+      await post(`/qs/tenders/${tender.id}/outcome`, {
+        status: form.get('status'),
+        awardValue: Number(form.get('awardValue') || 0),
+        awardedTo: form.get('awardedTo') || undefined,
+        ourRank: form.get('ourRank') ? Number(form.get('ourRank')) : undefined,
+        biddersCount: form.get('biddersCount') ? Number(form.get('biddersCount')) : undefined,
+        openedDate: form.get('openedDate') || undefined,
+        outcomeNote: form.get('outcomeNote') || undefined,
+        registerProject: form.get('registerProject') === 'on',
+        manager: form.get('manager') || undefined
+      });
+      await refresh();
+      onDone();
+    } catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  };
+
+  return <form className="report-form" style={{ padding: 0 }} onSubmit={submit}>
+    <SelectField name="status" label="What happened" options={['Won', 'Lost', 'Withdrawn', 'Cancelled']} />
+    <Field name="openedDate" label="Opened on" type="date" defaultValue={todayInput()} required={false} />
+    <Field name="awardValue" label="Award value (LKR)" type="number" min="0" defaultValue="0" required={false} />
+    <Field name="awardedTo" label="Awarded to" required={false} placeholder="Leave blank if it was us" />
+    <Field name="ourRank" label="Our position" type="number" min="1" required={false} placeholder="1 = lowest bid" />
+    <Field name="biddersCount" label="Bidders" type="number" min="1" required={false} />
+    <Field name="manager" label="Project manager, if we won" required={false} />
+    <label className="checkbox-line">
+      <input type="checkbox" name="registerProject" defaultChecked />
+      Register this as a live project if we won
+    </label>
+    <TextArea name="outcomeNote" label="Notes" required={false} placeholder="Why it went the way it did" />
+    {error && <p className="wide form-error">{error}</p>}
+    <div className="form-actions">
+      <button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Record outcome'}</button>
+    </div>
+  </form>;
 }
 
 const RETENTION_TEMPLATE = 'minmax(180px,1.4fr) minmax(140px,1fr) 130px 130px 130px 120px';
@@ -302,23 +568,66 @@ function QuotationWording({ quotation, close, reload }) {
 }
 
 function TenderForm({ close, reload }) {
-  return <FormModal title="File a tender" close={close} label="File tender" onSubmit={async values => {
+  return <FormModal title="Track a tender" close={close} label="Track tender" wide onSubmit={async values => {
     await post('/qs/tenders', {
+      contractNo: values.contractNo || undefined,
       title: values.title,
       client: values.client,
       source: values.source || undefined,
+      biddingEntity: values.biddingEntity || undefined,
+      procurementMethod: values.procurementMethod,
+      specialty: values.specialty,
+      cidaGrade: values.cidaGrade || undefined,
+      employerOffice: values.employerOffice || undefined,
+      employerContact: values.employerContact || undefined,
+      maxContractValue: Number(values.maxContractValue || 0),
+      documentFee: Number(values.documentFee || 0),
+      docsFrom: values.docsFrom || undefined,
+      docsUntil: values.docsUntil || undefined,
       closingDate: values.closingDate,
+      closingTime: values.closingTime || '10:00',
+      validityDays: Number(values.validityDays || 91),
+      securityAmount: Number(values.securityAmount || 0),
+      securityForm: values.securityForm,
+      securityInFavourOf: values.securityInFavourOf || undefined,
+      securityValidUntil: values.securityValidUntil || undefined,
       estimatedValue: Number(values.estimatedValue || 0),
       documentsNote: values.documentsNote || undefined
     });
     await reload();
   }}>
-    <Field name="title" label="Tender title" wide />
-    <Field name="client" label="Client / authority" />
-    <Field name="source" label="Where it was found" required={false} placeholder="Daily News, direct invitation" />
-    <Field name="closingDate" label="Closing date" type="date" defaultValue={todayInput()} />
-    <Field name="estimatedValue" label="Estimated value (LKR)" type="number" min="0" defaultValue="0" required={false} />
-    <TextArea name="documentsNote" label="Documents required" required={false} placeholder="Optional" />
+    <Field name="title" label="Works as named in the bidding document" wide />
+    <Field name="client" label="Employer" placeholder="Department of Buildings" />
+    <Field name="contractNo" label="Employer's contract number" required={false} placeholder="04-03-10-CT008/2026" />
+    <SelectField name="biddingEntity" label="We bid as"
+      options={['G.K.U.C. Construction (Pvt) Ltd', 'G.K.U.C. Ready Mix (Pvt) Ltd']} />
+    <SelectField name="procurementMethod" label="Procurement method"
+      options={['National Competitive Bidding', 'International Competitive Bidding', 'Shopping', 'Direct']} />
+    <SelectField name="specialty" label="Specialty"
+      options={['Highways', 'Bridges', 'Buildings', 'Irrigation', 'Water Supply', 'Other']} />
+    <Field name="cidaGrade" label="CIDA grade required" required={false} placeholder="C6, C5 or C4" />
+    <Field name="employerOffice" label="Issuing office" wide required={false}
+      placeholder="Chief Engineer's Office (Western South), Colombo 07" />
+    <Field name="employerContact" label="Contact" wide required={false} placeholder="Telephone / engineer" />
+
+    <Field name="docsFrom" label="Documents on sale from" type="date" required={false} />
+    <Field name="docsUntil" label="…until" type="date" required={false} />
+    <Field name="documentFee" label="Document fee (LKR)" type="number" min="0" defaultValue="0" required={false} />
+    <Field name="closingDate" label="Bids close on" type="date" defaultValue={todayInput()} />
+    <Field name="closingTime" label="…at" type="time" defaultValue="10:00" required={false} />
+    <Field name="validityDays" label="Bid valid for (days)" type="number" min="1" defaultValue="91" required={false} />
+
+    <Field name="securityAmount" label="Bid security (LKR)" type="number" min="0" defaultValue="0" required={false} />
+    <SelectField name="securityForm" label="Security form"
+      options={['Bank guarantee', 'Insurance bond', 'Cash deposit', 'Not required']} />
+    <Field name="securityInFavourOf" label="Security in favour of" required={false}
+      placeholder="Director General of Buildings" />
+    <Field name="securityValidUntil" label="Security valid until" type="date" required={false} />
+
+    <Field name="maxContractValue" label="Employer's ceiling (LKR)" type="number" min="0" defaultValue="0" required={false} />
+    <Field name="estimatedValue" label="Our estimate (LKR)" type="number" min="0" defaultValue="0" required={false} />
+    <Field name="source" label="Where it was advertised" required={false} placeholder="Daily News, e-procurement, invitation" />
+    <TextArea name="documentsNote" label="Notes" required={false} placeholder="Optional" />
   </FormModal>;
 }
 

@@ -19,6 +19,10 @@ export const PERMISSIONS = [
   /* Construction & Coordination */
   { key: 'projects.view', department: 'Construction & Coordination', label: 'View projects and sites' },
   { key: 'projects.manage', department: 'Construction & Coordination', label: 'Create and edit projects' },
+  /* Separate from projects.manage on purpose: the site record is evidence of how a plot
+     looked before work started and at every stage after, so who may add to it and who may
+     withdraw a photo from it is the MD's decision, not a side effect of managing projects. */
+  { key: 'gallery.manage', department: 'Construction & Coordination', label: 'Manage the project photo gallery' },
   { key: 'projects.schedule', department: 'Construction & Coordination', label: 'Reschedule a site (Site A / Site B)' },
   { key: 'resources.view', department: 'Construction & Coordination', label: 'See resource availability' },
   { key: 'resources.reassign', department: 'Construction & Coordination', label: 'Reassign people, vehicles and tools between sites' },
@@ -96,7 +100,7 @@ export const DEFAULT_ROLES = [
     permissions: () => [
       'projects.view', 'projects.manage', 'projects.schedule', 'resources.view', 'resources.reassign',
       'enquiries.manage', 'subcontractors.manage', 'site.reports', 'site.tasks', 'site.attendance',
-      'qs.view', 'finance.view', 'hr.view', 'transport.view', 'store.view'
+      'gallery.manage', 'qs.view', 'finance.view', 'hr.view', 'transport.view', 'store.view'
     ]
   },
   {
@@ -130,7 +134,7 @@ export const DEFAULT_ROLES = [
   {
     name: 'Site Supervisor',
     description: 'Records daily site activity, attendance context, tasks and issues.',
-    permissions: () => ['projects.view', 'site.reports', 'site.tasks', 'site.attendance', 'store.view', 'resources.view']
+    permissions: () => ['projects.view', 'site.reports', 'site.tasks', 'site.attendance', 'gallery.manage', 'store.view', 'resources.view']
   },
   {
     name: 'Store Keeper',
