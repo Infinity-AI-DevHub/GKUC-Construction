@@ -33,7 +33,7 @@
   .priority-item>span { width: 34px; height: 34px; font-size:14px; }
   .priority-item strong { font-size:15px; }.priority-item small { font-size:12px; }
   .quick-control button { height: 68px; grid-template-columns: 30px 1fr 28px 18px; }.quick-control button span,.quick-control button b { font-size:15px; }
-  .activity-timeline { padding: 20px 24px; }.timeline-grid { height: 218px; }.event { height: 55px; padding: 10px 14px; }.event b { font-size:14px; }.event small { font-size:12px; }
+  .activity-timeline { padding: 20px 24px; }
 }
 
 /* 2. Desktop: 1600px - 1919px */
@@ -49,7 +49,7 @@
   .attendance-ring { width: 145px; height: 145px; }.attendance-ring strong { font-size:33px; }
   .priority-board { padding: 19px 17px; }.priority-item { height: 62px; }.priority-item strong { font-size:14px; }.priority-item small { font-size:12px; }
   .quick-control button { height: 60px; }.quick-control button span { font-size:14px; }
-  .timeline-grid { height: 192px; }
+  
 }
 
 /* 3. Large laptop: 1440px - 1599px */
@@ -62,7 +62,7 @@
   .progress-number>strong { font-size:32px; }.bar-chart { height: 132px; }
   .attendance-ring { width: 132px; height: 132px; }
   .priority-item { height: 57px; }.priority-item strong { font-size:13px; }
-  .quick-control button { height: 54px; }.timeline-grid { height: 174px; }
+  .quick-control button { height: 54px; }
 }
 
 /* 4. Standard laptop: 1280px - 1439px */
@@ -74,7 +74,7 @@
   .progress-number>strong { font-size:31px; }.bar-chart { height: 122px; }
   .attendance-ring { width: 124px; height: 124px; }
   .priority-item { height: 54px; }.priority-item strong { font-size:13px; }.priority-item small { font-size:12px; }
-  .timeline-grid { height: 162px; }
+  
 }
 
 /* 5. Small laptop / landscape tablet: 1024px - 1279px */
@@ -84,7 +84,7 @@
   .reference-grid { grid-template-columns: 1fr 1.25fr 1fr; grid-template-rows: 230px 230px 230px; gap: 12px; }
   .site-spotlight { grid-column:1;grid-row:1; }.progress-card{grid-column:2;grid-row:1}.attendance-card{grid-column:3;grid-row:1}.quick-control{grid-column:1;grid-row:2}.priority-board{grid-column:2/4;grid-row:2}.activity-timeline{grid-column:1/4;grid-row:3}
   .priority-board{display:grid;grid-template-columns:220px 1fr 1fr;column-gap:10px}.priority-title{grid-row:1/4}.priority-item{height:61px}.priority-item:nth-of-type(4),.priority-item:nth-of-type(5),.priority-item:nth-of-type(6){grid-column:3}
-  .timeline-grid{height:165px}
+  
 }
 
 /* 6. Tablet: 761px - 1023px (below 761px is handled in styles.css) */
@@ -92,17 +92,17 @@
   .app > aside { position:fixed;inset:8px auto 8px 8px;top:8px;width:270px;height:calc(100vh - 16px);margin:0;padding:22px 14px;display:flex;flex-direction:column;align-items:stretch;transform:translateX(-105%);transition:transform .2s; }
   .app > aside.open{transform:translateX(0)}.brand>div{display:block}.brand{padding:0 8px 18px;border-bottom:1px solid #d5e2ea}nav{padding-top:16px;display:flex;flex-direction:column;overflow:visible}nav button{height:46px;padding:0 13px;font-size:15px}nav button svg{display:block}.sidebar-bottom{margin-top:auto;margin-left:0;padding:12px 0 0;border-left:0;border-top:1px solid #d5e2ea;flex-direction:column;align-items:stretch}.sidebar-bottom>button{width:100%;border-radius:7px;font-size:14px;justify-content:flex-start;padding:0 12px}.profile{width:100%;min-width:0}.profile>div,.profile>svg{display:block}
   .workspace > header{display:flex;background:rgba(245,250,253,.94);color:#172632}.menu-btn{display:grid;background:white;color:#172632;border-color:#d5e2ea}.mobile-brand{display:block;color:#172632}
-  main{max-width:920px;padding:34px 24px 55px}.reference-welcome h1{font-size:32px}.welcome-counters b{font-size:30px}.reference-grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:250px 250px 360px 250px;gap:12px}.site-spotlight{grid-column:1;grid-row:1}.progress-card{grid-column:2;grid-row:1}.attendance-card{grid-column:1;grid-row:2}.quick-control{grid-column:2;grid-row:2}.priority-board{grid-column:1/3;grid-row:3}.activity-timeline{grid-column:1/3;grid-row:4}.priority-item{height:58px}.timeline-grid{height:180px}
+  main{max-width:920px;padding:34px 24px 55px}.reference-welcome h1{font-size:32px}.welcome-counters b{font-size:30px}.reference-grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:250px 250px 360px 250px;gap:12px}.site-spotlight{grid-column:1;grid-row:1}.progress-card{grid-column:2;grid-row:1}.attendance-card{grid-column:1;grid-row:2}.quick-control{grid-column:2;grid-row:2}.priority-board{grid-column:1/3;grid-row:3}.activity-timeline{grid-column:1/3;grid-row:4}.priority-item{height:58px}
 }
 
 /* 7. Large phone: 480px - 767px */
 @media (min-width: 480px) and (max-width: 767px) {
-  main{padding:28px 20px 48px}.reference-welcome h1{font-size:30px}.welcome-counters b{font-size:28px}.welcome-counters span{font-size:12px}.project-pulse>span{width:145px;height:40px}.reference-grid{display:flex;flex-direction:column;gap:12px}.site-spotlight,.reference-card{min-height:250px}.priority-board{min-height:390px}.activity-timeline{min-height:260px}.reference-card .panel-title h2,.quick-control h2,.timeline-title h2{font-size:17px}.site-spotlight h2{font-size:28px}.progress-number>strong{font-size:35px}.bar-chart{height:145px}.attendance-ring{width:150px;height:150px}.quick-control button{height:62px}.priority-item{height:64px}.timeline-grid{height:190px}
+  main{padding:28px 20px 48px}.reference-welcome h1{font-size:30px}.welcome-counters b{font-size:28px}.welcome-counters span{font-size:12px}.project-pulse>span{width:145px;height:40px}.reference-grid{display:flex;flex-direction:column;gap:12px}.site-spotlight,.reference-card{min-height:250px}.priority-board{min-height:390px}.activity-timeline{min-height:260px}.reference-card .panel-title h2,.quick-control h2,.timeline-title h2{font-size:17px}.site-spotlight h2{font-size:28px}.progress-number>strong{font-size:35px}.bar-chart{height:145px}.attendance-ring{width:150px;height:150px}.quick-control button{height:62px}.priority-item{height:64px}
 }
 
 /* 8. Compact phone: below 480px */
 @media (max-width: 479px) {
-  main{padding:24px 14px 42px}.reference-welcome h1{font-size:27px}.reference-welcome p{font-size:12px}.welcome-counters{gap:12px}.welcome-counters b{font-size:25px}.welcome-counters span{font-size:12px}.project-pulse>span{width:132px;height:38px}.reference-grid{display:flex;flex-direction:column;gap:10px}.site-spotlight,.reference-card{min-height:235px}.site-spotlight h2{font-size:26px}.progress-number>strong{font-size:33px}.bar-chart{height:132px}.attendance-ring{width:142px;height:142px}.quick-control button{height:58px}.priority-board{min-height:385px}.priority-item{height:62px}.priority-item strong{font-size:13px}.priority-item small{font-size:12px}.activity-timeline{min-height:250px;padding-inline:12px}.timeline-grid{height:182px}.event{padding:7px}.event b{font-size:11px}.event small{font-size:11px}
+  main{padding:24px 14px 42px}.reference-welcome h1{font-size:27px}.reference-welcome p{font-size:12px}.welcome-counters{gap:12px}.welcome-counters b{font-size:25px}.welcome-counters span{font-size:12px}.project-pulse>span{width:132px;height:38px}.reference-grid{display:flex;flex-direction:column;gap:10px}.site-spotlight,.reference-card{min-height:235px}.site-spotlight h2{font-size:26px}.progress-number>strong{font-size:33px}.bar-chart{height:132px}.attendance-ring{width:142px;height:142px}.quick-control button{height:58px}.priority-board{min-height:385px}.priority-item{height:62px}.priority-item strong{font-size:13px}.priority-item small{font-size:12px}.activity-timeline{min-height:250px;padding-inline:12px}
   .page-heading h1{font-size:25px}.page-heading p{font-size:15px}.table-row{font-size:14px}.modal{width:calc(100% - 20px)}
 }
 
@@ -245,10 +245,40 @@ main { width:100% }
  */
 .table-head,.table-row { width:100%;min-width:max-content }
 .table-row > * { min-width:0 }
+
+/*
+ * One grid for the whole table, so a column is one column.
+ *
+ * Where subgrid is available the rows inherit the parent's tracks instead of resolving the
+ * same template separately against their own contents, which is what made long rows widen
+ * their own columns and step out of line with the heading. Without subgrid each row keeps
+ * its inline template and behaves as it did before.
+ */
+/* No min-width here: a row spans every column of this grid, so when the fixed minimums
+   add up to more than the panel the row grows with them and its background still runs the
+   whole scrolled width — which is the only reason the old rows needed max-content. */
+.table-grid { width: 100% }
+@supports (grid-template-columns: subgrid) {
+  .table-grid { display: grid }
+  .table-grid > .table-head,
+  .table-grid > .table-row {
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid !important;
+    min-width: 0;
+  }
+  .table-grid > .table-empty { display: block }
+}
+.table-empty { padding: 22px 17px; color: var(--muted) }
+
+/* Row actions read as words, not as "Acce pt" stacked in a column too narrow for them. */
+.table-row .status-button,
+.table-row .secondary,
+.table-row .primary { white-space: nowrap }
 /* Free text is capped so that "as wide as the content" stays a sane number: without it a
    single long sentence sets the width of the whole table. Columns sized in pixels by their
    own template are untouched. */
 .table-row > span,
+.table-row > strong,
 .table-row > div:not(.person) { max-width:240px }
 .table-row strong,.table-row small,.table-row span { overflow-wrap:anywhere }
 .person span { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
@@ -848,3 +878,178 @@ nav.measuring .nav-overflowed { display: flex; visibility: hidden; position: abs
 /* Pieces of the letterhead are grabbed on the page itself; these are the panel's own
    controls for the same thing, for when a value needs to be exact. */
 .designer-properties .designer-clear + .design-field { margin-top: 12px; }
+
+/* ---------------------------------------------------------------- Tenders */
+
+/* A bid carries far more than a name and a date, so its form is given two full columns. */
+.modal-wide { width: min(880px, 100%); }
+
+.detail-heading {
+  margin: 6px 0 0; font: 700 15px Manrope; color: #243b4a;
+  border-top: 1px solid var(--line); padding-top: 14px;
+}
+.detail-value { margin-top: 6px; }
+.detail-value strong { display: block; font-size: 14px; font-weight: 600; color: #1b2520; overflow-wrap: anywhere }
+.detail-value small { display: block; font-size: 12px; color: var(--muted); margin-top: 2px }
+
+.tender-checklist { display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden }
+.tender-checklist label {
+  display: grid; grid-template-columns: 18px 1fr; gap: 10px; align-items: start;
+  padding: 12px 14px; background: white; font-size: 14px; font-weight: 500; color: #26332c;
+}
+.tender-checklist label:nth-child(even) { background: #f8fafb }
+.tender-checklist label.done { color: var(--muted) }
+.tender-checklist label.done > span { text-decoration: line-through }
+.tender-checklist input[type="checkbox"] { flex: none; width: 16px; height: 16px; margin-top: 2px }
+.tender-checklist em { font-style: normal; color: var(--muted); font-weight: 500 }
+.tender-checklist small { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; text-decoration: none }
+
+.checklist-add { display: flex; gap: 8px; margin-top: 12px }
+.checklist-add input {
+  flex: 1; border: 1px solid var(--line); border-radius: 5px; padding: 10px; font-size: 14px; background: white;
+}
+.checkbox-line { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 500; color: #3b4a53 }
+.checkbox-line input { flex: none; width: 16px; height: 16px }
+
+@media (max-width: 620px) { .tender-checklist label { grid-template-columns: 18px 1fr } }
+.tender-checklist label { grid-template-columns: 18px 1fr auto; }
+.link-button {
+  border: 0; background: transparent; color: #1d6eb4; font-size: 12px; font-weight: 600;
+  padding: 2px 4px; white-space: nowrap; align-self: start;
+}
+.link-button:hover { text-decoration: underline }
+
+/* --------------------------------------------------- "Needs attention" alerts */
+
+/*
+ * One row per alert, sized by its own content.
+ *
+ * The card sits in a fixed-height dashboard row, so the list scrolls when there is more
+ * than fits rather than letting a long message escape its highlight — which is exactly
+ * what the previous absolutely-positioned version did.
+ */
+.alert-list {
+  margin-top: 8px; display: flex; flex-direction: column; gap: 6px;
+  flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px;
+}
+
+.alert-line {
+  padding: 10px 13px; border-radius: 8px; background: #eef3f7;
+  border-left: 4px solid #8aa0b0; min-width: 0;
+}
+.alert-line b {
+  display: block; font-size: 13.5px; font-weight: 700; color: #16222c;
+  overflow-wrap: anywhere; line-height: 1.35;
+}
+/* One line of message on the dashboard; the notification centre carries the whole thing. */
+.alert-line small {
+  display: block; font-size: 12.5px; line-height: 1.4; color: #445664; margin-top: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* The severity rides with the title rather than in a column of its own, which costs a
+   quarter of the width on a card the dashboard grid keeps deliberately short. */
+.alert-severity {
+  display: inline-block; margin-right: 8px; padding: 1px 7px; border-radius: 10px;
+  font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px;
+  background: rgba(255, 255, 255, .75); color: #445664; vertical-align: 1px;
+}
+
+/* Colour carries the severity, which is the one thing a glance should pick up. */
+.alert-line.critical { background: #fdecea; border-left-color: #c0392b }
+.alert-line.critical .alert-severity { color: #a3271b }
+.alert-line.warning { background: #fdf3e2; border-left-color: #c98a10 }
+.alert-line.warning .alert-severity { color: #8a5c07 }
+.alert-line.info, .alert-line.clear { background: #eaf2fb; border-left-color: #2c74c4 }
+.alert-line.info .alert-severity, .alert-line.clear .alert-severity { color: #1d5697 }
+
+.alert-more {
+  flex: none; margin-top: 8px; border: 0; background: transparent; text-align: left;
+  padding: 5px 2px; font-size: 12.5px; font-weight: 600; color: #1d6eb4;
+}
+.alert-more:hover { text-decoration: underline }
+
+@media (max-width: 700px) {
+  .alert-line small { white-space: normal }
+}
+
+/*
+ * Row actions wrap onto a second line rather than pushing the table sideways.
+ *
+ * Four buttons do not fit the action column on a quotation, and scrolling a table
+ * horizontally to reach "Accept" is a poor way to find it. The cell is exempt from the
+ * text cap for the same reason — it holds controls, not prose.
+ */
+.table-row > .row-actions {
+  display: flex; flex-wrap: wrap; gap: 6px; max-width: none; justify-content: flex-start;
+}
+
+/* Attachment previews are buttons now that files travel with the session, not links. */
+.attachment-thumb { border: 0; background: transparent; padding: 0; display: block; border-radius: 6px; overflow: hidden }
+.attachment-thumb img { display: block }
+button.attachment-icon { border: 1px solid var(--line); background: white; cursor: pointer }
+
+/* ------------------------------------------------------------- Project gallery */
+
+.gallery-bar { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 16px }
+.gallery-bar h3 { margin: 4px 0 2px; font: 700 17px Manrope; color: #16222c }
+.gallery-bar p { margin: 0; font-size: 13px; color: var(--muted); max-width: 52ch }
+.gallery-actions { display: flex; gap: 8px; flex-wrap: wrap }
+
+.folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px }
+.folder-card {
+  border: 1px solid var(--line); background: white; border-radius: 10px; padding: 0 0 12px;
+  text-align: left; overflow: hidden; display: flex; flex-direction: column; gap: 2px; cursor: pointer;
+}
+.folder-card:hover { box-shadow: 0 8px 22px #12241b14 }
+.folder-card strong { font-size: 14px; padding: 10px 12px 0; color: #16222c }
+.folder-card small { font-size: 12px; color: var(--muted); padding: 0 12px }
+.folder-cover, .folder-blank { display: block; width: 100%; height: 118px; object-fit: cover; background: #eef2f5 }
+.folder-blank { display: grid; place-items: center; color: #8aa0b0 }
+
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px }
+.photo-tile {
+  position: relative; border: 0; padding: 0; background: #eef2f5; border-radius: 8px;
+  overflow: hidden; aspect-ratio: 4 / 3; cursor: pointer;
+}
+.photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block }
+.photo-loading { display: block; width: 100%; height: 100%; background: #e6ecf0 }
+/* The stamp rides on the thumbnail: this record is about when, so when is always on screen. */
+.photo-stamp {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 8px 5px;
+  font-size: 11px; font-weight: 600; color: white; text-align: left;
+  background: linear-gradient(transparent, rgba(8, 18, 26, .82));
+}
+
+.lightbox {
+  position: fixed; inset: 0; z-index: 80; background: #0b1116e8; backdrop-filter: blur(6px);
+  display: grid; place-items: center; padding: 24px;
+}
+.lightbox-inner {
+  position: relative; max-width: min(1100px, 100%); max-height: 100%;
+  display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
+}
+/* The image gives way to the caption block: when this was recorded is the reason the
+   gallery exists, so it is never the part that gets pushed off the screen. */
+.lightbox-inner img, .lightbox-inner video {
+  max-width: 100%; max-height: min(56vh, 520px); border-radius: 10px;
+  display: block; margin: 0 auto; background: #000;
+}
+.lightbox-meta { flex: none }
+.lightbox-close {
+  position: absolute; top: -6px; right: -6px; z-index: 1; width: 36px; height: 36px; border: 0;
+  border-radius: 50%; background: white; display: grid; place-items: center; color: #16222c;
+}
+.lightbox-meta { background: white; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px }
+.lightbox-meta strong { font-size: 15px; color: #16222c }
+.lightbox-meta span { font-size: 13px; color: #445664 }
+.lightbox-meta small { font-size: 11.5px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace }
+.lightbox-meta em { font-style: normal; font-size: 13px; color: #a3271b; font-weight: 600 }
+.lightbox-meta .secondary { align-self: flex-start; margin-top: 4px }
+.photo-loading-text { color: white; text-align: center }
+.shutter { align-self: center }
+
+@media (max-width: 620px) {
+  .photo-grid { grid-template-columns: repeat(auto-fill, minmax(46%, 1fr)) }
+  .folder-grid { grid-template-columns: 1fr 1fr }
+}

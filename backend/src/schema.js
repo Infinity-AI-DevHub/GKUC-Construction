@@ -1,4 +1,4 @@
-import { query } from './db.js';
+import { ddl, query } from './db.js';
 import { DEFAULT_ROLES, LEGACY_ROLE_MAP, PERMISSIONS } from './lib/permissions.js';
 
 export const ROLES = [
@@ -32,6 +32,27 @@ async function indexExists(table, name) {
 async function addIndex(table, name, definition) {
   if (await indexExists(table, name)) return;
   await query(`ALTER TABLE ${table} ADD ${definition}`);
+}
+
+/*
+ * ALTER ... MODIFY rebuilds the table on most MySQL versions, and these run on every boot.
+ * On attendance and stock_movements — the two tables that grow every working day — that
+ * turns each restart into a full table copy. Applied only when the column is not already
+ * what it should be.
+ */
+async function columnType(table, column) {
+  const rows = await query(
+    'SELECT COLUMN_TYPE type FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name=?',
+    [table, column]
+  );
+  return rows[0]?.type || '';
+}
+
+async function modifyColumn(table, column, definition) {
+  const wanted = definition.trim().toLowerCase();
+  const current = (await columnType(table, column)).toLowerCase();
+  if (!current || wanted.startsWith(current)) return;
+  await query(`ALTER TABLE ${table} MODIFY ${column} ${definition}`);
 }
 
 async function constraintExists(table, name) {
@@ -634,6 +655,93 @@ async function createDocumentSettingsTable() {
  * an enquiry, to a project, or to both: an enquiry that becomes a project should not lose
  * the conversations that won it, so once converted the earlier history follows the project.
  */
+/*
+ * The project gallery.
+ *
+ * This is not a photo album, it is evidence. The client photographs every corner of a plot
+ * before a spade goes in — "to prove how it was" — and keeps adding through the job until
+ * handover. If a dispute follows, these pictures answer it, so what matters is not that the
+ * date is displayed but that it cannot be moved.
+ *
+ * Three things are therefore fixed once written: when the photo was received, the object it
+ * points at, and the checksum of that object. A caption can be corrected, and a photo can be
+ * withdrawn from view, but neither the clock nor the file behind it can be rewritten — and
+ * a withdrawn photo leaves its record behind, so the gallery cannot be quietly thinned out.
+ */
+async function createGalleryTables() {
+  await query(`CREATE TABLE IF NOT EXISTS gallery_folders (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    project_id BIGINT UNSIGNED NOT NULL,
+    name VARCHAR(140) NOT NULL,
+    description VARCHAR(400) NULL,
+    created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_folder_name (project_id, name),
+    CONSTRAINT fk_gallery_folder_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    CONSTRAINT fk_gallery_folder_user FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await query(`CREATE TABLE IF NOT EXISTS gallery_photos (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    project_id BIGINT UNSIGNED NOT NULL,
+    folder_id BIGINT UNSIGNED NULL,
+    storage_key VARCHAR(400) NOT NULL,
+    thumb_key VARCHAR(400) NULL,
+    filename VARCHAR(255) NOT NULL,
+    mime VARCHAR(120) NOT NULL,
+    size_bytes INT UNSIGNED NOT NULL,
+    checksum CHAR(64) NOT NULL,
+    caption VARCHAR(400) NULL,
+    /* Set by the server on receipt. No route accepts it and the trigger below refuses to
+       let it change, so "the date and time can never be edited from anywhere" holds even
+       against someone with a database client. */
+    captured_at DATETIME NOT NULL,
+    uploaded_by BIGINT UNSIGNED NOT NULL,
+    removed_at DATETIME NULL,
+    removed_by BIGINT UNSIGNED NULL,
+    removed_reason VARCHAR(300) NULL,
+    CONSTRAINT fk_gallery_photo_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    CONSTRAINT fk_gallery_photo_folder FOREIGN KEY(folder_id) REFERENCES gallery_folders(id) ON DELETE SET NULL,
+    CONSTRAINT fk_gallery_photo_user FOREIGN KEY(uploaded_by) REFERENCES users(id),
+    INDEX idx_gallery_project (project_id, folder_id),
+    INDEX idx_gallery_taken (project_id, captured_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await lockGalleryTimestamps();
+}
+
+/*
+ * Enforced by the database, not only by the routes.
+ *
+ * A guard that lives in application code is a guard that a future endpoint, a migration
+ * script or a person at a SQL prompt can walk straight past. The trigger makes the promise
+ * the client was given true of the data itself.
+ *
+ * If the database user has not been granted TRIGGER, the application still runs and the
+ * routes still refuse to touch these columns — but the stronger guarantee is not in force,
+ * so it says so loudly rather than pretending.
+ */
+async function lockGalleryTimestamps() {
+  const existing = await query(
+    `SELECT TRIGGER_NAME FROM information_schema.triggers
+     WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='gallery_photo_evidence_lock'`);
+  if (existing.length) return;
+  try {
+    await ddl(`CREATE TRIGGER gallery_photo_evidence_lock BEFORE UPDATE ON gallery_photos
+      FOR EACH ROW
+      BEGIN
+        IF NEW.captured_at <> OLD.captured_at
+           OR NEW.storage_key <> OLD.storage_key
+           OR NEW.checksum <> OLD.checksum THEN
+          SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'A gallery photo\\'s timestamp, file and checksum are fixed once recorded';
+        END IF;
+      END`);
+  } catch (error) {
+    console.warn('Gallery evidence lock not installed (needs the TRIGGER privilege):', error.message);
+  }
+}
+
 async function createCommunicationTable() {
   await query(`CREATE TABLE IF NOT EXISTS client_communications (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -717,6 +825,74 @@ async function createQsTables() {
     CONSTRAINT fk_tender_project FOREIGN KEY(project_id) REFERENCES projects(id),
     CONSTRAINT fk_tender_user FOREIGN KEY(owner_id) REFERENCES users(id), INDEX idx_tender_closing(closing_date)
   ) ENGINE=InnoDB`);
+  /*
+   * Everything a Sri Lankan public-works bid actually turns on, taken from the bidding
+   * documents GKUC bid against: an RDA sand-sealing contract, a Sabaragamuwa Provincial
+   * Council road, and a Department of Buildings package.
+   *
+   * The employer's own contract number is not our reference — RDA calls one bid
+   * "RDA/DDG(RM&M)/EP/CE(T)/RMTF/2025/15" while we file it as TEN-2026-0001 — so both are
+   * kept. Bids are submitted by one of two companies (G.K.U.C. Construction and G.K.U.C.
+   * Ready Mix), and which one bid matters when the award lands.
+   */
+  await addColumn('tenders', 'contract_no', 'VARCHAR(120) NULL AFTER reference');
+  await addColumn('tenders', 'bidding_entity', "VARCHAR(120) NULL");
+  await addColumn('tenders', 'procurement_method', "ENUM('National Competitive Bidding','International Competitive Bidding','Shopping','Direct') NOT NULL DEFAULT 'National Competitive Bidding'");
+  await addColumn('tenders', 'specialty', "ENUM('Highways','Bridges','Buildings','Irrigation','Water Supply','Other') NOT NULL DEFAULT 'Highways'");
+  await addColumn('tenders', 'cida_grade', 'VARCHAR(40) NULL');
+  await addColumn('tenders', 'employer_office', 'VARCHAR(220) NULL');
+  await addColumn('tenders', 'employer_contact', 'VARCHAR(220) NULL');
+  await addColumn('tenders', 'max_contract_value', 'DECIMAL(15,2) NOT NULL DEFAULT 0');
+
+  /* The document is bought inside a window, for a non-refundable fee, against a receipt. */
+  await addColumn('tenders', 'document_fee', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('tenders', 'docs_from', 'DATE NULL');
+  await addColumn('tenders', 'docs_until', 'DATE NULL');
+  await addColumn('tenders', 'receipt_no', 'VARCHAR(60) NULL');
+  await addColumn('tenders', 'purchased_date', 'DATE NULL');
+
+  /* Bids close at an hour, not on a day: "10:00 hrs on 23-07-2026". */
+  await addColumn('tenders', 'closing_time', "TIME NOT NULL DEFAULT '10:00:00'");
+  await addColumn('tenders', 'opening_date', 'DATE NULL');
+  await addColumn('tenders', 'validity_days', 'SMALLINT UNSIGNED NOT NULL DEFAULT 91');
+
+  /* Bid security: an amount, in someone's favour, valid until a date of its own. */
+  await addColumn('tenders', 'security_amount', 'DECIMAL(14,2) NOT NULL DEFAULT 0');
+  await addColumn('tenders', 'security_in_favour_of', 'VARCHAR(180) NULL');
+  await addColumn('tenders', 'security_form', "ENUM('Bank guarantee','Insurance bond','Cash deposit','Not required') NOT NULL DEFAULT 'Bank guarantee'");
+  await addColumn('tenders', 'security_valid_until', 'DATE NULL');
+  await addColumn('tenders', 'security_released_on', 'DATE NULL');
+
+  /* The Form of Bid amount is stated excluding VAT, in words and figures. */
+  await addColumn('tenders', 'vat_amount', 'DECIMAL(15,2) NOT NULL DEFAULT 0');
+
+  /* What came back after opening. */
+  await addColumn('tenders', 'award_value', 'DECIMAL(15,2) NOT NULL DEFAULT 0');
+  await addColumn('tenders', 'awarded_to', 'VARCHAR(180) NULL');
+  await addColumn('tenders', 'our_rank', 'SMALLINT UNSIGNED NULL');
+  await addColumn('tenders', 'bidders_count', 'SMALLINT UNSIGNED NULL');
+  await addColumn('tenders', 'opened_date', 'DATE NULL');
+
+  await modifyColumn('tenders', 'status', "ENUM('Identified','Document purchased','Preparing','Submitted','Opened','Won','Lost','Withdrawn','Cancelled') NOT NULL DEFAULT 'Identified'");
+  await addIndex('tenders', 'idx_tender_status', 'INDEX idx_tender_status(status)');
+
+  /*
+   * A bid is rejected for a missing certificate as readily as for a bad price — the
+   * Department of Buildings says outright that a bid without the PCA-03 cannot be awarded,
+   * and the affidavit of outstanding work carries "shall be treated as non-responsive".
+   * So the paperwork is tracked item by item rather than trusted to memory.
+   */
+  await query(`CREATE TABLE IF NOT EXISTS tender_checklist (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, tender_id BIGINT UNSIGNED NOT NULL,
+    item VARCHAR(220) NOT NULL, mandatory BOOLEAN NOT NULL DEFAULT TRUE,
+    done BOOLEAN NOT NULL DEFAULT FALSE, note VARCHAR(400) NULL,
+    done_by BIGINT UNSIGNED NULL, done_at TIMESTAMP NULL,
+    position SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    CONSTRAINT fk_checklist_tender FOREIGN KEY(tender_id) REFERENCES tenders(id) ON DELETE CASCADE,
+    CONSTRAINT fk_checklist_user FOREIGN KEY(done_by) REFERENCES users(id),
+    INDEX idx_checklist_tender(tender_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   await query(`CREATE TABLE IF NOT EXISTS retentions (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
     description VARCHAR(300) NOT NULL, amount DECIMAL(15,2) NOT NULL,
@@ -753,11 +929,11 @@ async function createQsTables() {
 async function migrateExistingInstalls() {
   /* The role column was an ENUM, which cannot hold roles the MD invents. It becomes a plain
      name mirroring roles.name, with role_id as the real relationship. */
-  await query('ALTER TABLE users MODIFY role VARCHAR(120) NOT NULL');
+  await modifyColumn('users', 'role', 'VARCHAR(120) NOT NULL');
   await addColumn('users', 'role_id', 'BIGINT UNSIGNED NULL');
   await addForeignKey('users', 'fk_users_role', 'CONSTRAINT fk_users_role FOREIGN KEY(role_id) REFERENCES roles(id)');
-  await query("ALTER TABLE attendance MODIFY state ENUM('On site','Late','Checked out','Absent','On leave') NOT NULL");
-  await query("ALTER TABLE stock_movements MODIFY movement_type ENUM('Receipt','Issue','Return','Adjustment','Transfer') NOT NULL");
+  await modifyColumn('attendance', 'state', "ENUM('On site','Late','Checked out','Absent','On leave') NOT NULL");
+  await modifyColumn('stock_movements', 'movement_type', "ENUM('Receipt','Issue','Return','Adjustment','Transfer') NOT NULL");
   await addColumn('materials', 'unit_cost', 'DECIMAL(14,2) NOT NULL DEFAULT 0');
   await addColumn('stock_movements', 'project_id', 'BIGINT UNSIGNED NULL');
   await addColumn('stock_movements', 'destination', 'VARCHAR(180) NULL');
@@ -900,6 +1076,7 @@ export async function migrate() {
   /* After the QS tables: this adds columns to quotations_client. */
   await createMethodTables();
   await createCommunicationTable();
+  await createGalleryTables();
   await migrateExistingInstalls();
   await seedWorkMethods();
   await seedAccessControl();

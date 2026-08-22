@@ -18,6 +18,12 @@ const config = {
 
 export const pool = mysql.createPool(config);
 export const query = async (sql, params = []) => (await pool.execute(sql, params))[0];
+/*
+ * Statements the prepared protocol will not carry — CREATE TRIGGER and anything else with a
+ * BEGIN ... END body. Takes no parameters by design: it is for schema definition, never for
+ * anything with a value in it.
+ */
+export const ddl = async sql => (await pool.query(sql))[0];
 export const getOne = async (sql, params = []) => (await query(sql, params))[0];
 /**
  * "Today" means the local calendar day on the server, which is what MySQL's CURDATE()

@@ -26,6 +26,9 @@ const raise = async alert => {
 
 const days = value => Math.ceil((new Date(value) - new Date(today())) / 86400000);
 const money = value => `LKR ${Number(value).toLocaleString('en-LK', { maximumFractionDigits: 0 })}`;
+/* Date columns arrive as Date objects, whose default string is "Thu Sep 10 2026 …" —
+   readable enough for a machine, but not what belongs in a message to a person. */
+const onDate = value => new Date(value).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
 async function vehicleComplianceAlerts(stamp, alerts) {
   const rows = await query(`SELECT d.id,d.doc_type,d.expiry_date,f.vehicle,f.registration
@@ -202,17 +205,91 @@ async function retentionAlerts(stamp, alerts) {
 }
 
 /** A tender closing date is worth nothing if it passes unnoticed. */
+/*
+ * A tender has four separate clocks, and missing any one of them costs the bid.
+ *
+ * The document is only on sale between two dates; bids close at an hour on a day; the bid
+ * security has an expiry of its own, and an expired guarantee makes an otherwise sound bid
+ * non-responsive; and our own offer only stands for the validity period, after which the
+ * employer can no longer accept it without asking us to extend.
+ */
 async function tenderAlerts(stamp, alerts) {
-  const rows = await query(`SELECT id,reference,title,client,closing_date FROM tenders
-    WHERE status IN ('Identified','Preparing') AND closing_date <= DATE_ADD(CURDATE(), INTERVAL 14 DAY)`);
-  for (const row of rows) {
+  const live = "t.status IN ('Identified','Document purchased','Preparing')";
+
+  /* The document is on sale for a fortnight or so, and cannot be bought late. */
+  const buying = await query(`SELECT t.id,t.reference,t.title,t.client,t.docs_until,t.document_fee
+    FROM tenders t WHERE ${live} AND t.purchased_date IS NULL AND t.docs_until IS NOT NULL
+      AND t.docs_until <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)`);
+  for (const row of buying) {
+    const remaining = days(row.docs_until);
+    alerts.push({
+      key: `tender-docs:${row.id}:${stamp}`,
+      audience: 'qs.tender',
+      severity: remaining <= 2 ? 'Critical' : 'Warning',
+      title: remaining < 0
+        ? `Bidding document no longer on sale — ${row.reference}`
+        : `Last day to buy the bidding document in ${remaining} day(s) — ${row.reference}`,
+      message: `${row.title} (${row.client}). The document is on sale until ${onDate(row.docs_until)}`
+        + `${Number(row.document_fee) > 0 ? ` for ${money(row.document_fee)}` : ''}. It cannot be bought after that.`,
+      referenceType: 'tender',
+      referenceId: row.id
+    });
+  }
+
+  /* Closing day, with the hour, and with the paperwork that is still missing. */
+  const closing = await query(`SELECT t.id,t.reference,t.title,t.client,t.closing_date,t.closing_time,
+      (SELECT COUNT(*) FROM tender_checklist c WHERE c.tender_id=t.id AND c.mandatory=1 AND c.done=0) outstanding
+    FROM tenders t WHERE ${live} AND t.closing_date <= DATE_ADD(CURDATE(), INTERVAL 14 DAY)`);
+  for (const row of closing) {
     const remaining = days(row.closing_date);
+    const at = String(row.closing_time || '').slice(0, 5);
     alerts.push({
       key: `tender:${row.id}:${stamp}`,
       audience: 'qs.tender',
       severity: remaining <= 3 ? 'Critical' : 'Warning',
       title: `Tender ${remaining < 0 ? 'closed' : 'closing'} — ${row.client}`,
-      message: `${row.reference} ${row.title}: ${remaining < 0 ? `closed ${Math.abs(remaining)} day(s) ago` : `closes in ${remaining} day(s)`}.`,
+      message: `${row.reference} ${row.title}: ${remaining < 0
+        ? `closed ${Math.abs(remaining)} day(s) ago`
+        : `closes in ${remaining} day(s)${at ? ` at ${at}` : ''}`}.`
+        + `${Number(row.outstanding) > 0 ? ` ${row.outstanding} required document(s) still outstanding.` : ' All required documents are ready.'}`,
+      referenceType: 'tender',
+      referenceId: row.id
+    });
+  }
+
+  /* A bid security that lapses before the award is decided has to be extended. */
+  const security = await query(`SELECT t.id,t.reference,t.title,t.security_valid_until,t.security_amount
+    FROM tenders t WHERE t.status IN ('Submitted','Opened') AND t.security_released_on IS NULL
+      AND t.security_valid_until IS NOT NULL
+      AND t.security_valid_until <= DATE_ADD(CURDATE(), INTERVAL ? DAY)`, [ALERT_WINDOW_DAYS]);
+  for (const row of security) {
+    const remaining = days(row.security_valid_until);
+    alerts.push({
+      key: `tender-security:${row.id}:${stamp}`,
+      audience: 'qs.tender',
+      severity: remaining <= 7 ? 'Critical' : 'Warning',
+      title: `Bid security ${remaining < 0 ? 'has expired' : `expires in ${remaining} day(s)`} — ${row.reference}`,
+      message: `${row.title}: the ${money(row.security_amount)} security is valid until `
+        + `${onDate(row.security_valid_until)}. Extend it or ask for its release.`,
+      referenceType: 'tender',
+      referenceId: row.id
+    });
+  }
+
+  /* Our own offer expires too, after which the employer cannot simply accept it. */
+  const validity = await query(`SELECT t.id,t.reference,t.title,t.validity_days,
+      DATE_ADD(t.closing_date, INTERVAL t.validity_days DAY) expires
+    FROM tenders t WHERE t.status IN ('Submitted','Opened')
+      AND DATE_ADD(t.closing_date, INTERVAL t.validity_days DAY) <= DATE_ADD(CURDATE(), INTERVAL 14 DAY)`);
+  for (const row of validity) {
+    const remaining = days(row.expires);
+    alerts.push({
+      key: `tender-validity:${row.id}:${stamp}`,
+      audience: 'qs.tender',
+      severity: remaining < 0 ? 'Warning' : 'Info',
+      title: `Bid validity ${remaining < 0 ? 'has lapsed' : `ends in ${remaining} day(s)`} — ${row.reference}`,
+      message: `${row.title}: the ${row.validity_days}-day validity runs to ${onDate(row.expires)}. `
+        + 'Chase the outcome, or agree an extension with the employer.',
       referenceType: 'tender',
       referenceId: row.id
     });

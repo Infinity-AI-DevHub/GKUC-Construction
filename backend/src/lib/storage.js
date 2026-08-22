@@ -29,7 +29,7 @@ const ALLOWED = new Map([
   ['text/csv', 'csv'], ['text/plain', 'txt']
 ]);
 
-export const FOLDERS = ['task', 'project', 'employee', 'report', 'vehicle', 'equipment'];
+export const FOLDERS = ['task', 'project', 'employee', 'report', 'vehicle', 'equipment', 'gallery'];
 
 export const isAllowedType = mime => ALLOWED.has(mime);
 export const allowedExtensions = () => [...new Set(ALLOWED.values())];
@@ -130,6 +130,13 @@ export async function store({ folder, filename, mime, buffer }) {
 
 export const remove = key => driver.remove(key);
 
+/*
+ * Where a stored object actually lives, so a route can serve it behind a permission check
+ * rather than leaving the whole store open to anyone who knows a URL.
+ */
+export const localPathFor = key => path.join(UPLOAD_ROOT, key);
+export const isLocalStore = () => driver === localDriver;
+
 /**
  * Reads an upload out of a multipart request. Node parses the body itself, so the
  * product carries no third-party multipart dependency.
@@ -161,8 +168,16 @@ export async function readUpload(req) {
   const form = await new Response(Buffer.concat(chunks), { headers: { 'content-type': contentType } }).formData();
   const file = form.get('file');
   if (!file || typeof file === 'string') throw Object.assign(new Error('No file was attached'), { status: 400 });
+  const read = async part => ({
+    filename: part.name, mime: part.type || 'application/octet-stream', buffer: Buffer.from(await part.arrayBuffer())
+  });
+
+  /* A gallery upload carries the original and a small preview made in the browser, so the
+     grid does not have to pull full-size site photos to draw a thumbnail. */
+  const thumbnail = form.get('thumbnail');
   return {
-    file: { filename: file.name, mime: file.type || 'application/octet-stream', buffer: Buffer.from(await file.arrayBuffer()) },
+    file: await read(file),
+    thumbnail: thumbnail && typeof thumbnail !== 'string' ? await read(thumbnail) : null,
     fields: Object.fromEntries([...form.entries()].filter(([, value]) => typeof value === 'string'))
   };
 }

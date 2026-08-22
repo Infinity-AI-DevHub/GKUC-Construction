@@ -9,7 +9,7 @@ import './theme.css';
 import './reference.css';
 import './responsive.css';
 
-import { announceDataChanged, api, post, token } from './api.js';
+import { announceDataChanged, api, post, slug, token } from './api.js';
 import { Avatar, Modal } from './ui.jsx';
 import NotificationBell from './NotificationBell.jsx';
 import NavBar from './NavBar.jsx';
@@ -24,7 +24,7 @@ import Fleet from './pages/Fleet.jsx';
 import Finance from './pages/Finance.jsx';
 import DailyReports from './pages/DailyReports.jsx';
 import Reports from './pages/Reports.jsx';
-import Admin from './pages/Admin.jsx';
+import Admin, { TABS as ADMIN_TABS } from './pages/Admin.jsx';
 import Coordination from './pages/Coordination.jsx';
 import QuantitySurveying from './pages/QuantitySurveying.jsx';
 
@@ -57,6 +57,7 @@ const capabilities = permissions => {
     roles: any('admin.roles'),
     audit: any('admin.audit'),
     projects: any('projects.manage'),
+    gallery: any('gallery.manage'),
     schedule: any('projects.schedule'),
     resources: any('resources.view'),
     reassign: any('resources.reassign'),
@@ -113,11 +114,20 @@ function Login({ onLogin }) {
         <h1>Sign in to SiteOps</h1>
         <p>Use your company account to access assigned projects and workflows.</p>
       </div>
-      <label>Email address<input type="email" name="email" defaultValue="owner@gkuc.lk" required /></label>
-      <label>Password<input type="password" name="password" defaultValue="GKUC@2026" required /></label>
+      {/*
+        * Never prefilled in a build.
+        *
+        * These carried the Managing Director's address and password as defaults so the
+        * client could click straight in during review. Shipped, that hands the top account
+        * to anyone who opens the page, so the convenience is limited to the dev server.
+        */}
+      <label>Email address<input type="email" name="email" autoComplete="username"
+        defaultValue={import.meta.env.DEV ? 'owner@gkuc.lk' : ''} required /></label>
+      <label>Password<input type="password" name="password" autoComplete="current-password"
+        defaultValue={import.meta.env.DEV ? 'GKUC@2026' : ''} required /></label>
       {error && <p className="login-error">{error}</p>}
       <button className="primary" disabled={busy}><LogIn size={17} />{busy ? 'Signing in...' : 'Sign in'}</button>
-      <small className="demo-note">Client review account: owner@gkuc.lk</small>
+      {import.meta.env.DEV && <small className="demo-note">Development sign-in: owner@gkuc.lk</small>}
     </form>
   </div>;
 }
@@ -150,9 +160,42 @@ function ScanResult({ token, onClose }) {
   </Modal>;
 }
 
+/*
+ * The address bar is the source of truth for which page is open.
+ *
+ * The navigation used to move a piece of React state and nothing else, so every screen sat
+ * at "/" — the back button left the app entirely, a reload always returned to the
+ * dashboard, and a page could not be sent to a colleague as a link. Each section now has a
+ * path of its own, pushed with the History API, and the page is read back out of the URL.
+ *
+ * Only the section is in the path. What is open *within* a section — a tab, a dialog, the
+ * row being looked at — deliberately is not: those are working state, and putting them in
+ * the URL would fill a person's history with steps they never chose to take. The one
+ * exception is the Administration tab, because alerts elsewhere in the product link
+ * straight to the notification centre.
+ */
+const pathFor = (name, tab) => {
+  if (name === 'Dashboard') return '/';
+  const base = `/${slug(name)}`;
+  return tab && tab !== 'Users' ? `${base}/${slug(tab)}` : base;
+};
+
+const pageFromPath = pathname => {
+  const [section] = pathname.replace(/^\/+|\/+$/g, '').split('/');
+  if (!section) return 'Dashboard';
+  return NAV.find(([name]) => slug(name) === section)?.[0] || null;
+};
+
+const adminTabFromPath = (pathname, tabs) => {
+  const [, second] = pathname.replace(/^\/+|\/+$/g, '').split('/');
+  return tabs.find(tab => slug(tab) === second) || 'Users';
+};
+
 function App() {
-  const [page, setPage] = useState('Dashboard');
-  const [adminTab, setAdminTab] = useState('Users');
+  /* Read from the address bar on first paint, so a deep link or a reload opens the page
+     that was asked for rather than always the dashboard. */
+  const [page, setPage] = useState(() => pageFromPath(window.location.pathname) || 'Dashboard');
+  const [adminTab, setAdminTab] = useState(() => adminTabFromPath(window.location.pathname, ADMIN_TABS));
   const scan = useScanTarget();
   const [scanned, setScanned] = useState(true);
   const [menu, setMenu] = useState(false);
@@ -182,6 +225,32 @@ function App() {
     else setLoading(false);
   }, []);
 
+  /* The back and forward buttons move between sections rather than out of the app. */
+  useEffect(() => {
+    const onPop = () => {
+      setPage(pageFromPath(window.location.pathname) || 'Dashboard');
+      setAdminTab(adminTabFromPath(window.location.pathname, ADMIN_TABS));
+      setMenu(false);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  /*
+   * One way in and out of a section, so the address bar and the screen cannot disagree.
+   * Navigating to the section already open replaces the entry instead of stacking another,
+   * which otherwise makes the back button appear to do nothing.
+   */
+  const goTo = (name, tab) => {
+    const path = pathFor(name, tab);
+    const method = path === `${window.location.pathname}` ? 'replaceState' : 'pushState';
+    window.history[method]({}, '', path);
+    setPage(name);
+    if (tab) setAdminTab(tab);
+    else if (name !== 'Administration') setAdminTab('Users');
+    setMenu(false);
+  };
+
   const can = useMemo(() => capabilities(user?.permissions), [user?.permissions]);
 
   const logout = async () => {
@@ -189,15 +258,9 @@ function App() {
       token.clear();
       setUser(null);
       setData(null);
-      setPage('Dashboard');
+      goTo('Dashboard');
     }
   };
-
-  if (loading) return <div className="loading-screen"><Building2 size={30} /><strong>Loading SiteOps...</strong></div>;
-  if (!user || !data) return <Login onLogin={async next => { setLoading(true); await load(next); }} />;
-
-  const reload = () => load(user);
-  const shared = { data, reload, can, user };
 
   const visibleNav = NAV.filter(([, , permission]) => !permission || can.has(permission));
   /*
@@ -209,8 +272,35 @@ function App() {
    */
   const activePage = visibleNav.some(([name]) => name === page) ? page : 'Dashboard';
 
+  /*
+   * Keep the address bar honest.
+   *
+   * A path can name a section that does not exist, or one this person is not allowed to
+   * open — a link passed between colleagues with different permissions does exactly that.
+   * The page falls back to the dashboard either way, and the URL is corrected to match so
+   * that a reload does not send them back to a page they cannot see.
+   *
+   * Declared above the early returns below: a hook that only runs on some renders changes
+   * the hook order between them, which React refuses outright.
+   */
+  useEffect(() => {
+    if (!user || !data) return;
+    const wanted = pathFor(activePage, activePage === 'Administration' ? adminTab : null);
+    if (window.location.pathname !== wanted) window.history.replaceState({}, '', wanted);
+  }, [activePage, adminTab, user, data]);
+
+  if (loading) return <div className="loading-screen"><Building2 size={30} /><strong>Loading SiteOps...</strong></div>;
+  if (!user || !data) return <Login onLogin={async next => { setLoading(true); await load(next); }} />;
+
+  const reload = () => load(user);
+  const shared = { data, reload, can, user };
+
+  /* Declared above the page map, which now references it: the dashboard's alert card offers
+     a way through to the full notification centre. */
+  const openNotifications = () => goTo('Administration', 'Notifications');
+
   const content = {
-    Dashboard: <Dashboard {...shared} go={setPage} />,
+    Dashboard: <Dashboard {...shared} go={goTo} onViewAlerts={openNotifications} />,
     Coordination: <Coordination {...shared} />,
     'Quantity Surveying': <QuantitySurveying {...shared} />,
     Projects: <Projects {...shared} />,
@@ -221,17 +311,13 @@ function App() {
     Finance: <Finance {...shared} />,
     'Daily reports': <DailyReports {...shared} />,
     Reports: <Reports {...shared} />,
-    Administration: <Admin {...shared} initialTab={adminTab} />
-  }[activePage] || <Dashboard {...shared} go={setPage} />;
+    Administration: <Admin {...shared} initialTab={adminTab} onTabChange={tab => goTo('Administration', tab)} />
+  }[activePage] || <Dashboard {...shared} go={goTo} />;
+
   const openTasks = data.tasks.filter(task => task.status !== 'Completed' && task.status !== 'Approved').length;
   /* A dialog rather than a page, because everyone may change their own password but most
      people cannot open the Administration page it would otherwise live on. */
   const openAccount = () => { setAccountOpen(true); setMenu(false); };
-  const openNotifications = () => {
-    setAdminTab('Notifications');
-    setPage('Administration');
-    setMenu(false);
-  };
   const bell = placement => (
     <NotificationBell notifications={data.notifications} reload={reload} onViewAll={openNotifications} placement={placement} />
   );
@@ -252,7 +338,7 @@ function App() {
         items={visibleNav}
         activePage={activePage}
         openTasks={openTasks}
-        onSelect={name => { setPage(name); setMenu(false); }}
+        onSelect={goTo}
       />
       <div className="sidebar-bottom">
         {bell('bar')}

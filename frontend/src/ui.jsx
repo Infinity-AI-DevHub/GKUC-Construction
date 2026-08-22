@@ -61,9 +61,9 @@ export function Tabs({ tabs, active, onChange }) {
   </div></div>;
 }
 
-export function Modal({ title, close, children }) {
+export function Modal({ title, close, children, wide = false }) {
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
-    <div className="modal">
+    <div className={wide ? 'modal modal-wide' : 'modal'}>
       <div className="modal-title"><h2>{title}</h2><button className="icon-btn" onClick={close}><X size={18} /></button></div>
       {children}
     </div>
@@ -113,16 +113,31 @@ export function EmptyState({ children }) {
  * grid template, so a new module only supplies its rows.
  */
 export function Table({ columns, template, children, title, tools, empty = 'Nothing recorded yet.' }) {
-  const style = { gridTemplateColumns: template };
   const rows = React.Children.toArray(children);
+  /*
+   * The heading and the rows share one grid.
+   *
+   * They each used to be a grid of their own carrying the same template, which reads as
+   * though it should line up and does not: a track written as minmax(150px,1fr) is resolved
+   * against the content of whichever row it is in, so a row holding a long project name
+   * came out with wider columns than the row above it and the table visibly stepped in and
+   * out. The columns are declared once here and each row takes its widths from the parent,
+   * so every cell in a column is measured against the same content.
+   */
   return <section className="table-panel">
     {(title || tools) && <div className="table-tools"><h2>{title}</h2>{tools}</div>}
-    <div className="table-head" style={style}>{columns.map(column => <span key={column}>{column}</span>)}</div>
-    {rows.length ? rows : <div className="table-row" style={{ gridTemplateColumns: '1fr' }}><span>{empty}</span></div>}
+    <div className="table-grid" style={{ gridTemplateColumns: template }}>
+      <div className="table-head" style={{ gridTemplateColumns: template }}>
+        {columns.map(column => <span key={column}>{column}</span>)}
+      </div>
+      {rows.length ? rows : <div className="table-row table-empty"><span>{empty}</span></div>}
+    </div>
   </section>;
 }
 
 export function Row({ template, children, onClick }) {
+  /* The inline template is the fallback for browsers without subgrid; where subgrid is
+     supported the stylesheet overrides it and the parent's columns win. */
   return <div className="table-row" style={{ gridTemplateColumns: template, cursor: onClick ? 'pointer' : undefined }} onClick={onClick}>{children}</div>;
 }
 
@@ -130,7 +145,7 @@ export function Row({ template, children, onClick }) {
  * Wraps a create/edit form in a modal and handles the submit lifecycle, so each module
  * describes only its fields and the request to send.
  */
-export function FormModal({ title, close, label, onSubmit, children }) {
+export function FormModal({ title, close, label, onSubmit, children, wide = false }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const submit = async event => {
@@ -147,7 +162,7 @@ export function FormModal({ title, close, label, onSubmit, children }) {
       setBusy(false);
     }
   };
-  return <Modal title={title} close={close}>
+  return <Modal title={title} close={close} wide={wide}>
     <EntityForm onSubmit={submit} error={error}>
       {children}
       <FormButtons close={close} label={label} busy={busy} />

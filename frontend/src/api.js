@@ -129,6 +129,32 @@ export const fileSize = bytes => (bytes >= 1048576
  * itself, because a browser only trusts a window opened directly from a person's action;
  * opening it after the fetch returns would be blocked as a popup.
  */
+/*
+ * Attachments travel with the session, not as public links.
+ *
+ * The file store is no longer world-readable, so an <img src> or a plain link cannot reach
+ * it — the request has to carry the bearer token. The bytes come back as a blob and the
+ * caller gets an object URL, which is scoped to this page and expires with it.
+ */
+export const fetchAttachment = async id => {
+  const stored = token.get();
+  const response = await fetch(`/api/uploads/file/${id}`, {
+    headers: stored ? { Authorization: `Bearer ${stored}` } : {}
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'That file could not be opened');
+  }
+  return URL.createObjectURL(await response.blob());
+};
+
+/** Opens an attachment in a new tab, revoking the temporary URL once it has loaded. */
+export const openAttachment = async id => {
+  const url = await fetchAttachment(id);
+  window.open(url, '_blank', 'noopener');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+};
+
 export const openDocument = async path => {
   const tab = window.open('', '_blank');
   if (tab) tab.document.write('<p style="font:14px sans-serif;padding:20px">Preparing the document…</p>');

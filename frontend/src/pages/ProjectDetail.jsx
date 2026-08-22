@@ -3,8 +3,9 @@ import { Download } from 'lucide-react';
 import { api, money, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Modal, Progress, Row, SelectField, Table, Tabs, Field, FormModal } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
+import ProjectGallery from '../ProjectGallery.jsx';
 
-const TABS = ['Overview', 'Timeline', 'Team', 'Documents', 'Completion report'];
+const TABS = ['Overview', 'Timeline', 'Team', 'Gallery', 'Documents', 'Completion report'];
 
 /** Everything known about one project, gathered from the modules that feed it. */
 export default function ProjectDetail({ projectId, data, close, reload, can }) {
@@ -19,13 +20,17 @@ export default function ProjectDetail({ projectId, data, close, reload, can }) {
 
   const refresh = async () => { await load(); await reload(); };
 
-  return <Modal title={project.name} close={close}>
+  /* Wider than a form dialog: this holds a photo grid and a timeline. */
+  return <Modal title={project.name} close={close} wide>
     <div className="report-form">
       <div className="wide"><Tabs tabs={TABS} active={tab} onChange={setTab} /></div>
 
       {tab === 'Overview' && <Overview project={project} />}
       {tab === 'Timeline' && <Timeline project={project} can={can} refresh={refresh} onAdd={() => setAdding('milestone')} />}
       {tab === 'Team' && <Team project={project} can={can} onAdd={() => setAdding('team')} />}
+      {tab === 'Gallery' && <div className="wide">
+        <ProjectGallery projectId={project.id} canManage={can.gallery} />
+      </div>}
       {tab === 'Documents' && <div className="wide">
         <Attachments ownerType="project" ownerId={project.id} title="Project documents"
           canUpload={can.projects} canDelete={can.projects} withCategory />

@@ -108,7 +108,7 @@ function BoqList({ data, reload, can }) {
         <span>{boq.title}</span>
         <strong>{rupees(boq.total)}</strong>
         <Badge tone={slug(boq.status)}>{boq.status}</Badge>
-        <span style={{ display: 'flex', gap: '6px' }}>
+        <span className="row-actions">
           <button className="status-button" onClick={() => openDetail(boq.id)}>Open</button>
           <button className="status-button" title="Open the printable bill of quantities"
             onClick={() => openDocument(`/boq/${boq.id}/document`).catch(failure => setError(failure.message))}>
@@ -208,7 +208,7 @@ function Variations({ can, reload }) {
       <strong>{rupees(row.amount)}</strong>
       <Badge tone={slug(row.status)}>{row.status}</Badge>
       {can.manage && row.status === 'Pending'
-        ? <span style={{ display: 'flex', gap: '6px' }}>
+        ? <span className="row-actions">
           <button className="status-button" onClick={() => decide(row.id, 'Approved')}>Approve</button>
           <button className="status-button" onClick={() => decide(row.id, 'Rejected')}>Reject</button>
         </span>

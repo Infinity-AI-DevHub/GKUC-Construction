@@ -203,7 +203,7 @@ function Equipment({ data, reload, can }) {
         <span>{item.category}</span>
         <span>{item.project ? `${item.project}` : '—'}</span>
         <Badge tone={slug(item.status)}>{item.status}</Badge>
-        <span style={{ display: 'flex', gap: '6px' }}>
+        <span className="row-actions">
           <button className="status-button" onClick={async () => setDetail(await api(`/equipment/${item.id}`))}>Open</button>
           {can.site && <button className="status-button" onClick={() => setActing(item)}>
             {item.status === 'Assigned' ? 'Return' : 'Assign'}
