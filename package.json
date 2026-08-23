@@ -11,5 +11,10 @@
     "build": "npm run build --prefix frontend",
     "start": "npm start --prefix backend",
     "test": "npm test --prefix backend && npm test --prefix frontend"
+  },
+  "pnpm": {
+    "overrides": {
+      "path-to-regexp@<0.1.13": "^0.1.13"
+    }
   }
 }

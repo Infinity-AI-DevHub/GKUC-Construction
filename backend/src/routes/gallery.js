@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, can, permit, validate, wrap } from '../lib/http.js';
-import { isAllowedType, isLocalStore, localPathFor, readUpload, remove, store } from '../lib/storage.js';
+import { isAllowedType, isLocalStore, localPathFor, readUpload, remove, signedDownloadUrl, store } from '../lib/storage.js';
 
 const router = Router();
 
@@ -228,13 +228,23 @@ router.post('/gallery/photos/:id/restore', auth, permit('gallery.manage'), wrap(
 /** The image itself, behind the same permission as seeing the project it belongs to. */
 router.get('/gallery/photos/:id/file', auth, permit('projects.view'), wrap(async (req, res) => {
   const photo = await getOne(
-    'SELECT storage_key, thumb_key, mime, filename FROM gallery_photos WHERE id=?', [req.params.id]);
+    'SELECT storage_key, thumb_key, mime, filename, removed_at FROM gallery_photos WHERE id=?', [req.params.id]);
   if (!photo) return res.status(404).json({ error: 'Photo not found' });
 
-  const key = req.query.size === 'thumb' && photo.thumb_key ? photo.thumb_key : photo.storage_key;
-  if (!isLocalStore()) {
-    return res.status(501).json({ error: 'Object storage needs signed downloads configured before use' });
+  /*
+   * A withdrawn photograph leaves the gallery here too.
+   *
+   * The listing hides it, but this route served the bytes to anyone who could see the
+   * project and knew the id — so withdrawing a photo removed it from view without removing
+   * it from reach. Whoever keeps the record still gets it, because they are the ones who
+   * need to see what was taken out and why.
+   */
+  if (photo.removed_at && !can(req, 'gallery.manage')) {
+    return res.status(404).json({ error: 'Photo not found' });
   }
+
+  const key = req.query.size === 'thumb' && photo.thumb_key ? photo.thumb_key : photo.storage_key;
+  if (!isLocalStore()) return res.redirect(302, signedDownloadUrl(key));
   res.type(photo.mime);
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(photo.filename)}"`);
   res.setHeader('Cache-Control', 'private, max-age=3600');

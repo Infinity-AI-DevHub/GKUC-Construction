@@ -7,7 +7,8 @@ const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const SOURCES = ['Material', 'Labour', 'Fuel', 'Equipment', 'Subcontractor', 'Overhead', 'Other'];
 
-router.get('/categories', auth, wrap(async (_req, res) => res.json(await query('SELECT id,name FROM expense_categories ORDER BY name'))));
+router.get('/categories', auth, permit('finance.view', 'finance.manage'),
+  wrap(async (_req, res) => res.json(await query('SELECT id,name FROM expense_categories ORDER BY name'))));
 
 router.post('/categories', auth, permit('finance.manage'), validate(z.object({ name: z.string().min(2).max(120) })), wrap(async (req, res) => {
   const result = await query('INSERT INTO expense_categories (name) VALUES (?)', [req.body.name]);

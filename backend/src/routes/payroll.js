@@ -108,7 +108,20 @@ const reviewSelect = `SELECT r.id,r.review_date reviewDate,r.period,r.quality,r.
   r.overall,r.strengths,r.improvements,e.name employee,e.code employeeCode,e.id employeeId,u.name reviewer
   FROM performance_reviews r JOIN employees e ON e.id=r.employee_id JOIN users u ON u.id=r.reviewer_id`;
 
-router.get('/reviews/all', auth, wrap(async (_req, res) => res.json(await query(`${reviewSelect} ORDER BY r.id DESC`))));
+/*
+ * Appraisals sit with pay, not with the staff directory.
+ *
+ * This was open to any signed-in account, so scores, strengths and the "needs improvement"
+ * notes on every employee were readable by the whole company. It follows the same rights as
+ * salary: the people who run payroll and the people who maintain the register.
+ */
+router.get('/reviews/all', auth, permit('hr.payroll', 'hr.manage'), wrap(async (req, res) => {
+  const rows = await query(`${reviewSelect} ORDER BY r.id DESC`);
+  /* Reading every appraisal in the company is worth a line in the trail. Writes were
+     recorded and reads were not, which leaves no answer to "who looked at this". */
+  await audit(pool, req.user.id, 'READ', 'performance_reviews', '', null, { rows: rows.length }, req.ip);
+  res.json(rows);
+}));
 
 router.post('/reviews/:employeeId', auth, permit('hr.payroll'), validate(z.object({
   reviewDate: isoDate,

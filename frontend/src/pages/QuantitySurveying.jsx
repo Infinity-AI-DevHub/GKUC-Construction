@@ -141,13 +141,18 @@ const OPEN_STATUSES = ['Identified', 'Document purchased', 'Preparing'];
 
 const daysUntil = value => (value ? Math.ceil((new Date(value) - new Date(new Date().toDateString())) / 86400000) : null);
 
-/** "in 6 days", "today", "closed 2 days ago" — the phrasing a person would use. */
-function Countdown({ date, time, live }) {
+/**
+ * "in 6 days", "today", "closed 2 days ago" — the phrasing a person would use.
+ *
+ * `past` names what happened when the date went by, because a tender closes and a price
+ * lapses, and the two should not be described with the same word.
+ */
+function Countdown({ date, time, live, past = 'closed' }) {
   const left = daysUntil(date);
   if (left === null) return <span>—</span>;
   const at = time ? String(time).slice(0, 5) : '';
   const urgent = live && left <= 3;
-  const wording = left < 0 ? `closed ${Math.abs(left)} day${Math.abs(left) === 1 ? '' : 's'} ago`
+  const wording = left < 0 ? `${past} ${Math.abs(left)} day${Math.abs(left) === 1 ? '' : 's'} ago`
     : left === 0 ? `today${at ? ` at ${at}` : ''}`
       : `in ${left} day${left === 1 ? '' : 's'}${at ? ` at ${at}` : ''}`;
   return <div>
@@ -500,8 +505,154 @@ function Subcontractors({ can, data }) {
         <Badge tone={slug(row.status)}>{row.status}</Badge>
       </Row>)}
     </Table>
+    <div style={{ height: '14px' }} />
+    <SubcontractQuotations can={can} data={data} subcontractors={rows} />
     {billing && <BillForm data={data} subcontractors={rows} close={() => setBilling(false)} reload={load} />}
   </>;
+}
+
+const SUBQUOTE_TEMPLATE = 'minmax(130px,.9fr) minmax(180px,1.3fr) minmax(170px,1.2fr) 130px 130px 130px';
+
+/**
+ * Prices asked of subcontractors, and what became of them.
+ *
+ * GKUC keep no standing panel: when a job needs a subcontractor they ask for a price, and
+ * whichever they take is carried into their own quotation to the client. So this is really
+ * a comparison sheet — several prices for one package, one of them chosen — and the record
+ * of where a figure in GKUC's own pricing came from.
+ */
+function SubcontractQuotations({ can, data, subcontractors }) {
+  const [rows, setRows] = useState([]);
+  const [recording, setRecording] = useState(false);
+  const [error, setError] = useState('');
+  const load = () => api('/qs/subcontract-quotations').then(setRows).catch(() => setRows([]));
+  useLiveList(load);
+
+  const decide = async (row, status) => {
+    setError('');
+    const note = status === 'Accepted'
+      ? window.prompt('Why this price? (optional)') ?? ''
+      : window.prompt('Why is it being turned down? (optional)') ?? '';
+    try {
+      await post(`/qs/subcontract-quotations/${row.id}/decision`, { status, note: note || undefined });
+      await load();
+    } catch (failure) { setError(failure.message); }
+  };
+
+  return <>
+    {error && <p className="form-error">{error}</p>}
+    <Table columns={['Reference', 'Subcontractor', 'Package', 'Quoted', 'Stands until', 'Status']}
+      template={SUBQUOTE_TEMPLATE} title="Prices from subcontractors"
+      tools={can.subcontractors
+        ? <button className="secondary" onClick={() => setRecording(true)}>Record a quotation</button>
+        : null}
+      empty="No subcontract prices recorded.">
+      {rows.map(row => {
+        const left = row.validUntil ? daysUntil(row.validUntil) : null;
+        const live = row.status === 'Received';
+        return <Row template={SUBQUOTE_TEMPLATE} key={row.id}>
+          <div>
+            <strong>{row.reference}</strong>
+            <small>{row.theirReference ? `their ref ${row.theirReference}` : '—'}</small>
+          </div>
+          <div>
+            <strong>{row.subcontractor}</strong>
+            <small>{row.trade}</small>
+          </div>
+          <div>
+            <strong>{row.package}</strong>
+            <small>{row.project || 'No project yet'}</small>
+          </div>
+          <div>
+            <strong>{rupees(row.total)}</strong>
+            {row.usedInQuotations > 0 && <small>used in our pricing</small>}
+          </div>
+          <Countdown date={row.validUntil} live={live} past="lapsed" />
+          <div>
+            <Badge tone={slug(row.status)}>{row.status}</Badge>
+            {can.subcontractors && live && <span className="row-actions" style={{ marginTop: '6px' }}>
+              <button className="status-button" onClick={() => decide(row, 'Accepted')}>Take</button>
+              <button className="status-button" onClick={() => decide(row, 'Rejected')}>Decline</button>
+            </span>}
+          </div>
+        </Row>;
+      })}
+    </Table>
+    {recording && <SubcontractQuotationForm data={data} subcontractors={subcontractors}
+      close={() => setRecording(false)} reload={load} />}
+  </>;
+}
+
+/** Follows the shape of the quotations subcontractors actually send: their reference, a
+    delivery address that is the site, per-line discounts, and a short validity. */
+function SubcontractQuotationForm({ data, subcontractors, close, reload }) {
+  const [lines, setLines] = useState([{ description: '', unit: '', quantity: '', rate: '', discount: '0' }]);
+  const total = lines.reduce((sum, line) =>
+    sum + Math.max(0, (Number(line.quantity) || 0) * (Number(line.rate) || 0) - (Number(line.discount) || 0)), 0);
+
+  const change = (index, field, value) => setLines(current =>
+    current.map((line, position) => (position === index ? { ...line, [field]: value } : line)));
+
+  return <FormModal title="Record a subcontractor's quotation" close={close} label="Record quotation" wide
+    onSubmit={async values => {
+      await post('/qs/subcontract-quotations', {
+        subcontractorId: Number(values.subcontractorId),
+        projectId: values.projectId ? Number(values.projectId) : undefined,
+        theirReference: values.theirReference || undefined,
+        package: values.package,
+        quoteDate: values.quoteDate,
+        validityDays: Number(values.validityDays || 7),
+        siteAddress: values.siteAddress || undefined,
+        contactPerson: values.contactPerson || undefined,
+        contactPhone: values.contactPhone || undefined,
+        notes: values.notes || undefined,
+        items: lines.filter(line => line.description.trim()).map(line => ({
+          description: line.description,
+          unit: line.unit || undefined,
+          quantity: Number(line.quantity) || 1,
+          rate: Number(line.rate) || 0,
+          discount: Number(line.discount) || 0
+        }))
+      });
+      await reload();
+    }}>
+    <SelectField name="subcontractorId" label="Who quoted"
+      options={subcontractors.map(row => [row.id, `${row.name} — ${row.trade}`])} />
+    <Field name="theirReference" label="Their quotation number" required={false} placeholder="00243-3" />
+    <Field name="package" label="What it covers" wide placeholder="Interlock paving blocks — SLS 1425:2011" />
+    <SelectField name="projectId" label="For which project"
+      options={[['', 'Not tied to a project yet'], ...data.projects.map(project => [project.id, project.name])]} />
+    <Field name="quoteDate" label="Dated" type="date" defaultValue={todayInput()} />
+    <Field name="validityDays" label="Stands for (days)" type="number" min="1" defaultValue="7" required={false} />
+    <Field name="siteAddress" label="Delivery / site address" wide required={false}
+      placeholder="Hemas Manufactures, Industrial Zone, Dankotuwa" />
+    <Field name="contactPerson" label="Their contact" required={false} />
+    <Field name="contactPhone" label="Telephone" required={false} />
+
+    <div className="wide">
+      <h3 className="detail-heading">What they quoted</h3>
+      {lines.map((line, index) => <div className="subquote-line" key={index}>
+        <input placeholder="Description" value={line.description}
+          onChange={event => change(index, 'description', event.target.value)} />
+        <input placeholder="Unit" value={line.unit} onChange={event => change(index, 'unit', event.target.value)} />
+        <input placeholder="Qty" type="number" step="any" value={line.quantity}
+          onChange={event => change(index, 'quantity', event.target.value)} />
+        <input placeholder="Rate" type="number" step="any" value={line.rate}
+          onChange={event => change(index, 'rate', event.target.value)} />
+        <input placeholder="Discount" type="number" step="any" value={line.discount}
+          onChange={event => change(index, 'discount', event.target.value)} />
+      </div>)}
+      <div className="subquote-foot">
+        <button type="button" className="secondary"
+          onClick={() => setLines(current => [...current, { description: '', unit: '', quantity: '', rate: '', discount: '0' }])}>
+          Add line
+        </button>
+        <strong>Total {rupees(total)}</strong>
+      </div>
+    </div>
+    <TextArea name="notes" label="Anything they noted" required={false}
+      placeholder="Price includes transport & unloading" />
+  </FormModal>;
 }
 
 /* ----------------------------------------------------------------- forms */

@@ -10,7 +10,7 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 /* ------------------------------------------------------------------ Quotations */
 
-const quoteSelect = `SELECT q.id,q.reference,q.title,q.client_name client,q.quote_date quoteDate,q.valid_until validUntil,
+const quoteSelect = `SELECT q.id,q.reference,q.title,q.client_name client,q.engagement,q.main_contractor mainContractor,q.quote_date quoteDate,q.valid_until validUntil,
   q.subtotal,q.markup_percent markupPercent,q.vat_percent vatPercent,q.total,q.status,q.notes,q.terms,
   q.boq_id boqId,b.reference boqReference,q.project_id projectId,p.name project,q.inquiry_id inquiryId,u.name preparedBy
   FROM quotations_client q LEFT JOIN boqs b ON b.id=q.boq_id LEFT JOIN projects p ON p.id=q.project_id
@@ -22,7 +22,7 @@ router.get('/quotations', auth, permit('qs.view'), wrap(async (_req, res) =>
 router.get('/quotations/:id', auth, permit('qs.view'), wrap(async (req, res) => {
   const quotation = await getOne(`${quoteSelect} WHERE q.id=?`, [req.params.id]);
   if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
-  const items = await query('SELECT id,category,description,unit,quantity,rate,amount FROM quotation_items WHERE quotation_id=? ORDER BY id',
+  const items = await query('SELECT id,category,description,unit,quantity,rate,amount,source_subquote_id sourceSubquoteId FROM quotation_items WHERE quotation_id=? ORDER BY id',
     [quotation.id]);
   res.json({ ...quotation, items });
 }));
@@ -219,6 +219,11 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
   markupPercent: z.number().min(0).max(100).default(0),
   vatPercent: z.number().min(0).max(100).default(0),
   inquiryId: z.number().int().positive().optional(),
+  /* GKUC are hired as a subcontractor as often as they hire one. Same document, different
+     footing — recording which is which is what makes "how much of our work is subcontracted
+     in" answerable. */
+  engagement: z.enum(['Direct', 'As subcontractor']).default('Direct'),
+  mainContractor: z.string().max(180).optional(),
   notes: z.string().max(1000).optional()
 })), wrap(async (req, res) => {
   const boq = await getOne(`SELECT b.*,p.name project,p.client FROM boqs b JOIN projects p ON p.id=b.project_id WHERE b.id=?`,
@@ -235,12 +240,13 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
   const id = await transaction(async connection => {
     const [result] = await connection.execute(`INSERT INTO quotations_client
       (reference,boq_id,project_id,inquiry_id,client_name,title,quote_date,valid_until,subtotal,
-       markup_percent,vat_percent,total,notes,prepared_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       markup_percent,vat_percent,total,notes,engagement,main_contractor,prepared_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [reference, boq.id, boq.project_id, req.body.inquiryId || null,
       req.body.clientName || boq.client, req.body.title || describe(boq),
       req.body.quoteDate || today(), req.body.validUntil || null, subtotal,
-      req.body.markupPercent, req.body.vatPercent, total, req.body.notes || null, req.user.id]);
+      req.body.markupPercent, req.body.vatPercent, total, req.body.notes || null,
+      req.body.engagement, req.body.mainContractor || null, req.user.id]);
     /* The lines are copied, not referenced: a later BOQ edit must not silently restate a
        quotation the client has already been given. */
     for (const item of items) {
@@ -669,6 +675,198 @@ router.get('/tenders/:id/commitments/document', auth, permit('qs.view'), wrap(as
   };
   const context = await documentContext(getOne);
   res.type('html').send(commitmentsDocument({ ...context, tender, commitments, totals, asAt: today() }));
+}));
+
+/* -------------------------------------------------- Subcontract quotations (inbound) */
+
+/*
+ * What a subcontractor quoted us.
+ *
+ * GKUC do not keep subcontractors on retainer: when a job needs one they ask for a price,
+ * and the figure that comes back is carried into GKUC's own quotation and then its invoices.
+ * Recording the quotation is therefore not filing — it is where a cost line in GKUC's own
+ * pricing comes from, and being able to point at it afterwards is the whole value.
+ */
+
+const subQuoteSelect = `SELECT q.id,q.reference,q.their_reference theirReference,q.package,
+  q.quote_date quoteDate,q.validity_days validityDays,q.valid_until validUntil,
+  q.site_address siteAddress,q.contact_person contactPerson,q.contact_phone contactPhone,
+  q.subtotal,q.discount_total discountTotal,q.total,q.notes,q.status,
+  q.decision_note decisionNote,q.decided_at decidedAt,
+  q.project_id projectId,p.name project,q.boq_id boqId,
+  s.id subcontractorId,s.name subcontractor,s.trade,
+  u.name recordedBy,d.name decidedBy,
+  (SELECT COUNT(*) FROM quotation_items qi WHERE qi.source_subquote_id=q.id) usedInQuotations
+  FROM subcontractor_quotations q
+  JOIN subcontractors s ON s.id=q.subcontractor_id
+  JOIN users u ON u.id=q.created_by
+  LEFT JOIN users d ON d.id=q.decided_by
+  LEFT JOIN projects p ON p.id=q.project_id`;
+
+const lineTotal = item =>
+  Math.max(0, Number(item.quantity) * Number(item.rate) - Number(item.discount || 0));
+
+router.get('/subcontract-quotations', auth, permit('qs.view', 'projects.view'), wrap(async (req, res) => {
+  const filters = [];
+  const params = [];
+  if (req.query.projectId) { filters.push('q.project_id=?'); params.push(req.query.projectId); }
+  if (req.query.status) { filters.push('q.status=?'); params.push(req.query.status); }
+  if (req.query.package) { filters.push('q.package=?'); params.push(req.query.package); }
+  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  res.json(await query(`${subQuoteSelect} ${where} ORDER BY q.quote_date DESC, q.id DESC`, params));
+}));
+
+router.get('/subcontract-quotations/:id', auth, permit('qs.view', 'projects.view'), wrap(async (req, res) => {
+  const quote = await getOne(`${subQuoteSelect} WHERE q.id=?`, [req.params.id]);
+  if (!quote) return res.status(404).json({ error: 'Subcontract quotation not found' });
+  quote.items = await query(
+    `SELECT id,description,unit,quantity,rate,discount,amount FROM subcontractor_quotation_items
+     WHERE quotation_id=? ORDER BY position,id`, [quote.id]);
+  return res.json(quote);
+}));
+
+router.post('/subcontract-quotations', auth, permit('subcontractors.manage'), validate(z.object({
+  subcontractorId: z.number().int().positive(),
+  projectId: z.number().int().positive().optional(),
+  boqId: z.number().int().positive().optional(),
+  theirReference: z.string().max(80).optional(),
+  package: z.string().min(2).max(200),
+  quoteDate: isoDate,
+  validityDays: z.number().int().min(1).max(365).default(7),
+  siteAddress: z.string().max(300).optional(),
+  contactPerson: z.string().max(120).optional(),
+  contactPhone: z.string().max(40).optional(),
+  notes: z.string().max(1000).optional(),
+  items: z.array(z.object({
+    description: z.string().min(2).max(300),
+    unit: z.string().max(30).optional(),
+    quantity: z.number().positive().default(1),
+    rate: z.number().nonnegative().default(0),
+    discount: z.number().nonnegative().default(0)
+  })).min(1)
+})), wrap(async (req, res) => {
+  const body = req.body;
+  const sub = await getOne('SELECT id,name FROM subcontractors WHERE id=? AND active=1', [body.subcontractorId]);
+  if (!sub) return res.status(404).json({ error: 'Subcontractor not found' });
+  if (body.projectId && !await getOne('SELECT id FROM projects WHERE id=?', [body.projectId])) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const subtotal = body.items.reduce((sum, item) => sum + Number(item.quantity) * Number(item.rate), 0);
+  const discountTotal = body.items.reduce((sum, item) => sum + Number(item.discount || 0), 0);
+  const total = body.items.reduce((sum, item) => sum + lineTotal(item), 0);
+  const reference = await nextReference('SQ', 'subcontractor_quotations');
+
+  const id = await transaction(async connection => {
+    const [result] = await connection.execute(
+      `INSERT INTO subcontractor_quotations
+        (reference,subcontractor_id,project_id,boq_id,their_reference,package,quote_date,validity_days,
+         valid_until,site_address,contact_person,contact_phone,subtotal,discount_total,total,notes,created_by)
+       VALUES (?,?,?,?,?,?,?,?,DATE_ADD(?, INTERVAL ? DAY),?,?,?,?,?,?,?,?)`,
+      [reference, sub.id, body.projectId || null, body.boqId || null, body.theirReference || null,
+        body.package, body.quoteDate, body.validityDays, body.quoteDate, body.validityDays,
+        body.siteAddress || null, body.contactPerson || null, body.contactPhone || null,
+        subtotal, discountTotal, total, body.notes || null, req.user.id]);
+
+    for (const [position, item] of body.items.entries()) {
+      await connection.execute(
+        `INSERT INTO subcontractor_quotation_items
+          (quotation_id,description,unit,quantity,rate,discount,amount,position) VALUES (?,?,?,?,?,?,?,?)`,
+        [result.insertId, item.description, item.unit || null, item.quantity, item.rate,
+          item.discount || 0, lineTotal(item), position]);
+    }
+    await audit(connection, req.user.id, 'CREATE', 'subcontract_quotation', result.insertId, null,
+      { reference, subcontractor: sub.name, total }, req.ip);
+    return result.insertId;
+  });
+
+  res.status(201).json(await getOne(`${subQuoteSelect} WHERE q.id=?`, [id]));
+}));
+
+/**
+ * Taking a price, or turning one down.
+ *
+ * Accepting one marks the others quoted for the same package on the same project as
+ * superseded, so the file shows which price was taken and against what — the comparison is
+ * the record, not a side note.
+ */
+router.post('/subcontract-quotations/:id/decision', auth, permit('subcontractors.manage'), validate(z.object({
+  status: z.enum(['Accepted', 'Rejected']),
+  note: z.string().max(400).optional()
+})), wrap(async (req, res) => {
+  const quote = await getOne('SELECT * FROM subcontractor_quotations WHERE id=?', [req.params.id]);
+  if (!quote) return res.status(404).json({ error: 'Subcontract quotation not found' });
+  if (quote.status === 'Accepted' && req.body.status === 'Accepted') {
+    return res.status(409).json({ error: 'This quotation has already been accepted' });
+  }
+
+  await transaction(async connection => {
+    await connection.execute(
+      'UPDATE subcontractor_quotations SET status=?, decided_at=UTC_TIMESTAMP(), decided_by=?, decision_note=? WHERE id=?',
+      [req.body.status, req.user.id, req.body.note || null, quote.id]);
+
+    if (req.body.status === 'Accepted') {
+      await connection.execute(
+        `UPDATE subcontractor_quotations SET status='Superseded'
+         WHERE id<>? AND package=? AND status='Received'
+           AND ((project_id IS NULL AND ? IS NULL) OR project_id=?)`,
+        [quote.id, quote.package, quote.project_id, quote.project_id]);
+    }
+    await audit(connection, req.user.id, 'UPDATE', 'subcontract_quotation', quote.id, quote, req.body, req.ip);
+  });
+
+  res.json(await getOne(`${subQuoteSelect} WHERE q.id=?`, [quote.id]));
+}));
+
+/**
+ * Carrying a subcontract price into one of GKUC's own quotations.
+ *
+ * This is the step the client described in one line — "they add that amount for their own
+ * quotations" — and the one the system had no answer for. The subcontractor's total becomes
+ * a priced line on GKUC's quotation with a markup on top, and the line remembers which
+ * quotation it came from, so the origin of the figure survives the year between quoting and
+ * arguing about it. The quotation's own totals are recomputed from its lines afterwards.
+ */
+router.post('/quotations/:id/subcontract-line', auth, permit('qs.quotation'), validate(z.object({
+  subQuotationId: z.number().int().positive(),
+  markupPercent: z.number().min(0).max(200).default(0),
+  description: z.string().max(300).optional()
+})), wrap(async (req, res) => {
+  const quotation = await getOne('SELECT * FROM quotations_client WHERE id=?', [req.params.id]);
+  if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
+  if (quotation.status !== 'Draft') {
+    return res.status(409).json({ error: 'Only a draft quotation can be changed' });
+  }
+  const sub = await getOne(
+    `SELECT q.*, s.name subcontractor FROM subcontractor_quotations q
+     JOIN subcontractors s ON s.id=q.subcontractor_id WHERE q.id=?`, [req.body.subQuotationId]);
+  if (!sub) return res.status(404).json({ error: 'Subcontract quotation not found' });
+  if (sub.status === 'Rejected' || sub.status === 'Superseded') {
+    return res.status(409).json({ error: `That subcontract quotation was ${sub.status.toLowerCase()}` });
+  }
+
+  const cost = Number(sub.total);
+  const amount = Math.round(cost * (1 + Number(req.body.markupPercent) / 100) * 100) / 100;
+
+  await transaction(async connection => {
+    await connection.execute(
+      `INSERT INTO quotation_items (quotation_id,category,description,unit,quantity,rate,amount,source_subquote_id)
+       VALUES (?,'Subcontract',?,?,1,?,?,?)`,
+      [quotation.id, req.body.description || `${sub.package} — ${sub.subcontractor}`, 'sum', amount, amount, sub.id]);
+
+    const [[totals]] = await connection.execute(
+      'SELECT COALESCE(SUM(amount),0) subtotal FROM quotation_items WHERE quotation_id=?', [quotation.id]);
+    const subtotal = Number(totals.subtotal);
+    const withMarkup = subtotal * (1 + Number(quotation.markup_percent) / 100);
+    const total = withMarkup * (1 + Number(quotation.vat_percent) / 100);
+    await connection.execute('UPDATE quotations_client SET subtotal=?, total=? WHERE id=?',
+      [subtotal, Math.round(total * 100) / 100, quotation.id]);
+
+    await audit(connection, req.user.id, 'UPDATE', 'quotation', quotation.id, null,
+      { addedSubcontract: sub.reference, cost, markupPercent: req.body.markupPercent, amount }, req.ip);
+  });
+
+  res.status(201).json(await getOne(`${quoteSelect} WHERE q.id=?`, [quotation.id]));
 }));
 
 /* ------------------------------------------------------------------ Retention */

@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, hashPassword, pool, query } from '../db.js';
-import { auth, permit, validate, wrap } from '../lib/http.js';
+import { auth, permissionsFor, permit, validate, wrap } from '../lib/http.js';
+import { PRIVILEGED_KEYS } from '../lib/permissions.js';
+import { strongPassword } from '../lib/passwords.js';
 import { runAlertScan } from '../alerts.js';
 import { documentContext, quotationDocument } from '../lib/documents.js';
 import { BLOCKS, DEFAULT_DESIGN, FONTS, HEADER_PIECES, normaliseDesign } from '../lib/document-design.js';
@@ -21,7 +23,9 @@ const COMPANY = `SELECT name,address,telephone,email,tin,vat_number vatNumber,
   bank_details bankDetails,vat_percent vatPercent
   FROM company_settings WHERE id=1`;
 
-router.get('/company', auth, wrap(async (_req, res) => res.json(await getOne(COMPANY) || {})));
+/* Bank account, TIN and VAT registration live here, so this is not general reading — it is
+   the Administration screen's own data and follows the same right as editing it. */
+router.get('/company', auth, permit('admin.users'), wrap(async (_req, res) => res.json(await getOne(COMPANY) || {})));
 
 router.put('/company', auth, permit('admin.users'), validate(z.object({
   name: z.string().min(2).max(180),
@@ -62,7 +66,7 @@ const asBooleans = row => (row && {
   showBankDetails: Boolean(row.showBankDetails)
 });
 
-router.get('/document-settings', auth, wrap(async (_req, res) =>
+router.get('/document-settings', auth, permit('admin.users'), wrap(async (_req, res) =>
   res.json(asBooleans(await getOne(DOCUMENT_SETTINGS)) || {})));
 
 router.put('/document-settings', auth, permit('admin.users'), validate(z.object({
@@ -97,7 +101,7 @@ router.put('/document-settings', auth, permit('admin.users'), validate(z.object(
  * layout and colour, and a person arranging a page should not need a real client's figures
  * in front of them to do it — nor should a design change touch a real record.
  */
-router.get('/document-design', auth, wrap(async (_req, res) => {
+router.get('/document-design', auth, permit('admin.users'), wrap(async (_req, res) => {
   const row = await getOne('SELECT design FROM document_settings WHERE id=1');
   const stored = typeof row?.design === 'string'
     ? (() => { try { return JSON.parse(row.design); } catch { return null; } })()
@@ -144,7 +148,7 @@ router.get('/users/roles', auth, permit('admin.users', 'admin.roles'), wrap(asyn
 router.post('/users', auth, permit('admin.users'), validate(z.object({
   name: z.string().min(2).max(120),
   email: z.string().email(),
-  password: z.string().min(10),
+  password: strongPassword,
   roleId: z.number().int().positive()
 })), wrap(async (req, res) => {
   const body = req.body;
@@ -159,12 +163,35 @@ router.post('/users', auth, permit('admin.users'), validate(z.object({
 
 router.patch('/users/:id', auth, permit('admin.users'), validate(z.object({
   active: z.boolean().optional(),
-  password: z.string().min(10).optional()
+  password: strongPassword.optional()
 })), wrap(async (req, res) => {
-  const before = await getOne('SELECT id,name,email,role,active FROM users WHERE id=?', [req.params.id]);
+  const before = await getOne('SELECT id,name,email,role,role_id,active FROM users WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'User not found' });
   if (Number(req.params.id) === req.user.id && req.body.active === false) {
     return res.status(409).json({ error: 'You cannot deactivate your own account' });
+  }
+
+  /*
+   * You cannot reach past your own authority.
+   *
+   * Holding admin.users meant being able to set anyone's password, the Managing Director's
+   * included — and then sign in as them. A user-administrator is meant to manage accounts,
+   * not to acquire every permission in the system by way of a password reset. Acting on an
+   * account whose rights exceed your own is refused; the MD, holding everything, is
+   * unaffected and can still act on anyone.
+   */
+  if (Number(req.params.id) !== req.user.id) {
+    const theirs = new Set(await permissionsFor(before.id, before.role_id));
+    const mine = new Set(req.user.permissions);
+    /* Only the authorities that would amount to taking over the system are protected, so
+       resetting an ordinary colleague's password remains help desk work. */
+    const beyond = PRIVILEGED_KEYS.filter(key => theirs.has(key) && !mine.has(key));
+    if (beyond.length) {
+      return res.status(403).json({
+        error: 'This account holds administrative authority you do not, so it cannot be changed '
+          + `from here: ${beyond.join(', ')}`
+      });
+    }
   }
   if (req.body.active !== undefined) {
     await query('UPDATE users SET active=? WHERE id=?', [req.body.active, req.params.id]);
@@ -180,14 +207,20 @@ router.patch('/users/:id', auth, permit('admin.users'), validate(z.object({
 }));
 
 /* Immutable audit trail */
-router.get('/audit', auth, permit('admin.users'), wrap(async (req, res) => {
+/* admin.audit exists for exactly this and was going unused, so user-management authority
+   silently carried the power to read everyone's activity trail. */
+router.get('/audit', auth, permit('admin.audit'), wrap(async (req, res) => {
   const filters = [];
   const params = [];
   if (req.query.entity) { filters.push('a.entity=?'); params.push(req.query.entity); }
   if (req.query.action) { filters.push('a.action=?'); params.push(req.query.action); }
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-  res.json(await query(`SELECT a.id,u.name user,a.action,a.entity,a.entity_id entityId,a.ip_address ip,a.created_at createdAt
-    FROM audit_logs a LEFT JOIN users u ON u.id=a.user_id ${where} ORDER BY a.id DESC LIMIT 500`, params));
+  const rows = await query(`SELECT a.id,u.name user,a.action,a.entity,a.entity_id entityId,a.ip_address ip,a.created_at createdAt
+    FROM audit_logs a LEFT JOIN users u ON u.id=a.user_id ${where} ORDER BY a.id DESC LIMIT 500`, params);
+  /* Reading the trail is itself an event the trail should hold — otherwise the one record
+     of who did what is the one place nobody's activity is recorded. */
+  await audit(pool, req.user.id, 'READ', 'audit_logs', '', null, { filters: req.query, rows: rows.length }, req.ip);
+  res.json(rows);
 }));
 
 /*
@@ -231,7 +264,7 @@ router.post('/notifications/read-all', auth, wrap(async (req, res) => {
 }));
 
 /** Manual trigger for the deadline/threshold scan; it also runs on a schedule. */
-router.post('/notifications/scan', auth, permit('admin.users'), wrap(async (_req, res) => {
+router.post('/notifications/scan', auth, permit('admin.notifications'), wrap(async (_req, res) => {
   res.json({ raised: await runAlertScan() });
 }));
 

@@ -121,9 +121,20 @@ test('purchase request, order, goods receipt and stock stay in step', async () =
   const after = (await call(owner, 'GET', '/materials')).body.find(material => material.id === 1);
   assert.equal(Number(after.stock), Number(before.stock) + 100);
 
-  /* Receiving goods charges the project, so budget monitoring reflects it immediately. */
+  /*
+   * Stock received into the store is not a project cost yet — it becomes one when it is
+   * issued to a site. Charging it here as well billed the project twice for the same
+   * material, so a stocked line deliberately raises no expense on receipt.
+   */
   const expenses = await call(owner, 'GET', '/finance/expenses?projectId=1');
-  assert.ok(expenses.body.some(expense => expense.originType === 'purchase_order'));
+  assert.ok(!expenses.body.some(expense => expense.originType === 'purchase_order'),
+    'receiving stocked material does not charge the project');
+
+  const issued = await call(store, 'POST', '/materials/1/movements', { type: 'Issue', quantity: 10, projectId: 1 });
+  assert.equal(issued.status, 201);
+  const afterIssue = await call(owner, 'GET', '/finance/expenses?projectId=1');
+  assert.ok(afterIssue.body.some(expense => expense.originType === 'stock_movement'),
+    'issuing it to the site is what charges the site');
 });
 
 test('issuing stock cannot drive a balance negative', async () => {
@@ -271,14 +282,27 @@ test('stores uploads, enforces type and permission, and lists them on the record
   const missing = await send(owner, 'task', 99999, 'site.png', 'image/png');
   assert.equal(missing.status, 404);
 
-  /* The file is served back and appears on the record it belongs to. */
-  const served = await fetch(`http://127.0.0.1:${port}${stored.body.url}`);
-  assert.equal(served.status, 200);
+  /*
+   * Stored files are not public. They used to be mounted statically, which put every
+   * contract and identity document one URL away from anyone at all; they now travel through
+   * a route that applies the same permission as seeing the file listed.
+   */
+  const byUrl = await fetch(`http://127.0.0.1:${port}${stored.body.url}`);
+  assert.equal(byUrl.status, 404, 'the old public path serves nothing');
+
+  const anonymous = await fetch(`http://127.0.0.1:${port}/api/uploads/file/${stored.body.id}`);
+  assert.equal(anonymous.status, 401, 'and the file needs a session');
+
+  const served = await fetch(`http://127.0.0.1:${port}/api/uploads/file/${stored.body.id}`,
+    { headers: { authorization: `Bearer ${owner}` } });
+  assert.equal(served.status, 200, 'someone who may see the record gets the file');
+
   const task = await call(owner, 'GET', '/tasks/1');
   assert.ok(task.body.attachments.some(file => file.id === stored.body.id));
 
   assert.equal((await call(owner, 'DELETE', `/uploads/${stored.body.id}`)).status, 204);
-  assert.equal((await fetch(`http://127.0.0.1:${port}${stored.body.url}`)).status, 404, 'deleting removes the object too');
+  assert.equal((await fetch(`http://127.0.0.1:${port}/api/uploads/file/${stored.body.id}`,
+    { headers: { authorization: `Bearer ${owner}` } })).status, 404, 'deleting removes the record and the object');
 });
 
 test('an inquiry converts into a registered project', async () => {

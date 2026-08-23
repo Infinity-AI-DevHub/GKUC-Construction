@@ -296,6 +296,33 @@ async function tenderAlerts(stamp, alerts) {
   }
 }
 
+/*
+ * A subcontractor's price does not stand for long — the one on file is good for seven days.
+ * If it lapses before GKUC's own quotation goes out, the figure carried into that quotation
+ * is no longer one anybody has agreed to.
+ */
+async function subcontractQuoteAlerts(stamp, alerts) {
+  const rows = await query(`SELECT q.id,q.reference,q.package,q.total,q.valid_until,s.name subcontractor
+    FROM subcontractor_quotations q JOIN subcontractors s ON s.id=q.subcontractor_id
+    WHERE q.status='Received' AND q.valid_until IS NOT NULL
+      AND q.valid_until <= DATE_ADD(CURDATE(), INTERVAL 5 DAY)`);
+  for (const row of rows) {
+    const remaining = days(row.valid_until);
+    alerts.push({
+      key: `subquote:${row.id}:${stamp}`,
+      audience: 'subcontractors.manage',
+      severity: remaining < 0 ? 'Warning' : 'Critical',
+      title: remaining < 0
+        ? `Subcontract price has lapsed — ${row.subcontractor}`
+        : `Subcontract price expires in ${remaining} day(s) — ${row.subcontractor}`,
+      message: `${row.reference} for ${row.package}, ${money(row.total)}, stands until `
+        + `${onDate(row.valid_until)}. Decide on it or ask for it to be held.`,
+      referenceType: 'subcontract_quotation',
+      referenceId: row.id
+    });
+  }
+}
+
 async function pendingApprovalAlerts(stamp, alerts) {
   const [requests] = await Promise.all([query("SELECT COUNT(*) count FROM purchase_requests WHERE status='Pending'")]);
   const pending = requests[0].count;
@@ -326,6 +353,7 @@ export async function runAlertScan() {
     serviceScheduleAlerts(stamp, alerts),
     retentionAlerts(stamp, alerts),
     tenderAlerts(stamp, alerts),
+    subcontractQuoteAlerts(stamp, alerts),
     pendingApprovalAlerts(stamp, alerts)
   ]);
   for (const alert of alerts) await raise(alert);
