@@ -162,7 +162,7 @@ export async function seedIfEmpty() {
       await run('INSERT INTO boq_items (boq_id,category,description,unit,quantity,rate,amount) VALUES (?,?,?,?,?,?,?)',
         [id, category, description, unit, quantity, rate, quantity * rate]);
     }
-    await run('UPDATE boqs SET total=?, approved_by=1, approved_at=UTC_TIMESTAMP() WHERE id=?', [boqTotal, boqId]);
+    await run('UPDATE boqs SET total=?, approved_by=1, approved_at=NOW() WHERE id=?', [boqTotal, boqId]);
     /* The approved BOQ is the project's budget, exactly as it works once the system is live. */
     await run('UPDATE projects SET budget=? WHERE id=1', [boqTotal]);
 

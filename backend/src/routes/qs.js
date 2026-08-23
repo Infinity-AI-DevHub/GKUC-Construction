@@ -802,7 +802,7 @@ router.post('/subcontract-quotations/:id/decision', auth, permit('subcontractors
 
   await transaction(async connection => {
     await connection.execute(
-      'UPDATE subcontractor_quotations SET status=?, decided_at=UTC_TIMESTAMP(), decided_by=?, decision_note=? WHERE id=?',
+      'UPDATE subcontractor_quotations SET status=?, decided_at=NOW(), decided_by=?, decision_note=? WHERE id=?',
       [req.body.status, req.user.id, req.body.note || null, quote.id]);
 
     if (req.body.status === 'Accepted') {

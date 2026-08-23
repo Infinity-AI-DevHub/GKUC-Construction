@@ -12,11 +12,34 @@ const config = {
   connectionLimit: Number(process.env.DB_POOL_SIZE || 10),
   queueLimit: 0,
   charset: 'utf8mb4',
-  timezone: 'Z',
+  /*
+   * The business runs in Sri Lanka, so the database and the application agree on one
+   * wall clock: Asia/Colombo, +05:30. The server's own timezone is deliberately not
+   * consulted — a VPS in Europe would otherwise decide when a Sri Lankan working day
+   * starts and ends.
+   *
+   * This value has to match the session time_zone set on every connection below, or
+   * mysql2 converts DATETIME values into a zone the database never wrote them in.
+   */
+  timezone: process.env.DB_TIME_ZONE || '+05:30',
+  /*
+   * DATE columns come back as plain 'YYYY-MM-DD' strings rather than Date objects.
+   * A DATE is a calendar day, not an instant: read as a Date it becomes midnight in
+   * some zone, and any conversion after that can move it to the day before.
+   */
+  dateStrings: ['DATE'],
   decimalNumbers: true
 };
 
 export const pool = mysql.createPool(config);
+
+/*
+ * MySQL evaluates NOW() and CURDATE() in the session's timezone, so every connection
+ * has to declare it. Without this the answer depends on how the host running MySQL
+ * happens to be configured.
+ */
+pool.on('connection', connection =>
+  connection.query(`SET time_zone='${(process.env.DB_TIME_ZONE || '+05:30').replace(/'/g, '')}'`));
 export const query = async (sql, params = []) => (await pool.execute(sql, params))[0];
 /*
  * Statements the prepared protocol will not carry — CREATE TRIGGER and anything else with a
@@ -37,8 +60,16 @@ export const today = (date = new Date()) =>
 export const clock = (date = new Date()) =>
   `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 
-/** Formats a DATE read back from MySQL, which arrives as UTC midnight. */
-export const isoDate = value => (value ? new Date(value).toISOString().slice(0, 10) : null);
+/**
+ * Formats a date read back from MySQL. DATE columns already arrive as 'YYYY-MM-DD'
+ * and are returned untouched; anything else is an instant and is rendered as the
+ * calendar day it falls on in the application's timezone, not in UTC.
+ */
+export const isoDate = value => {
+  if (!value) return null;
+  if (typeof value === 'string') return value.slice(0, 10);
+  return today(value);
+};
 
 export function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   return `${salt}:${crypto.scryptSync(password, salt, 64).toString('hex')}`;

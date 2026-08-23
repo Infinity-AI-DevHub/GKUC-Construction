@@ -136,7 +136,7 @@ router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.obje
 router.patch('/leave/:id', auth, permit('hr.manage', 'hr.leave'), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM leave_requests WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Leave request not found' });
-  await query('UPDATE leave_requests SET status=?,decided_by=?,decided_at=UTC_TIMESTAMP() WHERE id=?', [req.body.status, req.user.id, req.params.id]);
+  await query('UPDATE leave_requests SET status=?,decided_by=?,decided_at=NOW() WHERE id=?', [req.body.status, req.user.id, req.params.id]);
   if (req.body.status === 'Approved') await query("UPDATE employees SET status='On leave' WHERE id=?", [before.employee_id]);
   const after = await getOne('SELECT * FROM leave_requests WHERE id=?', [req.params.id]);
   await audit(pool, req.user.id, 'UPDATE', 'leave_request', after.id, before, after, req.ip);

@@ -90,7 +90,7 @@ router.patch('/requests/:id', auth, permit('projects.manage'), validate(z.object
   const before = await getOne('SELECT * FROM purchase_requests WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Purchase request not found' });
   if (before.status === 'Ordered') return res.status(409).json({ error: 'This request has already been ordered' });
-  await query('UPDATE purchase_requests SET status=?,decided_by=?,decided_at=UTC_TIMESTAMP() WHERE id=?', [req.body.status, req.user.id, req.params.id]);
+  await query('UPDATE purchase_requests SET status=?,decided_by=?,decided_at=NOW() WHERE id=?', [req.body.status, req.user.id, req.params.id]);
   const after = await getOne(`${requestList} WHERE r.id=?`, [req.params.id]);
   await audit(pool, req.user.id, req.body.status.toUpperCase(), 'purchase_request', after.id, before, after, req.ip);
   res.json(after);

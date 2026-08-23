@@ -40,7 +40,7 @@ export const auth = wrap(async (req, res, next) => {
   const rows = await query(
     `SELECT u.id,u.name,u.email,u.role,u.role_id,s.id session_id,s.last_seen_at
      FROM sessions s JOIN users u ON u.id=s.user_id
-     WHERE s.token_hash=? AND s.expires_at>UTC_TIMESTAMP() AND u.active=1`, [hash]);
+     WHERE s.token_hash=? AND s.expires_at>NOW() AND u.active=1`, [hash]);
   if (!rows[0]) return res.status(401).json({ error: 'Session expired' });
 
   const session = rows[0];
@@ -54,7 +54,7 @@ export const auth = wrap(async (req, res, next) => {
   /* Written at most once a minute: the point is to notice idleness, not to add a write to
      every request the application makes. */
   if (!lastSeen || idleMs > 60000) {
-    await query('UPDATE sessions SET last_seen_at=UTC_TIMESTAMP() WHERE id=?', [session.session_id]);
+    await query('UPDATE sessions SET last_seen_at=NOW() WHERE id=?', [session.session_id]);
   }
 
   req.user = { id: session.id, name: session.name, email: session.email, role: session.role, role_id: session.role_id };

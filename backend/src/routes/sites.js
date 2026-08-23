@@ -109,7 +109,7 @@ router.post('/projects/:id/reschedule', auth, permit('projects.schedule'), valid
 
   const logId = await transaction(async connection => {
     await connection.execute(
-      'UPDATE projects SET site_status=?, status_reason=?, status_changed_at=UTC_TIMESTAMP() WHERE id=?',
+      'UPDATE projects SET site_status=?, status_reason=?, status_changed_at=NOW() WHERE id=?',
       [req.body.status, req.body.reason, project.id]);
     /* The site being moved to becomes the one that is running. */
     if (destination) await connection.execute("UPDATE projects SET site_status='Active' WHERE id=?", [destination.id]);
