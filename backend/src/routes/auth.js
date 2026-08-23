@@ -57,7 +57,7 @@ async function issueSession(userId) {
   const token = crypto.randomBytes(32).toString('base64url');
   const expires = new Date(Date.now() + SESSION_HOURS * 3600000);
   await query('INSERT INTO sessions (user_id,token_hash,expires_at) VALUES (?,?,?)', [userId, tokenHash(token), expires]);
-  await query('DELETE FROM sessions WHERE expires_at < UTC_TIMESTAMP()');
+  await query('DELETE FROM sessions WHERE expires_at < NOW()');
   return { token, expires };
 }
 

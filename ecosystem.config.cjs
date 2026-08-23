@@ -34,7 +34,12 @@ module.exports = {
     env_production: {
       NODE_ENV: 'production',
       PORT: 4400,
-      TRUST_PROXY: 1
+      TRUST_PROXY: 1,
+      /*
+       * The company works in Sri Lanka. Set here rather than left to the host, so a
+       * server in any datacentre reports the same working day the sites do.
+       */
+      TZ: 'Asia/Colombo'
     }
   }]
 };

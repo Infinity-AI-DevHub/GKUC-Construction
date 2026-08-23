@@ -161,7 +161,7 @@ router.post('/projects/:projectId/gallery/photos', auth, permit('gallery.manage'
     const result = await query(
       `INSERT INTO gallery_photos
         (project_id,folder_id,storage_key,thumb_key,filename,mime,size_bytes,checksum,caption,captured_at,uploaded_by)
-       VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,NOW(),?)`,
       [project.id, folderId, stored.key, thumb?.key || null, stored.filename, stored.mime, stored.size,
         checksum, fields.caption?.slice(0, 400) || null, req.user.id]);
     await audit(pool, req.user.id, 'UPLOAD', 'gallery_photo', result.insertId, null,
@@ -211,7 +211,7 @@ router.delete('/gallery/photos/:id', auth, permit('gallery.manage'), wrap(async 
   if (photo.removed_at) return res.status(409).json({ error: 'This photo has already been withdrawn' });
 
   const reason = typeof req.query.reason === 'string' ? req.query.reason.slice(0, 300) : null;
-  await query('UPDATE gallery_photos SET removed_at=UTC_TIMESTAMP(), removed_by=?, removed_reason=? WHERE id=?',
+  await query('UPDATE gallery_photos SET removed_at=NOW(), removed_by=?, removed_reason=? WHERE id=?',
     [req.user.id, reason, photo.id]);
   await audit(pool, req.user.id, 'WITHDRAW', 'gallery_photo', photo.id, photo, { reason }, req.ip);
   res.json(await getOne(`${photoSelect} WHERE p.id=?`, [photo.id]));
