@@ -46,7 +46,7 @@ export default function Dashboard({ data, go, user, can, onViewAlerts }) {
 
     <div className="project-pulse">
       {data.projects.slice(0, 3).map(project => (
-        <span key={project.id}><small>{project.name.split(' ')[0]}</small><b>{project.progress}%</b></span>
+        <span key={project.id} className="pulse-project"><small>{project.name.split(' ')[0]}</small><b>{project.progress}%</b></span>
       ))}
       <span className="pulse-output"><small>Portfolio output</small><b>{portfolio}%</b></span>
       {/* Money is only shown to those allowed it — the figures arrive empty otherwise, and
