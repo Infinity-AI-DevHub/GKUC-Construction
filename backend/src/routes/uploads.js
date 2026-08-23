@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, can, permit, wrap } from '../lib/http.js';
-import { FOLDERS, allowedExtensions, isLocalStore, localPathFor, MAX_UPLOAD_BYTES, readUpload, remove, storageDriver, store } from '../lib/storage.js';
+import { allowedExtensions, isLocalStore, localPathFor, MAX_UPLOAD_BYTES, readUpload, remove, signedDownloadUrl, storageDriver, store } from '../lib/storage.js';
 
 const router = Router();
 
@@ -29,6 +29,12 @@ const READERS = {
   vehicle: ['transport.view', 'transport.manage'],
   equipment: ['store.view', 'store.manage']
 };
+
+/*
+ * The record types a file can be attached to. Deliberately its own list rather than the
+ * storage folders: those include places the store writes to that are not attachment owners.
+ */
+const OWNER_TYPES = Object.keys(WRITERS);
 
 /** Each owner type points at the table its id must exist in. */
 const OWNER_TABLES = {
@@ -77,16 +83,11 @@ router.get('/file/:id', auth, wrap(async (req, res) => {
   }
 
   /*
-   * Only the local store is served from here. When R2 is switched on, its bucket must stay
-   * private and this branch must hand back a short-lived signed URL — a public bucket would
-   * put the store back outside these checks, which is the hole this route exists to close.
+   * Object storage answers with a link of its own rather than streaming through here. The
+   * bucket stays private: the URL is signed for a few minutes, and the permission check
+   * above is what decides whether one is issued at all.
    */
-  if (!isLocalStore()) {
-    return res.status(501).json({
-      error: 'Object storage is enabled but signed downloads are not configured. '
-        + 'Keep the bucket private and issue a signed URL here before using R2 in production.'
-    });
-  }
+  if (!isLocalStore()) return res.redirect(302, signedDownloadUrl(file.storageKey));
 
   res.type(file.mime);
   /* Attachment rather than inline: a stored HTML or SVG file rendered in place would run
@@ -100,7 +101,7 @@ router.get('/file/:id', auth, wrap(async (req, res) => {
 }));
 
 router.get('/:ownerType/:ownerId', auth, wrap(async (req, res) => {
-  if (!FOLDERS.includes(req.params.ownerType)) return res.status(404).json({ error: 'Unknown record type' });
+  if (!OWNER_TYPES.includes(req.params.ownerType)) return res.status(404).json({ error: 'Unknown record type' });
   if (!READERS[req.params.ownerType].some(key => can(req, key))) {
     return res.status(403).json({ error: 'You do not have permission to see files on this record' });
   }
@@ -113,7 +114,7 @@ router.get('/:ownerType/:ownerId', auth, wrap(async (req, res) => {
  */
 router.post('/:ownerType/:ownerId', auth, wrap(async (req, res, next) => {
   const { ownerType, ownerId } = req.params;
-  if (!FOLDERS.includes(ownerType)) return res.status(404).json({ error: 'Unknown record type' });
+  if (!OWNER_TYPES.includes(ownerType)) return res.status(404).json({ error: 'Unknown record type' });
   if (!can(req, WRITERS[ownerType])) {
     return res.status(403).json({ error: 'You do not have permission to attach files to this record' });
   }

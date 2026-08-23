@@ -29,9 +29,70 @@ const ALLOWED = new Map([
   ['text/csv', 'csv'], ['text/plain', 'txt']
 ]);
 
+/*
+ * Where objects are filed in the store. This is a storage concern and nothing else — the
+ * attachment routes keep their own list of record types they will accept, because the two
+ * are not the same thing: 'gallery' is a place on disk, not something you attach a document
+ * to, and treating one list as both made /api/uploads/gallery/:id fall over with a 500.
+ */
 export const FOLDERS = ['task', 'project', 'employee', 'report', 'vehicle', 'equipment', 'gallery'];
 
 export const isAllowedType = mime => ALLOWED.has(mime);
+
+/*
+ * What the bytes say, not what the uploader claims.
+ *
+ * The content-type on a multipart part is written by the client, so a Windows executable
+ * renamed holiday.jpg and labelled image/jpeg passed every check and was then handed back
+ * to colleagues by a system they trust. Each accepted format is verified against its own
+ * signature instead; the text formats have none, so they are checked for the control bytes
+ * that a binary would carry.
+ */
+const SIGNATURES = {
+  'image/jpeg': buffer => buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff,
+  'image/png': buffer => buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  'image/webp': buffer => buffer.subarray(0, 4).toString('latin1') === 'RIFF'
+    && buffer.subarray(8, 12).toString('latin1') === 'WEBP',
+  /* HEIC and its relatives are ISO base media files: a size, then 'ftyp', then a brand. */
+  'image/heic': buffer => buffer.subarray(4, 8).toString('latin1') === 'ftyp'
+    && /^(heic|heix|hevc|heim|heis|mif1|msf1)/.test(buffer.subarray(8, 12).toString('latin1')),
+  'application/pdf': buffer => buffer.subarray(0, 5).toString('latin1') === '%PDF-',
+  /* The modern Office formats are zip containers; the legacy ones are OLE compound files. */
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': isZip,
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': isZip,
+  'application/msword': isOle,
+  'application/vnd.ms-excel': isOle,
+  'text/csv': isText,
+  'text/plain': isText
+};
+
+function isZip(buffer) {
+  const magic = buffer.subarray(0, 4);
+  return magic.equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))
+    || magic.equals(Buffer.from([0x50, 0x4b, 0x05, 0x06]))
+    || magic.equals(Buffer.from([0x50, 0x4b, 0x07, 0x08]));
+}
+
+function isOle(buffer) {
+  return buffer.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
+}
+
+/* No signature to match, so the test is the absence of the bytes text does not contain. */
+function isText(buffer) {
+  const sample = buffer.subarray(0, 4096);
+  for (const byte of sample) {
+    if (byte === 0) return false;
+    if (byte < 0x09 || (byte > 0x0d && byte < 0x20)) return false;
+  }
+  return true;
+}
+
+/** True when the file's own bytes agree with the type it was sent as. */
+export function contentMatchesType(buffer, mime) {
+  const check = SIGNATURES[mime];
+  /* An accepted type with no verifier would be a hole, so refuse rather than assume. */
+  return typeof check === 'function' && buffer.length >= 12 && check(buffer);
+}
 export const allowedExtensions = () => [...new Set(ALLOWED.values())];
 
 const safeName = name => (name || 'file')
@@ -110,6 +171,49 @@ async function signedR2Request(method, key, body = Buffer.alloc(0), mime = 'appl
   });
 }
 
+/**
+ * A short-lived URL for one object, signed with the same credentials as the writes.
+ *
+ * The protected download routes need to hand the browser something it can fetch directly —
+ * the alternative is streaming every site photograph back through the application. The link
+ * carries its own expiry, so the bucket itself stays private and a URL that leaks stops
+ * working within minutes rather than never.
+ */
+export function signedDownloadUrl(key, seconds = 300) {
+  const { R2_ACCOUNT_ID, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
+  if (!R2_ACCOUNT_ID || !R2_BUCKET || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
+    throw Object.assign(new Error('Object storage is selected but its credentials are not set'), { status: 500 });
+  }
+  const host = `${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = `${dateStamp}/auto/s3/aws4_request`;
+  const canonicalUri = `/${R2_BUCKET}/${key.split('/').map(encodeURIComponent).join('/')}`;
+
+  const params = new URLSearchParams({
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': `${R2_ACCESS_KEY_ID}/${scope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(seconds),
+    'X-Amz-SignedHeaders': 'host'
+  });
+  /* The signature covers the query string, so it has to be built in sorted order. */
+  const canonicalQuery = [...params.entries()].sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+
+  const canonicalRequest = ['GET', canonicalUri, canonicalQuery, `host:${host}\n`, 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
+    crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
+
+  const hmac = (secret, data) => crypto.createHmac('sha256', secret).update(data).digest();
+  let signingKey = hmac(`AWS4${R2_SECRET_ACCESS_KEY}`, dateStamp);
+  for (const part of ['auto', 's3', 'aws4_request']) signingKey = hmac(signingKey, part);
+  const signature = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex');
+
+  return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+}
+
 const driver = process.env.STORAGE_DRIVER === 'r2' ? r2Driver : localDriver;
 export const storageDriver = driver.name;
 
@@ -120,6 +224,11 @@ export async function store({ folder, filename, mime, buffer }) {
     throw Object.assign(new Error(`Unsupported file type. Allowed: ${allowedExtensions().join(', ')}`), { status: 415 });
   }
   if (!buffer.length) throw Object.assign(new Error('The file is empty'), { status: 400 });
+  if (!contentMatchesType(buffer, mime)) {
+    throw Object.assign(
+      new Error('The file contents do not match the type it was sent as, so it was not stored'),
+      { status: 415 });
+  }
   if (buffer.length > MAX_UPLOAD_BYTES) {
     throw Object.assign(new Error(`Files must be ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB or smaller`), { status: 413 });
   }

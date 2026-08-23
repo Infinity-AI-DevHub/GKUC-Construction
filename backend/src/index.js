@@ -7,6 +7,7 @@ import { query } from './db.js';
 import { migrate } from './schema.js';
 import { seedIfEmpty } from './seed.js';
 import { startAlertScheduler } from './alerts.js';
+import { rateLimit } from './lib/throttle.js';
 
 import authRoutes from './routes/auth.js';
 import bootstrapRoutes from './routes/bootstrap.js';
@@ -31,6 +32,43 @@ import biometricRoutes from './routes/biometric.js';
 import inquiryRoutes from './routes/inquiries.js';
 import payrollRoutes from './routes/payroll.js';
 import galleryRoutes from './routes/gallery.js';
+
+/*
+ * Refuse to start misconfigured, rather than start and behave as though nothing is wrong.
+ *
+ * A missing database password does not fail loudly on its own — MySQL may accept an empty
+ * one, and the application comes up looking healthy. The same goes for object storage
+ * selected without credentials, or a proxy in front of the app that is never declared, which
+ * quietly leaves every request recorded against the proxy's address.
+ */
+function checkConfiguration() {
+  const production = process.env.NODE_ENV === 'production';
+  const missing = [];
+  const warnings = [];
+
+  if (!process.env.DB_USER) missing.push('DB_USER');
+  if (!process.env.DB_PASSWORD) (production ? missing : warnings).push('DB_PASSWORD');
+  if (!process.env.DB_NAME) warnings.push('DB_NAME (defaulting to gkuc_siteops)');
+
+  if (process.env.STORAGE_DRIVER === 'r2') {
+    for (const key of ['R2_ACCOUNT_ID', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']) {
+      if (!process.env[key]) missing.push(key);
+    }
+  }
+
+  if (production && !process.env.TRUST_PROXY) {
+    warnings.push('TRUST_PROXY is unset — set it to the proxy in front of the app, or client '
+      + 'addresses in the audit trail will be the proxy\'s');
+  }
+
+  if (missing.length) {
+    console.error(`Refusing to start: required configuration is missing — ${missing.join(', ')}`);
+    process.exit(1);
+  }
+  for (const warning of warnings) console.warn(`Configuration warning: ${warning}`);
+}
+
+checkConfiguration();
 
 const app = express();
 const workspaceRoot = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
@@ -93,6 +131,13 @@ app.use((req, res, next) => (
 app.set('trust proxy', process.env.TRUST_PROXY
   ? (/^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY)
   : false);
+
+/*
+ * Applied to the whole API. It sits before the routers but after the body parser, so a
+ * refused request is cheap; the per-account key is filled in later by auth, and until then
+ * the address is what is counted.
+ */
+app.use('/api', rateLimit);
 
 app.get('/api/health', async (_req, res, next) => {
   try {

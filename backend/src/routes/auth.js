@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, hashPassword, pool, query, verifyPassword } from '../db.js';
 import { auth, bearer, permissionsFor, tokenHash, validate, wrap } from '../lib/http.js';
+import { passwordProblems, strongPassword } from '../lib/passwords.js';
 
 const SESSION_HOURS = 12;
 const router = Router();
@@ -106,10 +107,18 @@ router.post('/logout', auth, wrap(async (req, res) => {
 
 router.get('/me', auth, (req, res) => res.json({ user: req.user }));
 
-router.post('/password', auth, validate(z.object({ current: z.string().min(8), password: z.string().min(10) })), wrap(async (req, res) => {
+router.post('/password', auth, validate(z.object({ current: z.string().min(1), password: strongPassword })), wrap(async (req, res) => {
   const { hashPassword } = await import('../db.js');
   const user = await getOne('SELECT * FROM users WHERE id=?', [req.user.id]);
   if (!verifyPassword(req.body.current, user.password_hash)) return res.status(401).json({ error: 'Current password is incorrect' });
+
+  /* Checked here as well as in the schema, because only here are the person's own name and
+     address available to test the new password against. */
+  const personal = passwordProblems(req.body.password, { email: user.email, name: user.name });
+  if (personal.length) return res.status(400).json({ error: `The password must ${personal.join(', and ')}` });
+  if (verifyPassword(req.body.password, user.password_hash)) {
+    return res.status(400).json({ error: 'The new password must be different from the current one' });
+  }
   await query('UPDATE users SET password_hash=? WHERE id=?', [hashPassword(req.body.password), req.user.id]);
   await query('DELETE FROM sessions WHERE user_id=? AND token_hash<>?', [req.user.id, tokenHash(bearer(req))]);
   await audit(pool, req.user.id, 'PASSWORD_CHANGE', 'user', req.user.id, null, null, req.ip);

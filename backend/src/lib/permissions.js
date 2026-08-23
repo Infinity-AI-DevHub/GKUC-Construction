@@ -6,6 +6,20 @@
  * moving an authority never requires a code change.
  */
 
+/*
+ * The permissions that confer control over the system itself, rather than over one
+ * department's work.
+ *
+ * Taking over an account that holds one of these is how a limited administrator becomes an
+ * unlimited one: reset the Managing Director's password, sign in as them, and every other
+ * permission follows. Resetting an ordinary colleague's password is help desk work and
+ * stays possible; reaching an account that can rewrite the rules is not.
+ */
+export const PRIVILEGED_KEYS = [
+  'admin.users', 'admin.roles', 'admin.audit', 'admin.notifications',
+  'finance.pay', 'finance.invoice', 'hr.payroll'
+];
+
 export const DEPARTMENTS = [
   'Company', 'Finance', 'Human Resources', 'Quantity Surveying',
   'Transport', 'Construction & Coordination', 'Stores', 'Administration'

@@ -668,6 +668,15 @@ async function createDocumentSettingsTable() {
  * withdrawn from view, but neither the clock nor the file behind it can be rewritten — and
  * a withdrawn photo leaves its record behind, so the gallery cannot be quietly thinned out.
  */
+async function hardenSessions() {
+  /* Sessions expired 12 hours after sign-in whatever happened in between, so a browser left
+     open on a site office desk stayed usable all day. Recording last use lets an idle one
+     lapse on its own. */
+  await addColumn('sessions', 'last_seen_at', 'DATETIME NULL');
+  await addColumn('sessions', 'user_agent', 'VARCHAR(255) NULL');
+  await addIndex('sessions', 'idx_session_seen', 'INDEX idx_session_seen(last_seen_at)');
+}
+
 async function createGalleryTables() {
   await query(`CREATE TABLE IF NOT EXISTS gallery_folders (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -925,6 +934,89 @@ async function createQsTables() {
   ) ENGINE=InnoDB`);
 }
 
+/*
+ * Subcontract quotations, in both directions.
+ *
+ * GKUC keep no standing panel of subcontractors. When a job needs one they ask for a price,
+ * the subcontractor sends a quotation, and that figure is carried into GKUC's own quotation
+ * to the client and later into the invoice. So the received quotation is not a filing-cabinet
+ * document — it is where a cost line in GKUC's own pricing comes from, and the link between
+ * the two is the thing worth recording.
+ *
+ * The columns follow a real one: a supplier reference of their own, a delivery address that
+ * is the site rather than the office, per-line discounts, and a validity measured in days —
+ * the example on file stands for seven, which is short enough that knowing when it lapses
+ * matters.
+ *
+ * The other direction needs no new table. GKUC quote main contractors using the same
+ * quotation the product already produces; what was missing was any record that a particular
+ * quotation was issued as a subcontractor rather than direct to an end client.
+ */
+async function createSubcontractQuotationTables() {
+  await query(`CREATE TABLE IF NOT EXISTS subcontractor_quotations (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    reference VARCHAR(60) NOT NULL UNIQUE,
+    subcontractor_id BIGINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NULL,
+    boq_id BIGINT UNSIGNED NULL,
+    /* Their number for it, which is what either side will quote on the telephone. */
+    their_reference VARCHAR(80) NULL,
+    package VARCHAR(200) NOT NULL,
+    quote_date DATE NOT NULL,
+    validity_days SMALLINT UNSIGNED NOT NULL DEFAULT 7,
+    valid_until DATE NULL,
+    site_address VARCHAR(300) NULL,
+    contact_person VARCHAR(120) NULL,
+    contact_phone VARCHAR(40) NULL,
+    subtotal DECIMAL(15,2) NOT NULL DEFAULT 0,
+    discount_total DECIMAL(15,2) NOT NULL DEFAULT 0,
+    total DECIMAL(15,2) NOT NULL DEFAULT 0,
+    notes VARCHAR(1000) NULL,
+    status ENUM('Received','Accepted','Rejected','Expired','Superseded') NOT NULL DEFAULT 'Received',
+    decided_at DATETIME NULL, decided_by BIGINT UNSIGNED NULL, decision_note VARCHAR(400) NULL,
+    created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_subquote_sub FOREIGN KEY(subcontractor_id) REFERENCES subcontractors(id),
+    CONSTRAINT fk_subquote_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_subquote_boq FOREIGN KEY(boq_id) REFERENCES boqs(id),
+    CONSTRAINT fk_subquote_user FOREIGN KEY(created_by) REFERENCES users(id),
+    CONSTRAINT fk_subquote_decider FOREIGN KEY(decided_by) REFERENCES users(id),
+    INDEX idx_subquote_project (project_id, status),
+    INDEX idx_subquote_valid (valid_until)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await query(`CREATE TABLE IF NOT EXISTS subcontractor_quotation_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    quotation_id BIGINT UNSIGNED NOT NULL,
+    description VARCHAR(300) NOT NULL,
+    unit VARCHAR(30) NULL,
+    quantity DECIMAL(14,3) NOT NULL DEFAULT 1,
+    rate DECIMAL(14,2) NOT NULL DEFAULT 0,
+    discount DECIMAL(14,2) NOT NULL DEFAULT 0,
+    amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    position SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    CONSTRAINT fk_subquoteitem_quote FOREIGN KEY(quotation_id) REFERENCES subcontractor_quotations(id) ON DELETE CASCADE,
+    INDEX idx_subquoteitem_quote (quotation_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  /* Which subcontract price ended up inside which of GKUC's own quotations, and at what
+     markup — the answer to "why is this line priced as it is" a year later. */
+  await addColumn('quotation_items', 'source_subquote_id', 'BIGINT UNSIGNED NULL');
+  await addIndex('quotation_items', 'idx_quoteitem_subquote', 'INDEX idx_quoteitem_subquote(source_subquote_id)');
+  await addForeignKey('quotation_items', 'fk_quoteitem_subquote',
+    'CONSTRAINT fk_quoteitem_subquote FOREIGN KEY(source_subquote_id) REFERENCES subcontractor_quotations(id)');
+
+  /* A bill from a subcontractor should be traceable to the price that was agreed. */
+  await addColumn('subcontractor_bills', 'quotation_id', 'BIGINT UNSIGNED NULL');
+  await addForeignKey('subcontractor_bills', 'fk_subbill_quote',
+    'CONSTRAINT fk_subbill_quote FOREIGN KEY(quotation_id) REFERENCES subcontractor_quotations(id)');
+
+  /* GKUC quoting a main contractor rather than an end client. */
+  await addColumn('quotations_client', 'engagement',
+    "ENUM('Direct','As subcontractor') NOT NULL DEFAULT 'Direct'");
+  await addColumn('quotations_client', 'main_contractor', 'VARCHAR(180) NULL');
+}
+
 /** Non-destructive upgrades for databases created by an earlier version. */
 async function migrateExistingInstalls() {
   /* The role column was an ENUM, which cannot hold roles the MD invents. It becomes a plain
@@ -1077,6 +1169,8 @@ export async function migrate() {
   await createMethodTables();
   await createCommunicationTable();
   await createGalleryTables();
+  await hardenSessions();
+  await createSubcontractQuotationTables();
   await migrateExistingInstalls();
   await seedWorkMethods();
   await seedAccessControl();

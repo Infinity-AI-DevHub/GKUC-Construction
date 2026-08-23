@@ -25,14 +25,40 @@ export async function permissionsFor(userId, roleId) {
   return [...effective];
 }
 
+/*
+ * How long a session may sit untouched before it stops counting.
+ *
+ * The absolute lifetime alone left a browser open on a site office desk usable for the rest
+ * of the day. Idle time is tracked as well, and the two are enforced together.
+ */
+export const IDLE_MINUTES = Number(process.env.SESSION_IDLE_MINUTES || 60);
+
 export const auth = wrap(async (req, res, next) => {
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Authentication required' });
-  const rows = await query(`SELECT u.id,u.name,u.email,u.role,u.role_id FROM sessions s JOIN users u ON u.id=s.user_id
-    WHERE s.token_hash=? AND s.expires_at>UTC_TIMESTAMP() AND u.active=1`, [tokenHash(token)]);
+  const hash = tokenHash(token);
+  const rows = await query(
+    `SELECT u.id,u.name,u.email,u.role,u.role_id,s.id session_id,s.last_seen_at
+     FROM sessions s JOIN users u ON u.id=s.user_id
+     WHERE s.token_hash=? AND s.expires_at>UTC_TIMESTAMP() AND u.active=1`, [hash]);
   if (!rows[0]) return res.status(401).json({ error: 'Session expired' });
-  req.user = rows[0];
-  req.user.permissions = await permissionsFor(rows[0].id, rows[0].role_id);
+
+  const session = rows[0];
+  const lastSeen = session.last_seen_at ? new Date(session.last_seen_at) : null;
+  const idleMs = lastSeen ? Date.now() - lastSeen.getTime() : 0;
+  if (lastSeen && idleMs > IDLE_MINUTES * 60000) {
+    await query('DELETE FROM sessions WHERE id=?', [session.session_id]);
+    return res.status(401).json({ error: 'Signed out after a period of inactivity' });
+  }
+
+  /* Written at most once a minute: the point is to notice idleness, not to add a write to
+     every request the application makes. */
+  if (!lastSeen || idleMs > 60000) {
+    await query('UPDATE sessions SET last_seen_at=UTC_TIMESTAMP() WHERE id=?', [session.session_id]);
+  }
+
+  req.user = { id: session.id, name: session.name, email: session.email, role: session.role, role_id: session.role_id };
+  req.user.permissions = await permissionsFor(session.id, session.role_id);
   next();
 });
 
