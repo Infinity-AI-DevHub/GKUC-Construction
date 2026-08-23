@@ -38,6 +38,16 @@ export const rateLimit = (req, res, next) => {
   const now = Date.now();
 
   /*
+   * The live stream is exempt.
+   *
+   * It is one request that stays open for as long as the workspace does, so counting it
+   * says nothing about load. Worse, a browser that reconnects after a dropped connection —
+   * a laptop lid closing, a site office losing signal — would spend its allowance on
+   * retries and then be refused the very stream it was trying to restore.
+   */
+  if (req.path === '/events') return next();
+
+  /*
    * Counted per session where there is one, per address otherwise.
    *
    * The bearer token is used rather than the user id because this runs ahead of

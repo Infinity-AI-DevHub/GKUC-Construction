@@ -17,7 +17,8 @@
  */
 export const PRIVILEGED_KEYS = [
   'admin.users', 'admin.roles', 'admin.audit', 'admin.notifications',
-  'finance.pay', 'finance.invoice', 'hr.payroll'
+  'finance.pay', 'finance.invoice', 'hr.payroll',
+  'messages.send'
 ];
 
 export const DEPARTMENTS = [
@@ -82,7 +83,11 @@ export const PERMISSIONS = [
   { key: 'admin.users', department: 'Administration', label: 'Create and deactivate user accounts' },
   { key: 'admin.roles', department: 'Administration', label: 'Create roles and change what each role can do' },
   { key: 'admin.audit', department: 'Administration', label: 'Read the audit trail' },
-  { key: 'admin.notifications', department: 'Administration', label: 'Run the deadline scan and manage alerts' }
+  { key: 'admin.notifications', department: 'Administration', label: 'Run the deadline scan and manage alerts' },
+  /* Sending to a person's phone is a different act from reading an alert on screen: it
+     reaches them wherever they are, it costs money per message, and it goes out under the
+     company's name. Who may do it is the MD's decision, held separately from everything else. */
+  { key: 'messages.send', department: 'Administration', label: 'Send WhatsApp messages to selected people' }
 ];
 
 export const PERMISSION_KEYS = PERMISSIONS.map(permission => permission.key);

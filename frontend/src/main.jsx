@@ -12,6 +12,8 @@ import './responsive.css';
 import { announceDataChanged, api, post, slug, token } from './api.js';
 import { Avatar, Modal } from './ui.jsx';
 import NotificationBell from './NotificationBell.jsx';
+import Banners, { useBanners, SoundToggle } from './Banners.jsx';
+import { onRealtime, startRealtime, stopRealtime } from './realtime.js';
 import NavBar from './NavBar.jsx';
 import AccountMenu from './AccountMenu.jsx';
 import AccountPanel from './AccountPanel.jsx';
@@ -56,6 +58,7 @@ const capabilities = permissions => {
     manage: any('admin.users'),
     roles: any('admin.roles'),
     audit: any('admin.audit'),
+    messages: any('messages.send'),
     projects: any('projects.manage'),
     gallery: any('gallery.manage'),
     schedule: any('projects.schedule'),
@@ -225,6 +228,42 @@ function App() {
     else setLoading(false);
   }, []);
 
+  const banners = useBanners();
+  const [live, setLive] = useState(false);
+
+  /*
+   * The live connection, held for as long as somebody is signed in.
+   *
+   * Two kinds of event arrive. A notification is shown as a banner and rings; a data event
+   * means something was written somewhere and whatever is on screen should be re-read. The
+   * re-read goes through the ordinary bootstrap call, so the viewer still only receives
+   * what their permissions allow — the push is a prompt to refresh, never the data itself.
+   *
+   * Refreshes are coalesced: a bulk action can announce twenty changes in a second, and
+   * twenty bootstrap calls would be slower than the reload they are trying to avoid.
+   */
+  useEffect(() => {
+    if (!user) return undefined;
+    let pending = null;
+
+    const off = onRealtime((type, payload) => {
+      if (type === 'connected') setLive(true);
+      else if (type === 'disconnected') setLive(false);
+      else if (type === 'unauthorised') { setLive(false); token.clear(); setUser(null); }
+      else if (type === 'notification' || type === 'banner') {
+        banners.show(payload);
+        clearTimeout(pending);
+        pending = setTimeout(() => load(user), 250);
+      } else if (type === 'data') {
+        clearTimeout(pending);
+        pending = setTimeout(() => load(user), 250);
+      }
+    });
+
+    startRealtime();
+    return () => { off(); stopRealtime(); clearTimeout(pending); setLive(false); };
+  }, [user?.id]);
+
   /* The back and forward buttons move between sections rather than out of the app. */
   useEffect(() => {
     const onPop = () => {
@@ -319,10 +358,14 @@ function App() {
      people cannot open the Administration page it would otherwise live on. */
   const openAccount = () => { setAccountOpen(true); setMenu(false); };
   const bell = placement => (
-    <NotificationBell notifications={data.notifications} reload={reload} onViewAll={openNotifications} placement={placement} />
+    <span className={`bell-group${live ? ' is-live' : ''}`} title={live ? 'Live — updates arrive as they happen' : 'Reconnecting to live updates…'}>
+      <SoundToggle />
+      <NotificationBell notifications={data.notifications} reload={reload} onViewAll={openNotifications} placement={placement} />
+    </span>
   );
 
   return <div className="app">
+    <Banners items={banners.items} onDismiss={banners.dismiss} onOpen={openNotifications} />
     {scan.token && scanned && <ScanResult token={scan.token} onClose={() => { setScanned(false); scan.clear(); }} />}
     {accountOpen && (
       <Modal title="My account" close={() => setAccountOpen(false)}>

@@ -1,5 +1,6 @@
 import { pool, query, spendSql, today } from './db.js';
-import { dispatchQueued } from './lib/channels.js';
+import { dispatchQueued, dispatch } from './lib/channels.js';
+import { publish } from './lib/realtime.js';
 
 /**
  * Alerts are addressed to a *permission*, not a role name. With roles under the MD's
@@ -15,13 +16,57 @@ import { dispatchQueued } from './lib/channels.js';
 
 export const ALERT_WINDOW_DAYS = Number(process.env.ALERT_WINDOW_DAYS || 30);
 
+/*
+ * Records an alert, puts it on the screens that should see it, and sends it out.
+ *
+ * All three happen now rather than on the next sweep of the scheduler. Waiting up to an
+ * hour to tell somebody a tender closes today is not a notification, it is a record of
+ * having missed it — and the WhatsApp message the site actually reads was subject to the
+ * same delay.
+ *
+ * INSERT IGNORE against the unique dedupe key is what stops a condition being announced
+ * twice; the insert id tells us whether this was genuinely new, so a repeat scan does not
+ * re-notify and does not re-send.
+ */
 const raise = async alert => {
-  await pool.execute(
+  const [result] = await pool.execute(
     `INSERT IGNORE INTO notifications (user_id,audience,channel,severity,title,message,status,reference_type,reference_id,dedupe_key)
      VALUES (?,?,?,?,?,?,'Queued',?,?,?)`,
     [alert.userId || null, alert.audience || null, alert.channel || 'In-app', alert.severity || 'Info',
       alert.title, alert.message, alert.referenceType || null, String(alert.referenceId ?? ''), alert.key]
   );
+  /* Already raised today. Nothing new to announce and nothing new to send. */
+  if (!result.insertId) return null;
+
+  const notification = {
+    id: result.insertId,
+    user_id: alert.userId || null,
+    audience: alert.audience || null,
+    severity: alert.severity || 'Info',
+    title: alert.title,
+    message: alert.message
+  };
+
+  /* On screen immediately, addressed exactly as the notification itself is. */
+  publish('notification', {
+    id: notification.id,
+    severity: notification.severity,
+    title: notification.title,
+    message: notification.message,
+    referenceType: alert.referenceType || null,
+    referenceId: alert.referenceId ?? null,
+    createdAt: new Date().toISOString()
+  }, { audience: notification.audience, userId: notification.user_id });
+
+  /*
+   * Delivery over WhatsApp and the other channels is deliberately not awaited. A provider
+   * that is slow, rate-limiting us, or down must not hold up the action that raised the
+   * alert — the outcome is recorded per recipient either way, so nothing is lost by
+   * letting it finish on its own.
+   */
+  dispatch(notification).catch(error => console.error('Notification delivery failed', error));
+
+  return notification.id;
 };
 
 const days = value => Math.ceil((new Date(value) - new Date(today())) / 86400000);

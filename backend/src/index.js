@@ -8,6 +8,7 @@ import { migrate } from './schema.js';
 import { seedIfEmpty } from './seed.js';
 import { startAlertScheduler } from './alerts.js';
 import { rateLimit } from './lib/throttle.js';
+import { publishChange } from './lib/realtime.js';
 
 import authRoutes from './routes/auth.js';
 import bootstrapRoutes from './routes/bootstrap.js';
@@ -32,6 +33,8 @@ import biometricRoutes from './routes/biometric.js';
 import inquiryRoutes from './routes/inquiries.js';
 import payrollRoutes from './routes/payroll.js';
 import galleryRoutes from './routes/gallery.js';
+import eventRoutes from './routes/events.js';
+import messageRoutes from './routes/messages.js';
 
 /*
  * Refuse to start misconfigured, rather than start and behave as though nothing is wrong.
@@ -139,6 +142,30 @@ app.set('trust proxy', process.env.TRUST_PROXY
  */
 app.use('/api', rateLimit);
 
+/*
+ * Announces every successful write, so open workspaces re-read what they are showing.
+ *
+ * Done here rather than in each route on purpose: there are well over a hundred write
+ * endpoints, and a live system where somebody forgot the one line in one of them is worse
+ * than no live system at all — the screen looks current and is not. Hooking the response
+ * means anything that writes successfully is announced, including endpoints added later.
+ *
+ * Only the fact of the change travels, never the new rows. Clients re-fetch through the
+ * same permission-checked endpoints they always used, so this can never become a way to
+ * receive data the viewer would have been refused.
+ */
+const SILENT = new Set(['auth', 'events', 'bootstrap']);
+app.use('/api', (req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  const entity = req.path.split('/').filter(Boolean)[0] || 'data';
+  if (SILENT.has(entity)) return next();
+  res.on('finish', () => {
+    if (res.statusCode >= 400) return;
+    publishChange(entity, { method: req.method, by: req.user?.name || null });
+  });
+  next();
+});
+
 app.get('/api/health', async (_req, res, next) => {
   try {
     await query('SELECT 1');
@@ -167,6 +194,8 @@ app.use('/api/qs', qsRoutes);
 app.use('/api/biometric', biometricRoutes);
 app.use('/api/inquiries', inquiryRoutes);
 app.use('/api/payroll', payrollRoutes);
+app.use('/api', eventRoutes);
+app.use('/api', messageRoutes);
 app.use('/api', galleryRoutes);
 app.use('/api', adminRoutes);
 

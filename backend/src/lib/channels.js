@@ -14,6 +14,29 @@ const enabled = channel => (process.env.NOTIFY_CHANNELS || '')
 const SEVERITY_ORDER = { Info: 0, Warning: 1, Critical: 2 };
 const threshold = () => SEVERITY_ORDER[process.env.NOTIFY_MIN_SEVERITY || 'Warning'] ?? 1;
 
+/**
+ * Puts a phone number into the international form WhatsApp and Twilio require.
+ *
+ * Numbers are written down the way people say them here — "077 4412210", "0112 345678" —
+ * and both providers expect the country code with no leading zero. Sending the local form
+ * fails per message with a generic rejection, so the numbers already on file for every
+ * employee would each have to be re-typed before anyone could be reached.
+ *
+ * The trunk prefix drops and the country code goes on. A number already carrying one, in
+ * any of the ways people write it, is left as it is.
+ */
+export const toInternational = (value, countryCode = process.env.DEFAULT_COUNTRY_CODE || '94') => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  /* Already international: written with a + , or starting with the country code and long
+     enough that the code cannot be the start of a local number. */
+  if (String(value).trim().startsWith('+')) return digits;
+  if (digits.startsWith(countryCode) && digits.length > 9) return digits;
+  /* Local, with the trunk 0: swap it for the country code. */
+  if (digits.startsWith('0')) return countryCode + digits.slice(1);
+  return countryCode + digits;
+};
+
 const adapters = {
   Email: {
     /* Only Resend is wired. SMTP would need its own adapter, so it must not report as
@@ -41,7 +64,7 @@ const adapters = {
     async send({ recipient, notification }) {
       const sid = process.env.TWILIO_ACCOUNT_SID;
       const body = new URLSearchParams({
-        To: recipient,
+        To: `+${toInternational(recipient)}`,
         From: process.env.TWILIO_SMS_FROM || '',
         Body: `${notification.title}\n\n${notification.message}`
       });
@@ -61,20 +84,58 @@ const adapters = {
     configured: () => Boolean(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID),
     provider: () => 'meta-cloud',
     async send({ recipient, notification }) {
-      const response = await fetch(`https://graph.facebook.com/v21.0/${process.env.WHATSAPP_PHONE_ID}/messages`, {
+      /*
+       * The endpoint is configurable rather than hardcoded. Meta's own Cloud API is the
+       * default, but plenty of businesses here reach WhatsApp through a solution provider
+       * that speaks the same shape on a different host — and a fixed URL would mean a code
+       * change to point at one, or at a sandbox for testing.
+       */
+      const base = (process.env.WHATSAPP_API_BASE || 'https://graph.facebook.com/v21.0').replace(/\/$/, '');
+      const response = await fetch(`${base}/${process.env.WHATSAPP_PHONE_ID}/messages`, {
         method: 'POST',
         headers: { authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`, 'content-type': 'application/json' },
         body: JSON.stringify({
           messaging_product: 'whatsapp',
-          to: recipient.replace(/[^\d]/g, ''),
+          to: toInternational(recipient),
           type: 'text',
           text: { body: `*${notification.title}*\n\n${notification.message}` }
         })
       });
-      if (!response.ok) throw new Error(`WhatsApp Cloud API responded ${response.status}`);
+      if (!response.ok) {
+        /* The status alone does not say whether the number was wrong, the template was
+           rejected or the token expired — and that is exactly what the sender needs. */
+        const detail = await response.text().catch(() => '');
+        const reason = (() => {
+          try { return JSON.parse(detail)?.error?.message; } catch { return null; }
+        })();
+        throw new Error(`WhatsApp API responded ${response.status}${reason ? `: ${reason}` : ''}`);
+      }
     }
   }
 };
+
+/**
+ * Sends one message to one address, chosen by a person rather than raised by the scanner.
+ *
+ * Deliberately not gated on NOTIFY_CHANNELS. That setting decides which channels automatic
+ * alerts go out on; somebody who has opened the composer, picked recipients and pressed
+ * send has already made that decision themselves, and silently doing nothing would be the
+ * worst possible answer. Missing credentials still report as Skipped rather than Failed,
+ * because nothing was attempted and nothing broke.
+ */
+export async function sendDirect(channel, recipient, notification) {
+  const adapter = adapters[channel];
+  if (!adapter) return { status: 'Failed', detail: `Unknown channel ${channel}` };
+  if (!adapter.configured()) {
+    return { status: 'Skipped', detail: `${channel} credentials are not configured on this server` };
+  }
+  try {
+    await adapter.send({ recipient, notification });
+    return { status: 'Sent', detail: null };
+  } catch (error) {
+    return { status: 'Failed', detail: String(error.message).slice(0, 500) };
+  }
+}
 
 export const channelStatus = () => Object.entries(adapters).map(([channel, adapter]) => ({
   channel,
@@ -89,11 +150,11 @@ export const channelStatus = () => Object.entries(adapters).map(([channel, adapt
  */
 async function recipientsFor(notification) {
   if (notification.user_id) {
-    const user = await getOne('SELECT name,email FROM users WHERE id=? AND active=1', [notification.user_id]);
+    const user = await getOne('SELECT name,email,whatsapp_phone FROM users WHERE id=? AND active=1', [notification.user_id]);
     return user ? [user] : [];
   }
   if (!notification.audience) return [];
-  return query(`SELECT DISTINCT u.name,u.email FROM users u
+  return query(`SELECT DISTINCT u.name,u.email,u.whatsapp_phone FROM users u
     LEFT JOIN role_permissions rp ON rp.role_id=u.role_id AND rp.permission_key=?
     LEFT JOIN user_permissions up ON up.user_id=u.id AND up.permission_key=?
       AND up.effect='Grant' AND (up.expires_at IS NULL OR up.expires_at >= CURDATE())
@@ -104,8 +165,16 @@ async function recipientsFor(notification) {
   [notification.audience, notification.audience, notification.audience]);
 }
 
+/*
+ * Where to reach somebody on a given channel.
+ *
+ * The phone was only ever read from the employee record matched by email, so anyone with a
+ * login and no payroll record — the MD, office staff — was unreachable on WhatsApp and
+ * every message to them recorded as "No address on file". The account's own number is
+ * used when there is one, and the employee record remains the fallback for site staff.
+ */
 const addressFor = (channel, user, employee) =>
-  (channel === 'Email' ? user.email : employee?.phone || null);
+  (channel === 'Email' ? user.email : user.whatsapp_phone || employee?.phone || null);
 
 /**
  * Sends one queued notification out over every enabled channel and records the outcome
