@@ -7,8 +7,9 @@ import AccountPanel from '../AccountPanel.jsx';
 import CompanySettings from '../CompanySettings.jsx';
 import DocumentSettings from '../DocumentSettings.jsx';
 import DocumentDesigner from '../DocumentDesigner.jsx';
+import Messaging from '../Messaging.jsx';
 
-export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Audit log', 'My account'];
+export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Messages', 'Audit log', 'My account'];
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
 export default function Admin({ can, user, reload, initialTab = TABS[0], onTabChange }) {
@@ -31,6 +32,9 @@ export default function Admin({ can, user, reload, initialTab = TABS[0], onTabCh
     {tab === 'Documents' && <DocumentSettings can={can} />}
     {tab === 'Designer' && <DocumentDesigner can={can} />}
     {tab === 'Notifications' && <Notifications can={can} reload={reload} />}
+    {tab === 'Messages' && (can.messages
+      ? <Messaging />
+      : <p className="empty-state">You do not have permission to send messages.</p>)}
     {tab === 'Audit log' && <AuditLog />}
     {tab === 'My account' && <section className="table-panel">
       <div className="table-tools"><h2>Change your password</h2></div>

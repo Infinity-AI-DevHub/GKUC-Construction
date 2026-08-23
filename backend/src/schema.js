@@ -952,6 +952,52 @@ async function createQsTables() {
  * quotation the product already produces; what was missing was any record that a particular
  * quotation was issued as a subcontractor rather than direct to an end client.
  */
+/*
+ * Messages a person composed and sent, as opposed to alerts the system raised.
+ *
+ * Kept separate from `notifications` on purpose. A notification is a condition the system
+ * detected and can dedupe by day; this is somebody choosing to write to named people, and
+ * it needs a different record — who sent it, exactly who it went to, and what the provider
+ * said about each one. "We told the site" has to be provable per recipient.
+ */
+async function createMessagingTables() {
+  await query(`CREATE TABLE IF NOT EXISTS outbound_messages (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    channel ENUM('WhatsApp','SMS','Email') NOT NULL DEFAULT 'WhatsApp',
+    subject VARCHAR(180) NULL,
+    body VARCHAR(2000) NOT NULL,
+    sent_by BIGINT UNSIGNED NOT NULL,
+    recipient_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    sent_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    failed_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_outbound_sender FOREIGN KEY(sent_by) REFERENCES users(id),
+    INDEX idx_outbound_created(created_at)
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS outbound_message_recipients (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    message_id BIGINT UNSIGNED NOT NULL,
+    recipient_kind ENUM('Employee','User','Number') NOT NULL,
+    recipient_id BIGINT UNSIGNED NULL,
+    name VARCHAR(160) NOT NULL,
+    address VARCHAR(190) NOT NULL,
+    status ENUM('Sent','Failed','Skipped') NOT NULL,
+    provider VARCHAR(60) NULL,
+    detail VARCHAR(500) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_outbound_recipient_message FOREIGN KEY(message_id) REFERENCES outbound_messages(id) ON DELETE CASCADE,
+    INDEX idx_outbound_recipient_message(message_id)
+  ) ENGINE=InnoDB`);
+
+  /*
+   * A WhatsApp number for people who are not on the payroll — the MD, office staff, anyone
+   * with a login but no employee record. Without it those accounts could be picked as
+   * recipients and then silently skipped for having no address on file.
+   */
+  await addColumn('users', 'whatsapp_phone', 'VARCHAR(40) NULL');
+}
+
 async function createSubcontractQuotationTables() {
   await query(`CREATE TABLE IF NOT EXISTS subcontractor_quotations (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1171,6 +1217,7 @@ export async function migrate() {
   await createGalleryTables();
   await hardenSessions();
   await createSubcontractQuotationTables();
+  await createMessagingTables();
   await migrateExistingInstalls();
   await seedWorkMethods();
   await seedAccessControl();
