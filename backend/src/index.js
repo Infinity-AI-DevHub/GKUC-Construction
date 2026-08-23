@@ -73,7 +73,7 @@ checkConfiguration();
 const app = express();
 const workspaceRoot = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 const frontendDist = path.join(workspaceRoot, 'frontend', 'dist');
-const port = Number(process.env.PORT || 4173);
+const port = Number(process.env.PORT || 4400);
 
 /*
  * Content-Security-Policy was switched off wholesale, which gave up the main defence

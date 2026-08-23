@@ -59,13 +59,13 @@ npm run seed
 The seed is safe to re-run: migrations are idempotent, and it never overwrites role
 permissions the Managing Director has changed.
 
-Then, for development (backend on 4173, frontend on 5173):
+Then, for development (backend on 4400, frontend on 3400):
 
 ```bash
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173/`.
+Open `http://127.0.0.1:3400/`.
 
 To serve the built frontend from the backend on a single port instead:
 
@@ -73,7 +73,7 @@ To serve the built frontend from the backend on a single port instead:
 npm run build && npm start
 ```
 
-Open `http://127.0.0.1:4173/`.
+Open `http://127.0.0.1:4400/`.
 
 `npm` is used rather than `pnpm` throughout: the workspace file remains for reference,
 but the scripts run through `npm --prefix` so no extra package manager is required.
