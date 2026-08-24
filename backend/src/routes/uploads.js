@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, can, permit, wrap } from '../lib/http.js';
+import { enqueue as enqueueOcr } from '../lib/ocr-queue.js';
 import { allowedExtensions, isLocalStore, localPathFor, MAX_UPLOAD_BYTES, readUpload, remove, signedDownloadUrl, storageDriver, store } from '../lib/storage.js';
 
 const router = Router();
@@ -71,6 +72,43 @@ router.get('/limits', auth, (_req, res) => res.json({
  * and no way to withdraw access once someone had seen the link. The bytes now travel
  * through the same check as the listing, and the URL alone grants nothing.
  */
+/*
+ * Declared above the /:ownerType/:ownerId routes on purpose. Express takes the first
+ * match, and a two-segment path like /search/documents is otherwise read as an owner
+ * type called "search" with a record id of "documents".
+ */
+/*
+ * Searching inside documents.
+ *
+ * FULLTEXT in boolean mode, so a person can type what they remember of a document rather
+ * than an exact phrase. Results are filtered to the record types the viewer may see: a
+ * search must never become a way to learn the contents of a payslip or a contract that the
+ * ordinary listing would refuse.
+ */
+router.get('/search/documents', auth, wrap(async (req, res) => {
+  const term = String(req.query.q || '').trim();
+  if (term.length < 3) return res.json({ term, results: [], note: 'Type at least three characters' });
+
+  /* Permission per owner type, mirroring what the attachment listing itself allows. */
+  const readable = Object.entries(READERS)
+    .filter(([, keys]) => keys.some(key => req.user.permissions.includes(key)))
+    .map(([type]) => type);
+  if (!readable.length) return res.json({ term, results: [] });
+
+  const rows = await query(
+    `SELECT a.id,a.owner_type ownerType,a.owner_id ownerId,a.filename,a.title,a.mime,
+       t.source,t.pages,t.characters,
+       MATCH(t.content) AGAINST (? IN BOOLEAN MODE) score,
+       SUBSTRING(t.content, GREATEST(1, LOCATE(?, t.content) - 90), 260) excerpt
+     FROM attachment_text t JOIN attachments a ON a.id=t.attachment_id
+     WHERE a.owner_type IN (${readable.map(() => '?').join(',')})
+       AND MATCH(t.content) AGAINST (? IN BOOLEAN MODE)
+     ORDER BY score DESC LIMIT 50`,
+    [term, term, ...readable, term]);
+
+  res.json({ term, results: rows });
+}));
+
 router.get('/file/:id', auth, wrap(async (req, res) => {
   const file = await getOne(
     'SELECT id,owner_type ownerType,owner_id ownerId,storage_key storageKey,filename,mime FROM attachments WHERE id=?',
@@ -121,11 +159,24 @@ router.post('/:ownerType/:ownerId', auth, wrap(async (req, res, next) => {
   const owner = await getOne(`SELECT id FROM ${OWNER_TABLES[ownerType]} WHERE id=?`, [ownerId]);
   if (!owner) return res.status(404).json({ error: 'Record not found' });
 
-  const { file, fields } = await readUpload(req);
+  const { file, fields, discard } = await readUpload(req);
   const meta = metaSchema.safeParse(fields);
-  if (!meta.success) return res.status(400).json({ error: 'Invalid data', issues: meta.error.flatten() });
+  if (!meta.success) {
+    /* The bytes are already on disk; a rejected form must not leave them there. */
+    await discard();
+    return res.status(400).json({ error: 'Invalid data', issues: meta.error.flatten() });
+  }
 
-  const stored = await store({ folder: ownerType, filename: file.filename, mime: file.mime, buffer: file.buffer });
+  let stored;
+  try {
+    stored = await store({
+      folder: ownerType, filename: file.filename, mime: file.mime,
+      path: file.path, head: file.head, size: file.size
+    });
+  } catch (error) {
+    await discard();
+    throw error;
+  }
   try {
     const result = await query(`INSERT INTO attachments
       (owner_type,owner_id,storage_key,url,filename,mime,size_bytes,title,category,kind,expiry_date,uploaded_by)
@@ -136,11 +187,15 @@ router.post('/:ownerType/:ownerId', auth, wrap(async (req, res, next) => {
       meta.data.expiryDate || null, req.user.id]);
     await audit(pool, req.user.id, 'UPLOAD', `${ownerType}_attachment`, result.insertId, null,
       { filename: stored.filename, size: stored.size }, req.ip);
+    /* Queued, not awaited: a scan takes minutes to read and the file is usable now. */
+    await enqueueOcr(result.insertId, stored.mime).catch(() => {});
     res.status(201).json(await getOne(`SELECT a.id,a.url,a.filename,a.mime,a.size_bytes size,a.title,a.category,a.kind,
       a.expiry_date expiryDate,a.created_at createdAt,? uploadedBy FROM attachments a WHERE a.id=?`, [req.user.name, result.insertId]));
   } catch (error) {
     await remove(stored.key).catch(() => {});
     next(error);
+  } finally {
+    await discard();
   }
 }));
 
@@ -163,6 +218,24 @@ router.delete('/:id', auth, wrap(async (req, res) => {
   await remove(attachment.storage_key).catch(() => {});
   await audit(pool, req.user.id, 'DELETE', `${attachment.owner_type}_attachment`, attachment.id, attachment, null, req.ip);
   res.status(204).end();
+}));
+
+/** Whether a document has been read yet, and what came of it. */
+router.get('/:ownerType/:ownerId/text/:id', auth, wrap(async (req, res) => {
+  const readers = READERS[req.params.ownerType];
+  if (!readers || !readers.some(key => can(req, key))) {
+    return res.status(403).json({ error: 'You do not have permission to see these files' });
+  }
+  const row = await getOne(
+    `SELECT t.content,t.source,t.pages,t.characters,t.extracted_at extractedAt,
+       j.status,j.detail
+     FROM attachments a
+     LEFT JOIN attachment_text t ON t.attachment_id=a.id
+     LEFT JOIN ocr_jobs j ON j.attachment_id=a.id
+     WHERE a.id=? AND a.owner_type=? AND a.owner_id=?`,
+    [req.params.id, req.params.ownerType, req.params.ownerId]);
+  if (!row) return res.status(404).json({ error: 'File not found' });
+  res.json(row);
 }));
 
 export default router;

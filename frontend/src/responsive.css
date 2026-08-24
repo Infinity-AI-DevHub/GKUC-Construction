@@ -1220,3 +1220,54 @@ button.attachment-icon { border: 1px solid var(--line); background: white; curso
 @media (max-width: 980px) {
   .messaging-grid { grid-template-columns: 1fr }
 }
+
+/* ---------------------------------------------------------------------------
+   Searching inside documents
+   --------------------------------------------------------------------------- */
+.docsearch-backdrop {
+  position: fixed; inset: 0; z-index: 95; background: rgba(12, 19, 15, .48);
+  display: flex; justify-content: center; padding: 84px 18px 24px;
+}
+.docsearch {
+  width: min(760px, 100%); max-height: calc(100vh - 130px);
+  background: #fff; border-radius: 10px; overflow: hidden;
+  box-shadow: 0 24px 64px rgba(10, 22, 16, .3);
+  display: flex; flex-direction: column;
+}
+.docsearch-field {
+  display: flex; align-items: center; gap: 11px;
+  padding: 15px 16px; border-bottom: 1px solid var(--line); color: #56635b;
+}
+.docsearch-field input {
+  flex: 1; border: 0; outline: none; font-size: 16.5px; color: #16201b; background: transparent;
+}
+.docsearch-field button { border: 0; background: transparent; color: #7d8b83; padding: 4px; border-radius: 5px }
+.docsearch-field button:hover { background: #eef2ef; color: #2a3630 }
+.docsearch-spin { animation: docsearch-turn 1s linear infinite }
+@keyframes docsearch-turn { to { transform: rotate(360deg) } }
+@media (prefers-reduced-motion: reduce) { .docsearch-spin { animation: none } }
+
+.docsearch-results { overflow-y: auto; padding: 6px }
+.docsearch-hint { margin: 0; padding: 22px 16px; color: var(--muted); font-size: 14.5px; line-height: 1.55 }
+.docsearch-hit {
+  width: 100%; border: 0; background: transparent; text-align: left;
+  display: grid; grid-template-columns: 34px 1fr; gap: 12px;
+  padding: 12px 12px; border-radius: 8px;
+}
+.docsearch-hit:hover { background: #f3f7f4 }
+.docsearch-hit:focus-visible { outline: 2px solid #176fda; outline-offset: -2px }
+.docsearch-icon {
+  width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center;
+  background: #e6eff8; color: #176fda;
+}
+.docsearch-body { min-width: 0 }
+.docsearch-body strong { display: block; font-size: 15px; color: #16201b }
+.docsearch-body small { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px }
+.docsearch-body em {
+  display: block; font-style: normal; font-size: 13.5px; color: #4a5850;
+  margin-top: 6px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+@media (max-width: 760px) {
+  .docsearch-backdrop { padding: 60px 10px 16px }
+}

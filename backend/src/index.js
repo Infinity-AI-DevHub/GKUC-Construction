@@ -7,6 +7,7 @@ import { query } from './db.js';
 import { migrate } from './schema.js';
 import { seedIfEmpty } from './seed.js';
 import { startAlertScheduler } from './alerts.js';
+import { startOcrWorker } from './lib/ocr-queue.js';
 import { rateLimit } from './lib/throttle.js';
 import { publishChange } from './lib/realtime.js';
 
@@ -236,4 +237,5 @@ if (process.env.NODE_ENV !== 'production' || process.env.SEED_DEMO_DATA === 'tru
   if (!count) console.warn('No users exist and demo seeding is off. Create the first account before use.');
 }
 startAlertScheduler();
+await startOcrWorker();
 app.listen(port, () => console.log(`GKUC SiteOps running with MySQL at http://127.0.0.1:${port}`));

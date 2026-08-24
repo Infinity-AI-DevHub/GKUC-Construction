@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { readMultipart } from './multipart.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { today } from '../db.js';
@@ -12,11 +13,34 @@ import { fileURLToPath } from 'node:url';
  */
 
 const workspaceRoot = path.dirname(path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))));
+/*
+ * Where half-received uploads and OCR page renders are written.
+ *
+ * Deliberately inside the upload directory rather than the system temp directory. On a
+ * good many Ubuntu servers /tmp is a tmpfs held in RAM, so streaming a large upload there
+ * would put it straight back into memory — undoing the whole reason uploads stream to disk
+ * at all. Keeping scratch space beside the store guarantees it is on the same real disk.
+ */
+export const SCRATCH_DIR = process.env.UPLOAD_TMP_DIR
+  ? path.resolve(process.env.UPLOAD_TMP_DIR)
+  : null;
+
 export const UPLOAD_ROOT = process.env.UPLOAD_DIR
   ? path.resolve(process.env.UPLOAD_DIR)
   : path.join(workspaceRoot, 'uploads');
 
-export const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB || 15) * 1024 * 1024;
+/*
+ * The application's upload ceiling, in bytes. Zero means no ceiling.
+ *
+ * Uploads stream to disk rather than being held in memory, so a large file costs disk and
+ * time rather than the whole server's memory. That is what makes "no limit" a real option
+ * rather than an invitation to be knocked over by a single request. Disk space and the
+ * proxy's own client_max_body_size remain the practical bounds.
+ */
+const configuredMb = process.env.MAX_UPLOAD_MB;
+export const MAX_UPLOAD_BYTES = configuredMb === undefined
+  ? 15 * 1024 * 1024
+  : Number(configuredMb) * 1024 * 1024;
 
 /** Only formats a construction office actually files. Anything executable is rejected. */
 const ALLOWED = new Map([
@@ -117,6 +141,25 @@ const localDriver = {
     await fs.writeFile(destination, buffer);
     return `/uploads/${key}`;
   },
+  /*
+   * Moves a file already on disk into the store without reading it.
+   *
+   * A rename is instant and costs no memory, but only works within one filesystem — the
+   * temporary directory is often a separate one — so a cross-device move falls back to a
+   * copy, which streams rather than loading the file.
+   */
+  async putFile(key, sourcePath) {
+    const destination = path.join(UPLOAD_ROOT, key);
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    try {
+      await fs.rename(sourcePath, destination);
+    } catch (error) {
+      if (error.code !== 'EXDEV') throw error;
+      await fs.copyFile(sourcePath, destination);
+      await fs.rm(sourcePath, { force: true });
+    }
+    return `/uploads/${key}`;
+  },
   async remove(key) {
     await fs.rm(path.join(UPLOAD_ROOT, key), { force: true });
   }
@@ -132,6 +175,20 @@ const r2Driver = {
     const response = await signedR2Request('PUT', key, buffer, mime);
     if (!response.ok) throw new Error(`R2 upload failed (${response.status})`);
     return process.env.R2_PUBLIC_BASE_URL ? `${process.env.R2_PUBLIC_BASE_URL.replace(/\/$/, '')}/${key}` : `/uploads/${key}`;
+  },
+  /*
+   * R2 signs each request over a hash of the payload, so the file has to be read to be
+   * signed — this one does load it into memory, unlike the local driver.
+   *
+   * That is acceptable today because the local driver is the one in use, and it is flagged
+   * rather than hidden: before switching STORAGE_DRIVER to r2 with large uploads allowed,
+   * this wants replacing with S3 multipart upload, which signs and sends in parts.
+   */
+  async putFile(key, sourcePath, mime) {
+    const buffer = await fs.readFile(sourcePath);
+    const url = await this.put(key, buffer, mime);
+    await fs.rm(sourcePath, { force: true });
+    return url;
   },
   async remove(key) {
     await signedR2Request('DELETE', key);
@@ -217,25 +274,66 @@ export function signedDownloadUrl(key, seconds = 300) {
 const driver = process.env.STORAGE_DRIVER === 'r2' ? r2Driver : localDriver;
 export const storageDriver = driver.name;
 
-/** Stores one file and returns the record the database keeps: key, public URL and metadata. */
-export async function store({ folder, filename, mime, buffer }) {
+/**
+ * Stores one file and returns the record the database keeps: key, public URL and metadata.
+ *
+ * Takes either a buffer (small, in-memory content the application generated itself) or a
+ * `path` to a file already written to disk by the upload reader, plus the `head` bytes for
+ * type verification. The path form never loads the file into memory.
+ */
+export async function store({ folder, filename, mime, buffer, path: sourcePath, head, size }) {
   if (!FOLDERS.includes(folder)) throw Object.assign(new Error('Unknown upload folder'), { status: 400 });
   if (!isAllowedType(mime)) {
     throw Object.assign(new Error(`Unsupported file type. Allowed: ${allowedExtensions().join(', ')}`), { status: 415 });
   }
-  if (!buffer.length) throw Object.assign(new Error('The file is empty'), { status: 400 });
-  if (!contentMatchesType(buffer, mime)) {
+
+  const bytes = buffer ? buffer.length : size;
+  if (!bytes) throw Object.assign(new Error('The file is empty'), { status: 400 });
+
+  /* Verified from the first bytes, which the reader kept as the file went past. */
+  if (!contentMatchesType(buffer || head, mime)) {
     throw Object.assign(
       new Error('The file contents do not match the type it was sent as, so it was not stored'),
       { status: 415 });
   }
-  if (buffer.length > MAX_UPLOAD_BYTES) {
+  if (MAX_UPLOAD_BYTES && bytes > MAX_UPLOAD_BYTES) {
     throw Object.assign(new Error(`Files must be ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB or smaller`), { status: 413 });
   }
+
   const key = buildKey(folder, filename, mime);
-  const url = await driver.put(key, buffer, mime);
-  return { key, url, filename: safeName(filename), mime, size: buffer.length };
+  const url = sourcePath
+    ? await driver.putFile(key, sourcePath, mime)
+    : await driver.put(key, buffer, mime);
+  return { key, url, filename: safeName(filename), mime, size: bytes };
 }
+
+/**
+ * SHA-256 of a file on disk, read in chunks.
+ *
+ * The gallery fingerprints every photo on arrival so the file behind a record can later be
+ * shown to be the file that was received. Hashing has to stream like everything else here,
+ * or the one part of the upload path that still loaded the whole file into memory would be
+ * the evidence trail.
+ */
+export async function checksumFile(sourcePath) {
+  const hash = crypto.createHash('sha256');
+  const handle = await fs.open(sourcePath, 'r');
+  try {
+    for await (const chunk of handle.createReadStream()) hash.update(chunk);
+  } finally {
+    await handle.close();
+  }
+  return hash.digest('hex');
+}
+
+/**
+ * Reads an uploaded file into memory. Only for content that has to be parsed whole —
+ * a spreadsheet being imported — never for stored documents.
+ */
+export const readUploadedFile = sourcePath => fs.readFile(sourcePath);
+
+/** Scratch space on the same disk as the store. */
+export const scratchDir = () => SCRATCH_DIR || path.join(UPLOAD_ROOT, '.tmp');
 
 export const remove = key => driver.remove(key);
 
@@ -250,43 +348,45 @@ export const isLocalStore = () => driver === localDriver;
  * Reads an upload out of a multipart request. Node parses the body itself, so the
  * product carries no third-party multipart dependency.
  */
+/**
+ * Reads an upload request.
+ *
+ * File parts are streamed to temporary files, so the request costs disk rather than memory
+ * and its size is not bounded by what this process can hold. Each file comes back with the
+ * path it was written to and the first bytes of its content, which is all `store()` needs
+ * to verify the type without reading the file again.
+ *
+ * The caller must call `discard()` when finished, so a request that fails validation
+ * leaves nothing behind.
+ */
 export async function readUpload(req) {
   const contentType = req.headers['content-type'] || '';
   if (!contentType.startsWith('multipart/form-data')) {
     throw Object.assign(new Error('Expected a file upload'), { status: 400 });
   }
-  /* Buffered rather than streamed so the size ceiling is enforced before any parsing work. */
-  const chunks = [];
-  let received = 0;
-  let tooBig = false;
-  for await (const chunk of req) {
-    received += chunk.length;
-    if (received > MAX_UPLOAD_BYTES + 8192) {
-      /* Stop keeping the data, but keep reading it. Memory stays bounded either way, and
-         draining the rest is what lets the refusal reach a client that is still sending —
-         hanging up early reaches it as a connection reset instead of a reason. */
-      tooBig = true;
-      chunks.length = 0;
-      continue;
-    }
-    if (!tooBig) chunks.push(chunk);
-  }
-  if (tooBig) {
-    throw Object.assign(new Error(`Files must be ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB or smaller`), { status: 413 });
-  }
-  const form = await new Response(Buffer.concat(chunks), { headers: { 'content-type': contentType } }).formData();
-  const file = form.get('file');
-  if (!file || typeof file === 'string') throw Object.assign(new Error('No file was attached'), { status: 400 });
-  const read = async part => ({
-    filename: part.name, mime: part.type || 'application/octet-stream', buffer: Buffer.from(await part.arrayBuffer())
+
+  const { fields, files, discard } = await readMultipart(req, {
+    maxBytes: MAX_UPLOAD_BYTES,
+    tmpDir: scratchDir()
   });
+  const named = name => files.find(part => part.name === name) || null;
+
+  const shape = part => part && ({
+    filename: part.filename,
+    mime: part.type || 'application/octet-stream',
+    path: part.path,
+    head: part.head,
+    size: part.size
+  });
+
+  const file = named('file') || files[0] || null;
+  if (!file) {
+    await discard();
+    throw Object.assign(new Error('No file was attached'), { status: 400 });
+  }
 
   /* A gallery upload carries the original and a small preview made in the browser, so the
      grid does not have to pull full-size site photos to draw a thumbnail. */
-  const thumbnail = form.get('thumbnail');
-  return {
-    file: await read(file),
-    thumbnail: thumbnail && typeof thumbnail !== 'string' ? await read(thumbnail) : null,
-    fields: Object.fromEntries([...form.entries()].filter(([, value]) => typeof value === 'string'))
-  };
+  return { file: shape(file), thumbnail: shape(named('thumbnail')), fields, discard };
 }
+

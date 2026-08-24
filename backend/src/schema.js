@@ -960,6 +960,45 @@ async function createQsTables() {
  * it needs a different record — who sent it, exactly who it went to, and what the provider
  * said about each one. "We told the site" has to be provable per recipient.
  */
+/*
+ * Text read out of scanned documents and photographs.
+ *
+ * Held beside the attachment rather than inside it: the text of a forty-page scan dwarfs
+ * every other column on that row, and a table that is read on every attachment listing
+ * should not carry it. A FULLTEXT index is what makes searching the contents possible
+ * without reading every document back out of the database.
+ *
+ * The queue is a table rather than anything cleverer for the same reason the rest of this
+ * system avoids extra moving parts: one process, one database, and a job that can be seen
+ * and retried with a SELECT.
+ */
+async function createOcrTables() {
+  await query(`CREATE TABLE IF NOT EXISTS attachment_text (
+    attachment_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+    content MEDIUMTEXT NOT NULL,
+    source ENUM('text-layer','ocr','unsupported') NOT NULL,
+    pages SMALLINT UNSIGNED NULL,
+    characters INT UNSIGNED NOT NULL DEFAULT 0,
+    extracted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_attachment_text FOREIGN KEY(attachment_id) REFERENCES attachments(id) ON DELETE CASCADE,
+    FULLTEXT KEY ft_attachment_content (content)
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS ocr_jobs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    attachment_id BIGINT UNSIGNED NOT NULL,
+    status ENUM('Queued','Running','Done','Failed','Skipped') NOT NULL DEFAULT 'Queued',
+    attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    detail VARCHAR(500) NULL,
+    started_at DATETIME NULL,
+    finished_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_ocr_job_attachment FOREIGN KEY(attachment_id) REFERENCES attachments(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_ocr_job_attachment (attachment_id),
+    INDEX idx_ocr_job_status (status, id)
+  ) ENGINE=InnoDB`);
+}
+
 async function createMessagingTables() {
   await query(`CREATE TABLE IF NOT EXISTS outbound_messages (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1218,6 +1257,7 @@ export async function migrate() {
   await hardenSessions();
   await createSubcontractQuotationTables();
   await createMessagingTables();
+  await createOcrTables();
   await migrateExistingInstalls();
   await seedWorkMethods();
   await seedAccessControl();

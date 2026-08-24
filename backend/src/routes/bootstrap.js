@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query, spendSql, today } from '../db.js';
 import { auth, can, wrap } from '../lib/http.js';
 import { runAlertScan } from '../alerts.js';
+import { MAX_UPLOAD_BYTES } from '../lib/storage.js';
 
 const router = Router();
 
@@ -98,6 +99,13 @@ router.get('/', auth, wrap(async (req, res) => {
 
   res.json({
     user: { ...req.user, permissions: req.user.permissions },
+    /*
+     * Limits the interface has to know about. The upload ceiling is server configuration,
+     * so sending it means the browser can refuse an oversized file before spending several
+     * minutes pushing it up a site connection, and the message it shows stays true if the
+     * limit is ever changed.
+     */
+    limits: { maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024) },
     data: {
       projects,
       tasks,
