@@ -9,10 +9,11 @@ import './theme.css';
 import './reference.css';
 import './responsive.css';
 
-import { announceDataChanged, api, post, slug, token } from './api.js';
+import { announceDataChanged, api, post, setUploadLimit, slug, token } from './api.js';
 import { Avatar, Modal } from './ui.jsx';
 import NotificationBell from './NotificationBell.jsx';
 import Banners, { useBanners, SoundToggle } from './Banners.jsx';
+import DocumentSearch, { DocumentSearchButton } from './DocumentSearch.jsx';
 import { onRealtime, startRealtime, stopRealtime } from './realtime.js';
 import NavBar from './NavBar.jsx';
 import AccountMenu from './AccountMenu.jsx';
@@ -212,6 +213,8 @@ function App() {
       const result = await api('/bootstrap');
       setUser(currentUser || result.user);
       setData(result.data);
+      /* So the upload limit quoted to people is the server's, not a guess baked in here. */
+      setUploadLimit(result.limits?.maxUploadMb);
       /* Panels that fetch their own rows listen for this, so a record created on one of
          them appears straight away rather than after a page reload. */
       announceDataChanged();
@@ -230,6 +233,7 @@ function App() {
 
   const banners = useBanners();
   const [live, setLive] = useState(false);
+  const [searching, setSearching] = useState(false);
 
   /*
    * The live connection, held for as long as somebody is signed in.
@@ -359,6 +363,7 @@ function App() {
   const openAccount = () => { setAccountOpen(true); setMenu(false); };
   const bell = placement => (
     <span className={`bell-group${live ? ' is-live' : ''}`} title={live ? 'Live — updates arrive as they happen' : 'Reconnecting to live updates…'}>
+      <DocumentSearchButton onOpen={() => setSearching(true)} />
       <SoundToggle />
       <NotificationBell notifications={data.notifications} reload={reload} onViewAll={openNotifications} placement={placement} />
     </span>
@@ -366,6 +371,7 @@ function App() {
 
   return <div className="app">
     <Banners items={banners.items} onDismiss={banners.dismiss} onOpen={openNotifications} />
+    <DocumentSearch open={searching} onClose={() => setSearching(false)} />
     {scan.token && scanned && <ScanResult token={scan.token} onClose={() => { setScanned(false); scan.clear(); }} />}
     {accountOpen && (
       <Modal title="My account" close={() => setAccountOpen(false)}>

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { audit, getOne, pool, query, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
 import { parseBiometricFile } from '../lib/biometric.js';
-import { readUpload } from '../lib/storage.js';
+import { readUpload, readUploadedFile } from '../lib/storage.js';
 
 const router = Router();
 const LATE_AFTER = process.env.ATTENDANCE_LATE_AFTER || '08:00:00';
@@ -55,8 +55,11 @@ const stateFor = row => {
  * unmatched names and unreadable rows can be dealt with before the data lands.
  */
 router.post('/preview', auth, permit('hr.attendance'), wrap(async (req, res) => {
-  const { file } = await readUpload(req);
-  const parsed = parseBiometricFile(file);
+  const { file, discard } = await readUpload(req);
+  /* A spreadsheet has to be parsed whole, so this is one of the few places the bytes are
+     genuinely needed in memory. Attendance exports are small; documents never come here. */
+  const parsed = parseBiometricFile({ ...file, buffer: await readUploadedFile(file.path) });
+  await discard();
   if (!parsed.rows.length) {
     return res.status(422).json({
       error: 'Nothing could be read from that file',

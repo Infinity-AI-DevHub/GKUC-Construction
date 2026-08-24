@@ -99,7 +99,28 @@ export const dueLabel = value => {
  * Uploads a file against a record. Multipart, so the browser sets its own boundary —
  * the JSON content-type header used everywhere else must not be applied here.
  */
+/*
+ * The largest file the server will store, learned from it at sign-in.
+ *
+ * Held here rather than hardcoded so the figure quoted to the person matches whatever the
+ * server is actually configured with. Until bootstrap has answered, the check is skipped
+ * and the server remains the authority — it always was.
+ */
+let maxUploadMb = null;
+export const setUploadLimit = value => { maxUploadMb = Number(value) || null; };
+
 export const upload = async (ownerType, ownerId, file, meta = {}) => {
+  /*
+   * Refuse an oversized file here, before it is sent.
+   *
+   * A scanned bidding document can run to tens of megabytes, and a site office pushing one
+   * up a mobile connection waits minutes to be told it was never going to be accepted.
+   */
+  if (maxUploadMb && file.size > maxUploadMb * 1024 * 1024) {
+    throw new Error(`${file.name} is ${(file.size / 1048576).toFixed(1)}MB. `
+      + `Files must be ${maxUploadMb}MB or smaller — scan at a lower resolution, or split it into parts.`);
+  }
+
   const form = new FormData();
   form.append('file', file);
   for (const [key, value] of Object.entries(meta)) if (value) form.append(key, value);
@@ -109,8 +130,29 @@ export const upload = async (ownerType, ownerId, file, meta = {}) => {
     headers: stored ? { Authorization: `Bearer ${stored}` } : {},
     body: form
   });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error || 'Upload failed');
+
+  /*
+   * Not every refusal comes from the application.
+   *
+   * A file larger than the proxy allows is rejected by the proxy itself, which answers with
+   * its own HTML error page. Parsing that as JSON threw "Unexpected token '<'" at whoever
+   * was trying to attach a scan — a message about the shape of a reply, when what they
+   * needed to know was that the file was too big.
+   */
+  const text = await response.text();
+  let body = null;
+  if (text) {
+    try { body = JSON.parse(text); } catch { body = null; }
+  }
+
+  if (!response.ok) {
+    if (response.status === 413) {
+      throw new Error(body?.error
+        || `${file.name} is too large to upload${maxUploadMb ? ` — the limit is ${maxUploadMb}MB` : ''}.`);
+    }
+    throw new Error(body?.error || `The upload failed (${response.status}).`);
+  }
+  if (!body) throw new Error('The server sent a reply that could not be read.');
   return body;
 };
 

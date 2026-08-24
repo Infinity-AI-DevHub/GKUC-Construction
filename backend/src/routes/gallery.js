@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, can, permit, validate, wrap } from '../lib/http.js';
-import { isAllowedType, isLocalStore, localPathFor, readUpload, remove, signedDownloadUrl, store } from '../lib/storage.js';
+import { checksumFile, isAllowedType, isLocalStore, localPathFor, readUpload, remove, signedDownloadUrl, store } from '../lib/storage.js';
 
 const router = Router();
 
@@ -133,8 +133,9 @@ router.post('/projects/:projectId/gallery/photos', auth, permit('gallery.manage'
   const project = await projectExists(req.params.projectId);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const { file, thumbnail, fields } = await readUpload(req);
+  const { file, thumbnail, fields, discard } = await readUpload(req);
   if (!PHOTO_TYPES.has(file.mime)) {
+    await discard();
     return res.status(415).json({ error: 'The gallery takes photographs only: JPEG, PNG, WebP or HEIC' });
   }
 
@@ -142,19 +143,24 @@ router.post('/projects/:projectId/gallery/photos', auth, permit('gallery.manage'
   if (fields.folderId && fields.folderId !== 'none') {
     const folder = await getOne('SELECT id FROM gallery_folders WHERE id=? AND project_id=?',
       [fields.folderId, project.id]);
-    if (!folder) return res.status(404).json({ error: 'That folder is not on this project' });
+    if (!folder) { await discard(); return res.status(404).json({ error: 'That folder is not on this project' }); }
     folderId = folder.id;
   }
 
   /* Fingerprinted on arrival: the checksum is what lets anyone later show the file behind
      this record is the file that was received, and the trigger keeps it from being reset. */
-  const checksum = crypto.createHash('sha256').update(file.buffer).digest('hex');
+  const checksum = await checksumFile(file.path);
 
-  const stored = await store({ folder: 'gallery', filename: file.filename, mime: file.mime, buffer: file.buffer });
+  const stored = await store({
+    folder: 'gallery', filename: file.filename, mime: file.mime,
+    path: file.path, head: file.head, size: file.size
+  });
   let thumb = null;
   if (thumbnail && isAllowedType(thumbnail.mime)) {
-    thumb = await store({ folder: 'gallery', filename: `thumb-${file.filename}`, mime: thumbnail.mime, buffer: thumbnail.buffer })
-      .catch(() => null);
+    thumb = await store({
+      folder: 'gallery', filename: `thumb-${file.filename}`, mime: thumbnail.mime,
+      path: thumbnail.path, head: thumbnail.head, size: thumbnail.size
+    }).catch(() => null);
   }
 
   try {
