@@ -60,6 +60,7 @@ const capabilities = permissions => {
     roles: any('admin.roles'),
     audit: any('admin.audit'),
     messages: any('messages.send'),
+    lists: any('admin.lists'),
     projects: any('projects.manage'),
     gallery: any('gallery.manage'),
     schedule: any('projects.schedule'),

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { query } from '../db.js';
 import { isPermission } from './permissions.js';
+import { isValidOption, optionsFor } from './options.js';
 
 export const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 export const tokenHash = token => crypto.createHash('sha256').update(token).digest('hex');
@@ -84,6 +85,33 @@ export const validate = schema => (req, res, next) => {
   if (!result.success) return res.status(400).json({ error: 'Invalid data', issues: result.error.flatten() });
   req.body = result.data;
   next();
+};
+
+/**
+ * Checks fields against the lists the company maintains.
+ *
+ * Runs after validate(), which has already established the shape. A fixed z.enum() cannot
+ * be used for these: it would be decided when the module loaded, and the whole point of
+ * these lists is that they change while the system is running.
+ *
+ *   router.post('/', auth, validate(schema), fromOptions({ category: 'boq.category' }), handler)
+ */
+export const fromOptions = mapping => async (req, res, next) => {
+  try {
+    for (const [field, listKey] of Object.entries(mapping)) {
+      const value = req.body?.[field];
+      /* Absent or deliberately cleared is the schema's business, not this one's. */
+      if (value === undefined || value === null || value === '') continue;
+      if (!await isValidOption(listKey, value)) {
+        const allowed = await optionsFor(listKey);
+        return res.status(400).json({
+          error: `"${value}" is not one of the options for this field.`,
+          issues: { fieldErrors: { [field]: [`Choose one of: ${allowed.join(', ')}`] } }
+        });
+      }
+    }
+    next();
+  } catch (error) { next(error); }
 };
 
 /** Throwing this from a route produces a clean client error instead of a 500. */

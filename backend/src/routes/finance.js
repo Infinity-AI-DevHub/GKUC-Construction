@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, spendSql } from '../db.js';
-import { auth, permit, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -59,9 +59,9 @@ router.post('/income', auth, permit('finance.manage'), validate(z.object({
   description: z.string().min(2).max(400),
   amount: z.number().positive(),
   receivedDate: isoDate,
-  method: z.enum(['Cash', 'Cheque', 'Bank transfer', 'Card']).default('Bank transfer'),
+  method: z.string().trim().min(1).max(60).default('Bank transfer'),
   reference: z.string().max(120).optional()
-})), wrap(async (req, res) => {
+})), fromOptions({ method: 'income.method' }), wrap(async (req, res) => {
   const body = req.body;
   const result = await query('INSERT INTO incomes (project_id,description,amount,received_date,method,reference,created_by) VALUES (?,?,?,?,?,?,?)',
     [body.projectId, body.description, body.amount, body.receivedDate, body.method, body.reference || null, req.user.id]);

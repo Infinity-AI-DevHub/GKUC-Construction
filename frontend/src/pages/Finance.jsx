@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
 import { api, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Page, Progress, Row, SelectField, Summary, Table, Tabs, useLiveList } from '../ui.jsx';
+import { useOptions } from '../options.js';
 
 const TABS = ['Budget monitoring', 'Expenses', 'Income', 'Supplier invoices', 'Categories'];
 
@@ -170,6 +171,7 @@ function CategoryForm({ close, reload }) {
 }
 
 function ExpenseForm({ data, close, reload }) {
+  const costTypes = useOptions('expense.source');
   const [categories, setCategories] = useState([]);
   useEffect(() => { api('/finance/categories').then(setCategories).catch(() => setCategories([])); }, []);
   return <FormModal title="Record expense" close={close} label="Save expense" onSubmit={async values => {
@@ -185,7 +187,7 @@ function ExpenseForm({ data, close, reload }) {
     await reload();
   }}>
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
-    <SelectField name="source" label="Cost type" options={['Material', 'Labour', 'Fuel', 'Equipment', 'Subcontractor', 'Overhead', 'Other']} />
+    <SelectField name="source" label="Cost type" options={costTypes} />
     <SelectField name="categoryId" label="Category" options={[['', 'Uncategorised'], ...categories.map(category => [category.id, category.name])]} />
     <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" />
     <Field name="expenseDate" label="Date" type="date" defaultValue={todayInput()} />
@@ -195,6 +197,7 @@ function ExpenseForm({ data, close, reload }) {
 }
 
 function IncomeForm({ data, close, reload }) {
+  const payMethods = useOptions('income.method');
   return <FormModal title="Record income" close={close} label="Save income" onSubmit={async values => {
     await post('/finance/income', {
       projectId: Number(values.projectId),
@@ -209,7 +212,7 @@ function IncomeForm({ data, close, reload }) {
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
     <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" />
     <Field name="receivedDate" label="Received on" type="date" defaultValue={todayInput()} />
-    <SelectField name="method" label="Method" options={['Bank transfer', 'Cheque', 'Cash', 'Card']} />
+    <SelectField name="method" label="Method" options={payMethods} />
     <Field name="reference" label="Reference" required={false} />
     <Field name="description" label="Description" wide />
   </FormModal>;
@@ -243,6 +246,7 @@ function InvoiceForm({ close, reload }) {
 }
 
 function PaymentForm({ invoice, close, reload }) {
+  const payMethods = useOptions('income.method');
   const outstanding = Number(invoice.amount) - Number(invoice.paidAmount);
   return <FormModal title={`Pay ${invoice.invoiceNo}`} close={close} label="Record payment" onSubmit={async values => {
     await post(`/purchasing/invoices/${invoice.id}/payments`, {
@@ -255,7 +259,7 @@ function PaymentForm({ invoice, close, reload }) {
   }}>
     <Field name="amount" label={`Amount (outstanding ${rupees(outstanding)})`} type="number" step="any" min="0" defaultValue={outstanding} />
     <Field name="paidDate" label="Paid on" type="date" defaultValue={todayInput()} />
-    <SelectField name="method" label="Method" options={['Bank transfer', 'Cheque', 'Cash', 'Card']} />
+    <SelectField name="method" label="Method" options={payMethods} />
     <Field name="reference" label="Reference" required={false} />
   </FormModal>;
 }

@@ -18,7 +18,7 @@
 export const PRIVILEGED_KEYS = [
   'admin.users', 'admin.roles', 'admin.audit', 'admin.notifications',
   'finance.pay', 'finance.invoice', 'hr.payroll',
-  'messages.send'
+  'messages.send', 'qs.boqAmend', 'admin.lists'
 ];
 
 export const DEPARTMENTS = [
@@ -87,7 +87,14 @@ export const PERMISSIONS = [
   /* Sending to a person's phone is a different act from reading an alert on screen: it
      reaches them wherever they are, it costs money per message, and it goes out under the
      company's name. Who may do it is the MD's decision, held separately from everything else. */
-  { key: 'messages.send', department: 'Administration', label: 'Send WhatsApp messages to selected people' }
+  { key: 'messages.send', department: 'Administration', label: 'Send WhatsApp messages to selected people' },
+  /* Separate from qs.approve, which signs off a bill the first time. This is the authority
+     to let an already-approved bill be changed — the figures quotations and invoices were
+     built on — and the MD holds it unless they hand it to somebody. */
+  { key: 'qs.boqAmend', department: 'Quantity Surveying', label: 'Approve changes to an approved BOQ' },
+  /* The choices every form offers. Adding a cost type or a leave type is an ordinary
+     business decision; letting anyone do it would leave ten spellings of the same thing. */
+  { key: 'admin.lists', department: 'Administration', label: 'Manage the dropdown lists used across the system' }
 ];
 
 export const PERMISSION_KEYS = PERMISSIONS.map(permission => permission.key);

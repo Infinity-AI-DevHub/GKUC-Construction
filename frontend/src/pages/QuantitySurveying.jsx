@@ -2,8 +2,21 @@ import React, { useEffect, useState } from 'react';
 import { Download, FileText } from 'lucide-react';
 import { api, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import BoqImport from '../BoqImport.jsx';
+import BoqChanges from '../BoqChanges.jsx';
 
-const TABS = ['Quotations', 'Tenders', 'Retention', 'Subcontractors'];
+/* The bills already on the system, so this tab shows what exists as well as how to add. */
+function BoqList() {
+  const [boqs, setBoqs] = useState([]);
+  useLiveList(() => api('/boq').then(setBoqs).catch(() => setBoqs([])));
+  if (!boqs.length) return null;
+  return <Table title="Bills of quantities" columns={['Reference', 'Project', 'Title', 'Total', 'Status']}
+    rows={boqs.map(boq => [boq.reference, boq.project, boq.title, rupees(boq.total),
+      <Badge key="s" tone={boq.status === 'Approved' ? 'on-track' : 'watch'}>{boq.status}</Badge>])} />;
+}
+import { BoqForm } from './Projects.jsx';
+
+const TABS = ['Quotations', 'Bills of quantities', 'Tenders', 'Retention', 'Subcontractors'];
 
 /** PID v3 §3.3 — one connected thread from first estimate to final account. */
 export default function QuantitySurveying({ data, reload, can }) {
@@ -22,10 +35,16 @@ export default function QuantitySurveying({ data, reload, can }) {
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
     {tab === 'Quotations' && <Quotations can={can} reload={reload} />}
+    {tab === 'Bills of quantities' && <>
+      <BoqImport projects={data.projects} onDone={reload} onCreate={() => setOpen('Create BOQ')} />
+      <BoqList />
+      <BoqChanges can={can} reload={reload} />
+    </>}
     {tab === 'Tenders' && <Tenders can={can} />}
     {tab === 'Retention' && <Retention can={can} />}
     {tab === 'Subcontractors' && <Subcontractors can={can} data={data} />}
 
+    {open === 'Create BOQ' && <BoqForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Quotations' && <QuotationForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Tenders' && <TenderForm close={() => setOpen('')} reload={reload} />}
     {open === 'Retention' && <RetentionForm data={data} close={() => setOpen('')} reload={reload} />}

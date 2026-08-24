@@ -972,6 +972,203 @@ async function createQsTables() {
  * system avoids extra moving parts: one process, one database, and a job that can be seen
  * and retried with a SELECT.
  */
+/*
+ * Importing a bill of quantities from a spreadsheet.
+ *
+ * The rows land here first, not in the bill itself. A spreadsheet filled in by hand always
+ * carries something the system cannot take at face value — a category spelled differently,
+ * a quantity with a note beside it, a rate left blank — and committing that straight into a
+ * live bill would mean discovering it later, in a quotation already sent to a client.
+ *
+ * So an import is staged, shown back to the person who uploaded it with every problem
+ * marked against the row it came from, corrected on screen, and only then committed. What
+ * gets committed is what they approved, not what the file happened to contain.
+ */
+/*
+ * Lists the company controls itself.
+ *
+ * Most of the choices offered in a dropdown are classifications: what kind of cost this
+ * is, what sort of leave, which document on a vehicle. Those belong to the business, and
+ * the business changes — a new kind of subcontract, a document the RDA starts asking for.
+ * Holding them in the code meant every such change was a code change.
+ *
+ * Workflow statuses are deliberately NOT here, and that is not an oversight. The system
+ * decides what to do by reading them: an invoice that is "Approved" can be paid, a BOQ
+ * that is "Approved" locks, a tender that is "Submitted" stops warning about its closing
+ * date. A status somebody invented would be a value nothing knows how to act on, and the
+ * record would sit in a state no part of the system could move it out of.
+ */
+async function createOptionTables() {
+  await query(`CREATE TABLE IF NOT EXISTS option_lists (
+    list_key VARCHAR(60) NOT NULL PRIMARY KEY,
+    label VARCHAR(120) NOT NULL,
+    description VARCHAR(400) NULL,
+    department VARCHAR(60) NOT NULL DEFAULT 'General',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS option_values (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    list_key VARCHAR(60) NOT NULL,
+    value VARCHAR(120) NOT NULL,
+    sort_order SMALLINT UNSIGNED NOT NULL DEFAULT 100,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    /* Shipped with the system. Can be renamed or retired, but not deleted outright:
+       records already refer to it, and a report on last year should still read correctly. */
+    is_system TINYINT(1) NOT NULL DEFAULT 0,
+    /*
+     * The system reads this exact word to decide something, so it cannot be renamed or
+     * retired. "Unpaid" leave is the example: payroll finds unpaid days by matching that
+     * word, and renaming it would stop the deduction without any visible sign.
+     */
+    locked TINYINT(1) NOT NULL DEFAULT 0,
+    created_by BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_option_value_list FOREIGN KEY(list_key) REFERENCES option_lists(list_key) ON DELETE CASCADE,
+    UNIQUE KEY uq_option_value (list_key, value),
+    INDEX idx_option_value_list (list_key, active, sort_order)
+  ) ENGINE=InnoDB`);
+
+  /*
+   * The columns these lists feed become VARCHAR.
+   *
+   * An ENUM can only hold what was written into the table definition, so adding an option
+   * would mean altering the table every time. The value is checked against the list on the
+   * way in instead, which is the same guarantee enforced somewhere it can change.
+   */
+  await addColumn('option_values', 'locked', 'TINYINT(1) NOT NULL DEFAULT 0');
+
+  await modifyColumn('boq_items', 'category', "VARCHAR(60) NOT NULL DEFAULT 'Material'");
+  await modifyColumn('expenses', 'source', "VARCHAR(60) NOT NULL DEFAULT 'Other'");
+  await modifyColumn('leave_requests', 'leave_type', "VARCHAR(60) NOT NULL DEFAULT 'Annual'");
+  await modifyColumn('vehicle_documents', 'doc_type', "VARCHAR(60) NOT NULL DEFAULT 'Insurance'");
+  await modifyColumn('client_communications', 'channel', "VARCHAR(60) NOT NULL DEFAULT 'Call'");
+  await modifyColumn('vehicle_maintenance', 'maintenance_type', "VARCHAR(60) NOT NULL DEFAULT 'Service'");
+  await modifyColumn('incomes', 'method', "VARCHAR(60) NOT NULL DEFAULT 'Bank transfer'");
+
+  const lists = [
+    ['boq.category', 'BOQ categories', 'How each line of a bill of quantities is classified.',
+      'Quantity Surveying', ['Material', 'Labour', 'Equipment', 'Subcontract', 'Overhead']],
+    ['boq.unit', 'Units of measure', 'Offered when pricing a BOQ line. Anything may still be typed in.',
+      'Quantity Surveying', ['m', 'm2', 'm3', 'kg', 'MT', 'ltr', 'nos', 'item', 'day', 'hour', 'LS']],
+    ['expense.source', 'Expense types', 'What a recorded cost was spent on.',
+      'Finance', ['Material', 'Labour', 'Fuel', 'Equipment', 'Subcontractor', 'Overhead', 'Other']],
+    ['income.method', 'Payment methods', 'How money was received.',
+      'Finance', ['Cash', 'Cheque', 'Bank transfer', 'Card']],
+    ['leave.type', 'Leave types', 'The kinds of leave an employee may request.',
+      'Human Resources', ['Annual', 'Casual', 'Medical', 'Unpaid', 'Other']],
+    ['vehicle.document', 'Vehicle document types', 'Papers tracked against a vehicle, with expiry dates.',
+      'Transport', ['Insurance', 'Revenue licence', 'Emission test', 'Service', 'Fitness certificate']],
+    ['vehicle.maintenance', 'Maintenance types', 'What a workshop visit was for.',
+      'Transport', ['Service', 'Repair', 'Inspection']],
+    ['client.channel', 'Client contact methods', 'How a conversation with a client happened.',
+      'Construction & Coordination', ['Call', 'WhatsApp', 'Email', 'Meeting', 'Site visit', 'Letter']],
+    ['material.category', 'Material categories', 'How stock is grouped in the store.',
+      'Stores', ['Cement', 'Aggregate', 'Steel', 'Timber', 'Bitumen', 'Consumables', 'Tools', 'Other']],
+    ['employee.designation', 'Designations', 'Job titles used on employee records.',
+      'Human Resources', ['Site Supervisor', 'Mason', 'Carpenter', 'Bar bender', 'Driver',
+        'Machine operator', 'Labourer', 'Storekeeper', 'Quantity Surveyor', 'Engineer']]
+  ];
+
+  /* Values the code matches on by name. Everything else is free to be renamed. */
+  const LOCKED = { 'leave.type': ['Unpaid'] };
+
+  for (const [key, label, description, department, values] of lists) {
+    await query('INSERT IGNORE INTO option_lists (list_key,label,description,department) VALUES (?,?,?,?)',
+      [key, label, description, department]);
+    let order = 10;
+    for (const value of values) {
+      await query('INSERT IGNORE INTO option_values (list_key,value,sort_order,is_system,locked) VALUES (?,?,?,1,?)',
+        [key, value, order, (LOCKED[key] || []).includes(value) ? 1 : 0]);
+      order += 10;
+    }
+  }
+}
+
+async function createBoqImportTables() {
+  /* Method statements belong on the line, not only in the method library: a bill imported
+     from a spreadsheet carries the wording the estimator wrote for that specific item. */
+  await addColumn('boq_items', 'method', 'TEXT NULL');
+  await addColumn('boq_items', 'notes', 'VARCHAR(600) NULL');
+
+  await query(`CREATE TABLE IF NOT EXISTS boq_imports (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    project_id BIGINT UNSIGNED NULL,
+    boq_id BIGINT UNSIGNED NULL,
+    filename VARCHAR(190) NOT NULL,
+    title VARCHAR(180) NULL,
+    client VARCHAR(180) NULL,
+    notes VARCHAR(1000) NULL,
+    status ENUM('Review','Committed','Discarded') NOT NULL DEFAULT 'Review',
+    row_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    problem_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    total DECIMAL(15,2) NOT NULL DEFAULT 0,
+    uploaded_by BIGINT UNSIGNED NOT NULL,
+    committed_by BIGINT UNSIGNED NULL,
+    committed_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_boqimport_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_boqimport_boq FOREIGN KEY(boq_id) REFERENCES boqs(id),
+    CONSTRAINT fk_boqimport_user FOREIGN KEY(uploaded_by) REFERENCES users(id),
+    INDEX idx_boqimport_status(status, id)
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS boq_import_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    import_id BIGINT UNSIGNED NOT NULL,
+    source_row SMALLINT UNSIGNED NOT NULL,
+    category VARCHAR(60) NULL,
+    description VARCHAR(300) NULL,
+    unit VARCHAR(30) NULL,
+    quantity DECIMAL(14,3) NULL,
+    rate DECIMAL(14,2) NULL,
+    amount DECIMAL(15,2) NULL,
+    method TEXT NULL,
+    notes VARCHAR(600) NULL,
+    /* What the file said, kept verbatim, so a correction can always be compared with it. */
+    raw_json JSON NULL,
+    problems VARCHAR(600) NULL,
+    /* Worth saying, but not a reason to stop: the amount typed in the file disagreeing
+       with quantity x rate, for instance, when the system uses quantity x rate anyway. */
+    notice VARCHAR(600) NULL,
+    include TINYINT(1) NOT NULL DEFAULT 1,
+    CONSTRAINT fk_boqimportitem_import FOREIGN KEY(import_id) REFERENCES boq_imports(id) ON DELETE CASCADE,
+    INDEX idx_boqimportitem_import(import_id, source_row)
+  ) ENGINE=InnoDB`);
+
+  /*
+   * Changing a bill that has already been approved.
+   *
+   * An approved BOQ is what quotations, invoices and the project budget are built on, so
+   * amending one quietly would change figures other people have already relied on. The
+   * change is recorded, the reason with it, and it applies only once somebody holding the
+   * approval permission agrees.
+   */
+  await query(`CREATE TABLE IF NOT EXISTS boq_change_requests (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    boq_id BIGINT UNSIGNED NOT NULL,
+    item_id BIGINT UNSIGNED NULL,
+    action ENUM('Edit','Add','Remove') NOT NULL,
+    reason VARCHAR(600) NOT NULL,
+    before_json JSON NULL,
+    after_json JSON NULL,
+    status ENUM('Pending','Approved','Rejected') NOT NULL DEFAULT 'Pending',
+    requested_by BIGINT UNSIGNED NOT NULL,
+    decided_by BIGINT UNSIGNED NULL,
+    decided_at DATETIME NULL,
+    decision_note VARCHAR(600) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_boqchange_boq FOREIGN KEY(boq_id) REFERENCES boqs(id) ON DELETE CASCADE,
+    CONSTRAINT fk_boqchange_requester FOREIGN KEY(requested_by) REFERENCES users(id),
+    CONSTRAINT fk_boqchange_decider FOREIGN KEY(decided_by) REFERENCES users(id),
+    INDEX idx_boqchange_status(status, id)
+  ) ENGINE=InnoDB`);
+
+  /* For databases created before advisory notes were separated from blocking problems.
+     Declared after the table it alters, or a fresh install fails here on the first boot. */
+  await addColumn('boq_import_items', 'notice', 'VARCHAR(600) NULL');
+}
+
 async function createOcrTables() {
   await query(`CREATE TABLE IF NOT EXISTS attachment_text (
     attachment_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
@@ -1258,6 +1455,8 @@ export async function migrate() {
   await createSubcontractQuotationTables();
   await createMessagingTables();
   await createOcrTables();
+  await createOptionTables();
+  await createBoqImportTables();
   await migrateExistingInstalls();
   await seedWorkMethods();
   await seedAccessControl();

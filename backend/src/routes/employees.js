@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
-import { auth, permit, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
 
 const router = Router();
@@ -117,13 +117,13 @@ router.get('/leave/all', auth, permit('hr.view','hr.leave'), wrap(async (_req, r
   FROM leave_requests l JOIN employees e ON e.id=l.employee_id ORDER BY l.id DESC`))));
 
 router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.object({
-  leaveType: z.enum(['Annual', 'Casual', 'Medical', 'Unpaid', 'Other']),
+  leaveType: z.string().trim().min(1).max(60),
   fromDate: isoDate,
   toDate: isoDate,
   reason: z.string().min(3).max(600)
 }).refine(value => value.toDate >= value.fromDate, {
   message: 'Leave cannot end before it starts', path: ['toDate']
-})), wrap(async (req, res) => {
+})), fromOptions({ leaveType: 'leave.type' }), wrap(async (req, res) => {
   const body = req.body;
   const days = Math.max(1, Math.round((new Date(body.toDate) - new Date(body.fromDate)) / 86400000) + 1);
   const result = await query('INSERT INTO leave_requests (employee_id,leave_type,from_date,to_date,days,reason) VALUES (?,?,?,?,?,?)',

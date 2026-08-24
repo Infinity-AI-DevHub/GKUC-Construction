@@ -3,6 +3,7 @@ import { AlertTriangle, QrCode, Truck, Wrench } from 'lucide-react';
 import { api, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { toSvg } from '../qr.js';
+import { useOptions } from '../options.js';
 
 const TABS = ['Vehicles', 'Compliance', 'Fuel & service', 'Equipment'];
 
@@ -128,6 +129,7 @@ function VehicleDetail({ vehicle, close, can, refresh }) {
 
 /** Logging a service also resets the vehicle's service schedule from that date and odometer. */
 function MaintenanceForm({ vehicle, close, reload }) {
+  const maintenanceTypes = useOptions('vehicle.maintenance');
   return <FormModal title={`Log service — ${vehicle.reg}`} close={close} label="Save service" onSubmit={async values => {
     await post(`/fleet/${vehicle.id}/maintenance`, {
       serviceDate: values.serviceDate,
@@ -292,7 +294,7 @@ function EquipmentServiceForm({ item, close, reload }) {
     });
     await reload();
   }}>
-    <SelectField name="maintenanceType" label="Type" options={['Service', 'Repair', 'Inspection']} />
+    <SelectField name="maintenanceType" label="Type" options={maintenanceTypes} />
     <Field name="performedAt" label="Date" type="date" defaultValue={todayInput()} />
     <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" defaultValue="0" required={false} />
     <SelectField name="setStatus" label="Set status to" options={[['', 'Leave unchanged'], 'Available', 'Maintenance']} />
@@ -301,6 +303,7 @@ function EquipmentServiceForm({ item, close, reload }) {
 }
 
 function VehicleForm({ data, close, reload }) {
+  const docTypes = useOptions('vehicle.document');
   return <FormModal title="Add fleet asset" close={close} label="Add asset" onSubmit={async values => {
     await post('/fleet', {
       vehicle: values.vehicle,
@@ -324,7 +327,7 @@ function VehicleForm({ data, close, reload }) {
     <SelectField name="driverEmployeeId" label="Assigned driver"
       options={[['', 'Unassigned'], ...data.employees.map(employee => [employee.id, employee.name])]} />
     <SelectField name="status" label="Status" options={['Available', 'Assigned', 'Repair', 'Inactive']} />
-    <SelectField name="renewal" label="Next renewal type" options={DOC_TYPES} />
+    <SelectField name="renewal" label="Next renewal type" options={docTypes} />
     <Field name="dueDate" label="Renewal due date" type="date" defaultValue={todayInput()} />
     <SelectField name="projectId" label="Assigned site" options={[['', 'Yard'], ...data.projects.map(project => [project.id, project.name])]} />
     <Field name="odometer" label="Odometer" type="number" min="0" defaultValue="0" required={false} />
@@ -332,6 +335,7 @@ function VehicleForm({ data, close, reload }) {
 }
 
 function DocumentForm({ data, close, reload }) {
+  const docTypes = useOptions('vehicle.document');
   return <FormModal title="Record renewal" close={close} label="Save renewal" onSubmit={async values => {
     await post(`/fleet/${values.vehicleId}/documents`, {
       docType: values.docType,
@@ -342,7 +346,7 @@ function DocumentForm({ data, close, reload }) {
     await reload();
   }}>
     <SelectField name="vehicleId" label="Vehicle" options={data.fleet.map(vehicle => [vehicle.id, `${vehicle.vehicle} — ${vehicle.reg}`])} />
-    <SelectField name="docType" label="Document" options={DOC_TYPES} />
+    <SelectField name="docType" label="Document" options={docTypes} />
     <Field name="reference" label="Reference / policy number" required={false} />
     <Field name="expiryDate" label="Expires on" type="date" defaultValue={todayInput()} />
     <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" defaultValue="0" required={false} />

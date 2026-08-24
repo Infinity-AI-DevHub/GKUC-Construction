@@ -4,6 +4,7 @@ import { api, localDate, patch, post, rupees, shortDate, slug, todayInput } from
 import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import BiometricImport from './BiometricImport.jsx';
+import { useOptions } from '../options.js';
 
 const TABS = ['Employees', 'Attendance', 'Biometric import', 'Leave', 'Overtime', 'Payroll', 'Performance', 'Departments'];
 
@@ -433,6 +434,7 @@ function AttendanceForm({ data, close, reload }) {
 }
 
 function LeaveForm({ data, close, reload }) {
+  const leaveTypes = useOptions('leave.type');
   return <FormModal title="Record leave" close={close} label="Save leave request" onSubmit={async values => {
     await post(`/employees/${values.employeeId}/leave`, {
       leaveType: values.leaveType,
@@ -443,7 +445,7 @@ function LeaveForm({ data, close, reload }) {
     await reload();
   }}>
     <SelectField name="employeeId" label="Employee" options={data.employees.map(employee => [employee.id, employee.name])} />
-    <SelectField name="leaveType" label="Leave type" options={['Annual', 'Casual', 'Medical', 'Unpaid', 'Other']} />
+    <SelectField name="leaveType" label="Leave type" options={leaveTypes} />
     <Field name="fromDate" label="From" type="date" defaultValue={todayInput()} />
     <Field name="toDate" label="To" type="date" defaultValue={todayInput()} />
     <TextArea name="reason" label="Reason" />

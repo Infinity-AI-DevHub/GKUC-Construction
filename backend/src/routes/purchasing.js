@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { auth, permit, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
@@ -257,9 +257,9 @@ router.post('/invoices', auth, permit('finance.pay'), validate(z.object({
 router.post('/invoices/:id/payments', auth, permit('finance.pay'), validate(z.object({
   amount: z.number().positive(),
   paidDate: isoDate,
-  method: z.enum(['Cash', 'Cheque', 'Bank transfer', 'Card']).default('Bank transfer'),
+  method: z.string().trim().min(1).max(60).default('Bank transfer'),
   reference: z.string().max(120).optional()
-})), wrap(async (req, res) => {
+})), fromOptions({ method: 'income.method' }), wrap(async (req, res) => {
   try {
     const invoice = await transaction(async connection => {
       const [rows] = await connection.execute('SELECT * FROM supplier_invoices WHERE id=? FOR UPDATE', [req.params.id]);
