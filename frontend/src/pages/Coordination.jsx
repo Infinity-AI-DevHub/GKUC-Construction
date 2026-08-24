@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle, ArrowRightLeft, CloudRain, HardHat, MessageSquare, Truck, Wrench } from 'lucide-react';
 import { api, daysUntil, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { useOptions } from '../options.js';
 
 const TABS = ['Live sites', 'Resource availability', 'Enquiries', 'Movement history'];
 
@@ -260,6 +261,7 @@ const CHANNELS = ['Call', 'WhatsApp', 'Email', 'Meeting', 'Site visit', 'Letter'
 
 /** The record of contact with one client, and the means to add to it. */
 function ClientHistory({ enquiry, can, close }) {
+  const channels = useOptions('client.channel');
   const [entries, setEntries] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -319,7 +321,7 @@ function ClientHistory({ enquiry, can, close }) {
 
       {can.enquiries && <form onSubmit={add} className="wide delegate-form">
         <label>Direction<select name="direction"><option>Incoming</option><option>Outgoing</option></select></label>
-        <label>How<select name="channel">{CHANNELS.map(one => <option key={one}>{one}</option>)}</select></label>
+        <label>How<select name="channel">{channels.map(one => <option key={one}>{one}</option>)}</select></label>
         <label>Who<input name="contactPerson" placeholder="Person spoken to" /></label>
         <label>Follow up<input type="date" name="followUpDate" /></label>
         <label className="wide">What was said

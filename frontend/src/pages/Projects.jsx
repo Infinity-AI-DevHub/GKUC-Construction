@@ -3,6 +3,7 @@ import { BriefcaseBusiness, Building2, Check, FileText } from 'lucide-react';
 import { api, money, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Page, Progress, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import ProjectDetail from './ProjectDetail.jsx';
+import { useOptions } from '../options.js';
 
 const TABS = ['Projects', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquiries'];
 const healthTone = health => (health === 'On track' ? 'on-track' : health === 'At risk' ? 'at-risk' : 'watch');
@@ -347,8 +348,10 @@ function MilestoneForm({ data, close, reload }) {
 const CATEGORIES = ['Material', 'Labour', 'Equipment', 'Subcontract', 'Overhead'];
 
 /** A BOQ is created with its first priced line; further lines are added from the detail view. */
-function BoqForm({ data, close, reload }) {
-  const [lines, setLines] = useState([{ category: 'Material', description: '', unit: '', quantity: '', rate: '' }]);
+export function BoqForm({ data, close, reload }) {
+  const boqCategories = useOptions('boq.category');
+  const units = useOptions('boq.unit');
+  const [lines, setLines] = useState([{ category: '', description: '', unit: '', quantity: '', rate: '' }]);
   const update = (index, key, value) => setLines(current => current.map((line, position) => (position === index ? { ...line, [key]: value } : line)));
   const total = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.rate) || 0), 0);
 
@@ -372,7 +375,7 @@ function BoqForm({ data, close, reload }) {
     {lines.map((line, index) => <div className="wide" key={index} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 80px 90px 110px', gap: '8px' }}>
       <label>Category
         <select value={line.category} onChange={event => update(index, 'category', event.target.value)}>
-          {CATEGORIES.map(category => <option key={category}>{category}</option>)}
+          {boqCategories.map(category => <option key={category}>{category}</option>)}
         </select>
       </label>
       <label>Description<input value={line.description} onChange={event => update(index, 'description', event.target.value)} /></label>

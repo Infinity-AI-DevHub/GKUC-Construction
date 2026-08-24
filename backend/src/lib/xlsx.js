@@ -89,9 +89,20 @@ function sheetIndex(files) {
   const workbook = (files.get('xl/workbook.xml') || Buffer.alloc(0)).toString('utf8');
   const relations = (files.get('xl/_rels/workbook.xml.rels') || Buffer.alloc(0)).toString('utf8');
 
+  /*
+   * Attributes are read individually rather than in a fixed order.
+   *
+   * The order they appear in is up to whichever program wrote the file: Excel writes Id
+   * before Target, openpyxl and LibreOffice write Target first. A pattern that expected
+   * one order matched nothing on files from the other, and the workbook came back with no
+   * sheets at all — a spreadsheet that opens perfectly everywhere else, silently unreadable
+   * here.
+   */
   const targets = new Map();
-  for (const [, id, target] of relations.matchAll(/<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
-    targets.set(id, target.replace(/^\/?xl\//, '').replace(/^\//, ''));
+  for (const [tag] of relations.matchAll(/<Relationship\b[^>]*>/g)) {
+    const id = tag.match(/\bId="([^"]+)"/)?.[1];
+    const target = tag.match(/\bTarget="([^"]+)"/)?.[1];
+    if (id && target) targets.set(id, target.replace(/^\/?xl\//, '').replace(/^\//, ''));
   }
 
   const sheets = new Map();

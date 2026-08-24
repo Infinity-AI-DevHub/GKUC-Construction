@@ -1,11 +1,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { auth, permit, validate, wrap } from '../lib/http.js';
+import { optionsFor } from '../lib/options.js';
+import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { boqDocument, documentContext } from '../lib/documents.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
+/* Kept only as the fallback grouping for the cost comparison below; the values people
+   may choose come from the option list, which the company maintains itself. */
 const CATEGORIES = ['Material', 'Labour', 'Equipment', 'Subcontract', 'Overhead'];
 
 const select = `SELECT b.id,b.reference,b.title,b.status,b.version,b.total,b.notes,b.terms,b.project_id projectId,p.name project,
@@ -28,13 +31,31 @@ async function recalculateBudget(connection, projectId) {
 }
 
 const itemSchema = z.object({
-  category: z.enum(CATEGORIES),
+  category: z.string().trim().min(1).max(60),
   description: z.string().min(2).max(300),
   unit: z.string().min(1).max(30),
   quantity: z.number().positive(),
   rate: z.number().nonnegative(),
   materialId: z.number().int().positive().optional()
 });
+
+/*
+ * A bill arrives with all its lines at once, so each line's category is checked rather
+ * than one field on the body. Same list, same message, applied across the array.
+ */
+const checkItemCategories = async (req, res, next) => {
+  try {
+    const allowed = await optionsFor('boq.category');
+    const wrong = (req.body.items || []).find(item => !allowed.includes(item.category));
+    if (wrong) {
+      return res.status(400).json({
+        error: `"${wrong.category}" is not one of the BOQ categories.`,
+        issues: { fieldErrors: { category: [`Choose one of: ${allowed.join(', ')}`] } }
+      });
+    }
+    next();
+  } catch (error) { next(error); }
+};
 
 router.get('/', auth, permit('qs.view','qs.boq'), wrap(async (_req, res) => res.json(await query(`${select} ORDER BY b.id DESC`))));
 
@@ -44,7 +65,7 @@ router.get('/:id/document', auth, permit('qs.view', 'qs.boq'), wrap(async (req, 
   if (!boq) return res.status(404).json({ error: 'BOQ not found' });
 
   const [items, variations, context] = await Promise.all([
-    query(`SELECT category,description,unit,quantity,rate,amount FROM boq_items
+    query(`SELECT category,description,unit,quantity,rate,amount,method FROM boq_items
       WHERE boq_id=? ORDER BY id`, [boq.id]),
     query(`SELECT reference,description,amount,status FROM variation_orders
       WHERE boq_id=? ORDER BY id`, [boq.id]),
@@ -58,7 +79,7 @@ router.get('/:id', auth, permit('qs.view','qs.boq'), wrap(async (req, res) => {
   const boq = await getOne(`${select} WHERE b.id=?`, [req.params.id]);
   if (!boq) return res.status(404).json({ error: 'BOQ not found' });
   const [items, variations, actual] = await Promise.all([
-    query('SELECT id,category,description,unit,quantity,rate,amount,material_id materialId FROM boq_items WHERE boq_id=? ORDER BY id', [boq.id]),
+    query('SELECT id,category,description,unit,quantity,rate,amount,method,notes,material_id materialId FROM boq_items WHERE boq_id=? ORDER BY id', [boq.id]),
     query(`SELECT v.id,v.reference,v.description,v.amount,v.status,u.name raisedBy FROM variation_orders v
       JOIN users u ON u.id=v.raised_by WHERE v.boq_id=? ORDER BY v.id DESC`, [boq.id]),
     query(`SELECT source,COALESCE(SUM(amount),0) total FROM expenses WHERE project_id=? GROUP BY source`, [boq.projectId])
@@ -78,7 +99,7 @@ router.post('/', auth, permit('qs.boq'), validate(z.object({
   title: z.string().min(3).max(180),
   notes: z.string().max(1000).optional(),
   items: z.array(itemSchema).min(1)
-})), wrap(async (req, res) => {
+})), checkItemCategories, wrap(async (req, res) => {
   const body = req.body;
   const reference = await nextReference('BOQ', 'boqs');
   const total = body.items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
@@ -95,7 +116,8 @@ router.post('/', auth, permit('qs.boq'), validate(z.object({
   res.status(201).json(await getOne(`${select} WHERE b.id=?`, [id]));
 }));
 
-router.post('/:id/items', auth, permit('qs.boq'), validate(itemSchema), wrap(async (req, res) => {
+router.post('/:id/items', auth, permit('qs.boq'), validate(itemSchema),
+  fromOptions({ category: 'boq.category' }), wrap(async (req, res) => {
   const boq = await getOne('SELECT * FROM boqs WHERE id=?', [req.params.id]);
   if (!boq) return res.status(404).json({ error: 'BOQ not found' });
   if (boq.status === 'Approved') return res.status(409).json({ error: 'An approved BOQ cannot be edited — raise a variation order instead' });

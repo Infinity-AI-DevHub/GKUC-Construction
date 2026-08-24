@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, transaction } from '../db.js';
-import { auth, permit, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -111,12 +111,12 @@ router.post('/:id/return', auth, permit('store.lending'), validate(z.object({
 }));
 
 router.post('/:id/maintenance', auth, permit('store.lending'), validate(z.object({
-  maintenanceType: z.enum(['Service', 'Repair', 'Inspection']),
+  maintenanceType: z.string().trim().min(1).max(60),
   performedAt: isoDate,
   cost: z.number().nonnegative().default(0),
   notes: z.string().max(600).optional(),
   setStatus: z.enum(['Available', 'Maintenance']).optional()
-})), wrap(async (req, res) => {
+})), fromOptions({ maintenanceType: 'vehicle.maintenance' }), wrap(async (req, res) => {
   const body = req.body;
   const result = await query('INSERT INTO equipment_maintenance (equipment_id,maintenance_type,performed_at,cost,notes,created_by) VALUES (?,?,?,?,?,?)',
     [req.params.id, body.maintenanceType, body.performedAt, body.cost, body.notes || null, req.user.id]);

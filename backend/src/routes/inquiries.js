@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, clock, getOne, nextReference, pool, query, today, transaction } from '../db.js';
-import { auth, permit, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
@@ -55,12 +55,12 @@ router.get('/:id/communications', auth, permit('enquiries.manage', 'projects.vie
 
 router.post('/:id/communications', auth, permit('enquiries.manage'), validate(z.object({
   direction: z.enum(['Incoming', 'Outgoing']).default('Outgoing'),
-  channel: z.enum(['Call', 'WhatsApp', 'Email', 'Meeting', 'Site visit', 'Letter']).default('Call'),
+  channel: z.string().trim().min(1).max(60).default('Call'),
   contactPerson: z.string().max(120).optional(),
   summary: z.string().min(3).max(1000),
   happenedAt: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/)).optional(),
   followUpDate: isoDate.optional()
-})), wrap(async (req, res) => {
+})), fromOptions({ channel: 'client.channel' }), wrap(async (req, res) => {
   const inquiry = await getOne('SELECT id,project_id FROM inquiries WHERE id=?', [req.params.id]);
   if (!inquiry) return res.status(404).json({ error: 'Enquiry not found' });
 
