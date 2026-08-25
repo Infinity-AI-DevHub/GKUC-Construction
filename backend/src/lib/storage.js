@@ -60,7 +60,7 @@ const ALLOWED = new Map([
  * to, and treating one list as both made /api/uploads/gallery/:id fall over with a 500.
  */
 /* 'boq' holds the spreadsheets bills were read from, kept as the evidence behind them. */
-export const FOLDERS = ['task', 'project', 'employee', 'report', 'vehicle', 'equipment', 'gallery', 'boq'];
+export const FOLDERS = ['task', 'project', 'employee', 'report', 'vehicle', 'equipment', 'gallery', 'boq', 'drive'];
 
 export const isAllowedType = mime => ALLOWED.has(mime);
 
@@ -282,17 +282,21 @@ export const storageDriver = driver.name;
  * `path` to a file already written to disk by the upload reader, plus the `head` bytes for
  * type verification. The path form never loads the file into memory.
  */
-export async function store({ folder, filename, mime, buffer, path: sourcePath, head, size }) {
+export async function store({ folder, filename, mime, buffer, path: sourcePath, head, size, skipTypeCheck = false }) {
   if (!FOLDERS.includes(folder)) throw Object.assign(new Error('Unknown upload folder'), { status: 400 });
-  if (!isAllowedType(mime)) {
+  if (!skipTypeCheck && !isAllowedType(mime)) {
     throw Object.assign(new Error(`Unsupported file type. Allowed: ${allowedExtensions().join(', ')}`), { status: 415 });
   }
 
   const bytes = buffer ? buffer.length : size;
   if (!bytes) throw Object.assign(new Error('The file is empty'), { status: 400 });
 
-  /* Verified from the first bytes, which the reader kept as the file went past. */
-  if (!contentMatchesType(buffer || head, mime)) {
+  /*
+   * The drive carries its own judgement about what is acceptable — drawings, archives,
+   * video — so it does its check before calling here and asks this one to stand aside.
+   * Everywhere else keeps the narrow allow-list, which is right for a vehicle document.
+   */
+  if (!skipTypeCheck && !contentMatchesType(buffer || head, mime)) {
     throw Object.assign(
       new Error('The file contents do not match the type it was sent as, so it was not stored'),
       { status: 415 });

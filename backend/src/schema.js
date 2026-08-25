@@ -998,6 +998,306 @@ async function createQsTables() {
  * date. A status somebody invented would be a value nothing knows how to act on, and the
  * record would sit in a state no part of the system could move it out of.
  */
+/*
+ * Whether somebody has been shown round the system yet.
+ *
+ * On the user record rather than in the browser: a supervisor who signs in on the site
+ * tablet one day and the office computer the next is the same person, and being walked
+ * through the same introduction a second time reads as the system having forgotten them.
+ */
+/*
+ * Messaging between the people who use the system.
+ *
+ * A site supervisor asking the storekeeper whether the cement arrived should not have to
+ * leave the system to do it — and when that conversation happens on a personal phone, the
+ * company has no record of what was agreed. Kept here, it sits beside the work it is about.
+ *
+ * The delivery marks are the WhatsApp ones because that is what everybody already reads:
+ * one tick means the server has it, two mean it reached them, two filled mean they opened
+ * it. That needs a row per person per message, which is why receipts are their own table
+ * rather than a column — in a group of twelve, "delivered" is twelve separate facts.
+ */
+/*
+ * Watching the company's own records for the things that cost construction firms money.
+ *
+ * Two different problems wear the same clothes. Somebody fat-fingering 850,000 where they
+ * meant 85,000 and somebody quietly inflating a supplier invoice produce the same row in
+ * the same table, and neither announces itself. What separates them is pattern — one is a
+ * single wrong figure, the other is a habit — so the detectors here look at each entry
+ * against its own history rather than against a fixed rule.
+ *
+ * Findings are raised for review, not enforced. A system that refuses a legitimate unusual
+ * entry at six in the evening on a pour day gets worked around within a week, and then the
+ * company has neither the control nor the record. The few things that are refused outright
+ * are the ones that cannot be legitimate under any reading — see the engine.
+ */
+/*
+ * The company's own document store.
+ *
+ * Folders and files, shared the way people expect from Drive or OneDrive — which means the
+ * hard part is not the storing but the answer to "who can see this". That answer has to be
+ * obvious to whoever set it, because this is the same system that holds payslips, identity
+ * documents and priced tenders, and a folder quietly inheriting a public link would be a
+ * serious matter rather than an inconvenience.
+ *
+ * So access is accumulated up the tree — sharing a folder shares what is inside it, as
+ * everybody expects — and the public flag is deliberately not something a file can acquire
+ * by being moved. Making something public is always a decision somebody took about that
+ * thing, and it is written into the audit trail.
+ */
+async function createDriveTables() {
+  await query(`CREATE TABLE IF NOT EXISTS drive_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    parent_id BIGINT UNSIGNED NULL,
+    kind ENUM('Folder','File') NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    owner_id BIGINT UNSIGNED NOT NULL,
+    /* Optional: a folder can belong to a project, which is how most site paperwork is found. */
+    project_id BIGINT UNSIGNED NULL,
+
+    storage_key VARCHAR(400) NULL,
+    size_bytes BIGINT UNSIGNED NULL,
+    mime VARCHAR(160) NULL,
+    checksum CHAR(64) NULL,
+
+    /*
+     * 'Private'      — the owner, and nobody else
+     * 'People'       — the owner and whoever is named in drive_shares
+     * 'Organisation' — anybody signed in, at org_role
+     * The public link is separate and additive: something can be shared with named people
+     * and also carry a link, and revoking one does not touch the other.
+     */
+    visibility ENUM('Private','People','Organisation') NOT NULL DEFAULT 'Private',
+    org_role ENUM('View','Edit') NOT NULL DEFAULT 'View',
+
+    /* Unguessable, revocable, and never inherited from a parent. */
+    public_token CHAR(43) NULL,
+    public_expires_at DATETIME NULL,
+    public_created_by BIGINT UNSIGNED NULL,
+    public_downloads INT UNSIGNED NOT NULL DEFAULT 0,
+
+    /* Withdrawn rather than erased, so a deletion can be undone and can be accounted for. */
+    trashed_at DATETIME NULL,
+    trashed_by BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_drive_parent FOREIGN KEY(parent_id) REFERENCES drive_items(id) ON DELETE CASCADE,
+    CONSTRAINT fk_drive_owner FOREIGN KEY(owner_id) REFERENCES users(id),
+    CONSTRAINT fk_drive_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    UNIQUE KEY uq_drive_public (public_token),
+    INDEX idx_drive_parent (parent_id, trashed_at),
+    INDEX idx_drive_owner (owner_id, trashed_at)
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS drive_shares (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    item_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,
+    role ENUM('View','Edit') NOT NULL DEFAULT 'View',
+    granted_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_share_item FOREIGN KEY(item_id) REFERENCES drive_items(id) ON DELETE CASCADE,
+    CONSTRAINT fk_share_user FOREIGN KEY(user_id) REFERENCES users(id),
+    CONSTRAINT fk_share_granter FOREIGN KEY(granted_by) REFERENCES users(id),
+    UNIQUE KEY uq_drive_share (item_id, user_id),
+    INDEX idx_share_user (user_id)
+  ) ENGINE=InnoDB`);
+
+  /*
+   * Somebody asking to be let in.
+   *
+   * Better than the alternative, which is a phone call the owner forgets and a colleague
+   * who works around the system instead.
+   */
+  await query(`CREATE TABLE IF NOT EXISTS drive_access_requests (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    item_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,
+    requested_role ENUM('View','Edit') NOT NULL DEFAULT 'View',
+    message VARCHAR(500) NULL,
+    status ENUM('Pending','Granted','Refused') NOT NULL DEFAULT 'Pending',
+    decided_by BIGINT UNSIGNED NULL,
+    decided_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_request_item FOREIGN KEY(item_id) REFERENCES drive_items(id) ON DELETE CASCADE,
+    CONSTRAINT fk_request_user FOREIGN KEY(user_id) REFERENCES users(id),
+    UNIQUE KEY uq_drive_request (item_id, user_id, status),
+    INDEX idx_request_status (status, id)
+  ) ENGINE=InnoDB`);
+}
+
+async function createIntegrityTables() {
+  await query(`CREATE TABLE IF NOT EXISTS risk_findings (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    /* The detector that raised it, so a noisy one can be traced and tuned. */
+    rule VARCHAR(60) NOT NULL,
+    category ENUM('Fraud','Error','Control','Integrity') NOT NULL,
+    severity ENUM('Low','Medium','High','Critical') NOT NULL DEFAULT 'Medium',
+    /* What it is about: the table and row, so the reviewer can go and look. */
+    entity VARCHAR(60) NOT NULL,
+    entity_id VARCHAR(60) NOT NULL,
+    project_id BIGINT UNSIGNED NULL,
+    subject_user_id BIGINT UNSIGNED NULL,
+    amount DECIMAL(15,2) NULL,
+    title VARCHAR(200) NOT NULL,
+    /* Written for a person, not a log: what was seen, what was expected, why it matters. */
+    detail VARCHAR(1200) NOT NULL,
+    evidence_json JSON NULL,
+    /* A number, so a list can be ranked rather than read end to end. */
+    score SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    status ENUM('Open','Confirmed','Dismissed','Resolved') NOT NULL DEFAULT 'Open',
+    /* One finding per rule per record, so a nightly sweep does not pile up duplicates. */
+    fingerprint VARCHAR(190) NOT NULL,
+    reviewed_by BIGINT UNSIGNED NULL,
+    reviewed_at DATETIME NULL,
+    review_note VARCHAR(1000) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_finding_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_finding_subject FOREIGN KEY(subject_user_id) REFERENCES users(id),
+    CONSTRAINT fk_finding_reviewer FOREIGN KEY(reviewed_by) REFERENCES users(id),
+    UNIQUE KEY uq_finding (fingerprint),
+    INDEX idx_finding_open (status, severity, id),
+    INDEX idx_finding_entity (entity, entity_id)
+  ) ENGINE=InnoDB`);
+
+  /*
+   * What the company considers normal, so the thresholds are theirs rather than mine.
+   *
+   * Every figure a detector compares against is here and editable. A rule nobody can tune
+   * is a rule that gets switched off the first time it is wrong.
+   */
+  await query(`CREATE TABLE IF NOT EXISTS risk_settings (
+    setting_key VARCHAR(80) NOT NULL PRIMARY KEY,
+    value VARCHAR(200) NOT NULL,
+    label VARCHAR(200) NOT NULL,
+    help VARCHAR(500) NULL,
+    updated_by BIGINT UNSIGNED NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB`);
+
+  const defaults = [
+    ['approval.threshold', '250000', 'Purchase approval threshold (LKR)',
+      'Orders above this need sign-off. Used to spot purchases split to stay just underneath it.'],
+    ['split.window.days', '7', 'Window for spotting split purchases (days)',
+      'Several orders to one supplier inside this many days are judged together against the threshold.'],
+    ['outlier.sigma', '3', 'How far from normal counts as unusual',
+      'Measured in robust standard deviations from that category\'s own history. Lower catches more.'],
+    ['outlier.minimum.history', '8', 'Least history before judging an amount unusual',
+      'Below this the system has nothing to compare against and says nothing.'],
+    ['duplicate.window.days', '30', 'Window for spotting duplicate payments (days)', null],
+    ['round.amount.floor', '100000', 'Round-figure watch starts at (LKR)',
+      'Fabricated amounts cluster on round numbers. Small round figures are ordinary; large ones less so.'],
+    ['overtime.daily.max', '6', 'Overtime hours in a day before it is questioned', null],
+    ['fuel.variance.percent', '40', 'Fuel cost variance before it is questioned (%)', null],
+    ['workday.start', '06:00', 'Working day starts', 'Entries outside these hours are noted, not refused.'],
+    ['workday.end', '20:00', 'Working day ends', null],
+    ['benford.minimum.sample', '60', 'Least records before testing digit distribution',
+      'Benford\'s law needs a reasonable sample before it says anything useful.']
+  ];
+  for (const [key, value, label, help] of defaults) {
+    await query('INSERT IGNORE INTO risk_settings (setting_key,value,label,help) VALUES (?,?,?,?)',
+      [key, value, label, help]);
+  }
+}
+
+async function createChatTables() {
+  await query(`CREATE TABLE IF NOT EXISTS conversations (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    kind ENUM('Direct','Group') NOT NULL DEFAULT 'Direct',
+    /* Null for a direct chat: it is named by whoever you are talking to. */
+    name VARCHAR(120) NULL,
+    topic VARCHAR(300) NULL,
+    project_id BIGINT UNSIGNED NULL,
+    created_by BIGINT UNSIGNED NOT NULL,
+    last_message_id BIGINT UNSIGNED NULL,
+    last_message_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_conversation_creator FOREIGN KEY(created_by) REFERENCES users(id),
+    CONSTRAINT fk_conversation_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    INDEX idx_conversation_recent (last_message_at)
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS conversation_members (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    conversation_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,
+    role ENUM('Member','Admin') NOT NULL DEFAULT 'Member',
+    /* How far down they have read, which is what the unread count is measured against. */
+    last_read_message_id BIGINT UNSIGNED NULL,
+    muted TINYINT(1) NOT NULL DEFAULT 0,
+    joined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    left_at DATETIME NULL,
+    CONSTRAINT fk_member_conversation FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    CONSTRAINT fk_member_user FOREIGN KEY(user_id) REFERENCES users(id),
+    UNIQUE KEY uq_conversation_member (conversation_id, user_id),
+    INDEX idx_member_user (user_id, left_at)
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS chat_messages (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    conversation_id BIGINT UNSIGNED NOT NULL,
+    sender_id BIGINT UNSIGNED NOT NULL,
+    body VARCHAR(4000) NOT NULL,
+    /* A message about a particular record links to it, so a conversation can be followed
+       back to the work it concerned. */
+    reference_type VARCHAR(60) NULL,
+    reference_id VARCHAR(60) NULL,
+    reply_to_id BIGINT UNSIGNED NULL,
+    /* Withdrawn rather than erased: the fact that something was said and then taken back
+       is itself part of the record. */
+    deleted_at DATETIME NULL,
+    edited_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_message_conversation FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    CONSTRAINT fk_message_sender FOREIGN KEY(sender_id) REFERENCES users(id),
+    INDEX idx_message_conversation (conversation_id, id)
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS chat_receipts (
+    message_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,
+    delivered_at DATETIME NULL,
+    read_at DATETIME NULL,
+    PRIMARY KEY (message_id, user_id),
+    CONSTRAINT fk_receipt_message FOREIGN KEY(message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+    CONSTRAINT fk_receipt_user FOREIGN KEY(user_id) REFERENCES users(id),
+    INDEX idx_receipt_user (user_id, read_at)
+  ) ENGINE=InnoDB`);
+
+  /*
+   * When somebody was last using the system, for "last seen".
+   *
+   * Separate from sessions.last_seen_at, which exists to expire an idle session and is
+   * written at most once a minute per session. This is about the person, across whatever
+   * they are signed in on.
+   */
+  await addColumn('users', 'last_active_at', 'DATETIME NULL');
+
+  /*
+   * Messaging is granted to every role that exists, once.
+   *
+   * The permission is there so it can be taken away from somebody, not so it has to be
+   * handed out one role at a time — a system where colleagues cannot reach each other just
+   * moves the conversation to personal phones, where the company has no record of it.
+   * Done as a one-off: a role the MD later creates decides for itself, and a grant removed
+   * on purpose is not quietly restored on the next restart.
+   */
+  for (const key of ['chat.use', 'drive.use']) {
+    const [{ done }] = await query(
+      'SELECT COUNT(*) done FROM role_permissions WHERE permission_key=?', [key]);
+    if (done) continue;
+    for (const role of await query('SELECT id FROM roles')) {
+      await query('INSERT IGNORE INTO role_permissions (role_id,permission_key) VALUES (?,?)',
+        [role.id, key]);
+    }
+  }
+}
+
+async function createOnboardingColumns() {
+  await addColumn('users', 'tour_seen_at', 'DATETIME NULL');
+}
+
 async function createOptionTables() {
   await query(`CREATE TABLE IF NOT EXISTS option_lists (
     list_key VARCHAR(60) NOT NULL PRIMARY KEY,
@@ -1482,6 +1782,10 @@ export async function migrate() {
   await createSubcontractQuotationTables();
   await createMessagingTables();
   await createOcrTables();
+  await createOnboardingColumns();
+  await createChatTables();
+  await createDriveTables();
+  await createIntegrityTables();
   await createOptionTables();
   await createBoqImportTables();
   await migrateExistingInstalls();

@@ -94,7 +94,14 @@ export const PERMISSIONS = [
   { key: 'qs.boqAmend', department: 'Quantity Surveying', label: 'Approve changes to an approved BOQ' },
   /* The choices every form offers. Adding a cost type or a leave type is an ordinary
      business decision; letting anyone do it would leave ten spellings of the same thing. */
-  { key: 'admin.lists', department: 'Administration', label: 'Manage the dropdown lists used across the system' }
+  { key: 'admin.lists', department: 'Administration', label: 'Manage the dropdown lists used across the system' },
+  /* Held by everybody by default. It exists so the MD can take it away from somebody, not
+     so it has to be handed out — an internal system where colleagues cannot talk to each
+     other simply pushes the conversation onto personal phones, where there is no record. */
+  { key: 'chat.use', department: 'General', label: 'Use the staff messaging' },
+  /* Held by everybody by default, like the messaging. What a person can reach inside the
+     drive is decided by who shared it with them, not by this. */
+  { key: 'drive.use', department: 'General', label: 'Use the document drive' }
 ];
 
 export const PERMISSION_KEYS = PERMISSIONS.map(permission => permission.key);

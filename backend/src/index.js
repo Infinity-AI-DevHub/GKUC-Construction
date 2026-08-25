@@ -8,6 +8,8 @@ import { migrate } from './schema.js';
 import { seedIfEmpty } from './seed.js';
 import { startAlertScheduler } from './alerts.js';
 import { startOcrWorker } from './lib/ocr-queue.js';
+import { startPresence } from './lib/presence.js';
+import { startIntegrityWatch } from './lib/integrity.js';
 import { rateLimit } from './lib/throttle.js';
 import { publishChange } from './lib/realtime.js';
 
@@ -24,6 +26,10 @@ import equipmentRoutes from './routes/equipment.js';
 import boqRoutes from './routes/boq.js';
 import boqImportRoutes from './routes/boq-import.js';
 import optionRoutes from './routes/options.js';
+import chatRoutes from './routes/chat.js';
+import integrityRoutes from './routes/integrity.js';
+import driveRoutes from './routes/drive.js';
+import publicShareRoutes from './routes/public-share.js';
 import financeRoutes from './routes/finance.js';
 import dailyReportRoutes from './routes/dailyReports.js';
 import analyticsRoutes from './routes/analytics.js';
@@ -187,6 +193,9 @@ app.use('/api/purchasing', purchasingRoutes);
 app.use('/api/fleet', fleetRoutes);
 app.use('/api/equipment', equipmentRoutes);
 app.use('/api', optionRoutes);
+app.use('/api', chatRoutes);
+app.use('/api', integrityRoutes);
+app.use('/api', driveRoutes);
 app.use('/api', boqImportRoutes);
 app.use('/api/boq', boqRoutes);
 app.use('/api/finance', financeRoutes);
@@ -216,6 +225,12 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'API endpoint not f
  * /uploads is answered with 404 rather than silently falling through to the single-page
  * app and returning index.html with a 200.
  */
+/*
+ * Published files. Outside /api on purpose: these links are given to people outside the
+ * company, and /s/<token> is a shape somebody can read out over a telephone.
+ */
+app.use('/', publicShareRoutes);
+
 app.use('/uploads', (_req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(express.static(frontendDist));
 app.get('*', (_req, res) => res.sendFile(path.join(frontendDist, 'index.html')));
@@ -242,4 +257,8 @@ if (process.env.NODE_ENV !== 'production' || process.env.SEED_DEMO_DATA === 'tru
 }
 startAlertScheduler();
 await startOcrWorker();
+/* Arrivals and departures are announced to everybody signed in. */
+startPresence();
+/* Watches the company's own records for fraud and for the mistakes that look like it. */
+startIntegrityWatch();
 app.listen(port, () => console.log(`GKUC SiteOps running with MySQL at http://127.0.0.1:${port}`));

@@ -9,8 +9,9 @@ import DocumentSettings from '../DocumentSettings.jsx';
 import DocumentDesigner from '../DocumentDesigner.jsx';
 import Messaging from '../Messaging.jsx';
 import OptionLists from '../OptionLists.jsx';
+import Integrity from '../Integrity.jsx';
 
-export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Messages', 'Lists', 'Audit log', 'My account'];
+export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Messages', 'Lists', 'Fraud watch', 'Audit log', 'My account'];
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
 export default function Admin({ can, user, reload, initialTab = TABS[0], onTabChange }) {
@@ -37,6 +38,9 @@ export default function Admin({ can, user, reload, initialTab = TABS[0], onTabCh
       ? <Messaging />
       : <p className="empty-state">You do not have permission to send messages.</p>)}
     {tab === 'Lists' && <OptionLists can={can} />}
+    {tab === 'Fraud watch' && (can.audit
+      ? <Integrity can={can} />
+      : <p className="empty-state">You do not have permission to see the fraud watch.</p>)}
     {tab === 'Audit log' && <AuditLog />}
     {tab === 'My account' && <section className="table-panel">
       <div className="table-tools"><h2>Change your password</h2></div>
