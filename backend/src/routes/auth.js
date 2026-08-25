@@ -95,6 +95,9 @@ router.post('/login', validate(z.object({ email: z.string().email(), password: z
     token: session.token,
     user: {
       id: user.id, name: user.name, email: user.email, role: user.role,
+      /* Carried here as well as on /bootstrap, so the introduction cannot appear for a
+         moment on sign-in before the first bootstrap says it has already been given. */
+      tourSeenAt: user.tour_seen_at,
       permissions: await permissionsFor(user.id, user.role_id)
     }
   });
