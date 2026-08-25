@@ -215,10 +215,19 @@ function App() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const load = async currentUser => {
+  /*
+   * Always takes the user from the server's answer, never from a value handed in.
+   *
+   * This used to accept a user to set instead, which the live-update handler passed from a
+   * closure keyed on the user's id. Nothing about that id changes when somebody finishes
+   * the introduction, so the closure kept a copy from before they had — and every change
+   * anywhere in the system wrote that stale copy back, which is why the introduction
+   * reappeared each time anybody saved anything.
+   */
+  const load = async () => {
     try {
       const result = await api('/bootstrap');
-      setUser(currentUser || result.user);
+      setUser(result.user);
       setData(result.data);
       /* So the upload limit quoted to people is the server's, not a guess baked in here. */
       setUploadLimit(result.limits?.maxUploadMb);
@@ -271,10 +280,10 @@ function App() {
       else if (type === 'notification' || type === 'banner') {
         banners.show(payload);
         clearTimeout(pending);
-        pending = setTimeout(() => load(user), 250);
+        pending = setTimeout(load, 250);
       } else if (type === 'data') {
         clearTimeout(pending);
-        pending = setTimeout(() => load(user), 250);
+        pending = setTimeout(load, 250);
       }
     });
 
@@ -347,9 +356,9 @@ function App() {
   }, [activePage, adminTab, user, data]);
 
   if (loading) return <div className="loading-screen"><Building2 size={30} /><strong>Loading SiteOps...</strong></div>;
-  if (!user || !data) return <Login onLogin={async next => { setLoading(true); await load(next); }} />;
+  if (!user || !data) return <Login onLogin={async () => { setLoading(true); await load(); }} />;
 
-  const reload = () => load(user);
+  const reload = () => load();
   const shared = { data, reload, can, user };
 
   /* Declared above the page map, which now references it: the dashboard's alert card offers
