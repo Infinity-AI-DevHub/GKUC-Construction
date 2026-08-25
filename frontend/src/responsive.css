@@ -1405,3 +1405,230 @@ button.attachment-icon { border: 1px solid var(--line); background: white; curso
 .option-note p { margin: 0; font-size: 13.5px; line-height: 1.6; max-width: 74ch }
 
 @media (max-width: 760px) { .boq-choice { grid-template-columns: 1fr } }
+
+/* ---------------------------------------------------------------------------
+   Mobile guards
+   Rules that hold regardless of content, rather than per-screen patches. Most
+   overflow on a phone comes from one of three things: a control sized by its
+   contents, a flex or grid child refusing to shrink, or an unbroken string.
+   --------------------------------------------------------------------------- */
+
+/*
+ * A <select> is as wide as its widest option unless told otherwise, so one long
+ * project name — "Sand sealing work on Batticaloa Thirukkondamadu Trincomalee
+ * Road (108+500-130+000 km)" — pushed the whole page sideways. Controls never
+ * exceed the space they are given.
+ */
+select, input, textarea, button { max-width: 100% }
+
+/*
+ * A flex or grid child defaults to min-width:auto, which means "never smaller than
+ * my contents" — the usual reason a long word or a wide table stops a column from
+ * shrinking on a narrow screen.
+ */
+.dashboard-grid > *, .metric-grid > *, .project-cards > *, .fleet-grid > *,
+.report-body > *, .messaging-grid > *, .boq-choice > *, .table-row > *,
+.attention-row > *, .task-line > *, .project-row > * { min-width: 0 }
+
+/* Long references, emails and file names have no spaces to break at. */
+.table-row, .attention-row strong, .attention-row span, .task-line strong,
+.recipient-main strong, .message-row strong, .docsearch-body strong,
+.option-chip, .boq-change-body strong { overflow-wrap: anywhere }
+
+@media (max-width: 760px) {
+  /* Every wide block scrolls inside itself rather than pushing the page. */
+  .scroll, .table-panel, .boq-review-scroll, .recipient-list { max-width: 100% }
+
+  .boq-project-pick select, .messaging-tools select, .boq-review-head select,
+  .search-field, .messaging-manual input { width: 100% }
+
+  .messaging-tools { flex-direction: column }
+  .messaging-manual { flex-wrap: wrap }
+  .messaging-manual input { flex: 1 1 100% }
+
+  .option-list-head { flex-direction: column; align-items: stretch; gap: 9px }
+  .option-list-head button { align-self: flex-start }
+
+  .boq-review-head { flex-direction: column; align-items: stretch }
+  .boq-review-actions { flex-direction: column-reverse }
+  .boq-review-actions button { width: 100% }
+
+  .boq-import-actions { flex-direction: column }
+  .boq-import-actions button { width: 100% }
+
+  .send-outcome ul { max-height: 260px }
+  .docsearch { max-height: calc(100vh - 90px) }
+}
+
+/*
+ * An action button keeps its size whatever the column does.
+ *
+ * These sit in the last track of a subgrid row, which the row's own horizontal padding
+ * eats into — on a narrow screen the button was being squeezed to 20px wide, well under
+ * what a thumb can reliably hit, while still looking like a button.
+ */
+.icon-btn { min-width: 36px; flex: none }
+
+/*
+ * One line of a bill being typed in.
+ *
+ * Five columns side by side on a desktop; on a phone the description takes a row of its
+ * own and the four short fields pair up beneath it. Previously these were fixed pixel
+ * columns set inline, which needed 464px inside a 303px dialog — the quantity and rate
+ * boxes were rendered outside the dialog entirely and could not be reached.
+ */
+.boq-line {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) 80px 90px 110px;
+  gap: 8px;
+}
+.boq-line > label { min-width: 0 }
+
+@media (max-width: 700px) {
+  .boq-line {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fbfcfb;
+  }
+  /* Category and description get the full width; unit, quantity and rate share rows. */
+  .boq-line > label:nth-child(1),
+  .boq-line > label:nth-child(2) { grid-column: 1 / -1 }
+}
+
+/*
+ * Touch targets.
+ *
+ * Keyed to the pointer rather than the screen width: a tablet is wide but still operated
+ * with a thumb, and a narrow desktop window is not. The small icon buttons on the list
+ * chips measured 18x18 — well under what anybody can hit reliably, and with Delete sitting
+ * immediately beside Rename, a mis-tap was destructive rather than merely annoying.
+ */
+@media (pointer: coarse) {
+  .option-tools { gap: 6px }
+  .option-tools button,
+  .option-chip.is-new button {
+    width: 34px; height: 34px; border-radius: 8px;
+    background: #fff; border: 1px solid var(--line);
+  }
+  .option-chip { padding: 6px 8px 6px 14px; gap: 9px }
+  .option-chip input { width: 150px; min-height: 34px }
+
+  /* The same treatment for the other icon-only controls that sit inside rows. */
+  .banner-close, .docsearch-field button { width: 34px; height: 34px }
+
+  /*
+   * The BOQ checking table is operated cell by cell — tick a row in or out, tap a value to
+   * correct it. Each of those is a target, so each has to be big enough to hit while
+   * holding a phone on a site. The table itself scrolls sideways; only the controls grow.
+   */
+  .boq-review-table input[type="checkbox"] { width: 26px; height: 26px }
+  .boq-review-table select { min-height: 38px }
+  .boq-review-table td { padding-block: 10px }
+  .boq-cell { min-height: 38px; display: flex; align-items: center }
+  .boq-review-table input:not([type="checkbox"]) { min-height: 38px }
+}
+
+/* The tick cell in the BOQ checking table is tappable across its whole area. */
+.boq-use { padding: 0 !important }
+.boq-use-hit {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; min-height: 44px; padding: 4px 10px; cursor: pointer;
+}
+.boq-use-hit input { cursor: pointer }
+
+@media (pointer: coarse) {
+  /* The "Projects >" and "People >" links on the dashboard panels, and the arrow on the
+     priority card — all comfortably under a thumb rather than a mouse pointer. */
+  .panel-title button { min-height: 38px; padding-inline: 8px }
+  .priority-title button { width: 36px; height: 36px }
+  .reference-card .panel-title button { min-height: 38px }
+  /* "38 more alerts — open the notification centre" at the foot of the alert card. */
+  .alert-more { min-height: 38px; padding-block: 6px }
+}
+
+/* ---------------------------------------------------------------------------
+   Required fields
+   --------------------------------------------------------------------------- */
+
+/* The star the shared Field / SelectField / TextArea components render. */
+.req {
+  color: #bd5149;
+  font-weight: 700;
+  text-decoration: none;
+  margin-left: 3px;
+  cursor: help;
+}
+
+/*
+ * The same mark on forms whose labels are written by hand rather than through those
+ * components. Driven by the control's own `required` attribute, so it can never disagree
+ * with what the form actually enforces — and it stays right when a field is added later.
+ * Labels that already carry a star are skipped, so nothing is marked twice.
+ */
+label:has(> input[required]):not(:has(.req))::after,
+label:has(> select[required]):not(:has(.req))::after,
+label:has(> textarea[required]):not(:has(.req))::after {
+  content: " *";
+  color: #bd5149;
+  font-weight: 700;
+}
+
+/*
+ * A line at the top of every dialog explaining the mark, so it is not left to be guessed.
+ */
+.modal-title { gap: 10px }
+/* Ordered explicitly: the legend is a third item in a flex row that was built for two,
+   and without this it lands between the heading and the close button. */
+.modal-title h2 { order: 1 }
+.modal-title::after {
+  content: "* required";
+  order: 2;
+  margin-right: auto;
+  font: 400 12.5px/1 'DM Sans', sans-serif;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.modal-title > button { order: 3 }
+
+/* ---------------------------------------------------------------------------
+   Reading a bill written on somebody else's template
+   --------------------------------------------------------------------------- */
+.boq-foreign {
+  display: grid; grid-template-columns: 20px 1fr; gap: 12px;
+  background: #eef3f8; border-left: 4px solid #3d6d93;
+  margin: 0 16px 12px; padding: 14px 16px; border-radius: 0 7px 7px 0; color: #24384a;
+}
+.boq-foreign strong { display: block; font-size: 14.5px; margin-bottom: 5px }
+.boq-foreign p { margin: 0 0 8px; font-size: 13.5px; line-height: 1.55; max-width: 70ch }
+.boq-mapping { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px }
+.boq-mapping li {
+  display: flex; gap: 6px; align-items: baseline;
+  background: #fff; border: 1px solid #cfdce6; border-radius: 6px; padding: 5px 9px; font-size: 12.5px;
+}
+.boq-mapping li span { color: #5b7185 }
+.boq-mapping li b { color: #1c2c39 }
+.boq-mapping-notes { font-size: 12.5px !important; color: #4a6076 }
+
+.boq-bulk {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 9px;
+  margin: 0 16px 12px; padding: 12px 14px;
+  background: #f6f8f6; border: 1px solid var(--line); border-radius: 8px;
+  font-size: 13.5px; color: #3f4b44;
+}
+.boq-bulk select { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+  background: #fff; min-width: 150px; width: auto; flex: 0 1 200px }
+.boq-bulk button { flex: none }
+.boq-evidence {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  color: #176fda; font-size: 13px; font-weight: 600; text-decoration: none;
+}
+.boq-evidence:hover { text-decoration: underline }
+
+@media (max-width: 760px) {
+  .boq-foreign, .boq-bulk { margin-inline: 12px }
+  .boq-bulk select, .boq-bulk button { width: 100% }
+  .boq-evidence { margin-left: 0 }
+}

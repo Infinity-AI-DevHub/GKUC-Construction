@@ -1086,6 +1086,15 @@ async function createOptionTables() {
 }
 
 async function createBoqImportTables() {
+  /*
+   * The file exactly as it arrived, kept as evidence.
+   *
+   * A bill priced by somebody else is a commercial document: it is what was quoted, by whom
+   * and when. Reading the figures out of it and discarding the file would leave the system
+   * holding numbers with nothing behind them — no use in a dispute, and no way to check
+   * later whether a line was read correctly. The original stays, and stays reachable from
+   * the bill it produced.
+   */
   /* Method statements belong on the line, not only in the method library: a bill imported
      from a spreadsheet carries the wording the estimator wrote for that specific item. */
   await addColumn('boq_items', 'method', 'TEXT NULL');
@@ -1096,6 +1105,14 @@ async function createBoqImportTables() {
     project_id BIGINT UNSIGNED NULL,
     boq_id BIGINT UNSIGNED NULL,
     filename VARCHAR(190) NOT NULL,
+    storage_key VARCHAR(400) NULL,
+    file_url VARCHAR(600) NULL,
+    file_size BIGINT UNSIGNED NULL,
+    file_mime VARCHAR(120) NULL,
+    /* Fingerprinted on arrival, so the stored file can be shown to be the file received. */
+    checksum CHAR(64) NULL,
+    source ENUM('Template','Foreign') NOT NULL DEFAULT 'Template',
+    layout_json JSON NULL,
     title VARCHAR(180) NULL,
     client VARCHAR(180) NULL,
     notes VARCHAR(1000) NULL,
@@ -1144,6 +1161,16 @@ async function createBoqImportTables() {
    * change is recorded, the reason with it, and it applies only once somebody holding the
    * approval permission agrees.
    */
+  for (const [column, definition] of [
+    ['storage_key', 'VARCHAR(400) NULL'], ['file_url', 'VARCHAR(600) NULL'],
+    ['file_size', 'BIGINT UNSIGNED NULL'], ['file_mime', 'VARCHAR(120) NULL'],
+    ['checksum', 'CHAR(64) NULL'], ['layout_json', 'JSON NULL'],
+    ['source', "ENUM('Template','Foreign') NOT NULL DEFAULT 'Template'"]
+  ]) await addColumn('boq_imports', column, definition);
+
+  /* Reachable from the bill itself, not only from the import that produced it. */
+  await addColumn('boqs', 'import_id', 'BIGINT UNSIGNED NULL');
+
   await query(`CREATE TABLE IF NOT EXISTS boq_change_requests (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     boq_id BIGINT UNSIGNED NOT NULL,

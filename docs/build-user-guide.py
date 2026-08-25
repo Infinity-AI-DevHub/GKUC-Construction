@@ -370,6 +370,40 @@ A(Paragraph(
     'The <b>Category</b> dropdown offers the categories your company uses. If the one you '
     'need is missing, it can be added &mdash; see section 17.', S['body']))
 
+A(Paragraph('Uploading a BOQ from another company', S['h2']))
+A(Paragraph(
+    'Bills arrive from consultants, clients and other contractors, laid out however their '
+    'office does it. You do not need to retype them into our template &mdash; upload the '
+    'file as it is and the system works out which column is which.', S['body']))
+A(steps([
+    'Upload the file the same way as our own template.',
+    'A blue box appears saying the layout was worked out, and showing which column it read '
+    'as the description, the quantity, the rate and so on. <b>Check that box first.</b>',
+    'Section headings and subtotal lines are left out, so a "Sub Total" row is not imported '
+    'as though it were work to be done.',
+    'Their item numbers are kept in the notes on each line, so a line can be traced back to '
+    'their document.',
+]))
+story += note(
+    'Their bill will not have our categories',
+    'No other company groups work the way we do, so every line will be flagged as needing a '
+    'category. Rather than setting two hundred of them one at a time, use <b>Set every line '
+    'still missing a category to</b> at the top of the checking screen &mdash; choose one and '
+    'press Apply.')
+A(Paragraph(
+    'If their bill gives an amount but no rate, the system works the rate back by dividing '
+    'the amount by the quantity, and says so on the line. That is arithmetic of ours, not a '
+    'figure they quoted, so it is worth a look before you approve it.', S['body']))
+
+A(Paragraph('The original file is kept', S['h2']))
+A(Paragraph(
+    'Every spreadsheet uploaded is stored exactly as it arrived, and stays reachable from '
+    'the bill it produced &mdash; click <b>The original file</b> on the checking screen. A '
+    'bill priced by somebody else is a commercial document: it is what was quoted, by whom, '
+    'and when. Keeping it means a figure can always be checked against the paper it came '
+    'from, which matters in a dispute.', S['body']))
+A(PageBreak())
+
 A(Paragraph('Way 2: upload a BOQ you made in Excel', S['h2']))
 A(Paragraph(
     'Most estimators are faster in Excel. You can work there and bring the finished BOQ '

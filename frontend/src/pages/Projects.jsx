@@ -355,12 +355,24 @@ export function BoqForm({ data, close, reload }) {
   const update = (index, key, value) => setLines(current => current.map((line, position) => (position === index ? { ...line, [key]: value } : line)));
   const total = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.rate) || 0), 0);
 
+  /*
+   * A line counts once anything has been typed into it.
+   *
+   * The first line is always required — a bill with no items is not a bill — and any line
+   * somebody has started must be finished. A line left entirely blank is simply ignored,
+   * so adding one row too many does not block the form.
+   */
+  const started = line => Boolean(line.category || line.description || line.unit || line.quantity || line.rate);
+  const mustComplete = (line, index) => index === 0 || started(line);
+
   return <FormModal title="Create BOQ" close={close} label="Create BOQ" onSubmit={async values => {
     await post('/boq', {
       projectId: Number(values.projectId),
       title: values.title,
       notes: values.notes || undefined,
-      items: lines.filter(line => line.description && line.quantity).map(line => ({
+      /* Only wholly blank lines are dropped. A half-filled one is caught by the form
+         above rather than disappearing without a word, which is what used to happen. */
+      items: lines.filter(started).map(line => ({
         category: line.category,
         description: line.description,
         unit: line.unit || 'item',
@@ -372,19 +384,29 @@ export function BoqForm({ data, close, reload }) {
   }}>
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
     <Field name="title" label="BOQ title" />
-    {lines.map((line, index) => <div className="wide" key={index} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 80px 90px 110px', gap: '8px' }}>
+    {/* Laid out by class rather than inline, so a phone can stack what will not fit:
+        the five fixed columns needed 464px inside a 303px dialog. */}
+    {lines.map((line, index) => <div className="wide boq-line" key={index}>
       <label>Category
-        <select value={line.category} onChange={event => update(index, 'category', event.target.value)}>
+        <select value={line.category} required={mustComplete(line, index)}
+          onChange={event => update(index, 'category', event.target.value)}>
+          <option value="">Choose…</option>
           {boqCategories.map(category => <option key={category}>{category}</option>)}
         </select>
       </label>
-      <label>Description<input value={line.description} onChange={event => update(index, 'description', event.target.value)} /></label>
-      <label>Unit<input value={line.unit} onChange={event => update(index, 'unit', event.target.value)} placeholder="m³" /></label>
-      <label>Quantity<input type="number" step="any" value={line.quantity} onChange={event => update(index, 'quantity', event.target.value)} /></label>
-      <label>Rate<input type="number" step="any" value={line.rate} onChange={event => update(index, 'rate', event.target.value)} /></label>
+      <label>Description<input value={line.description} required={mustComplete(line, index)}
+        onChange={event => update(index, 'description', event.target.value)} /></label>
+      <label>Unit<input value={line.unit} required={mustComplete(line, index)} list="boq-units"
+        onChange={event => update(index, 'unit', event.target.value)} placeholder="m³" /></label>
+      <label>Quantity<input type="number" step="any" min="0" value={line.quantity} required={mustComplete(line, index)}
+        onChange={event => update(index, 'quantity', event.target.value)} /></label>
+      <label>Rate<input type="number" step="any" min="0" value={line.rate} required={mustComplete(line, index)}
+        onChange={event => update(index, 'rate', event.target.value)} /></label>
     </div>)}
+    {/* The units the company keeps, offered as suggestions without preventing a new one. */}
+    <datalist id="boq-units">{units.map(unit => <option key={unit} value={unit} />)}</datalist>
     <div className="wide" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <button type="button" className="secondary" onClick={() => setLines(current => [...current, { category: 'Material', description: '', unit: '', quantity: '', rate: '' }])}>Add line</button>
+      <button type="button" className="secondary" onClick={() => setLines(current => [...current, { category: '', description: '', unit: '', quantity: '', rate: '' }])}>Add line</button>
       <strong>Estimated total {rupees(total)}</strong>
     </div>
     <TextArea name="notes" label="Notes" required={false} placeholder="Optional" />

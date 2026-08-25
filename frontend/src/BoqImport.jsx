@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Download, Upload, AlertTriangle, Info, Check, X, FileSpreadsheet, Loader2, PencilLine } from 'lucide-react';
-import { api, post, del, rupees, token, announceDataChanged } from './api.js';
+import { Download, Upload, AlertTriangle, Info, Check, X, FileSpreadsheet, Loader2, PencilLine, Wand2, Paperclip } from 'lucide-react';
+import { api, post, del, rupees, token, announceDataChanged, fetchDownload } from './api.js';
 
 /*
  * Bringing a bill of quantities in from a spreadsheet.
@@ -11,6 +11,11 @@ import { api, post, del, rupees, token, announceDataChanged } from './api.js';
  * something — a category spelled differently, a quantity with a note beside it — and the
  * alternative to showing it here is discovering it in a quotation already sent to a client.
  */
+
+const LABELS = {
+  ref: 'Their item reference', description: 'Description', unit: 'Unit',
+  quantity: 'Quantity', rate: 'Rate', amount: 'Amount', category: 'Category'
+};
 
 export default function BoqImport({ projects, onDone, onCreate }) {
   const [staged, setStaged] = useState(null);
@@ -154,6 +159,34 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
     } finally { setSaving(false); }
   };
 
+  const [bulkCategory, setBulkCategory] = useState('');
+  const [bulking, setBulking] = useState(false);
+
+  /* Fills in what the other company's bill never had, in one go rather than line by line. */
+  const applyBulkCategory = async () => {
+    setBulking(true);
+    setError('');
+    try {
+      const next = await post(`/boq/imports/${staged.id}/bulk`,
+        { field: 'category', value: bulkCategory, onlyMissing: true });
+      onChange(next);
+      setBulkCategory('');
+    } catch (failure) { setError(failure.message); } finally { setBulking(false); }
+  };
+
+  /* The file travels with the session, so it is fetched rather than linked. */
+  const downloadOriginal = async event => {
+    event.preventDefault();
+    try {
+      const url = await fetchDownload(`/boq/imports/${staged.id}/file`);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = staged.filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (failure) { setError(failure.message); }
+  };
+
   const included = staged.items.filter(item => item.include);
   const total = included.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
@@ -182,6 +215,51 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
       </label>
     </div>
 
+    {/*
+      * A bill written on somebody else's template was read by working out what the columns
+      * meant. Showing that working is the difference between the reviewer checking the
+      * figures and being asked to take them on trust.
+      */}
+    {staged.layout?.foreign && (
+      <div className="boq-foreign">
+        <Info size={17} />
+        <div>
+          <strong>This is not our template, so the system worked out the layout</strong>
+          <p>
+            Headings were found on row {staged.layout.headerRow} of sheet
+            <b> {staged.layout.sheet || 'the first sheet'}</b>. Check the columns were read the right way round:
+          </p>
+          <ul className="boq-mapping">
+            {Object.entries(staged.layout.headings || {}).map(([key, heading]) => (
+              <li key={key}><span>{LABELS[key] || key}</span><b>{heading || '—'}</b></li>
+            ))}
+          </ul>
+          {staged.layout.notes?.length ? (
+            <p className="boq-mapping-notes">{staged.layout.notes.join('. ')}.</p>
+          ) : null}
+          <p className="boq-mapping-notes">
+            Section headings and subtotal lines were left out. Their own item references are
+            kept in the notes on each line.
+          </p>
+        </div>
+      </div>
+    )}
+
+    <div className="boq-bulk">
+      <Wand2 size={15} />
+      <span>Set every line still missing a category to</span>
+      <select value={bulkCategory} onChange={event => setBulkCategory(event.target.value)}>
+        <option value="">Choose…</option>
+        {(staged.categories || []).map(category => <option key={category}>{category}</option>)}
+      </select>
+      <button type="button" className="secondary" disabled={!bulkCategory || bulking}
+        onClick={applyBulkCategory}>{bulking ? 'Setting…' : 'Apply'}</button>
+      <a className="boq-evidence" href={`/api/boq/imports/${staged.id}/file`}
+        onClick={downloadOriginal}>
+        <Paperclip size={14} /> The original file
+      </a>
+    </div>
+
     <div className="boq-review-scroll">
       <table className="boq-review-table">
         <thead>
@@ -193,10 +271,15 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
         <tbody>
           {staged.items.map(item => (
             <tr key={item.id} className={item.problems && item.include ? 'has-problem' : ''}>
-              <td>
-                <input type="checkbox" checked={Boolean(item.include)}
-                  aria-label={`Include row ${item.sourceRow}`}
-                  onChange={event => patch(item.id, { include: event.target.checked })} />
+              <td className="boq-use">
+                {/* The label wraps the box, so the whole cell toggles it. A bare checkbox is
+                    a 26px target — hard to hit on a phone held on a site, and the row beside
+                    it does nothing when tapped, which reads as the screen being broken. */}
+                <label className="boq-use-hit">
+                  <input type="checkbox" checked={Boolean(item.include)}
+                    aria-label={`Include row ${item.sourceRow}`}
+                    onChange={event => patch(item.id, { include: event.target.checked })} />
+                </label>
               </td>
               <td className="num">{item.sourceRow}</td>
               <td>

@@ -2,8 +2,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { pool, query, getOne, transaction, audit, nextReference } from '../db.js';
 import { auth, permit, validate, fail, fromOptions } from '../lib/http.js';
-import { readUpload, readUploadedFile } from '../lib/storage.js';
+import { readUpload, readUploadedFile, store, checksumFile, remove,
+  isLocalStore, localPathFor, signedDownloadUrl } from '../lib/storage.js';
 import { buildTemplate, parseBoqWorkbook, CATEGORIES } from '../lib/boq-template.js';
+import { optionsFor } from '../lib/options.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
@@ -53,11 +55,25 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
     const problemCount = parsed.items.filter(item => item.problems.length).length;
     const total = parsed.items.reduce((sum, item) => sum + (item.amount || 0), 0);
 
+    /*
+     * The file is kept whatever happens to the reading of it. Fingerprinted first, so the
+     * stored copy can later be shown to be the one that was received.
+     */
+    const checksum = await checksumFile(file.path);
+    const stored = await store({
+      folder: 'boq', filename: file.filename, mime: file.mime,
+      path: file.path, head: file.head, size: file.size
+    });
+
     const importId = await transaction(async connection => {
       const [created] = await connection.execute(
-        `INSERT INTO boq_imports (project_id,filename,title,client,status,row_count,problem_count,total,uploaded_by)
-         VALUES (?,?,?,?,'Review',?,?,?,?)`,
-        [projectId, file.filename.slice(0, 190), parsed.title, parsed.client,
+        `INSERT INTO boq_imports (project_id,filename,storage_key,file_url,file_size,file_mime,
+           checksum,source,layout_json,title,client,status,row_count,problem_count,total,uploaded_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,'Review',?,?,?,?)`,
+        [projectId, file.filename.slice(0, 190), stored.key, stored.url, stored.size, stored.mime,
+          checksum, parsed.layout?.foreign ? 'Foreign' : 'Template',
+          parsed.layout ? JSON.stringify(parsed.layout) : null,
+          parsed.title, parsed.client,
           parsed.items.length, problemCount, total, req.user.id]);
 
       for (const item of parsed.items) {
@@ -87,6 +103,7 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
 const detail = async importId => {
   const record = await getOne(`SELECT i.id,i.project_id projectId,i.boq_id boqId,i.filename,i.title,i.client,
     i.status,i.row_count rowCount,i.problem_count problemCount,i.total,i.created_at createdAt,
+    i.source,i.layout_json layout,i.file_size fileSize,i.checksum,
     u.name uploadedBy,p.name project
     FROM boq_imports i JOIN users u ON u.id=i.uploaded_by
     LEFT JOIN projects p ON p.id=i.project_id WHERE i.id=?`, [importId]);
@@ -94,6 +111,9 @@ const detail = async importId => {
   record.items = await query(`SELECT id,source_row sourceRow,category,description,unit,quantity,rate,amount,
     method,notes,problems,notice,include FROM boq_import_items WHERE import_id=? ORDER BY source_row`, [importId]);
   record.categories = CATEGORIES;
+  if (typeof record.layout === 'string') {
+    try { record.layout = JSON.parse(record.layout); } catch { record.layout = null; }
+  }
   return record;
 };
 
@@ -224,6 +244,7 @@ router.post('/boq/imports/:id/commit', auth, permit('qs.boq'),
             [created.insertId, item.category, item.description, item.unit,
               item.quantity, item.rate, item.amount, item.method, item.notes]);
         }
+        await connection.execute('UPDATE boqs SET import_id=? WHERE id=?', [record.id, created.insertId]);
         await connection.execute(
           "UPDATE boq_imports SET status='Committed', boq_id=?, committed_by=?, committed_at=NOW() WHERE id=?",
           [created.insertId, req.user.id, record.id]);
@@ -391,5 +412,90 @@ router.patch('/boq/changes/:id', auth, permit('qs.boqAmend'),
       res.json({ id: request.id, status: req.body.status });
     } catch (error) { next(error); }
   });
+
+/**
+ * The spreadsheet a bill was read from, exactly as it arrived.
+ *
+ * Behind the same permission as seeing the bill, and served through the application rather
+ * than as a link, so a priced bill from another company is not one guessed URL away from
+ * anybody at all.
+ */
+router.get('/boq/imports/:id/file', auth, permit('qs.view', 'qs.boq'), async (req, res, next) => {
+  try {
+    const record = await getOne(
+      'SELECT filename,storage_key storageKey,file_mime fileMime FROM boq_imports WHERE id=?', [req.params.id]);
+    if (!record?.storageKey) return res.status(404).json({ error: 'No file was kept for this import' });
+
+    res.setHeader('Content-Type', record.fileMime || 'application/octet-stream');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="${record.filename.replace(/[^\w.\- ]+/g, '')}"`);
+
+    if (isLocalStore()) return res.sendFile(localPathFor(record.storageKey));
+    return res.redirect(await signedDownloadUrl(record.storageKey));
+  } catch (error) { next(error); }
+});
+
+/**
+ * Sets one field across many staged rows at once.
+ *
+ * A bill from another company has no category on any of its two hundred lines, because no
+ * other company groups work the way we do. Setting them one at a time is not review, it is
+ * data entry — and a reviewer doing it two hundred times stops reading what they are
+ * confirming, which is the one thing this step exists for.
+ */
+router.post('/boq/imports/:id/bulk', auth, permit('qs.boq'),
+  validate(z.object({
+    field: z.enum(['category', 'unit', 'include']),
+    value: z.union([z.string().trim().max(120), z.boolean()]),
+    /* Empty means every row; otherwise only those still missing the field. */
+    onlyMissing: z.boolean().default(true),
+    rowIds: z.array(z.coerce.number().int().positive()).optional()
+  })),
+  async (req, res, next) => {
+    try {
+      const record = await getOne('SELECT status FROM boq_imports WHERE id=?', [req.params.id]);
+      if (!record) return res.status(404).json({ error: 'That import was not found' });
+      if (record.status !== 'Review') return res.status(409).json({ error: 'This import has already been dealt with' });
+
+      const { field, value, onlyMissing, rowIds } = req.body;
+      if (field === 'category' && !(await optionsFor('boq.category')).includes(String(value))) {
+        throw fail(400, `"${value}" is not one of the BOQ categories`);
+      }
+
+      const where = ['import_id=?'];
+      const params = [field === 'include' ? (value ? 1 : 0) : String(value), req.params.id];
+      if (rowIds?.length) {
+        where.push(`id IN (${rowIds.map(() => '?').join(',')})`);
+        params.push(...rowIds);
+      } else if (onlyMissing && field !== 'include') {
+        where.push(`(${field} IS NULL OR ${field} = '')`);
+      }
+
+      const column = field === 'include' ? 'include' : field;
+      const result = await query(`UPDATE boq_import_items SET ${column}=? WHERE ${where.join(' AND ')}`, params);
+
+      /* Every touched row is re-checked, so a filled gap stops being flagged. */
+      await recheck(req.params.id);
+      await refreshTotals(req.params.id);
+      res.json({ changed: result.affectedRows, ...(await detail(req.params.id)) });
+    } catch (error) { next(error); }
+  });
+
+/** Re-runs the row checks after a bulk change, so the flags match what is now there. */
+async function recheck(importId) {
+  const rows = await query('SELECT * FROM boq_import_items WHERE import_id=?', [importId]);
+  for (const row of rows) {
+    const problems = [];
+    if (!row.description) problems.push('No description');
+    if (!row.category) problems.push('No category — choose one');
+    if (!row.unit) problems.push('No unit');
+    if (row.quantity === null || Number(row.quantity) <= 0) problems.push('Quantity must be more than zero');
+    if (row.rate === null) problems.push('No rate');
+    const amount = row.quantity !== null && row.rate !== null
+      ? Number((Number(row.quantity) * Number(row.rate)).toFixed(2)) : null;
+    await query('UPDATE boq_import_items SET amount=?, problems=? WHERE id=?',
+      [amount, problems.join(' · ') || null, row.id]);
+  }
+}
 
 export default router;

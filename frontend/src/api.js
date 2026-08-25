@@ -156,6 +156,25 @@ export const upload = async (ownerType, ownerId, file, meta = {}) => {
   return body;
 };
 
+/**
+ * Fetches a file that needs the session, and hands back a URL the page can use.
+ *
+ * A plain link cannot carry the bearer token, and these files are deliberately not public —
+ * a bill priced by another company is a commercial document. The bytes come back through
+ * the API and become an object URL scoped to this page.
+ */
+export const fetchDownload = async path => {
+  const stored = token.get();
+  const response = await fetch(`/api${path}`, {
+    headers: stored ? { Authorization: `Bearer ${stored}` } : {}
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'That file could not be opened');
+  }
+  return URL.createObjectURL(await response.blob());
+};
+
 export const del = path => api(path, { method: 'DELETE' });
 
 export const fileSize = bytes => (bytes >= 1048576

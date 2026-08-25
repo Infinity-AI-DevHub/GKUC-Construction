@@ -59,7 +59,8 @@ const ALLOWED = new Map([
  * are not the same thing: 'gallery' is a place on disk, not something you attach a document
  * to, and treating one list as both made /api/uploads/gallery/:id fall over with a 500.
  */
-export const FOLDERS = ['task', 'project', 'employee', 'report', 'vehicle', 'equipment', 'gallery'];
+/* 'boq' holds the spreadsheets bills were read from, kept as the evidence behind them. */
+export const FOLDERS = ['task', 'project', 'employee', 'report', 'vehicle', 'equipment', 'gallery', 'boq'];
 
 export const isAllowedType = mime => ALLOWED.has(mime);
 
