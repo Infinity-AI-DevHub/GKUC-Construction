@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { query } from '../db.js';
 import { isPermission } from './permissions.js';
 import { isValidOption, optionsFor } from './options.js';
+import { touch } from './presence.js';
 
 export const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 export const tokenHash = token => crypto.createHash('sha256').update(token).digest('hex');
@@ -39,7 +40,7 @@ export const auth = wrap(async (req, res, next) => {
   if (!token) return res.status(401).json({ error: 'Authentication required' });
   const hash = tokenHash(token);
   const rows = await query(
-    `SELECT u.id,u.name,u.email,u.role,u.role_id,s.id session_id,s.last_seen_at
+    `SELECT u.id,u.name,u.email,u.role,u.role_id,u.tour_seen_at,s.id session_id,s.last_seen_at
      FROM sessions s JOIN users u ON u.id=s.user_id
      WHERE s.token_hash=? AND s.expires_at>NOW() AND u.active=1`, [hash]);
   if (!rows[0]) return res.status(401).json({ error: 'Session expired' });
@@ -58,8 +59,15 @@ export const auth = wrap(async (req, res, next) => {
     await query('UPDATE sessions SET last_seen_at=NOW() WHERE id=?', [session.session_id]);
   }
 
-  req.user = { id: session.id, name: session.name, email: session.email, role: session.role, role_id: session.role_id };
+  req.user = {
+    id: session.id, name: session.name, email: session.email,
+    role: session.role, role_id: session.role_id,
+    /* Null until they have been shown round, which is what triggers the introduction. */
+    tourSeenAt: session.tour_seen_at
+  };
   req.user.permissions = await permissionsFor(session.id, session.role_id);
+  /* Keeps "last seen" current without a write per request — see presence.js. */
+  touch(session.id);
   next();
 });
 

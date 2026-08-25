@@ -165,8 +165,17 @@
 @media (max-width:1023px) {
   .bell-wrap.bar { display:none }
   .bell-wrap.topbar { display:block }
-  .workspace > header .alert-button { border-color:#334039;background:#202a25;color:white;border-radius:7px;width:36px;height:36px }
-  .workspace > header .alert-button i { border-color:#202a25 }
+  /* Matches the search and sound buttons beside it. This used to paint the bell dark
+     whatever its state — a leftover from when this header itself was dark — which left it
+     looking like a different kind of control from the two next to it. The dark fill now
+     means something: unread notifications, handled with the rest of the set below. */
+  .workspace > header .alert-button {
+    border-color:rgba(23,41,33,.10); background:#fff; color:#4c5c65;
+    border-radius:11px; width:38px; height:38px;
+  }
+  .workspace > header .alert-button:hover { border-color:rgba(23,41,33,.2); color:#16201b }
+  .workspace > header .alert-button:has(i) { background:#17211c; border-color:#17211c; color:#fff }
+  .workspace > header .alert-button:has(i):hover { background:#22302a; border-color:#22302a }
   .sidebar-bottom .profile { padding:0 12px }
 }
 
@@ -1405,3 +1414,869 @@ button.attachment-icon { border: 1px solid var(--line); background: white; curso
 .option-note p { margin: 0; font-size: 13.5px; line-height: 1.6; max-width: 74ch }
 
 @media (max-width: 760px) { .boq-choice { grid-template-columns: 1fr } }
+
+/* ---------------------------------------------------------------------------
+   Mobile guards
+   Rules that hold regardless of content, rather than per-screen patches. Most
+   overflow on a phone comes from one of three things: a control sized by its
+   contents, a flex or grid child refusing to shrink, or an unbroken string.
+   --------------------------------------------------------------------------- */
+
+/*
+ * A <select> is as wide as its widest option unless told otherwise, so one long
+ * project name — "Sand sealing work on Batticaloa Thirukkondamadu Trincomalee
+ * Road (108+500-130+000 km)" — pushed the whole page sideways. Controls never
+ * exceed the space they are given.
+ */
+select, input, textarea, button { max-width: 100% }
+
+/*
+ * A flex or grid child defaults to min-width:auto, which means "never smaller than
+ * my contents" — the usual reason a long word or a wide table stops a column from
+ * shrinking on a narrow screen.
+ */
+.dashboard-grid > *, .metric-grid > *, .project-cards > *, .fleet-grid > *,
+.report-body > *, .messaging-grid > *, .boq-choice > *, .table-row > *,
+.attention-row > *, .task-line > *, .project-row > * { min-width: 0 }
+
+/* Long references, emails and file names have no spaces to break at. */
+.table-row, .attention-row strong, .attention-row span, .task-line strong,
+.recipient-main strong, .message-row strong, .docsearch-body strong,
+.option-chip, .boq-change-body strong { overflow-wrap: anywhere }
+
+@media (max-width: 760px) {
+  /* Every wide block scrolls inside itself rather than pushing the page. */
+  .scroll, .table-panel, .boq-review-scroll, .recipient-list { max-width: 100% }
+
+  .boq-project-pick select, .messaging-tools select, .boq-review-head select,
+  .search-field, .messaging-manual input { width: 100% }
+
+  .messaging-tools { flex-direction: column }
+  .messaging-manual { flex-wrap: wrap }
+  .messaging-manual input { flex: 1 1 100% }
+
+  .option-list-head { flex-direction: column; align-items: stretch; gap: 9px }
+  .option-list-head button { align-self: flex-start }
+
+  .boq-review-head { flex-direction: column; align-items: stretch }
+  .boq-review-actions { flex-direction: column-reverse }
+  .boq-review-actions button { width: 100% }
+
+  .boq-import-actions { flex-direction: column }
+  .boq-import-actions button { width: 100% }
+
+  .send-outcome ul { max-height: 260px }
+  .docsearch { max-height: calc(100vh - 90px) }
+}
+
+/*
+ * An action button keeps its size whatever the column does.
+ *
+ * These sit in the last track of a subgrid row, which the row's own horizontal padding
+ * eats into — on a narrow screen the button was being squeezed to 20px wide, well under
+ * what a thumb can reliably hit, while still looking like a button.
+ */
+.icon-btn { min-width: 36px; flex: none }
+
+/*
+ * One line of a bill being typed in.
+ *
+ * Five columns side by side on a desktop; on a phone the description takes a row of its
+ * own and the four short fields pair up beneath it. Previously these were fixed pixel
+ * columns set inline, which needed 464px inside a 303px dialog — the quantity and rate
+ * boxes were rendered outside the dialog entirely and could not be reached.
+ */
+.boq-line {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) 80px 90px 110px;
+  gap: 8px;
+}
+.boq-line > label { min-width: 0 }
+
+@media (max-width: 700px) {
+  .boq-line {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fbfcfb;
+  }
+  /* Category and description get the full width; unit, quantity and rate share rows. */
+  .boq-line > label:nth-child(1),
+  .boq-line > label:nth-child(2) { grid-column: 1 / -1 }
+}
+
+/*
+ * Touch targets.
+ *
+ * Keyed to the pointer rather than the screen width: a tablet is wide but still operated
+ * with a thumb, and a narrow desktop window is not. The small icon buttons on the list
+ * chips measured 18x18 — well under what anybody can hit reliably, and with Delete sitting
+ * immediately beside Rename, a mis-tap was destructive rather than merely annoying.
+ */
+@media (pointer: coarse) {
+  .option-tools { gap: 6px }
+  .option-tools button,
+  .option-chip.is-new button {
+    width: 34px; height: 34px; border-radius: 8px;
+    background: #fff; border: 1px solid var(--line);
+  }
+  .option-chip { padding: 6px 8px 6px 14px; gap: 9px }
+  .option-chip input { width: 150px; min-height: 34px }
+
+  /* The same treatment for the other icon-only controls that sit inside rows. */
+  .banner-close, .docsearch-field button { width: 34px; height: 34px }
+
+  /*
+   * The BOQ checking table is operated cell by cell — tick a row in or out, tap a value to
+   * correct it. Each of those is a target, so each has to be big enough to hit while
+   * holding a phone on a site. The table itself scrolls sideways; only the controls grow.
+   */
+  .boq-review-table input[type="checkbox"] { width: 26px; height: 26px }
+  .boq-review-table select { min-height: 38px }
+  .boq-review-table td { padding-block: 10px }
+  .boq-cell { min-height: 38px; display: flex; align-items: center }
+  .boq-review-table input:not([type="checkbox"]) { min-height: 38px }
+}
+
+/* The tick cell in the BOQ checking table is tappable across its whole area. */
+.boq-use { padding: 0 !important }
+.boq-use-hit {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; min-height: 44px; padding: 4px 10px; cursor: pointer;
+}
+.boq-use-hit input { cursor: pointer }
+
+@media (pointer: coarse) {
+  /* The "Projects >" and "People >" links on the dashboard panels, and the arrow on the
+     priority card — all comfortably under a thumb rather than a mouse pointer. */
+  .panel-title button { min-height: 38px; padding-inline: 8px }
+  .priority-title button { width: 36px; height: 36px }
+  .reference-card .panel-title button { min-height: 38px }
+  /* "38 more alerts — open the notification centre" at the foot of the alert card. */
+  .alert-more { min-height: 38px; padding-block: 6px }
+}
+
+/* ---------------------------------------------------------------------------
+   Required fields
+   --------------------------------------------------------------------------- */
+
+/* The star the shared Field / SelectField / TextArea components render. */
+.req {
+  color: #bd5149;
+  font-weight: 700;
+  text-decoration: none;
+  margin-left: 3px;
+  cursor: help;
+}
+
+/*
+ * The same mark on forms whose labels are written by hand rather than through those
+ * components. Driven by the control's own `required` attribute, so it can never disagree
+ * with what the form actually enforces — and it stays right when a field is added later.
+ * Labels that already carry a star are skipped, so nothing is marked twice.
+ */
+label:has(> input[required]):not(:has(.req))::after,
+label:has(> select[required]):not(:has(.req))::after,
+label:has(> textarea[required]):not(:has(.req))::after {
+  content: " *";
+  color: #bd5149;
+  font-weight: 700;
+}
+
+/*
+ * A line at the top of every dialog explaining the mark, so it is not left to be guessed.
+ */
+.modal-title { gap: 10px }
+/* Ordered explicitly: the legend is a third item in a flex row that was built for two,
+   and without this it lands between the heading and the close button. */
+.modal-title h2 { order: 1 }
+.modal-title::after {
+  content: "* required";
+  order: 2;
+  margin-right: auto;
+  font: 400 12.5px/1 'DM Sans', sans-serif;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.modal-title > button { order: 3 }
+
+/* ---------------------------------------------------------------------------
+   Reading a bill written on somebody else's template
+   --------------------------------------------------------------------------- */
+.boq-foreign {
+  display: grid; grid-template-columns: 20px 1fr; gap: 12px;
+  background: #eef3f8; border-left: 4px solid #3d6d93;
+  margin: 0 16px 12px; padding: 14px 16px; border-radius: 0 7px 7px 0; color: #24384a;
+}
+.boq-foreign strong { display: block; font-size: 14.5px; margin-bottom: 5px }
+.boq-foreign p { margin: 0 0 8px; font-size: 13.5px; line-height: 1.55; max-width: 70ch }
+.boq-mapping { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px }
+.boq-mapping li {
+  display: flex; gap: 6px; align-items: baseline;
+  background: #fff; border: 1px solid #cfdce6; border-radius: 6px; padding: 5px 9px; font-size: 12.5px;
+}
+.boq-mapping li span { color: #5b7185 }
+.boq-mapping li b { color: #1c2c39 }
+.boq-mapping-notes { font-size: 12.5px !important; color: #4a6076 }
+
+.boq-bulk {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 9px;
+  margin: 0 16px 12px; padding: 12px 14px;
+  background: #f6f8f6; border: 1px solid var(--line); border-radius: 8px;
+  font-size: 13.5px; color: #3f4b44;
+}
+.boq-bulk select { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+  background: #fff; min-width: 150px; width: auto; flex: 0 1 200px }
+.boq-bulk button { flex: none }
+.boq-evidence {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  color: #176fda; font-size: 13px; font-weight: 600; text-decoration: none;
+}
+.boq-evidence:hover { text-decoration: underline }
+
+@media (max-width: 760px) {
+  .boq-foreign, .boq-bulk { margin-inline: 12px }
+  .boq-bulk select, .boq-bulk button { width: 100% }
+  .boq-evidence { margin-left: 0 }
+}
+
+/* ---------------------------------------------------------------------------
+   The introduction shown on a first sign-in
+   Sits over the real screen it is describing, dimmed rather than hidden, so the
+   words have something to point at.
+   --------------------------------------------------------------------------- */
+.tour-backdrop {
+  position: fixed; inset: 0; z-index: 120;
+  background: rgba(10, 19, 14, .55);
+  display: flex; align-items: flex-end; justify-content: center;
+  padding: 20px;
+}
+@media (min-width: 761px) {
+  .tour-backdrop { align-items: center }
+}
+.tour {
+  width: min(520px, 100%);
+  background: #fff; border-radius: 12px; padding: 22px 24px 20px;
+  box-shadow: 0 24px 64px rgba(8, 20, 14, .34);
+  animation: tour-in .22s cubic-bezier(.2, .8, .3, 1);
+}
+@keyframes tour-in { from { opacity: 0; transform: translateY(14px) } to { opacity: 1; transform: none } }
+@media (prefers-reduced-motion: reduce) { .tour { animation: none } }
+
+.tour-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px }
+.tour-count {
+  font: 700 11.5px/1 'DM Sans', sans-serif; letter-spacing: .14em; text-transform: uppercase;
+  color: #7d8b83;
+}
+.tour-skip { border: 0; background: transparent; color: #7d8b83; padding: 6px; border-radius: 6px;
+  display: grid; place-items: center; min-width: 36px; min-height: 36px }
+.tour-skip:hover { background: #eef2ef; color: #22302a }
+
+.tour h2 { font: 800 22px/1.2 Manrope, sans-serif; margin: 0 0 10px; color: #16201b; text-wrap: balance }
+.tour p { margin: 0 0 12px; font-size: 15px; line-height: 1.6; color: #45524b; max-width: 60ch }
+
+.tour-dots { display: flex; gap: 5px; margin: 16px 0 18px }
+.tour-dots i { width: 100%; height: 4px; border-radius: 3px; background: #e2e8e4 }
+.tour-dots i.is-done { background: #b7d98a }
+.tour-dots i.is-here { background: var(--green) }
+
+.tour-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap }
+.tour-move { display: flex; gap: 8px; margin-left: auto }
+.tour-actions button { min-height: 42px }
+
+@media (max-width: 560px) {
+  .tour { padding: 18px }
+  .tour h2 { font-size: 20px }
+  .tour-actions { flex-direction: column-reverse; align-items: stretch }
+  .tour-move { margin-left: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px }
+  .tour-move button:only-child { grid-column: 1 / -1 }
+  .tour-actions > .secondary { width: 100% }
+}
+
+/* ---------------------------------------------------------------------------
+   The three controls in the top bar: search, sound, notifications
+
+   They had drifted apart — different sizes, two different corner radii, and a
+   bell still carrying the colours of the dark sidebar it used to live in, which
+   left it looking faded beside the other two on a light bar. Treated here as one
+   set, so they read as three things of the same kind rather than three
+   leftovers.
+   --------------------------------------------------------------------------- */
+.bell-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  position: relative;
+}
+
+.bell-group .icon-btn,
+.bell-group .alert-button {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  border: 1px solid rgba(23, 41, 33, .10);
+  background: #fff;
+  color: #4c5c65;
+  display: grid;
+  place-items: center;
+  flex: none;
+  position: relative;
+  /* Colour and shadow move; the lift is separate so it can be dropped on press. */
+  transition: background-color .15s ease, border-color .15s ease,
+              color .15s ease, box-shadow .15s ease, transform .12s ease;
+  box-shadow: 0 1px 2px rgba(20, 40, 30, .04);
+}
+
+.bell-group .icon-btn:hover,
+.bell-group .alert-button:hover {
+  background: #fff;
+  border-color: rgba(23, 41, 33, .2);
+  color: #16201b;
+  box-shadow: 0 4px 12px rgba(20, 45, 32, .12);
+  transform: translateY(-1px);
+}
+
+/* Pressed sits back down, so the control feels answerable rather than decorative. */
+.bell-group .icon-btn:active,
+.bell-group .alert-button:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(20, 40, 30, .08);
+  background: #f4f7f5;
+}
+
+.bell-group .icon-btn:focus-visible,
+.bell-group .alert-button:focus-visible {
+  outline: 2px solid #176fda;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bell-group .icon-btn,
+  .bell-group .alert-button { transition: none }
+  .bell-group .icon-btn:hover,
+  .bell-group .alert-button:hover { transform: none }
+}
+
+/*
+ * Sound off is a state worth seeing at a glance, not only by squinting at which
+ * icon is drawn — somebody who has muted alerts should be able to tell without
+ * waiting for one to be missed.
+ */
+.bell-group .sound-toggle[aria-label^="Turn alert sound on"] {
+  background: #f2f5f3;
+  color: #8b9a92;
+  box-shadow: none;
+}
+
+/*
+ * Unread notifications fill the bell instead of hanging a red dot off a pale
+ * button. The dark fill is what carries the message; the accent dot on top is
+ * how many rather than whether.
+ */
+.bell-group .alert-button:has(i) {
+  background: #17211c;
+  border-color: #17211c;
+  color: #fff;
+}
+.bell-group .alert-button:has(i):hover {
+  background: #22302a;
+  border-color: #22302a;
+  color: #fff;
+}
+.bell-group .alert-button i {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  border: 0;
+  box-shadow: 0 0 0 2px #17211c;
+}
+.bell-group .alert-button:has(i):hover i { box-shadow: 0 0 0 2px #22302a }
+
+/*
+ * The live-updates mark belongs on the bell.
+ *
+ * It sat under whichever control happened to be first in the group, which after
+ * the search button was added meant a green dot beneath a magnifying glass —
+ * saying nothing about anything. Live updates are how notifications arrive, so
+ * it belongs on the thing they arrive at.
+ */
+/* Matching the original selector's specificity, or the old dot stays where it was. */
+.bell-group.is-live::after { content: none; display: none }
+.bell-group.is-live .bell-wrap { position: relative }
+.bell-group.is-live .alert-button::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #4f9a2f;
+  /* Ringed in the bar's own colour so it reads as sitting on the button edge. */
+  box-shadow: 0 0 0 2.5px #f7fbfd;
+}
+
+@media (pointer: coarse) {
+  .bell-group .icon-btn,
+  .bell-group .alert-button,
+  /* Matching the header rule's reach, or the bell stays a size smaller than its neighbours. */
+  .workspace > header .alert-button { width: 40px; height: 40px }
+}
+
+
+/*
+ * Only one copy of the cluster is ever on screen.
+ *
+ * The bell is rendered twice — once in the bar, once in the header — with the width
+ * deciding which is used. Search and sound joined it inside the same group, so hiding the
+ * bell alone left two of each on screen at narrow widths. These sit at the end of the file
+ * deliberately: the rule that gives .bell-group its display is above, and a hide declared
+ * before it would simply lose.
+ */
+@media (max-width: 1023px) {
+  .bell-group-bar { display: none }
+}
+@media (min-width: 1024px) {
+  .bell-group-topbar { display: none }
+}
+
+/* ---------------------------------------------------------------------------
+   Staff messaging
+   Two panes on a computer; on a phone the list steps aside once a conversation
+   is open, because half a list beside half a conversation is neither.
+   --------------------------------------------------------------------------- */
+.chat {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 14px;
+  height: calc(100vh - 190px);
+  min-height: 460px;
+}
+.chat-list, .chat-thread-view {
+  background: #fff; border: 1px solid var(--line); border-radius: 9px;
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+}
+
+.chat-list-head { display: flex; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line) }
+.chat-search {
+  flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0;
+  border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; color: #5d6a62;
+}
+.chat-search input {
+  flex: 1; min-width: 0; border: 0; outline: none; background: transparent;
+  padding: 9px 0; font-size: 14px;
+}
+.chat-unread-total {
+  margin: 0; padding: 8px 14px; font-size: 12.5px; font-weight: 700;
+  color: #4f740c; background: #f3fae4; border-bottom: 1px solid var(--line);
+}
+
+.chat-threads { overflow-y: auto; flex: 1; min-height: 0 }
+.chat-thread {
+  width: 100%; border: 0; background: transparent; text-align: left;
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 11px;
+  align-items: center; padding: 11px 13px; border-bottom: 1px solid #eef2ef;
+}
+.chat-thread:hover { background: #f6f9f7 }
+.chat-thread.is-open { background: #eef5fb }
+.chat-thread:focus-visible { outline: 2px solid #176fda; outline-offset: -2px }
+.chat-avatar { position: relative; display: inline-grid; place-items: center }
+.chat-group-mark {
+  width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center;
+  background: #e8f1fb; color: #176fda;
+}
+.chat-dot {
+  position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px;
+  border-radius: 50%; background: #4f9a2f; box-shadow: 0 0 0 2px #fff;
+}
+.chat-thread-body { min-width: 0 }
+.chat-thread-body strong {
+  display: block; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-thread-body small {
+  display: block; font-size: 13px; color: var(--muted); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-typing { font-style: normal; color: #176fda }
+.chat-thread-meta { display: grid; justify-items: end; gap: 5px }
+.chat-thread-meta time { font-size: 11.5px; color: var(--muted) }
+.chat-count {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+  background: var(--green); color: #142016; font-size: 12px; font-weight: 800;
+  display: grid; place-items: center;
+}
+
+/* ---- the conversation ---- */
+.chat-thread-view { position: relative }
+.chat-empty {
+  margin: auto; text-align: center; color: var(--muted); padding: 30px; max-width: 42ch;
+}
+.chat-empty strong { display: block; font-size: 16px; color: #2a3630; margin: 12px 0 6px }
+.chat-empty p { margin: 0; font-size: 14px; line-height: 1.6 }
+
+.chat-head {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 14px; border-bottom: 1px solid var(--line); background: #fbfdfc;
+}
+.chat-back { display: none }
+.chat-head-who { min-width: 0; flex: 1 }
+.chat-head-who strong { display: block; font-size: 15.5px }
+.chat-head-who small { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px }
+.chat-online { color: #4f9a2f; font-weight: 700 }
+.chat-head-members { display: flex }
+.chat-head-members span { margin-left: -8px; border-radius: 50%; box-shadow: 0 0 0 2px #fbfdfc; position: relative }
+.chat-head-members span.is-online::after {
+  content: ""; position: absolute; right: 0; bottom: 0; width: 9px; height: 9px;
+  border-radius: 50%; background: #4f9a2f; box-shadow: 0 0 0 2px #fbfdfc;
+}
+
+.chat-messages {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 16px 14px;
+  display: flex; flex-direction: column; gap: 3px;
+  background: #f6f8f7;
+}
+.chat-day { text-align: center; margin: 12px 0 8px }
+.chat-day span {
+  background: #e5ebe7; color: #4f5d55; font-size: 12px; font-weight: 700;
+  padding: 4px 12px; border-radius: 12px;
+}
+.chat-bubble {
+  max-width: min(74%, 560px); align-self: flex-start;
+  background: #fff; border-radius: 12px 12px 12px 4px;
+  padding: 8px 11px 6px; box-shadow: 0 1px 2px rgba(20, 40, 30, .08);
+  margin-top: 7px;
+}
+.chat-bubble.is-runon { margin-top: 2px; border-top-left-radius: 12px }
+.chat-bubble.is-mine {
+  align-self: flex-end; background: #e7f6cd; border-radius: 12px 12px 4px 12px;
+}
+.chat-bubble.is-mine.is-runon { border-top-right-radius: 12px }
+.chat-from { display: block; font-size: 12.5px; font-weight: 700; color: #176fda; margin-bottom: 2px }
+.chat-bubble p {
+  margin: 0; font-size: 14.5px; line-height: 1.5; color: #16201b;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.chat-withdrawn { font-style: italic; color: #7d8b83 !important }
+.chat-meta {
+  display: flex; align-items: center; justify-content: flex-end; gap: 5px; margin-top: 3px;
+}
+.chat-meta time { font-size: 11px; color: #7d8b83 }
+.ticks { display: inline-grid; place-items: center; color: #9aa8a0 }
+.ticks-read { color: #2f7fd4 }
+.chat-withdraw {
+  border: 0; background: transparent; color: #a4b1a9; padding: 2px; border-radius: 4px;
+  display: grid; place-items: center; opacity: 0; transition: opacity .12s;
+}
+.chat-bubble:hover .chat-withdraw { opacity: 1 }
+.chat-withdraw:focus-visible { opacity: 1; outline: 2px solid #176fda }
+.chat-typing-bubble p { color: #6c7a72; font-style: italic }
+
+.chat-error { margin: 0 14px 6px }
+.chat-compose {
+  display: flex; gap: 9px; align-items: flex-end;
+  padding: 11px 12px; border-top: 1px solid var(--line); background: #fff;
+}
+.chat-compose textarea {
+  flex: 1; min-height: 42px; max-height: 140px; resize: none;
+  border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px;
+  font: inherit; font-size: 14.5px; outline: none; line-height: 1.45;
+}
+.chat-compose textarea:focus { border-color: #9fb3a6 }
+.chat-compose .primary { width: 44px; height: 44px; padding: 0; flex: none; border-radius: 10px }
+
+/* ---- starting one ---- */
+.chat-picker-backdrop {
+  position: fixed; inset: 0; z-index: 80; background: rgba(12, 19, 15, .5);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.chat-picker {
+  width: min(460px, 100%); max-height: min(680px, calc(100vh - 60px));
+  background: #fff; border-radius: 11px; overflow: hidden;
+  display: flex; flex-direction: column; box-shadow: 0 22px 60px rgba(10, 25, 18, .3);
+}
+.chat-picker-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--line);
+}
+.chat-picker-head strong { font-size: 16px }
+.chat-picker-head button { border: 0; background: transparent; color: #7d8b83; padding: 6px; border-radius: 6px }
+.chat-new-group {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  border: 0; border-bottom: 1px solid var(--line); background: transparent; padding: 13px 16px;
+}
+.chat-new-group:hover { background: #f6f9f7 }
+.chat-new-group strong { display: block; font-size: 14.5px }
+.chat-new-group small { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px }
+.chat-picker-search { margin: 12px 16px }
+.chat-field { display: block; padding: 0 16px 10px; font-size: 13.5px; font-weight: 700; color: #3f4b44 }
+.chat-field input {
+  width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+  margin-top: 6px; font-size: 14.5px; outline: none;
+}
+.chat-people { overflow-y: auto; flex: 1; min-height: 0; padding-bottom: 6px }
+.chat-people button {
+  width: 100%; border: 0; background: transparent; text-align: left;
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 11px;
+  align-items: center; padding: 9px 16px;
+}
+.chat-people button:hover { background: #f6f9f7 }
+.chat-people button.is-picked { background: #eef8db }
+.chat-people strong { display: block; font-size: 14px }
+.chat-people small { display: block; font-size: 12.5px; color: var(--muted) }
+.chat-people em { font-style: normal; font-size: 12px; color: var(--muted); white-space: nowrap }
+.chat-pick {
+  width: 22px; height: 22px; border: 1.5px solid #c3ccc6; border-radius: 6px;
+  display: grid; place-items: center; margin-left: 9px;
+}
+.chat-people .is-picked .chat-pick { background: var(--green); border-color: var(--green) }
+.chat-picker-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 16px; border-top: 1px solid var(--line); font-size: 13.5px; color: var(--muted);
+}
+
+@media (max-width: 860px) {
+  .chat { grid-template-columns: 1fr; height: calc(100vh - 165px) }
+  .chat-thread-view { display: none }
+  .chat.has-open .chat-list { display: none }
+  .chat.has-open .chat-thread-view { display: flex }
+  .chat-back { display: grid }
+  .chat-bubble { max-width: 86% }
+}
+
+/* ---------------------------------------------------------------------------
+   Fraud and error watch
+   --------------------------------------------------------------------------- */
+.integrity { display: flex; flex-direction: column; gap: 14px }
+.integrity-top { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap }
+.integrity-scores { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; flex: 1 }
+.integrity-score {
+  background: #fff; border: 1px solid var(--line); border-radius: 9px; padding: 14px 16px;
+}
+.integrity-score strong { display: block; font: 800 24px/1.1 Manrope, sans-serif; color: #16201b }
+.integrity-score span { display: block; font-size: 12.5px; color: var(--muted); margin-top: 4px }
+.integrity-score.is-critical { border-left: 4px solid #bd5149 }
+.integrity-score.is-critical strong { color: #a8443d }
+.integrity-score.is-high { border-left: 4px solid #d49320 }
+.integrity-actions { display: flex; gap: 8px; align-items: center }
+
+.integrity-filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap }
+.integrity-cats { display: flex; gap: 6px; flex-wrap: wrap }
+.integrity-cats button {
+  border: 1px solid var(--line); background: #fff; border-radius: 16px;
+  padding: 7px 13px; font-size: 13px; color: #4a5850; display: inline-flex; align-items: center; gap: 6px;
+}
+.integrity-cats button.is-on { background: #17211c; color: #fff; border-color: #17211c }
+.integrity-cats b { background: rgba(0,0,0,.08); border-radius: 9px; padding: 1px 6px; font-size: 11.5px }
+.integrity-cats button.is-on b { background: rgba(255,255,255,.2) }
+
+.integrity-clear {
+  background: #fff; border: 1px solid var(--line); border-radius: 9px;
+  padding: 34px 22px; text-align: center; color: var(--muted);
+}
+.integrity-clear strong { display: block; font-size: 16px; color: #2a3630; margin: 10px 0 5px }
+.integrity-clear p { margin: 0 auto; font-size: 14px; line-height: 1.6; max-width: 48ch }
+
+.integrity-list { display: flex; flex-direction: column; gap: 9px }
+.finding { background: #fff; border: 1px solid var(--line); border-radius: 9px; overflow: hidden }
+.finding-critical { border-left: 4px solid #bd5149 }
+.finding-high { border-left: 4px solid #d49320 }
+.finding-medium { border-left: 4px solid #3e7fb0 }
+.finding-low { border-left: 4px solid #b6c3ba }
+.finding-head {
+  width: 100%; border: 0; background: transparent; text-align: left;
+  display: grid; grid-template-columns: 76px minmax(0, 1fr) auto 20px; gap: 12px;
+  align-items: center; padding: 13px 15px;
+}
+.finding-head:hover { background: #f7faf8 }
+.finding-head svg { color: #8b9a92; transition: transform .15s }
+.finding-head svg.is-open { transform: rotate(180deg) }
+.finding-sev {
+  font: 700 10.5px/1 'DM Sans', sans-serif; letter-spacing: .1em; text-transform: uppercase;
+  padding: 5px 8px; border-radius: 5px; text-align: center;
+}
+.finding-critical .finding-sev { background: #fae5e2; color: #a8443d }
+.finding-high .finding-sev { background: #fbf0d8; color: #8a6210 }
+.finding-medium .finding-sev { background: #e6eff8; color: #2f5f84 }
+.finding-low .finding-sev { background: #eef2ef; color: #5c6a63 }
+.finding-title { min-width: 0 }
+.finding-title strong { display: block; font-size: 14.5px; line-height: 1.35; overflow-wrap: anywhere }
+.finding-title small { display: block; font-size: 12.5px; color: var(--muted); margin-top: 3px }
+.finding-amount { font: 700 14.5px/1 Manrope, sans-serif; white-space: nowrap; color: #16201b }
+
+.finding-body { padding: 0 15px 15px 15px; border-top: 1px solid #eef2ef }
+.finding-body > p { margin: 13px 0; font-size: 14.5px; line-height: 1.65; color: #3f4d46; max-width: 78ch }
+.finding-evidence {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px;
+  background: #f6f8f7; border-radius: 8px; padding: 12px; margin: 0 0 14px;
+}
+.finding-evidence div { min-width: 0 }
+.finding-evidence dt { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em }
+.finding-evidence dd { margin: 3px 0 0; font-size: 13.5px; color: #22302a; overflow-wrap: anywhere }
+
+.finding-review label { display: block; font-size: 13.5px; font-weight: 700; color: #3f4b44 }
+.finding-review textarea {
+  width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+  margin-top: 6px; font: inherit; font-size: 14px; outline: none; resize: vertical;
+}
+.finding-buttons { display: flex; gap: 8px; margin-top: 11px; flex-wrap: wrap }
+.finding-confirm { color: #a8443d; border-color: #edc9c4 }
+.finding-hint { margin: 10px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; max-width: 70ch }
+.finding-decided { margin: 13px 0 0; font-size: 13.5px; color: #4a5850 }
+
+.risk-settings { width: min(620px, 100%) }
+.risk-intro { margin: 0; padding: 12px 16px 0; font-size: 13.5px; color: var(--muted); line-height: 1.6 }
+.risk-rows { overflow-y: auto; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px }
+.risk-rows label { display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 12px; align-items: center }
+.risk-rows strong { display: block; font-size: 13.5px }
+.risk-rows small { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.5 }
+.risk-rows input {
+  border: 1px solid var(--line); border-radius: 7px; padding: 9px 10px; font-size: 14px; outline: none;
+}
+
+@media (max-width: 760px) {
+  .integrity-top { flex-direction: column }
+  .integrity-actions { width: 100%; }
+  .integrity-actions button { flex: 1 }
+  .finding-head { grid-template-columns: 70px minmax(0, 1fr) 18px; row-gap: 6px }
+  .finding-amount { grid-column: 2 / -1; text-align: left }
+  .finding-buttons button { flex: 1 1 100% }
+  .risk-rows label { grid-template-columns: 1fr }
+}
+
+/* ---------------------------------------------------------------------------
+   The document drive
+   --------------------------------------------------------------------------- */
+.drive { display: flex; flex-direction: column; gap: 12px; position: relative; min-height: 400px }
+.drive-bar { display: flex; gap: 9px; align-items: center; flex-wrap: wrap }
+.drive-search {
+  flex: 1; min-width: 180px; display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 0 11px; color: #5d6a62;
+}
+.drive-search input { flex: 1; min-width: 0; border: 0; outline: none; padding: 10px 0; font-size: 14px; background: transparent }
+
+.drive-trail { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; color: #8b9a92 }
+.drive-trail button {
+  border: 0; background: transparent; padding: 5px 7px; border-radius: 6px;
+  font-size: 13.5px; font-weight: 600; color: #3f4d46;
+}
+.drive-trail button:hover { background: #eef2ef }
+.drive-trail button:last-child { color: #16201b }
+
+.drive-busy { margin: 0; font-size: 13.5px; color: #176fda; font-weight: 600 }
+.drive-empty {
+  background: #fff; border: 1px dashed var(--line); border-radius: 10px;
+  padding: 40px 22px; text-align: center; color: var(--muted);
+}
+.drive-empty strong { display: block; font-size: 15.5px; color: #2a3630; margin: 10px 0 5px }
+.drive-empty p { margin: 0 auto; font-size: 14px; line-height: 1.6; max-width: 46ch }
+
+.drive-grid { display: flex; flex-direction: column; gap: 6px }
+.drive-item {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
+  background: #fff; border: 1px solid var(--line); border-radius: 9px; padding: 4px 10px 4px 4px;
+}
+.drive-item:hover { border-color: #b6c3ba; box-shadow: 0 2px 8px rgba(20, 40, 30, .06) }
+.drive-open {
+  display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 11px; align-items: center;
+  border: 0; background: transparent; text-align: left; padding: 9px; border-radius: 8px; min-width: 0;
+}
+.drive-open:focus-visible { outline: 2px solid #176fda; outline-offset: -2px }
+.drive-icon { width: 40px; height: 40px; border-radius: 9px; display: grid; place-items: center; background: #eef2ef; color: #5c6a63 }
+.is-folder .drive-icon { background: #e8f1fb; color: #176fda }
+.is-drawing .drive-icon { background: #efeafb; color: #6446b8 }
+.is-image .drive-icon, .is-video .drive-icon { background: #e9f8ca; color: #4f740c }
+.is-pdf .drive-icon { background: #fae5e2; color: #a8443d }
+.is-sheet .drive-icon { background: #e3f3e9; color: #226b47 }
+.is-archive .drive-icon { background: #fbf0d8; color: #8a6210 }
+.drive-name { min-width: 0 }
+.drive-name strong { display: block; font-size: 14.5px; overflow-wrap: anywhere }
+.drive-name small { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px }
+
+.drive-tag {
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  font-size: 11.5px; font-weight: 700; padding: 4px 9px; border-radius: 11px;
+}
+.drive-tag.is-private { background: #eef2ef; color: #5c6a63 }
+.drive-tag.is-people { background: #e6eff8; color: #2f5f84 }
+.drive-tag.is-org { background: #e9f8ca; color: #4f740c }
+.drive-tag.is-public { background: #fae5e2; color: #a8443d }
+
+.drive-tools { display: flex; gap: 2px }
+.drive-tools button {
+  border: 0; background: transparent; color: #7d8b83; padding: 8px; border-radius: 7px;
+  display: grid; place-items: center;
+}
+.drive-tools button:hover { background: #eef2ef; color: #22302a }
+
+.drive-drop {
+  position: absolute; inset: 0; z-index: 5; border-radius: 12px;
+  border: 2px dashed #176fda; background: rgba(232, 241, 251, .92);
+  display: grid; place-items: center; align-content: center; gap: 8px; color: #176fda;
+}
+.drive-drop strong { font-size: 16px }
+
+/* ---- the sharing panel ---- */
+.drive-sharing { width: min(560px, 100%) }
+.drive-owner { margin: 0; padding: 12px 16px 0; font-size: 13px; color: var(--muted) }
+.drive-readonly {
+  margin: 10px 16px 0; padding: 11px 13px; background: #eef3f8; border-left: 3px solid #3d6d93;
+  border-radius: 0 7px 7px 0; font-size: 13.5px; color: #24384a; line-height: 1.55;
+}
+.drive-requests { margin: 12px 16px 0; padding: 12px; background: #fbf0d8; border-radius: 8px }
+.drive-requests > strong { display: block; font-size: 13.5px; color: #6b4d0d; margin-bottom: 8px }
+.drive-requests div { display: flex; gap: 10px; align-items: center; font-size: 13.5px; flex-wrap: wrap }
+.drive-request-buttons { display: flex; gap: 6px; margin-left: auto }
+.drive-request-buttons button { padding: 6px 11px; font-size: 13px; min-height: 34px }
+
+.drive-levels { border: 0; margin: 12px 16px 0; padding: 0; display: flex; flex-direction: column; gap: 6px }
+.drive-levels legend { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; padding: 0 0 7px }
+.drive-levels label {
+  display: grid; grid-template-columns: 18px 18px minmax(0, 1fr); gap: 10px; align-items: center;
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer;
+}
+.drive-levels label.is-on { border-color: var(--green); background: #f7fcef }
+.drive-levels label:has(input:disabled) { cursor: default; opacity: .75 }
+.drive-levels strong { display: block; font-size: 14px }
+.drive-levels small { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px }
+.drive-orgrole { display: flex !important; grid-template-columns: none !important; gap: 8px; align-items: center; font-size: 13.5px }
+.drive-orgrole select { border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px }
+
+.drive-people { margin: 14px 16px 0 }
+.drive-people > strong { display: block; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px }
+.drive-people > div { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto; gap: 9px; align-items: center; padding: 6px 0 }
+.drive-people b { display: block; font-size: 13.5px }
+.drive-people small { display: block; font-size: 12px; color: var(--muted) }
+.drive-people em { font-style: normal; font-size: 12.5px; color: var(--muted) }
+.drive-people select { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 13px }
+.drive-people button { border: 0; background: transparent; color: #8b9a92; padding: 5px; border-radius: 5px }
+.drive-add { display: flex; gap: 7px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eef2ef }
+.drive-add select { flex: 1; min-width: 0 }
+
+.drive-public { margin: 16px; padding: 13px; border: 1px solid var(--line); border-radius: 9px }
+.drive-public.is-on { border-color: #e3b0aa; background: #fdf6f5 }
+.drive-public-head { display: flex; gap: 11px; align-items: center }
+.drive-public-head > div { flex: 1; min-width: 0 }
+.drive-public strong { display: block; font-size: 14px }
+.drive-public small { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px }
+.drive-link { display: flex; gap: 7px; align-items: center; margin-top: 11px }
+.drive-link input {
+  flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 7px;
+  padding: 9px 10px; font-size: 13px; background: #fff; outline: none;
+}
+.drive-warning { margin: 9px 0 0; font-size: 12.5px; line-height: 1.6; color: #8a4a42 }
+
+@media (max-width: 760px) {
+  .drive-bar { gap: 7px }
+  .drive-bar .secondary, .drive-bar .primary { flex: 1 }
+  .drive-item { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px }
+  .drive-tools { grid-column: 1 / -1; justify-content: flex-end }
+  .drive-people > div { grid-template-columns: 32px minmax(0, 1fr); row-gap: 6px }
+  .drive-add { flex-wrap: wrap }
+  .drive-add select { flex: 1 1 100% }
+}

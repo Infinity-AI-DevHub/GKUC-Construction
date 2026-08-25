@@ -74,21 +74,33 @@ export function EntityForm({ onSubmit, error, children }) {
   return <form onSubmit={onSubmit} className="report-form">{children}{error && <p className="form-error">{error}</p>}</form>;
 }
 
+/**
+ * The mark that says a field must be filled in.
+ *
+ * Hidden from screen readers on purpose: the `required` attribute on the input already
+ * makes them announce it, and a spoken "asterisk" after every label is noise. The title
+ * gives the same information to anyone who hovers, and the colour is not the only signal —
+ * the star itself is.
+ */
+export const Required = ({ when = true }) => (when
+  ? <abbr className="req" title="This field is required" aria-hidden="true">*</abbr>
+  : null);
+
 export function Field({ name, label, type = 'text', wide = false, required = true, defaultValue, step, min, placeholder }) {
-  return <label className={wide ? 'wide' : ''}>{label}
+  return <label className={wide ? 'wide' : ''}>{label}<Required when={required} />
     <input name={name} type={type} required={required} defaultValue={defaultValue} step={step} min={min} placeholder={placeholder} />
   </label>;
 }
 
 export function TextArea({ name, label, required = true, placeholder, defaultValue, rows }) {
-  return <label className="wide">{label}
+  return <label className="wide">{label}<Required when={required} />
     <textarea name={name} required={required} placeholder={placeholder} defaultValue={defaultValue} rows={rows} />
   </label>;
 }
 
-export function SelectField({ name, label, options, defaultValue, wide = false }) {
-  return <label className={wide ? 'wide' : ''}>{label}
-    <select name={name} defaultValue={defaultValue}>
+export function SelectField({ name, label, options, defaultValue, wide = false, required = true }) {
+  return <label className={wide ? 'wide' : ''}>{label}<Required when={required} />
+    <select name={name} defaultValue={defaultValue} required={required}>
       {options.map(option => {
         const [value, text] = Array.isArray(option) ? option : [option, option];
         return <option value={value} key={value}>{text}</option>;

@@ -175,7 +175,10 @@ contents = [
     ('15', 'Finding old documents', 'Searching inside scanned paperwork'),
     ('16', 'Who is allowed to do what', 'Roles and permissions'),
     ('17', 'Changing the dropdown choices', 'Adding your own categories and types'),
-    ('18', 'If something looks wrong', 'Simple things to check first'),
+    ('18', 'Messaging your colleagues', 'Chats and groups inside the system'),
+    ('19', 'The fraud and mistake watch', 'What the system checks for on its own'),
+    ('20', 'The document drive', 'Storing and sharing files'),
+    ('21', 'If something looks wrong', 'Simple things to check first'),
 ]
 story += table([['', 'Section', 'What it covers']] +
                [[n, f'<b>{t}</b>', d] for n, t, d in contents],
@@ -241,6 +244,26 @@ A(Paragraph(
 A(PageBreak())
 
 # ---------------------------------------------------------------- 3
+A(Paragraph('The first time you sign in', S['h2']))
+A(Paragraph(
+    'A short introduction appears the first time you use SiteOps. It moves through the '
+    'screens you are allowed to open, one at a time, explaining what each is for. It takes '
+    'about a minute.', S['body']))
+A(steps([
+    'Press <b>Next</b> to move on, or <b>Back</b> to see a step again.',
+    'Press <b>Skip the introduction</b> at any point if you would rather get on.',
+    'It does not come back once you have finished or skipped it.',
+]))
+A(Paragraph(
+    'You will not see every step. The introduction only covers the parts of the system your '
+    'role can open &mdash; a store keeper is not walked through payroll. That is the correct '
+    'tour for that person, not a shortened one.', S['body']))
+story += note(
+    'To see it again',
+    'Click your name in the top corner and choose <b>Show me around again</b>. It starts from '
+    'the beginning, and works on a phone as well as a computer.')
+A(PageBreak())
+
 A(Paragraph('3. Finding your way around', S['h1']))
 A(Paragraph(
     'The menu runs along the top of the screen. On a phone, tap the three lines at the top '
@@ -369,6 +392,40 @@ A(steps([
 A(Paragraph(
     'The <b>Category</b> dropdown offers the categories your company uses. If the one you '
     'need is missing, it can be added &mdash; see section 17.', S['body']))
+
+A(Paragraph('Uploading a BOQ from another company', S['h2']))
+A(Paragraph(
+    'Bills arrive from consultants, clients and other contractors, laid out however their '
+    'office does it. You do not need to retype them into our template &mdash; upload the '
+    'file as it is and the system works out which column is which.', S['body']))
+A(steps([
+    'Upload the file the same way as our own template.',
+    'A blue box appears saying the layout was worked out, and showing which column it read '
+    'as the description, the quantity, the rate and so on. <b>Check that box first.</b>',
+    'Section headings and subtotal lines are left out, so a "Sub Total" row is not imported '
+    'as though it were work to be done.',
+    'Their item numbers are kept in the notes on each line, so a line can be traced back to '
+    'their document.',
+]))
+story += note(
+    'Their bill will not have our categories',
+    'No other company groups work the way we do, so every line will be flagged as needing a '
+    'category. Rather than setting two hundred of them one at a time, use <b>Set every line '
+    'still missing a category to</b> at the top of the checking screen &mdash; choose one and '
+    'press Apply.')
+A(Paragraph(
+    'If their bill gives an amount but no rate, the system works the rate back by dividing '
+    'the amount by the quantity, and says so on the line. That is arithmetic of ours, not a '
+    'figure they quoted, so it is worth a look before you approve it.', S['body']))
+
+A(Paragraph('The original file is kept', S['h2']))
+A(Paragraph(
+    'Every spreadsheet uploaded is stored exactly as it arrived, and stays reachable from '
+    'the bill it produced &mdash; click <b>The original file</b> on the checking screen. A '
+    'bill priced by somebody else is a commercial document: it is what was quoted, by whom, '
+    'and when. Keeping it means a figure can always be checked against the paper it came '
+    'from, which matters in a dispute.', S['body']))
+A(PageBreak())
 
 A(Paragraph('Way 2: upload a BOQ you made in Excel', S['h2']))
 A(Paragraph(
@@ -679,7 +736,162 @@ A(Paragraph(
     S['body']))
 A(PageBreak())
 
-A(Paragraph('18. If something looks wrong', S['h1']))
+A(Paragraph('18. Messaging your colleagues', S['h1']))
+A(Paragraph(
+    'You can message anybody who uses SiteOps without leaving it. A supervisor asking the '
+    'storekeeper whether the cement arrived should not have to pick up a personal phone '
+    '&mdash; and when that conversation happens on WhatsApp, the company has no record of '
+    'what was agreed.', S['body']))
+A(Paragraph('Starting a conversation', S['h2']))
+A(steps([
+    'Open <b>Chat</b> from the menu.',
+    'Press <b>+</b> at the top of the list.',
+    'Choose a person to message them directly, or <b>New group</b> for a site team.',
+    'Type at the bottom and press Enter. Shift and Enter together starts a new line.',
+]))
+A(Paragraph('The ticks beside your message', S['h2']))
+story += table([
+    ['Mark', 'What it means'],
+    ['One tick', 'The system has your message. It has not reached them yet &mdash; their phone or computer may be off.'],
+    ['Two grey ticks', 'It reached them. In a group, it reached everybody.'],
+    ['Two blue ticks', 'They opened the conversation and saw it. In a group, everybody did.'],
+], [42 * mm, 128 * mm])
+A(Paragraph(
+    'Beside somebody\'s name you will see <b>Online</b> if they are using the system now, or '
+    'when they were last on it. A group shows how many people are in it.', S['body']))
+story += note(
+    'Withdrawing a message',
+    'Hover over anything you sent and press the bin to withdraw it. It is replaced with '
+    '&ldquo;This message was withdrawn&rdquo; rather than disappearing &mdash; the fact that '
+    'something was said and taken back stays visible, which is the honest way round.')
+A(PageBreak())
+
+A(Paragraph('19. The fraud and mistake watch', S['h1']))
+A(Paragraph(
+    'Every few hours the system reads back through its own records looking for things that '
+    'are not right. Some of what it finds is dishonesty; far more of it is ordinary human '
+    'error. Both cost the company money, and both look the same in the records until '
+    'somebody checks.', S['body']))
+A(Paragraph('What it looks for', S['h2']))
+story += table([
+    ['It notices', 'Why that matters'],
+    ['A cost far outside the usual for its kind',
+     'Compared against what that sort of cost normally is on that project &mdash; not a fixed limit, because unusual for fuel and unusual for a subcontract are different numbers.'],
+    ['A figure that looks like a typing slip',
+     'If moving the decimal point one or two places makes it an ordinary figure, it says so and suggests the amount that was probably meant.'],
+    ['Orders split to stay under the approval limit',
+     'Four orders of 240,000 to one supplier in a week, where one order of 960,000 would have needed sign-off.'],
+    ['The same invoice billed twice',
+     'Same supplier, same amount, days apart &mdash; under a slightly different invoice number.'],
+    ['Paying more than was invoiced',
+     'Money leaving the company that no invoice asks for.'],
+    ['Attendance for somebody who is on no employee record',
+     'Either a person was taken on without a contract or rate, or a day\'s pay is being drawn for somebody who does not exist.'],
+    ['A whole gang checked in at the identical second',
+     'Real arrivals scatter over several minutes. Identical times mean the day was filled in afterwards.'],
+    ['More material issued than was ever received',
+     'Either receipts were never entered, or material left without being bought.'],
+    ['Spending far ahead of progress',
+     '80% of the budget gone for 40% of the work.'],
+], [52 * mm, 118 * mm])
+
+A(Paragraph('Nothing is blocked', S['h2']))
+A(Paragraph(
+    'The watch raises things for a person to look at. It does not refuse entries. A system '
+    'that stops a legitimate unusual entry at six in the evening on a pour day gets worked '
+    'around within a week &mdash; and then the company has neither the control nor the '
+    'record. The only things refused outright are the ones that cannot be right under any '
+    'reading, and those were already refused before this existed.', S['body']))
+
+A(Paragraph('Looking at what it found', S['h2']))
+A(steps([
+    'Go to <b>Administration</b> and open the <b>Fraud watch</b> tab.',
+    'Findings are ranked worst first. Click one to see the detail and the figures behind it.',
+    'Say what you found when you looked, then choose <b>Not a problem</b>, <b>This is real</b> or <b>Dealt with</b>.',
+]))
+story += note(
+    'Write the note, even when it is nothing',
+    'Saying why matters more than which button you press. Six months from now, the note is '
+    'the only thing that says whether somebody checked this properly or just cleared it off '
+    'the list. The system will not let you dismiss a finding without one.')
+A(Paragraph(
+    'A finding is not an accusation. Most of them turn out to be a genuine bulk delivery, a '
+    'legitimate late night, or a figure that only looks odd without the paperwork beside it. '
+    'The point is that somebody looked.', S['body']))
+A(Paragraph('Adjusting what counts as normal', S['h2']))
+A(Paragraph(
+    'Under <b>What counts as normal</b> on the same screen, every figure the checks compare '
+    'against can be changed &mdash; the approval limit, how far from usual counts as unusual, '
+    'how many hours of overtime is too many. A rule nobody can adjust is a rule that gets '
+    'switched off the first time it is wrong.', S['body']))
+A(PageBreak())
+
+A(Paragraph('20. The document drive', S['h1']))
+A(Paragraph(
+    'The drive is the company\'s own store for files &mdash; drawings, contracts, '
+    'photographs, anything. It works the way Google Drive or OneDrive does: folders you '
+    'arrange yourself, and sharing you control per item.', S['body']))
+A(steps([
+    'Open <b>Drive</b> from the menu.',
+    'Press <b>New folder</b> to make one, or <b>Upload</b> to add files. You can also drag files onto the page.',
+    'Click a folder to go into it. The trail across the top shows where you are.',
+    'Click a file to download it.',
+]))
+story += note(
+    'Everything starts private',
+    'Anything you put in the drive can be seen by you alone until you share it. Nothing is '
+    'visible to colleagues by accident.')
+
+A(Paragraph('Deciding who can see something', S['h2']))
+A(Paragraph(
+    'Press the share button on any row. There are four levels, and they build on each other:', S['body']))
+story += table([
+    ['Level', 'Who can reach it'],
+    ['<b>Only me</b>', 'Nobody else, whatever folder it sits in.'],
+    ['<b>People I choose</b>', 'Only the colleagues you name. Each can be set to view or to edit.'],
+    ['<b>Everybody in the company</b>', 'Anybody who can sign in to SiteOps, viewing or editing as you choose.'],
+    ['<b>Anyone with the link</b>', 'A web address that works without signing in. For a client or a consultant.'],
+], [58 * mm, 112 * mm])
+
+A(Paragraph(
+    'Sharing a <b>folder</b> shares everything inside it. That is what most people expect, '
+    'and it saves sharing a hundred files one at a time.', S['body']))
+
+story += note(
+    'The public link is the one exception',
+    'A public link applies to that one file and nothing else. A file does <b>not</b> become '
+    'public because a folder above it was made public, and a folder cannot be made public at '
+    'all. This is deliberate: everything else in the drive spreads downwards, and a payslip '
+    'reachable by anyone with a web address is not a mistake worth risking. Making something '
+    'public is always a decision somebody took about that one file, and it is recorded '
+    'against their name.')
+
+A(Paragraph('Public links', S['h2']))
+A(steps([
+    'Open the sharing panel and press <b>Create a link</b>.',
+    'Copy it and send it to whoever needs the file.',
+    'The panel shows how many times it has been downloaded.',
+    'Press <b>Turn off</b> when it has served its purpose. The link stops working at once.',
+]))
+A(Paragraph(
+    'Only the owner of a file can create or withdraw a public link &mdash; somebody you gave '
+    'editing rights to can change the file, but cannot publish it to the world.', S['body']))
+
+A(Paragraph('Asking for access', S['h2']))
+A(Paragraph(
+    'If a colleague sends you a link to something you cannot open, you can ask for access '
+    'and say why. The owner is notified and can let you in with one click. That is better '
+    'than a phone call they forget, and better than working around the system.', S['body']))
+
+A(Paragraph('What the drive will not take', S['h2']))
+A(Paragraph(
+    'Programs. Anything that would run on the computer of whoever opens it &mdash; .exe, '
+    '.bat, .sh, and Office files carrying macros &mdash; is refused, including files renamed '
+    'to look like something else. Drawings, archives, video and everything else a site '
+    'actually produces are fine.', S['body']))
+A(PageBreak())
+
+A(Paragraph('21. If something looks wrong', S['h1']))
 story += table([
     ['What you see', 'What to do'],
     ['<b>The screen is not updating</b>', 'Look under the bell for the small green dot. No dot means your internet has dropped. It reconnects on its own; if it does not, refresh the page.'],

@@ -125,4 +125,22 @@ router.post('/password', auth, validate(z.object({ current: z.string().min(1), p
   res.status(204).end();
 }));
 
+/**
+ * Records that somebody has been shown round.
+ *
+ * Deliberately separate from any preference screen: it is not a setting anybody chooses,
+ * it is a fact about whether the introduction has been given. Asking again is what the
+ * flag exists to prevent.
+ */
+router.post('/tour-seen', auth, wrap(async (req, res) => {
+  await query('UPDATE users SET tour_seen_at=NOW() WHERE id=?', [req.user.id]);
+  res.status(204).end();
+}));
+
+/** Lets somebody ask for the tour again — from the account menu. */
+router.post('/tour-reset', auth, wrap(async (req, res) => {
+  await query('UPDATE users SET tour_seen_at=NULL WHERE id=?', [req.user.id]);
+  res.status(204).end();
+}));
+
 export default router;

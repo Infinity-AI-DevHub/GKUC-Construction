@@ -1,5 +1,6 @@
 import { writeWorkbook, STYLE } from './xlsx-write.js';
 import { readWorkbook } from './xlsx.js';
+import { chooseSheet } from './boq-detect.js';
 
 /*
  * The bill of quantities template, and reading one back in.
@@ -158,11 +159,12 @@ export function parseBoqWorkbook(buffer) {
   const rows = sheet.rows;
   const headerIndex = locateHeader(rows);
   if (headerIndex === -1) {
-    return {
-      ok: false,
-      error: 'This does not look like the BOQ template — no "Description of work" column was found. '
-        + 'Download a fresh template and copy your rows into it.'
-    };
+    /*
+     * Not our template. Bills arrive from consultants, clients and other contractors in
+     * whatever shape their office uses, and refusing them would mean retyping a hundred
+     * priced lines by hand. The sheet is examined instead — see boq-detect.js.
+     */
+    return readForeignWorkbook(workbook);
   }
 
   const columns = mapColumns(rows[headerIndex]);
@@ -251,4 +253,93 @@ export function parseBoqWorkbook(buffer) {
   }
 
   return { ok: true, title, client, items, sheet: sheetName };
+}
+
+/**
+ * Reads a bill written on somebody else's template.
+ *
+ * Comes back in the same shape as a reading of our own, with two differences the reviewer
+ * is told about: the category is usually absent, because no other company groups work the
+ * way we do, and the rate is sometimes worked back from the amount. Both are marked so the
+ * person checking knows which figures the system decided rather than read.
+ */
+function readForeignWorkbook(workbook) {
+  const found = chooseSheet(workbook);
+  if (!found) {
+    return {
+      ok: false,
+      error: 'The system could not find a bill of quantities in this file. It looks for a row '
+        + 'naming the columns — a description, and a quantity or a rate. If the sheet has one, '
+        + 'check it is not split across merged cells; otherwise copy the rows into our template.'
+    };
+  }
+
+  const items = found.items.map(item => {
+    const problems = [];
+    const notices = [];
+    const category = matchCategory(item.category);
+
+    if (!item.description) problems.push('No description');
+    /*
+     * Almost no other company groups work the way we do, so the category is normally
+     * absent. It is a problem rather than a notice because a bill cannot be committed
+     * without one — but the reviewer can set them all at once rather than row by row.
+     */
+    if (!category) problems.push(item.category
+      ? `"${item.category}" is not one of ${CATEGORIES.join(', ')}`
+      : 'No category in the file — choose one');
+    if (!item.unit) problems.push('No unit');
+    if (item.quantity === null) problems.push('Quantity is not a number');
+    else if (item.quantity <= 0) problems.push('Quantity must be more than zero');
+    if (item.rate === null) problems.push('No rate, and none could be worked out from the amount');
+
+    const amount = item.quantity !== null && item.rate !== null
+      ? Number((item.quantity * item.rate).toFixed(2)) : null;
+    if (item.statedAmount !== null && amount !== null && Math.abs(item.statedAmount - amount) > 1) {
+      notices.push(`The file says ${item.statedAmount.toLocaleString('en-LK')}; quantity × rate is `
+        + `${amount.toLocaleString('en-LK')}, which is what will be used`);
+    }
+    /* Said plainly: a worked-back rate is arithmetic of ours, not a figure they quoted. */
+    if (item.rateDerived) {
+      notices.push('The file gave no rate; this one was worked back from the amount ÷ quantity');
+    }
+
+    /* Where the line sat in their bill, kept so it can be traced back to their document. */
+    const notes = [item.section, item.ref ? `Ref ${item.ref}` : null]
+      .filter(Boolean).join(' · ') || null;
+
+    return {
+      sourceRow: item.sourceRow,
+      category,
+      description: String(item.description || '').slice(0, 300),
+      unit: (item.unit || '').slice(0, 30),
+      quantity: item.quantity,
+      rate: item.rate,
+      amount,
+      method: null,
+      notes: notes ? notes.slice(0, 600) : null,
+      raw: item.raw,
+      problems, notices
+    };
+  });
+
+  if (!items.length) {
+    return { ok: false, error: 'A bill was found in this file but it holds no priced lines.' };
+  }
+
+  return {
+    ok: true,
+    title: null,
+    client: null,
+    items,
+    sheet: found.sheet,
+    /* What the reviewer needs in order to trust — or correct — how the sheet was read. */
+    layout: {
+      foreign: true,
+      sheet: found.sheet,
+      headerRow: found.headerRow,
+      headings: found.headings,
+      notes: found.notes
+    }
+  };
 }

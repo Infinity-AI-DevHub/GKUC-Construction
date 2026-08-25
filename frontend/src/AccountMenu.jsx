@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, LogOut, ShieldCheck, UserRound } from 'lucide-react';
+import { ChevronDown, LogOut, ShieldCheck, UserRound, Compass } from 'lucide-react';
 import { Avatar } from './ui.jsx';
 
 /**
@@ -10,7 +10,7 @@ import { Avatar } from './ui.jsx';
  * resolve into a single control: the whole cluster is the button, and the menu it opens is
  * where the account actions live, with signing out last and set apart.
  */
-export default function AccountMenu({ user, onAccount, onLogout }) {
+export default function AccountMenu({ user, onAccount, onLogout, onTour }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef(null);
 
@@ -51,6 +51,14 @@ export default function AccountMenu({ user, onAccount, onLogout }) {
             <em><ShieldCheck size={11} />{user.role}</em>
           </div>
         </div>
+
+        {/* People forget where things are, and asking a colleague costs two people's time. */}
+
+        {onTour && <button type="button" role="menuitem" onClick={() => choose(onTour)}>
+
+          <Compass size={16} /> Show me around again
+
+        </button>}
 
         <button type="button" role="menuitem" onClick={() => choose(onAccount)}>
           <UserRound size={15} />My account

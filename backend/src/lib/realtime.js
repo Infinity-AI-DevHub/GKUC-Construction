@@ -34,9 +34,35 @@ const HEARTBEAT_MS = 25000;
  * permissions they held at connection time travel with the subscriber and decide which
  * events it is allowed to see.
  */
+/*
+ * Told when somebody connects or disconnects, so presence can be kept without this module
+ * needing to know what presence is for. The hub knows who is connected; whether that means
+ * "online" to another person is somebody else's question.
+ */
+const watchers = new Set();
+export const onPresenceChange = listener => {
+  watchers.add(listener);
+  return () => watchers.delete(listener);
+};
+const announce = (userId, online) => {
+  for (const watcher of [...watchers]) {
+    try { watcher(userId, online); } catch (error) { console.error('Presence watcher failed', error); }
+  }
+};
+
+/** Whether this person has at least one browser listening. */
+export const isOnline = userId => {
+  for (const client of clients) if (client.user.id === userId) return true;
+  return false;
+};
+
+export const onlineUserIds = () => [...new Set([...clients].map(client => client.user.id))];
+
 export function subscribe(res, user) {
   const client = { id: nextId++, res, user, connectedAt: Date.now() };
+  const wasOnline = isOnline(user.id);
   clients.add(client);
+  if (!wasOnline) announce(user.id, true);
 
   const beat = setInterval(() => {
     /* A comment line: valid SSE, ignored by the client, enough to keep the socket open. */
@@ -47,6 +73,9 @@ export function subscribe(res, user) {
   const close = () => {
     clearInterval(beat);
     clients.delete(client);
+    /* Only when the last of their browsers has gone: somebody with the site tablet and the
+       office computer open is still here when one of them closes. */
+    if (!isOnline(user.id)) announce(user.id, false);
   };
   return close;
 }
@@ -99,6 +128,23 @@ export function publish(type, payload = {}, options = {}) {
  * have been refused on request.
  */
 export const publishChange = (entity, detail = {}) => publish('data', { entity, ...detail });
+
+/**
+ * Sends to a named set of people, whatever they hold the permission for.
+ *
+ * The audience rules used elsewhere are about roles; a conversation is about membership,
+ * and the two are not the same — being in a group chat is not a permission anybody grants.
+ */
+export function publishTo(userIds, type, payload = {}) {
+  const wanted = new Set(userIds);
+  const frame = `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
+  let delivered = 0;
+  for (const client of [...clients]) {
+    if (!wanted.has(client.user.id)) continue;
+    try { client.res.write(frame); delivered += 1; } catch { clients.delete(client); }
+  }
+  return delivered;
+}
 
 export const listenerCount = () => clients.size;
 

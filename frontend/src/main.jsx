@@ -2,8 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Building2, Calculator, CircleDollarSign, ClipboardCheck, ClipboardList, FileText,
-  LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse
-} from 'lucide-react';
+  LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse, MessageSquare, HardDrive } from 'lucide-react';
 import './styles.css';
 import './theme.css';
 import './reference.css';
@@ -14,6 +13,9 @@ import { Avatar, Modal } from './ui.jsx';
 import NotificationBell from './NotificationBell.jsx';
 import Banners, { useBanners, SoundToggle } from './Banners.jsx';
 import DocumentSearch, { DocumentSearchButton } from './DocumentSearch.jsx';
+import Tour from './Tour.jsx';
+import Chat from './Chat.jsx';
+import Drive from './Drive.jsx';
 import { onRealtime, startRealtime, stopRealtime } from './realtime.js';
 import NavBar from './NavBar.jsx';
 import AccountMenu from './AccountMenu.jsx';
@@ -42,6 +44,8 @@ const NAV = [
   ['Fleet', Truck, 'transport.view'],
   ['Finance', CircleDollarSign, 'finance.view'],
   ['Daily reports', FileText, 'projects.view'],
+  ['Chat', MessageSquare, 'chat.use'],
+  ['Drive', HardDrive, 'drive.use'],
   ['Reports', ClipboardList, null],
   ['Administration', ShieldCheck, 'admin.users']
 ];
@@ -61,6 +65,8 @@ const capabilities = permissions => {
     audit: any('admin.audit'),
     messages: any('messages.send'),
     lists: any('admin.lists'),
+    chat: any('chat.use'),
+    drive: any('drive.use'),
     projects: any('projects.manage'),
     gallery: any('gallery.manage'),
     schedule: any('projects.schedule'),
@@ -235,6 +241,13 @@ function App() {
   const banners = useBanners();
   const [live, setLive] = useState(false);
   const [searching, setSearching] = useState(false);
+  /*
+   * Shown once, the first time somebody signs in. Held here rather than read straight from
+   * the user record so that finishing it closes the tour immediately, without waiting for
+   * the next reload to notice.
+   */
+  const [tourOpen, setTourOpen] = useState(false);
+  useEffect(() => { if (user && !user.tourSeenAt) setTourOpen(true); }, [user?.id, user?.tourSeenAt]);
 
   /*
    * The live connection, held for as long as somebody is signed in.
@@ -355,6 +368,8 @@ function App() {
     Finance: <Finance {...shared} />,
     'Daily reports': <DailyReports {...shared} />,
     Reports: <Reports {...shared} />,
+    Chat: <Chat user={user} />,
+    Drive: <Drive user={user} />,
     Administration: <Admin {...shared} initialTab={adminTab} onTabChange={tab => goTo('Administration', tab)} />
   }[activePage] || <Dashboard {...shared} go={goTo} />;
 
@@ -363,7 +378,12 @@ function App() {
      people cannot open the Administration page it would otherwise live on. */
   const openAccount = () => { setAccountOpen(true); setMenu(false); };
   const bell = placement => (
-    <span className={`bell-group${live ? ' is-live' : ''}`} title={live ? 'Live — updates arrive as they happen' : 'Reconnecting to live updates…'}>
+    /* The placement travels on the group, not only on the bell inside it. The bell is
+       rendered in both the bar and the header with CSS showing whichever fits the width;
+       when search and sound joined it, only the bell was being hidden — so both copies of
+       the other two stayed on screen. */
+    <span className={`bell-group bell-group-${placement}${live ? ' is-live' : ''}`}
+      title={live ? 'Live — updates arrive as they happen' : 'Reconnecting to live updates…'}>
       <DocumentSearchButton onOpen={() => setSearching(true)} />
       <SoundToggle />
       <NotificationBell notifications={data.notifications} reload={reload} onViewAll={openNotifications} placement={placement} />
@@ -373,6 +393,8 @@ function App() {
   return <div className="app">
     <Banners items={banners.items} onDismiss={banners.dismiss} onOpen={openNotifications} />
     <DocumentSearch open={searching} onClose={() => setSearching(false)} />
+    {tourOpen && <Tour user={user} can={can} onNavigate={goTo}
+      onClose={() => { setTourOpen(false); setUser(current => ({ ...current, tourSeenAt: new Date().toISOString() })); }} />}
     {scan.token && scanned && <ScanResult token={scan.token} onClose={() => { setScanned(false); scan.clear(); }} />}
     {accountOpen && (
       <Modal title="My account" close={() => setAccountOpen(false)}>
@@ -392,7 +414,7 @@ function App() {
       />
       <div className="sidebar-bottom">
         {bell('bar')}
-        <AccountMenu user={user} onLogout={logout} onAccount={openAccount} />
+        <AccountMenu user={user} onLogout={logout} onAccount={openAccount} onTour={() => setTourOpen(true)} />
       </div>
     </aside>
 
