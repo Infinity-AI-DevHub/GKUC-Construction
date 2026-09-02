@@ -191,8 +191,8 @@ function FuelAndService({ data }) {
   </Table>;
 }
 
-const EQUIPMENT_COLUMNS = ['Code', 'Equipment', 'Category', 'Assigned to', 'Status', ''];
-const EQUIPMENT_TEMPLATE = '110px minmax(180px,1.3fr) minmax(140px,1fr) minmax(160px,1.1fr) 120px 210px';
+const EQUIPMENT_COLUMNS = ['Code', 'Equipment', 'Category', 'Assigned to', 'Due back', 'Status', ''];
+const EQUIPMENT_TEMPLATE = '110px minmax(180px,1.2fr) minmax(130px,1fr) minmax(150px,1.1fr) 130px 120px 210px';
 
 function Equipment({ data, reload, can }) {
   const [acting, setActing] = useState(null);
@@ -204,6 +204,13 @@ function Equipment({ data, reload, can }) {
         <span>{item.name}</span>
         <span>{item.category}</span>
         <span>{item.project ? `${item.project}` : '—'}</span>
+        <div>
+          <span className={Number(item.daysOverdue) > 0 ? 'overdue' : ''}>
+            {item.dueBack ? shortDate(item.dueBack) : '—'}
+          </span>
+          {Number(item.daysOverdue) > 0
+            ? <small className="overdue">{item.daysOverdue} days late</small> : null}
+        </div>
         <Badge tone={slug(item.status)}>{item.status}</Badge>
         <span className="row-actions">
           <button className="status-button" onClick={async () => setDetail(await api(`/equipment/${item.id}`))}>Open</button>
@@ -224,7 +231,7 @@ function Equipment({ data, reload, can }) {
 /** Assignment history, maintenance record, and the printable QR label (PID 2.9). */
 function EquipmentDetail({ item, close, refresh, can }) {
   const [servicing, setServicing] = useState(false);
-  const assignTemplate = 'minmax(150px,1.2fr) minmax(140px,1fr) 120px 120px';
+  const assignTemplate = 'minmax(150px,1.2fr) minmax(140px,1fr) 110px 110px 110px';
   const maintTemplate = '130px 120px minmax(180px,1.6fr) 120px';
 
   const issueQr = async () => { await post(`/equipment/${item.id}/qr`); await refresh(); };
@@ -253,13 +260,16 @@ function EquipmentDetail({ item, close, refresh, can }) {
       </div>
 
       <div className="wide">
-        <Table columns={['Project', 'Held by', 'From', 'Returned']} template={assignTemplate}
+        <Table columns={['Project', 'Held by', 'From', 'Due back', 'Returned']} template={assignTemplate}
           title="Assignment history" empty="Never assigned.">
           {item.assignments.map(row => <Row template={assignTemplate} key={row.id}>
             <strong>{row.project}</strong>
             <span>{row.assignedTo}</span>
             <span>{shortDate(row.assignedAt)}</span>
-            <span>{row.returnedAt ? shortDate(row.returnedAt) : 'Still out'}</span>
+            <span>{row.dueBack ? shortDate(row.dueBack) : '—'}</span>
+            <span className={!row.returnedAt && row.dueBack && row.dueBack < todayInput() ? 'overdue' : ''}>
+              {row.returnedAt ? shortDate(row.returnedAt) : 'Still out'}
+            </span>
           </Row>)}
         </Table>
       </div>
@@ -400,6 +410,8 @@ function AssignForm({ item, data, close, reload }) {
       projectId: Number(values.projectId),
       assignedTo: values.assignedTo,
       assignedAt: values.assignedAt,
+      dueBack: values.dueBack || undefined,
+      issuedCondition: values.issuedCondition,
       conditionNote: values.conditionNote || undefined
     });
     await reload();
@@ -407,7 +419,11 @@ function AssignForm({ item, data, close, reload }) {
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
     <SelectField name="assignedTo" label="Responsible person" options={data.employees.map(employee => [employee.name, employee.name])} />
     <Field name="assignedAt" label="Assigned from" type="date" defaultValue={todayInput()} />
-    <TextArea name="conditionNote" label="Condition on issue" required={false} placeholder="Optional" />
+    {/* Everything lent out is chased once it is late, so the date is the whole point of the record. */}
+    <Field name="dueBack" label="Due back on" type="date" required={false} />
+    <SelectField name="issuedCondition" label="Condition on issue"
+      options={['Good', 'Fair', 'Worn', 'Damaged']} />
+    <TextArea name="conditionNote" label="Notes on issue" required={false} placeholder="Optional" />
   </FormModal>;
 }
 
@@ -416,12 +432,15 @@ function ReturnForm({ item, close, reload }) {
     await post(`/equipment/${item.id}/return`, {
       returnedAt: values.returnedAt,
       status: values.status,
+      returnedCondition: values.returnedCondition,
       conditionNote: values.conditionNote || undefined
     });
     await reload();
   }}>
     <Field name="returnedAt" label="Returned on" type="date" defaultValue={todayInput()} />
-    <SelectField name="status" label="Condition" options={['Available', 'Maintenance', 'Retired']} />
-    <TextArea name="conditionNote" label="Condition on return" required={false} placeholder="Optional" />
+    <SelectField name="returnedCondition" label="Condition it came back in"
+      options={['Good', 'Fair', 'Worn', 'Damaged']} />
+    <SelectField name="status" label="Where it goes now" options={['Available', 'Maintenance', 'Retired']} />
+    <TextArea name="conditionNote" label="Notes on return" required={false} placeholder="Optional" />
   </FormModal>;
 }

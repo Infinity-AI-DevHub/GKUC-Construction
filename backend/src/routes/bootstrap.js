@@ -50,7 +50,11 @@ router.get('/', auth, wrap(async (req, res) => {
     gated(['hr.view','hr.manage'], () => query('SELECT id,name,description FROM departments ORDER BY name')),
     gated(['store.view','store.manage'], () => query(`SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_cost purchaseCost,
       (SELECT p.name FROM equipment_assignments a JOIN projects p ON p.id=a.project_id
-        WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) project
+        WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) project,
+      (SELECT a.due_back FROM equipment_assignments a
+        WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) dueBack,
+      (SELECT DATEDIFF(CURDATE(), a.due_back) FROM equipment_assignments a
+        WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) daysOverdue
       FROM equipment e ORDER BY e.code`)),
     gated(['store.view','store.manage','finance.pay'], () => query('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE active=1 ORDER BY name')),
     gated(['store.view','store.manage'], () => query(`SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,p.name project,u.name requestedBy,

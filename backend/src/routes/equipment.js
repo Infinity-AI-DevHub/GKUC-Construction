@@ -10,7 +10,10 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const select = `SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_date purchaseDate,e.purchase_cost purchaseCost,e.notes,e.qr_token qrToken,
   (SELECT p.name FROM equipment_assignments a JOIN projects p ON p.id=a.project_id
     WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) project,
-  (SELECT a.assigned_to FROM equipment_assignments a WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) holder
+  (SELECT a.assigned_to FROM equipment_assignments a WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) holder,
+  (SELECT a.due_back FROM equipment_assignments a WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) dueBack,
+  (SELECT DATEDIFF(CURDATE(), a.due_back) FROM equipment_assignments a
+    WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) daysOverdue
   FROM equipment e`;
 
 router.get('/', auth, permit('store.view','store.manage'), wrap(async (_req, res) => res.json(await query(`${select} ORDER BY e.code`))));
@@ -40,7 +43,8 @@ router.get('/:id', auth, permit('store.view','store.manage'), wrap(async (req, r
   const item = await getOne(`${select} WHERE e.id=?`, [req.params.id]);
   if (!item) return res.status(404).json({ error: 'Equipment not found' });
   const [assignments, maintenance] = await Promise.all([
-    query(`SELECT a.id,a.assigned_to assignedTo,a.assigned_at assignedAt,a.returned_at returnedAt,a.condition_note conditionNote,p.name project
+    query(`SELECT a.id,a.assigned_to assignedTo,a.assigned_at assignedAt,a.returned_at returnedAt,a.due_back dueBack,
+      a.issued_condition issuedCondition,a.returned_condition returnedCondition,a.condition_note conditionNote,p.name project
       FROM equipment_assignments a JOIN projects p ON p.id=a.project_id WHERE a.equipment_id=? ORDER BY a.id DESC`, [item.id]),
     query('SELECT id,maintenance_type maintenanceType,performed_at performedAt,cost,notes FROM equipment_maintenance WHERE equipment_id=? ORDER BY performed_at DESC', [item.id])
   ]);
@@ -74,6 +78,8 @@ router.post('/:id/assign', auth, permit('store.lending'), validate(z.object({
   projectId: z.number().int().positive(),
   assignedTo: z.string().min(2).max(120),
   assignedAt: isoDate,
+  dueBack: isoDate.optional(),
+  issuedCondition: z.string().max(60).optional(),
   conditionNote: z.string().max(500).optional()
 })), wrap(async (req, res) => {
   try {
@@ -83,8 +89,13 @@ router.post('/:id/assign', auth, permit('store.lending'), validate(z.object({
       if (!item) throw Object.assign(new Error('Equipment not found'), { status: 404 });
       if (item.status === 'Assigned') throw Object.assign(new Error('This equipment is already assigned. Record its return first.'), { status: 409 });
       if (item.status === 'Retired') throw Object.assign(new Error('Retired equipment cannot be assigned'), { status: 409 });
-      const [result] = await connection.execute(`INSERT INTO equipment_assignments (equipment_id,project_id,assigned_to,assigned_at,condition_note,created_by)
-        VALUES (?,?,?,?,?,?)`, [item.id, req.body.projectId, req.body.assignedTo, req.body.assignedAt, req.body.conditionNote || null, req.user.id]);
+      if (req.body.dueBack && req.body.dueBack < req.body.assignedAt) {
+        throw Object.assign(new Error('The due-back date cannot be before the day it goes out'), { status: 400 });
+      }
+      const [result] = await connection.execute(`INSERT INTO equipment_assignments
+        (equipment_id,project_id,assigned_to,assigned_at,due_back,issued_condition,condition_note,created_by)
+        VALUES (?,?,?,?,?,?,?,?)`, [item.id, req.body.projectId, req.body.assignedTo, req.body.assignedAt,
+        req.body.dueBack || null, req.body.issuedCondition || null, req.body.conditionNote || null, req.user.id]);
       await connection.execute("UPDATE equipment SET status='Assigned' WHERE id=?", [item.id]);
       await audit(connection, req.user.id, 'ASSIGN', 'equipment', item.id, item, req.body, req.ip);
       return result.insertId;
@@ -98,13 +109,16 @@ router.post('/:id/assign', auth, permit('store.lending'), validate(z.object({
 
 router.post('/:id/return', auth, permit('store.lending'), validate(z.object({
   returnedAt: isoDate,
+  returnedCondition: z.string().max(60).optional(),
   conditionNote: z.string().max(500).optional(),
   status: z.enum(['Available', 'Maintenance', 'Retired']).default('Available')
 })), wrap(async (req, res) => {
   const open = await getOne('SELECT * FROM equipment_assignments WHERE equipment_id=? AND returned_at IS NULL ORDER BY id DESC LIMIT 1', [req.params.id]);
   if (!open) return res.status(409).json({ error: 'This equipment is not currently assigned' });
-  await query('UPDATE equipment_assignments SET returned_at=?,condition_note=COALESCE(?,condition_note) WHERE id=?',
-    [req.body.returnedAt, req.body.conditionNote || null, open.id]);
+  await query(`UPDATE equipment_assignments
+    SET returned_at=?, returned_condition=COALESCE(?,returned_condition),
+        condition_note=COALESCE(?,condition_note) WHERE id=?`,
+  [req.body.returnedAt, req.body.returnedCondition || null, req.body.conditionNote || null, open.id]);
   await query('UPDATE equipment SET status=? WHERE id=?', [req.body.status, req.params.id]);
   await audit(pool, req.user.id, 'RETURN', 'equipment', req.params.id, open, req.body, req.ip);
   res.json(await getOne(`${select} WHERE e.id=?`, [req.params.id]));

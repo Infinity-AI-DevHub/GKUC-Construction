@@ -1,10 +1,12 @@
 import fs from 'node:fs';
+import { ensureFixtures } from './fixtures.mjs';
+const FIX=ensureFixtures();
 const BASE='http://127.0.0.1:4400/api';
 let pass=0,fail=0; const check=(o,l,d='')=>{if(o)pass++;else{fail++;console.log('   FAIL',l,d);}};
 const md=(await(await fetch(BASE+'/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:'owner@gkuc.lk',password:'GKUC@2026'})})).json()).token;
 const call=async(m,p,b)=>{const r=await fetch(BASE+p,{method:m,headers:{'content-type':'application/json',authorization:`Bearer ${md}`},body:b?JSON.stringify(b):undefined});return{status:r.status,body:await r.json().catch(()=>null)}};
 const form=new FormData();
-form.append('file', new Blob([fs.readFileSync('/tmp/foreign-a.xlsx')],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'rda-bill.xlsx');
+form.append('file', new Blob([fs.readFileSync(`${FIX}/foreign-a.xlsx`)],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'rda-bill.xlsx');
 const up=await (await fetch(BASE+'/boq/import',{method:'POST',headers:{authorization:`Bearer ${md}`},body:form})).json();
 console.log('uploaded a foreign bill:',up.items.length,'lines,',up.problemCount,'need attention');
 check(up.items.every(i=>!i.category),'no line arrived with a category');
@@ -28,7 +30,8 @@ const projectId=projects[0].id;
 const c=await call('POST',`/boq/imports/${up.id}/commit`,{projectId});
 check(c.status===201,'committed',String(c.status)+JSON.stringify(c.body).slice(0,90));
 check(c.body.items===5,'five lines became a bill',String(c.body.items));
-const total=12500*85+9800*140+3400*950+2850*1150+1120*8750;
+/* The five priced lines of fixtures/foreign-a.xlsx, multiplied out the way their bill does. */
+const total=12500*95+8900*240+6400*1150+5100*1420+2300*9600;
 check(Math.abs(c.body.total-total)<1,'total matches their document',`${c.body.total} vs ${total}`);
 
 console.log('\n=== the bill points back at the file it came from ===');

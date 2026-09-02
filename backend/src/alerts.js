@@ -399,11 +399,110 @@ export async function runAlertScan() {
     retentionAlerts(stamp, alerts),
     tenderAlerts(stamp, alerts),
     subcontractQuoteAlerts(stamp, alerts),
-    pendingApprovalAlerts(stamp, alerts)
+    pendingApprovalAlerts(stamp, alerts),
+    bondAlerts(stamp, alerts),
+    receivableAlerts(stamp, alerts),
+    toolReturnAlerts(stamp, alerts)
   ]);
   for (const alert of alerts) await raise(alert);
   await dispatchQueued().catch(error => console.error('Channel dispatch failed', error));
   return alerts.length;
+}
+
+/**
+ * Bank guarantees running out.
+ *
+ * An advance-payment bond that lapses on a live contract is a breach the client can act on;
+ * one still live after the work is finished is the company's own cash sitting in the bank's
+ * account. Both matter, and neither announces itself.
+ */
+async function bondAlerts(stamp, alerts) {
+  const rows = await query(`
+    SELECT b.id,b.reference,b.kind,b.beneficiary,b.bank,b.amount,b.margin_held marginHeld,
+           b.expiry_date expiryDate,p.name project
+      FROM bank_bonds b LEFT JOIN projects p ON p.id=b.project_id
+     WHERE b.status='Live' AND b.expiry_date <= DATE_ADD(CURDATE(), INTERVAL ? DAY)`,
+  [ALERT_WINDOW_DAYS]);
+
+  for (const row of rows) {
+    const remaining = days(row.expiryDate);
+    alerts.push({
+      key: `bond:${row.id}:${stamp}`,
+      audience: 'finance.invoice',
+      severity: remaining < 0 ? 'Critical' : remaining <= 14 ? 'Critical' : 'Warning',
+      title: `${row.kind} bond ${remaining < 0 ? 'has expired' : 'expiring'} — ${row.reference}`,
+      message: `${money(row.amount)} to ${row.beneficiary} through ${row.bank}`
+        + `${row.project ? ` on ${row.project}` : ''}. `
+        + (remaining < 0
+          ? `Expired ${Math.abs(remaining)} day(s) ago. If the contract is still running this needs `
+            + 'extending; if it is finished, ask the bank to release it.'
+          : `Expires on ${onDate(row.expiryDate)} — ${remaining} day(s). `
+            + (Number(row.marginHeld) > 0
+              ? `${money(row.marginHeld)} of the company's own money is held against it.` : '')),
+      referenceType: 'bond', referenceId: row.id
+    });
+  }
+}
+
+/**
+ * Money the client has not paid.
+ *
+ * Chased by age rather than by one deadline: a certificate a week late is a reminder, one
+ * two months late is a different conversation, and saying which saves somebody working it
+ * out from a date.
+ */
+async function receivableAlerts(stamp, alerts) {
+  const rows = await query(`
+    SELECT i.id,i.reference,i.client,i.title,i.due_date dueDate,
+           (i.net_payable - i.paid_amount) outstanding,
+           DATEDIFF(CURDATE(), i.due_date) overdue, p.name project
+      FROM client_invoices i JOIN projects p ON p.id=i.project_id
+     WHERE i.status IN ('Issued','Part paid')
+       AND i.net_payable > i.paid_amount
+       AND i.due_date IS NOT NULL AND i.due_date <= CURDATE()`);
+
+  for (const row of rows) {
+    const overdue = Number(row.overdue);
+    alerts.push({
+      key: `receivable:${row.id}:${stamp}`,
+      audience: 'finance.invoice',
+      severity: overdue > 60 ? 'Critical' : overdue > 30 ? 'Warning' : 'Info',
+      title: `${money(row.outstanding)} outstanding from ${row.client} — ${row.reference}`,
+      message: `${row.title} on ${row.project} fell due on ${onDate(row.dueDate)}, ${overdue} day(s) ago.`
+        + (overdue > 60 ? ' Past sixty days this is worth raising with the client directly.' : ''),
+      referenceType: 'client_invoice', referenceId: row.id
+    });
+  }
+}
+
+/**
+ * Tools that have not come back.
+ *
+ * The lending record has always existed; nothing was ever watching it. A drill signed out
+ * for a fortnight and still out three months later is a small loss nobody notices, because
+ * no single person was ever told.
+ */
+async function toolReturnAlerts(stamp, alerts) {
+  const rows = await query(`
+    SELECT a.id,a.assigned_to assignedTo,a.assigned_at assignedAt,a.due_back dueBack,
+           e.code,e.name,p.name project, DATEDIFF(CURDATE(), a.due_back) overdue
+      FROM equipment_assignments a
+      JOIN equipment e ON e.id=a.equipment_id
+      LEFT JOIN projects p ON p.id=a.project_id
+     WHERE a.returned_at IS NULL AND a.due_back IS NOT NULL AND a.due_back < CURDATE()`);
+
+  for (const row of rows) {
+    const overdue = Number(row.overdue);
+    alerts.push({
+      key: `tool-return:${row.id}:${stamp}`,
+      audience: 'store.lending',
+      severity: overdue > 30 ? 'Critical' : overdue > 7 ? 'Warning' : 'Info',
+      title: `${row.name} not returned — ${overdue} day(s) over`,
+      message: `${row.code} went to ${row.assignedTo}${row.project ? ` on ${row.project}` : ''} on `
+        + `${onDate(row.assignedAt)}, due back ${onDate(row.dueBack)}. Still signed out.`,
+      referenceType: 'equipment_assignment', referenceId: row.id
+    });
+  }
 }
 
 /** Queues a one-off notification raised by an operator action rather than by the scanner. */

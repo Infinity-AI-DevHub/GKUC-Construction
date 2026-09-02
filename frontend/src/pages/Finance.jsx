@@ -3,8 +3,9 @@ import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
 import { api, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Page, Progress, Row, SelectField, Summary, Table, Tabs, useLiveList } from '../ui.jsx';
 import { useOptions } from '../options.js';
+import { Bonds, ClientInvoices, PettyCash } from '../Receivables.jsx';
 
-const TABS = ['Budget monitoring', 'Expenses', 'Income', 'Supplier invoices', 'Categories'];
+const TABS = ['Budget monitoring', 'Client invoices', 'Bonds', 'Petty cash', 'Expenses', 'Income', 'Supplier invoices', 'Categories'];
 
 /** PID 2.10 — costs, payments and profitability in one view, watched continuously. */
 export default function Finance({ data, reload, can }) {
@@ -17,6 +18,9 @@ export default function Finance({ data, reload, can }) {
 
   const actions = {
     'Budget monitoring': null,
+    'Client invoices': null,
+    Bonds: null,
+    'Petty cash': null,
     Expenses: can.finance && 'Record expense',
     Income: can.finance && 'Record income',
     'Supplier invoices': can.finance && 'Record invoice',
@@ -30,6 +34,9 @@ export default function Finance({ data, reload, can }) {
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
     {tab === 'Budget monitoring' && <BudgetMonitoring summary={summary} />}
+    {tab === 'Client invoices' && <ClientInvoices data={data} can={can} />}
+    {tab === 'Bonds' && <Bonds data={data} can={can} />}
+    {tab === 'Petty cash' && <PettyCash data={data} can={can} />}
     {tab === 'Expenses' && <Expenses />}
     {tab === 'Income' && <Income />}
     {tab === 'Supplier invoices' && <Invoices can={can} refresh={refresh} />}

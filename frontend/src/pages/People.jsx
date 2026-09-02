@@ -5,8 +5,9 @@ import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary
 import Attachments from '../Attachments.jsx';
 import BiometricImport from './BiometricImport.jsx';
 import { useOptions } from '../options.js';
+import { AttendanceRegister, LeaveRegister } from '../Registers.jsx';
 
-const TABS = ['Employees', 'Attendance', 'Biometric import', 'Leave', 'Overtime', 'Payroll', 'Performance', 'Departments'];
+const TABS = ['Employees', 'Attendance', 'Attendance register', 'Biometric import', 'Leave', 'Leave register', 'Overtime', 'Payroll', 'Performance', 'Departments'];
 
 /** PID 2.2 — one record per employee covering profile, attendance, leave and overtime. */
 export default function People({ data, reload, can }) {
@@ -19,7 +20,9 @@ export default function People({ data, reload, can }) {
   const actions = {
     Employees: can.hr && 'Add employee',
     Attendance: can.attendance && 'Record attendance',
+    'Attendance register': null,
     'Biometric import': null,
+    'Leave register': null,
     Leave: can.hr && 'Record leave',
     Overtime: can.site && 'Record overtime',
     Payroll: can.payroll && 'Run payroll',
@@ -33,6 +36,8 @@ export default function People({ data, reload, can }) {
 
     {tab === 'Employees' && <Employees data={data} can={can} />}
     {tab === 'Attendance' && <Attendance data={data} reload={reload} can={can} />}
+    {tab === 'Attendance register' && <AttendanceRegister />}
+    {tab === 'Leave register' && <LeaveRegister />}
     {tab === 'Biometric import' && <BiometricImport data={data} reload={reload} can={can} />}
     {tab === 'Leave' && <Leave can={can} />}
     {tab === 'Overtime' && <Overtime can={can} />}
