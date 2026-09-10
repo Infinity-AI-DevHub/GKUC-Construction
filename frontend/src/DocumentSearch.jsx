@@ -79,7 +79,7 @@ export default function DocumentSearch({ open, onClose }) {
           )}
           {results.map(row => (
             <button type="button" key={row.id} className="docsearch-hit"
-              onClick={() => { openAttachment(row.id).catch(() => {}); onClose(); }}>
+              onClick={() => { openAttachment(row.id); onClose(); }}>
               <span className="docsearch-icon"><FileText size={17} /></span>
               <span className="docsearch-body">
                 <strong>{row.title || row.filename}</strong>

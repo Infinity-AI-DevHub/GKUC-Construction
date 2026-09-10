@@ -87,8 +87,31 @@ router.post('/:id/assign', auth, permit('store.lending'), validate(z.object({
       const [rows] = await connection.execute('SELECT * FROM equipment WHERE id=? FOR UPDATE', [req.params.id]);
       const item = rows[0];
       if (!item) throw Object.assign(new Error('Equipment not found'), { status: 404 });
-      if (item.status === 'Assigned') throw Object.assign(new Error('This equipment is already assigned. Record its return first.'), { status: 409 });
       if (item.status === 'Retired') throw Object.assign(new Error('Retired equipment cannot be assigned'), { status: 409 });
+
+      /*
+       * Whether the asset is out is decided by the lending record, not by the status column.
+       *
+       * The status is a summary kept for the register to read quickly, and a summary can
+       * drift — a return that half-succeeded, or a reassignment written straight into the
+       * table, leaves an asset marked Available while its previous lending is still open.
+       * Trusting it let the same tool go out to two sites at once, and every screen that
+       * lists equipment then showed it twice. The open lending is the fact; the status is
+       * repaired from it below.
+       */
+      const [[open]] = await connection.execute(
+        `SELECT a.id, a.assigned_to assignedTo, a.assigned_at assignedAt, p.name project
+           FROM equipment_assignments a LEFT JOIN projects p ON p.id=a.project_id
+          WHERE a.equipment_id=? AND a.returned_at IS NULL
+          ORDER BY a.id DESC LIMIT 1`, [item.id]);
+      if (open) {
+        if (item.status !== 'Assigned') {
+          await connection.execute("UPDATE equipment SET status='Assigned' WHERE id=?", [item.id]);
+        }
+        throw Object.assign(new Error(
+          `This equipment is already out${open.project ? ` on ${open.project}` : ''}`
+          + `${open.assignedTo ? ` with ${open.assignedTo}` : ''}. Record its return first.`), { status: 409 });
+      }
       if (req.body.dueBack && req.body.dueBack < req.body.assignedAt) {
         throw Object.assign(new Error('The due-back date cannot be before the day it goes out'), { status: 400 });
       }

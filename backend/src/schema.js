@@ -1866,7 +1866,74 @@ async function migrateExistingInstalls() {
   await addForeignKey('fleet', 'fk_fleet_driver', 'CONSTRAINT fk_fleet_driver FOREIGN KEY(driver_employee_id) REFERENCES employees(id)');
   await addIndex('notifications', 'uq_notification_dedupe', 'UNIQUE KEY uq_notification_dedupe(dedupe_key)');
   await addForeignKey('attendance', 'fk_attendance_employee', 'CONSTRAINT fk_attendance_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');
+  await onlyOneOpenLendingPerAsset();
 }
+
+/**
+ * One asset can be out on one lending at a time — enforced by the database, not by hope.
+ *
+ * The application already refuses to lend out something that is already out, but that check
+ * could only ever be as good as the column it read, and a tool was found committed to two
+ * sites at once. Every screen that lists equipment then showed it twice, and React dropped
+ * one of the two.
+ *
+ * A partial unique index would be the natural fit and MySQL has none; a generated column
+ * standing in for one cannot be added to a table that carries foreign keys. So the rule is
+ * stated as a trigger, the way the gallery's evidence lock already is.
+ */
+async function onlyOneOpenLendingPerAsset() {
+  /* Older duplicates are closed first: a rule cannot be imposed on data that already breaks
+     it, and refusing to migrate would leave the customer with no rule at all. */
+  const duplicates = await query(`
+    SELECT equipment_id, MAX(id) keep FROM equipment_assignments
+     WHERE returned_at IS NULL GROUP BY equipment_id HAVING COUNT(*) > 1`);
+  for (const row of duplicates) {
+    await query(
+      `UPDATE equipment_assignments SET returned_at = COALESCE(due_back, assigned_at),
+              condition_note = CONCAT(COALESCE(condition_note,''),
+                ' [closed automatically: superseded by a later lending of the same asset]')
+        WHERE equipment_id = ? AND returned_at IS NULL AND id <> ?`, [row.equipment_id, row.keep]);
+  }
+  if (duplicates.length) {
+    console.warn(`Closed stale lendings on ${duplicates.length} asset(s) that were out twice.`);
+  }
+
+  /*
+   * The status column is a summary of the lending table, so drift is repaired here too: an
+   * asset with an open lending reads Assigned, one without reads Available. Retired and
+   * Maintenance are left alone — those say something the lending table does not.
+   */
+  await query(`
+    UPDATE equipment eq SET eq.status='Assigned'
+     WHERE eq.status='Available'
+       AND EXISTS (SELECT 1 FROM equipment_assignments a
+                    WHERE a.equipment_id=eq.id AND a.returned_at IS NULL)`);
+  await query(`
+    UPDATE equipment eq SET eq.status='Available'
+     WHERE eq.status='Assigned'
+       AND NOT EXISTS (SELECT 1 FROM equipment_assignments a
+                        WHERE a.equipment_id=eq.id AND a.returned_at IS NULL)`);
+
+  const existing = await query(
+    `SELECT TRIGGER_NAME FROM information_schema.triggers
+      WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='equipment_one_open_lending'`);
+  if (existing.length) return;
+  try {
+    await ddl(`CREATE TRIGGER equipment_one_open_lending BEFORE INSERT ON equipment_assignments
+      FOR EACH ROW
+      BEGIN
+        IF NEW.returned_at IS NULL AND EXISTS (
+          SELECT 1 FROM equipment_assignments a
+           WHERE a.equipment_id = NEW.equipment_id AND a.returned_at IS NULL) THEN
+          SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'That equipment is already out. Record its return first.';
+        END IF;
+      END`);
+  } catch (error) {
+    console.warn('Equipment lending rule not installed (needs the TRIGGER privilege):', error.message);
+  }
+}
+
 
 /**
  * Writes the starting roles once. It never rewrites an existing role's permissions, so a

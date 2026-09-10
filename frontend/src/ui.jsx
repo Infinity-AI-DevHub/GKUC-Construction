@@ -61,6 +61,21 @@ export function Tabs({ tabs, active, onChange }) {
   </div></div>;
 }
 
+/**
+ * The tabs of a module that this person can actually use.
+ *
+ * A module is opened by anyone holding any one of its permissions, so the tabs inside it
+ * cannot all be assumed usable: a site supervisor reaches People to mark attendance and has
+ * no business on the payroll, and a store keeper reaches Fleet for the tools and not for the
+ * lorries. Each tab names the permissions the server will accept for it, and only the tabs
+ * that match are offered — so nothing on screen is a door into a refusal.
+ *
+ * `tabs` is a list of [name, [permission, ...]]; a tab with no permissions is open to all.
+ */
+export const allowedTabs = (tabs, can) => tabs
+  .filter(([, keys]) => !keys || !keys.length || keys.some(key => can.has(key)))
+  .map(([name]) => name);
+
 export function Modal({ title, close, children, wide = false }) {
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
     <div className={wide ? 'modal modal-wide' : 'modal'}>
@@ -86,9 +101,15 @@ export const Required = ({ when = true }) => (when
   ? <abbr className="req" title="This field is required" aria-hidden="true">*</abbr>
   : null);
 
-export function Field({ name, label, type = 'text', wide = false, required = true, defaultValue, step, min, placeholder }) {
+/*
+ * `max` matters as much as `min`. Without it a number the server will refuse — a bid
+ * validity of 250000 days, a markup of 900% — is only caught after the person has filled
+ * in the whole form and pressed save. The bounds here are meant to mirror the schema the
+ * route validates against, so the answer comes back at the field rather than at the end.
+ */
+export function Field({ name, label, type = 'text', wide = false, required = true, defaultValue, step, min, max, placeholder }) {
   return <label className={wide ? 'wide' : ''}>{label}<Required when={required} />
-    <input name={name} type={type} required={required} defaultValue={defaultValue} step={step} min={min} placeholder={placeholder} />
+    <input name={name} type={type} required={required} defaultValue={defaultValue} step={step} min={min} max={max} placeholder={placeholder} />
   </label>;
 }
 

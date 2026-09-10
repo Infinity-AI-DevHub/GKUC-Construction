@@ -1,10 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Folder, FolderPlus, Upload, File, FileText, FileSpreadsheet, Image, Video, Archive,
-  PenTool, ChevronRight, Users, Globe, Lock, Share2, Download, Trash2, X, Check,
-  Link2, Search, ArrowLeft, MoreVertical, UserPlus
-} from 'lucide-react';
-import { api, post, del, fileSize, shortDate, initials } from './api.js';
+import { Folder, FolderPlus, Upload, File, FileText, FileSpreadsheet, Image, Video, Archive, PenTool, ChevronRight, Users, Globe, Lock, Share2, Download, Trash2, X, Check, Link2, Search, UserPlus } from 'lucide-react';
+import { api, post, del, fileSize, shortDate } from './api.js';
 import { Avatar, useLiveList } from './ui.jsx';
 
 /*

@@ -81,6 +81,10 @@ check(Number(pe.n)===1,'and a site spend becomes a project cost',String(pe.n));
 console.log('\n=== PHASE 4 — tools not returned ===');
 const [[eq]]=await db.query('SELECT id FROM equipment LIMIT 1');
 await db.query("DELETE FROM equipment_assignments WHERE assigned_to='Overdue Holder'");
+/* An asset may be out already — from the last run of this suite, or from somebody using the
+   system. Only one lending of an asset may be open at a time (the database enforces it), so
+   whatever is open is closed before this overdue one is staged. */
+await db.query('UPDATE equipment_assignments SET returned_at=CURDATE() WHERE equipment_id=? AND returned_at IS NULL',[eq.id]);
 await db.query(`INSERT INTO equipment_assignments (equipment_id,project_id,assigned_to,assigned_at,due_back,created_by)
                 VALUES (?,?,'Overdue Holder',DATE_SUB(CURDATE(),INTERVAL 40 DAY),DATE_SUB(CURDATE(),INTERVAL 26 DAY),1)`,[eq.id,proj.id]);
 

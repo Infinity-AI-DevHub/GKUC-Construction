@@ -1,7 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import {
-  ShieldAlert, TriangleAlert, Eye, Check, X, RefreshCw, Search, ChevronDown, Settings2
-} from 'lucide-react';
+import { ShieldAlert, TriangleAlert, Check, X, RefreshCw, ChevronDown, Settings2 } from 'lucide-react';
 import { api, post, rupees, shortDate } from './api.js';
 import { useLiveList } from './ui.jsx';
 

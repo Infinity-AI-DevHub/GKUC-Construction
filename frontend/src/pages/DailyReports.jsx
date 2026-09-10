@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AlertTriangle, ChevronRight, HardHat, Users } from 'lucide-react';
-import { api, post, slug, todayInput } from '../api.js';
+import { openRecord, post, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 
@@ -12,7 +12,7 @@ export default function DailyReports({ data, reload, can }) {
   return <Page title="Daily site reports" subtitle="Capture workforce, completed work, materials, delays, and site evidence."
     action={can.site ? 'New report' : null} onAction={() => setCreating(true)}>
     <div className="report-list">
-      {data.reports.map(report => <article className="report-row" key={report.id} onClick={async () => setDetail(await api(`/reports/${report.id}`))}>
+      {data.reports.map(report => <article className="report-row" key={report.id} onClick={() => openRecord(`/reports/${report.id}`, setDetail)}>
         <div className="report-date">
           <b>{report.date.split(' ')[0]}</b>
           <span>{report.date.split(' ')[1]}</span>

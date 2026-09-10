@@ -51,10 +51,21 @@ router.get('/resources/availability', auth, permit('resources.view'), wrap(async
         p.name project,p.site_status siteStatus,e.name driverName
       FROM fleet f LEFT JOIN projects p ON p.id=f.project_id
       LEFT JOIN employees e ON e.id=f.driver_employee_id ORDER BY f.vehicle`),
+    /*
+     * Joined to the latest open lending rather than to every open lending.
+     *
+     * An asset should only ever have one, but "should" is not a guarantee the database
+     * makes, and a plain join turns a single stray row into a duplicate on this screen —
+     * which React then renders under a repeated key and quietly drops. One row per asset,
+     * whatever the lending table happens to hold.
+     */
     query(`SELECT eq.id,eq.code,eq.name,eq.category,eq.status,
         a.project_id projectId,p.name project,p.site_status siteStatus,a.assigned_to assignedTo
       FROM equipment eq
-      LEFT JOIN equipment_assignments a ON a.equipment_id=eq.id AND a.returned_at IS NULL
+      LEFT JOIN equipment_assignments a ON a.id = (
+        SELECT open.id FROM equipment_assignments open
+         WHERE open.equipment_id = eq.id AND open.returned_at IS NULL
+         ORDER BY open.id DESC LIMIT 1)
       LEFT JOIN projects p ON p.id=a.project_id
       WHERE eq.status <> 'Retired' ORDER BY eq.code`)
   ]);

@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, Bell, CheckCircle2, X, Volume2, VolumeX } from 'lucide-react';
 import { playChime, soundMuted, setSoundMuted } from './chime.js';
+import { onNotice } from './notices.js';
 
 /*
  * Banner notifications.
@@ -50,7 +51,11 @@ function Banner({ item, onDismiss, onOpen }) {
       <div className="banner-body">
         <strong>{item.title}</strong>
         {item.message ? <p>{item.message}</p> : null}
-        {onOpen ? <button type="button" className="banner-link" onClick={() => { onOpen(); close(); }}>
+        {/* Only a real notification is in the notification centre to be opened. A notice
+            raised by the app itself — a document that would not open, a record that was
+            gone — was never stored there, so offering the link sent people to look for
+            something that was not going to be in the list. */}
+        {onOpen && item.id ? <button type="button" className="banner-link" onClick={() => { onOpen(); close(); }}>
           Open the notification centre
         </button> : null}
       </div>
@@ -71,11 +76,15 @@ function Banner({ item, onDismiss, onOpen }) {
 export function useBanners() {
   const [items, setItems] = useState([]);
 
-  const show = notification => {
+  /* Held in a ref so the subscription below never needs re-binding. */
+  const show = useCallback(notification => {
     const key = `${notification.id || 'x'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     setItems(current => [...current, { ...notification, key }].slice(-4));
     playChime(notification.severity);
-  };
+  }, []);
+
+  /* Anything raised outside React — the API layer, mainly — arrives here. */
+  useEffect(() => onNotice(show), [show]);
 
   const dismiss = key => setItems(current => current.filter(item => item.key !== key));
   return { items, show, dismiss };

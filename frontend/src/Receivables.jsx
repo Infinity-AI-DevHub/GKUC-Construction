@@ -222,12 +222,12 @@ function CertificateForm({ data, close, reload }) {
       </select>
     </label>
     {terms.taxTreatment !== 'Exempt' && <label>VAT rate (%)
-      <input type="number" step="any" min="0" value={terms.vatRate}
+      <input type="number" step="any" min="0" max="100" value={terms.vatRate}
         onChange={event => setTerm('vatRate', event.target.value)} />
     </label>}
     {terms.taxTreatment === 'SVAT' && <Field name="svatVoucher" label="SVAT voucher number" required={false} />}
     <label>Retention withheld (%)
-      <input type="number" step="any" min="0" value={terms.retentionPercent}
+      <input type="number" step="any" min="0" max="50" value={terms.retentionPercent}
         onChange={event => setTerm('retentionPercent', event.target.value)} />
     </label>
     <label>Advance recovered (LKR)

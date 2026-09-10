@@ -1,11 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, QrCode, Truck, Wrench } from 'lucide-react';
-import { api, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { api, openRecord, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { allowedTabs, Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { toSvg } from '../qr.js';
 import { useOptions } from '../options.js';
 
-const TABS = ['Vehicles', 'Compliance', 'Fuel & service', 'Equipment'];
+/* Fleet is two registers under one roof: the transport office's vehicles, and the store's
+   tools. Each tab names what the server will accept for it — see allowedTabs. */
+const TABS = [
+  ['Vehicles', ['transport.view', 'transport.manage']],
+  ['Compliance', ['transport.view', 'transport.manage']],
+  ['Fuel & service', ['transport.view', 'transport.manage']],
+  ['Equipment', ['store.view', 'store.manage', 'store.lending']]
+];
 
 /** Renders a QR label as inline SVG — no image request, so it prints cleanly. */
 function QrCodeImage({ value }) {
@@ -19,19 +26,20 @@ const DOC_TYPES = ['Insurance', 'Revenue licence', 'Emission test', 'Service', '
 
 /** PID 2.8 and 2.9 — vehicles with their compliance dates, and equipment with its whereabouts. */
 export default function Fleet({ data, reload, can }) {
-  const [tab, setTab] = useState(TABS[0]);
+  const tabs = allowedTabs(TABS, can);
+  const [tab, setTab] = useState(tabs[0]);
   const [open, setOpen] = useState('');
 
   const actions = {
     Vehicles: can.transport && 'Add asset',
     Compliance: can.transport && 'Record renewal',
     'Fuel & service': can.transport && 'Record fuel',
-    Equipment: can.projects && 'Add equipment'
+    Equipment: can.lending && 'Add equipment'
   };
 
   return <Page title="Fleet & equipment" subtitle="Keep vehicles available, assigned, maintained, and compliant."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
-    <Tabs tabs={TABS} active={tab} onChange={setTab} />
+    <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
     {tab === 'Vehicles' && <Vehicles data={data} can={can} />}
     {tab === 'Compliance' && <Compliance />}
@@ -49,7 +57,7 @@ function Vehicles({ data, can }) {
   const [detail, setDetail] = useState(null);
   return <>
     <div className="fleet-grid">
-      {data.fleet.map(vehicle => <article className="fleet-card" key={vehicle.id} onClick={async () => setDetail(await api(`/fleet/${vehicle.id}`))}>
+      {data.fleet.map(vehicle => <article className="fleet-card" key={vehicle.id} onClick={() => openRecord(`/fleet/${vehicle.id}`, setDetail)}>
         <div className="fleet-visual"><Truck size={34} /><Badge tone={slug(vehicle.status)}>{vehicle.status}</Badge></div>
         <h3>{vehicle.vehicle}</h3>
         <p>{vehicle.reg}</p>
@@ -213,8 +221,8 @@ function Equipment({ data, reload, can }) {
         </div>
         <Badge tone={slug(item.status)}>{item.status}</Badge>
         <span className="row-actions">
-          <button className="status-button" onClick={async () => setDetail(await api(`/equipment/${item.id}`))}>Open</button>
-          {can.site && <button className="status-button" onClick={() => setActing(item)}>
+          <button className="status-button" onClick={() => openRecord(`/equipment/${item.id}`, setDetail)}>Open</button>
+          {can.lending && <button className="status-button" onClick={() => setActing(item)}>
             {item.status === 'Assigned' ? 'Return' : 'Assign'}
           </button>}
         </span>
@@ -254,7 +262,7 @@ function EquipmentDetail({ item, close, refresh, can }) {
           {item.qrToken && <code>{`${window.location.origin}/scan/${item.qrToken}`}</code>}
         </div>
         {item.qrToken && <QrCodeImage value={`${window.location.origin}/scan/${item.qrToken}`} />}
-        {can.projects && <button type="button" className="secondary" onClick={issueQr}>
+        {can.lending && <button type="button" className="secondary" onClick={issueQr}>
           <QrCode size={15} />{item.qrToken ? 'Reissue label' : 'Issue label'}
         </button>}
       </div>
@@ -276,7 +284,7 @@ function EquipmentDetail({ item, close, refresh, can }) {
 
       <div className="wide">
         <Table columns={['Date', 'Type', 'Notes', 'Cost']} template={maintTemplate} title="Maintenance and repairs"
-          tools={can.projects ? <button className="secondary" onClick={() => setServicing(true)}><Wrench size={14} /> Log work</button> : null}
+          tools={can.lending ? <button className="secondary" onClick={() => setServicing(true)}><Wrench size={14} /> Log work</button> : null}
           empty="No maintenance recorded.">
           {item.maintenance.map(row => <Row template={maintTemplate} key={row.id}>
             <span>{shortDate(row.performedAt)}</span>

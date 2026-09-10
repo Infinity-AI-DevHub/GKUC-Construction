@@ -96,8 +96,26 @@ function BoqList({ data, reload, can }) {
   const [detail, setDetail] = useState(null);
   const [wording, setWording] = useState(null);
   const [error, setError] = useState('');
-  const openDetail = async id => setDetail(await api(`/boq/${id}`));
-  const decide = async (id, status) => { await patch(`/boq/${id}`, { status }); await reload(); setDetail(null); };
+
+  /*
+   * Opening and approving both talk to the server, and both used to do so without a
+   * catch — an approval refused for want of the permission, or a bill that had moved on
+   * since the list was drawn, resolved into an unhandled rejection and the button simply
+   * did nothing. Whatever comes back is put where the person is looking.
+   */
+  const openDetail = async id => {
+    setError('');
+    try { setDetail(await api(`/boq/${id}`)); }
+    catch (failure) { setError(failure.message); }
+  };
+  const decide = async (id, status) => {
+    setError('');
+    try {
+      await patch(`/boq/${id}`, { status });
+      await reload();
+      setDetail(null);
+    } catch (failure) { setError(failure.message); }
+  };
 
   return <>
     {error && <p className="form-error">{error}</p>}
@@ -112,7 +130,7 @@ function BoqList({ data, reload, can }) {
         <span className="row-actions">
           <button className="status-button" onClick={() => openDetail(boq.id)}>Open</button>
           <button className="status-button" title="Open the printable bill of quantities"
-            onClick={() => openDocument(`/boq/${boq.id}/document`).catch(failure => setError(failure.message))}>
+            onClick={() => openDocument(`/boq/${boq.id}/document`)}>
             <FileText size={13} />PDF
           </button>
         </span>

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Check, PackageCheck } from 'lucide-react';
-import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { api, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 
 const TABS = ['Stock', 'Movements', 'Purchase requests', 'Orders', 'Suppliers'];
@@ -103,7 +103,7 @@ function Requests({ reload, can }) {
       <span>{rupees(row.estimate)}</span>
       <Badge tone={slug(row.status)}>{row.status}</Badge>
       <span className="row-actions">
-        <button className="status-button" onClick={async () => setDetail(await api(`/purchasing/requests/${row.id}`))}>Open</button>
+        <button className="status-button" onClick={() => openRecord(`/purchasing/requests/${row.id}`, setDetail)}>Open</button>
         {can.projects && row.status === 'Pending' && <>
           <button className="status-button" onClick={() => decide(row.id, 'Approved')}>Approve</button>
           <button className="status-button" onClick={() => decide(row.id, 'Rejected')}>Reject</button>
@@ -202,7 +202,7 @@ function Orders({ reload, can }) {
         <span>{shortDate(row.orderDate)}</span>
         <strong>{rupees(row.total)}</strong>
         <Badge tone={slug(row.status)}>{row.status}</Badge>
-        <button className="status-button" onClick={async () => setDetail(await api(`/purchasing/orders/${row.id}`))}>Open</button>
+        <button className="status-button" onClick={() => openRecord(`/purchasing/orders/${row.id}`, setDetail)}>Open</button>
       </Row>)}
     </Table>
     {detail && <OrderDetail order={detail} can={can} close={() => setDetail(null)}

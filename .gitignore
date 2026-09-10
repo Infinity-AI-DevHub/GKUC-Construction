@@ -5,3 +5,4 @@ data/
 *.log
 .claude
 uploads/
+fixtures/dl-template.xlsx

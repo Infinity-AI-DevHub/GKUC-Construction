@@ -1,19 +1,31 @@
 import React, { useState } from 'react';
 import { ArrowDownToLine, Check, Clock3, PencilLine, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
-import { api, localDate, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { api, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { allowedTabs, Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import BiometricImport from './BiometricImport.jsx';
 import { useOptions } from '../options.js';
 import { AttendanceRegister, LeaveRegister } from '../Registers.jsx';
 
-const TABS = ['Employees', 'Attendance', 'Attendance register', 'Biometric import', 'Leave', 'Leave register', 'Overtime', 'Payroll', 'Performance', 'Departments'];
+/* Each tab beside the permissions the server will accept for it — see allowedTabs. */
+const TABS = [
+  ['Employees', ['hr.view', 'hr.manage']],
+  ['Attendance', ['hr.view', 'hr.attendance', 'site.attendance']],
+  ['Attendance register', ['hr.view', 'hr.attendance', 'site.attendance']],
+  ['Biometric import', ['hr.attendance']],
+  ['Leave', ['hr.view', 'hr.leave']],
+  ['Leave register', ['hr.view', 'hr.leave']],
+  ['Overtime', ['hr.view', 'hr.leave']],
+  ['Payroll', ['hr.payroll']],
+  ['Performance', ['hr.payroll', 'hr.manage']],
+  ['Departments', ['hr.view', 'hr.manage']]
+];
 
 /** PID 2.2 — one record per employee covering profile, attendance, leave and overtime. */
 export default function People({ data, reload, can }) {
-  /* Payroll is a tab of its own permission: offering it to someone the server will refuse
-     only sends them into an error they can do nothing about. */
-  const tabs = TABS.filter(name => name !== 'Payroll' || can.payroll);
+  /* Offering a tab the server will refuse only sends somebody into an error they can do
+     nothing about, so each is shown against the permissions it actually needs. */
+  const tabs = allowedTabs(TABS, can);
   const [tab, setTab] = useState(tabs[0]);
   const [open, setOpen] = useState('');
 
@@ -23,10 +35,10 @@ export default function People({ data, reload, can }) {
     'Attendance register': null,
     'Biometric import': null,
     'Leave register': null,
-    Leave: can.hr && 'Record leave',
-    Overtime: can.site && 'Record overtime',
+    Leave: can.leave && 'Record leave',
+    Overtime: can.overtime && 'Record overtime',
     Payroll: can.payroll && 'Run payroll',
-    Performance: can.hr && 'Add review',
+    Performance: can.payroll && 'Add review',
     Departments: can.hr && 'Add department'
   };
 
@@ -78,7 +90,7 @@ function Employees({ data, can }) {
     </div>
     <Table columns={columns} template={template} title="Employee register">
       {data.employees.map(employee => <Row template={template} key={employee.id}
-        onClick={async () => setDetail(await api(`/employees/${employee.id}`))}>
+        onClick={() => openRecord(`/employees/${employee.id}`, setDetail)}>
         <div className="person"><Avatar name={employee.name} /><div><strong>{employee.name}</strong><small>{employee.code}</small></div></div>
         <span>{employee.department || '—'}</span>
         <span>{employee.designation}</span>
@@ -168,9 +180,9 @@ function Payroll({ can }) {
         <strong>{rupees(row.total)}</strong>
         <Badge tone={slug(row.status)}>{row.status}</Badge>
         <span className="row-actions">
-          <button className="status-button" onClick={async () => setDetail(await api(`/payroll/${row.id}`))}>Open</button>
-          {can.hr && row.status === 'Draft' && <button className="status-button" onClick={() => setStatus(row.id, 'Approved')}>Approve</button>}
-          {can.hr && row.status === 'Approved' && <button className="status-button" onClick={() => setStatus(row.id, 'Paid')}>Mark paid</button>}
+          <button className="status-button" onClick={() => openRecord(`/payroll/${row.id}`, setDetail)}>Open</button>
+          {can.payroll && row.status === 'Draft' && <button className="status-button" onClick={() => setStatus(row.id, 'Approved')}>Approve</button>}
+          {can.payroll && row.status === 'Approved' && <button className="status-button" onClick={() => setStatus(row.id, 'Paid')}>Mark paid</button>}
         </span>
       </Row>)}
     </Table>
@@ -291,7 +303,7 @@ function Attendance({ data, reload, can }) {
         <span>{row.in || '—'}</span>
         <span>{row.out || '—'}</span>
         <Badge tone={slug(row.state)}>{row.state}</Badge>
-        {can.site
+        {can.attendance
           ? <span className="row-actions">
             <button className="icon-btn" onClick={() => toggle(row.id)} title={row.in && !row.out ? 'Check out' : 'Check in'}>
               {row.in && !row.out ? <ArrowDownToLine size={17} /> : <Check size={17} />}
@@ -340,7 +352,7 @@ function Leave({ can }) {
       <span>{shortDate(row.toDate)}</span>
       <span>{row.days}</span>
       <Badge tone={slug(row.status)}>{row.status}</Badge>
-      {can.hr && row.status === 'Pending'
+      {can.leave && row.status === 'Pending'
         ? <span className="row-actions">
           <button className="status-button" onClick={() => decide(row.id, 'Approved')}>Approve</button>
           <button className="status-button" onClick={() => decide(row.id, 'Rejected')}>Reject</button>
@@ -367,7 +379,7 @@ function Overtime({ can }) {
       <span>{row.hours}</span>
       <span>{rupees(row.rate)}</span>
       <Badge tone={slug(row.status)}>{row.status}</Badge>
-      {can.hr && row.status === 'Pending'
+      {can.leave && row.status === 'Pending'
         ? <button className="status-button" onClick={() => decide(row.id, 'Approved')}>Approve</button>
         : <span>—</span>}
     </Row>)}
