@@ -101,7 +101,10 @@ export const PERMISSIONS = [
   { key: 'chat.use', department: 'General', label: 'Use the staff messaging' },
   /* Held by everybody by default, like the messaging. What a person can reach inside the
      drive is decided by who shared it with them, not by this. */
-  { key: 'drive.use', department: 'General', label: 'Use the document drive' }
+  { key: 'drive.use', department: 'General', label: 'Use the document drive' },
+  /* Who gets the evening summary on WhatsApp. The MD by default; named as a permission so
+     it can be given to a second person without a code change. */
+  { key: 'reports.daily-summary', department: 'Administration', label: 'Receive the evening summary on WhatsApp' }
 ];
 
 export const PERMISSION_KEYS = PERMISSIONS.map(permission => permission.key);

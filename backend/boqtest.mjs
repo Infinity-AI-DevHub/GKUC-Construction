@@ -1,4 +1,10 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import { ensureFixtures } from './fixtures.mjs';
+const FIX=ensureFixtures();
+/* The downloaded template is an output of this run, not a fixture — it does not belong in
+   the repository, so it is written to the machine's temporary directory. */
+const OUT=os.tmpdir();
 const BASE='http://127.0.0.1:4400/api';
 let pass=0, fail=0;
 const check=(ok,label,detail='')=>{ if(ok)pass++; else {fail++; console.log('   FAIL',label,detail);} };
@@ -13,14 +19,14 @@ const tpl=Buffer.from(await r.arrayBuffer());
 check(r.status===200,'template downloads',String(r.status));
 check(r.headers.get('content-type').includes('spreadsheetml'),'served as a spreadsheet');
 check(tpl.subarray(0,2).toString()==='PK','it is a real zip/xlsx');
-fs.writeFileSync('/tmp/dl-template.xlsx',tpl);
+fs.writeFileSync(`${OUT}/dl-template.xlsx`,tpl);
 console.log(`   ${tpl.length} bytes`);
 const denied=await fetch(BASE+'/boq/template',{headers:{authorization:`Bearer ${store}`}});
 check(denied.status===403,'store keeper cannot download it',String(denied.status));
 
 console.log('\n=== upload the messy filled-in file ===');
 const form=new FormData();
-form.append('file',new Blob([fs.readFileSync('/tmp/boq-filled.xlsx')],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'peradeniya-boq.xlsx');
+form.append('file',new Blob([fs.readFileSync(`${FIX}/boq-filled.xlsx`)],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'peradeniya-boq.xlsx');
 form.append('projectId','4');
 r=await fetch(BASE+'/boq/import',{method:'POST',headers:{authorization:`Bearer ${qs}`},body:form});
 const imported=await r.json();

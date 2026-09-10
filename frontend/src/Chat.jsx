@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Search, Send, Users, Plus, ArrowLeft, Check, CheckCheck, Clock, Trash2, X
-} from 'lucide-react';
-import { api, post, del, initials } from './api.js';
+import { Search, Send, Users, Plus, ArrowLeft, Check, CheckCheck, Trash2, X } from 'lucide-react';
+import { api, post, del } from './api.js';
+import { notice } from './notices.js';
 import { onRealtime } from './realtime.js';
 import { Avatar } from './ui.jsx';
 
@@ -193,12 +192,25 @@ export default function Chat({ user }) {
     }
   };
 
+  /*
+   * Both of these are things a person pressed, so a failure has to be visible. They used to
+   * swallow it: clicking a colleague when the request failed simply did nothing at all, and
+   * withdrawing a message left it on screen with no word of why.
+   */
   const startDirect = async personId => {
-    const result = await post('/chat/direct', { userId: personId }).catch(() => null);
-    if (!result) return;
-    setStarting(false);
-    await loadConversations();
-    openConversation(result.id);
+    try {
+      const result = await post('/chat/direct', { userId: personId });
+      setStarting(false);
+      await loadConversations();
+      openConversation(result.id);
+    } catch (failure) {
+      notice({ title: 'That conversation could not be opened', message: failure.message });
+    }
+  };
+
+  const withdraw = async messageId => {
+    try { await del(`/chat/messages/${messageId}`); }
+    catch (failure) { notice({ title: 'That message was not withdrawn', message: failure.message }); }
   };
 
   const shown = useMemo(() => {
@@ -314,7 +326,7 @@ export default function Chat({ user }) {
                   {mine && !message.deletedAt && (
                     <button type="button" className="chat-withdraw" title="Withdraw this message"
                       aria-label="Withdraw this message"
-                      onClick={() => del(`/chat/messages/${message.id}`).catch(() => {})}>
+                      onClick={() => withdraw(message.id)}>
                       <Trash2 size={12} />
                     </button>
                   )}

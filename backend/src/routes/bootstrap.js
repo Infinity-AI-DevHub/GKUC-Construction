@@ -41,8 +41,17 @@ router.get('/', auth, wrap(async (req, res) => {
     gated(['site.reports','projects.view'], () => query(`SELECT r.id,r.project_id projectId,p.name site,r.supervisor,DATE_FORMAT(r.report_date,'%d %b %Y') date,
       r.workforce,r.work_completed work,r.issue,r.weather,r.delay_hours delayHours
       FROM daily_reports r JOIN projects p ON p.id=r.project_id ORDER BY r.report_date DESC,r.id DESC LIMIT 60`)),
-    /* Pay travels only to the people who maintain it — see routes/employees.js. */
-    gated(['hr.view','hr.manage'], () => query(`SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,
+    /*
+     * The roster.
+     *
+     * Anyone who records something against a named person needs the list of who works here,
+     * so this is not the HR office's alone. A site supervisor holds site.attendance and had
+     * been given an empty list, leaving the attendance form with nothing to choose from —
+     * the one thing he opens the system to do every morning. A store keeper booking a tool
+     * out has to say who took it, and had the same empty list. Pay is a separate matter and
+     * still travels only to the people who maintain it, as in routes/employees.js.
+     */
+    gated(['hr.view','hr.manage','hr.attendance','site.attendance','store.lending'], () => query(`SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,
       ${['hr.payroll', 'hr.manage'].some(key => req.user.permissions.includes(key))
     ? 'e.basic_salary basicSalary,e.daily_rate dailyRate,e.overtime_rate overtimeRate,' : ''}
       e.join_date joinDate,d.name department,e.department_id departmentId
@@ -50,7 +59,11 @@ router.get('/', auth, wrap(async (req, res) => {
     gated(['hr.view','hr.manage'], () => query('SELECT id,name,description FROM departments ORDER BY name')),
     gated(['store.view','store.manage'], () => query(`SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_cost purchaseCost,
       (SELECT p.name FROM equipment_assignments a JOIN projects p ON p.id=a.project_id
-        WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) project
+        WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) project,
+      (SELECT a.due_back FROM equipment_assignments a
+        WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) dueBack,
+      (SELECT DATEDIFF(CURDATE(), a.due_back) FROM equipment_assignments a
+        WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) daysOverdue
       FROM equipment e ORDER BY e.code`)),
     gated(['store.view','store.manage','finance.pay'], () => query('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE active=1 ORDER BY name')),
     gated(['store.view','store.manage'], () => query(`SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,p.name project,u.name requestedBy,

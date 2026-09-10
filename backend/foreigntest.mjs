@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { ensureFixtures } from './fixtures.mjs';
+const FIX=ensureFixtures();
 import crypto from 'node:crypto';
 const BASE='http://127.0.0.1:4400/api';
 let pass=0,fail=0;
@@ -22,7 +24,7 @@ const expected={
 };
 
 for(const name of ['a','b','c','d']){
-  const r=await upload(`/tmp/foreign-${name}.xlsx`);
+  const r=await upload(`${FIX}/foreign-${name}.xlsx`);
   console.log(`\n=== foreign-${name} ===`);
   check(r.status===201, 'accepted', String(r.status)+' '+JSON.stringify(r.body).slice(0,110));
   if(r.status!==201) continue;
@@ -48,7 +50,7 @@ const f2=await fetch(BASE+`/boq/imports/${list[0].id}/file`,{headers:{authorizat
 check(f2.status===403,'store keeper refused',String(f2.status));
 
 console.log('\n=== our own template still reads as before ===');
-const t=await upload('/tmp/boq-filled.xlsx');
+const t=await upload(`${FIX}/boq-filled.xlsx`);
 check(t.status===201,'template accepted',String(t.status));
 check(t.body?.source==='Template','recorded as our template',t.body?.source);
 check(t.body?.items.length===9,'nine lines',String(t.body?.items.length));

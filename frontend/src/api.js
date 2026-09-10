@@ -1,3 +1,5 @@
+import { notice } from './notices.js';
+
 const TOKEN_KEY = 'gkuc-token';
 
 export const token = {
@@ -209,16 +211,58 @@ export const fetchAttachment = async id => {
   return URL.createObjectURL(await response.blob());
 };
 
-/** Opens an attachment in a new tab, revoking the temporary URL once it has loaded. */
-export const openAttachment = async id => {
-  const url = await fetchAttachment(id);
-  window.open(url, '_blank', 'noopener');
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+/**
+ * Loads one record into a detail panel, reporting a failure rather than rejecting.
+ *
+ * Every "Open" button in the product does the same two things — fetch the full record, hand
+ * it to some state — and each had been written inline as `async () => set(await api(path))`.
+ * That shape has no error path at all: a record deleted a moment ago, or one the person may
+ * list but not open, left the button doing nothing and a rejection in the console. Nine of
+ * them were written that way, so the fix belongs here rather than nine times over.
+ */
+export const openRecord = async (path, receive) => {
+  try {
+    receive(await api(path));
+    return true;
+  } catch (failure) {
+    notice({ title: 'That record could not be opened', message: failure.message });
+    return false;
+  }
 };
 
+/*
+ * Opening a file or a document in another tab.
+ *
+ * Both report their own failures and resolve to whether it worked, rather than rejecting.
+ * A rejection is only seen if every call site remembers to catch it, and half of them did
+ * not — so a blocked pop-up produced an uncaught rejection in the console and absolutely
+ * nothing on screen. The commonest failure here is the browser blocking the pop-up, which
+ * is not the caller's business to explain and is the same sentence wherever it happens.
+ */
+const POPUP_BLOCKED = {
+  title: 'Your browser blocked the new tab',
+  message: 'Allow pop-ups for this site, then try again.'
+};
+
+/** Opens an attachment in a new tab, revoking the temporary URL once it has loaded. */
+export const openAttachment = async id => {
+  try {
+    const url = await fetchAttachment(id);
+    const tab = window.open(url, '_blank', 'noopener');
+    if (!tab) { URL.revokeObjectURL(url); notice(POPUP_BLOCKED); return false; }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return true;
+  } catch (failure) {
+    notice({ title: 'That file could not be opened', message: failure.message });
+    return false;
+  }
+};
+
+/** Renders a generated document (a quotation, a BOQ, a declaration) into a new tab. */
 export const openDocument = async path => {
   const tab = window.open('', '_blank');
-  if (tab) tab.document.write('<p style="font:14px sans-serif;padding:20px">Preparing the document…</p>');
+  if (!tab) { notice(POPUP_BLOCKED); return false; }
+  tab.document.write('<p style="font:14px sans-serif;padding:20px">Preparing the document…</p>');
   try {
     const stored = token.get();
     const response = await fetch(`/api${path}`, {
@@ -229,13 +273,14 @@ export const openDocument = async path => {
       throw new Error(body.error || 'That document could not be produced');
     }
     const html = await response.text();
-    if (!tab) throw new Error('Allow pop-ups for this site to open the document');
     tab.document.open();
     tab.document.write(html);
     tab.document.close();
+    return true;
   } catch (failure) {
-    tab?.close();
-    throw failure;
+    tab.close();
+    notice({ title: 'That document could not be opened', message: failure.message });
+    return false;
   }
 };
 

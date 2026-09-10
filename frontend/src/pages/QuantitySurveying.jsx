@@ -61,7 +61,21 @@ function Quotations({ can, reload }) {
   const [error, setError] = useState('');
   const load = () => api('/qs/quotations').then(setRows).catch(() => setRows([]));
   useLiveList(load);
-  const setStatus = async (id, status) => { await patch(`/qs/quotations/${id}`, { status }); await load(); await reload(); };
+
+  /* A refused status change has to say so; it used to reject into nothing. */
+  const setStatus = async (id, status) => {
+    setError('');
+    try {
+      await patch(`/qs/quotations/${id}`, { status });
+      await load();
+      await reload();
+    } catch (failure) { setError(failure.message); }
+  };
+  const openQuotation = async id => {
+    setError('');
+    try { setDetail(await api(`/qs/quotations/${id}`)); }
+    catch (failure) { setError(failure.message); }
+  };
 
   return <>
     {error && <p className="form-error">{error}</p>}
@@ -74,9 +88,9 @@ function Quotations({ can, reload }) {
         <strong>{rupees(row.total)}</strong>
         <Badge tone={slug(row.status)}>{row.status}</Badge>
         <span className="row-actions">
-          <button className="status-button" onClick={async () => setDetail(await api(`/qs/quotations/${row.id}`))}>Open</button>
+          <button className="status-button" onClick={() => openQuotation(row.id)}>Open</button>
           <button className="status-button" title="Open the client-ready document"
-            onClick={() => openDocument(`/qs/quotations/${row.id}/document`).catch(failure => setError(failure.message))}>
+            onClick={() => openDocument(`/qs/quotations/${row.id}/document`)}>
             <FileText size={13} />PDF
           </button>
           {can.quotation && row.status !== 'Accepted' && (
@@ -642,7 +656,7 @@ function SubcontractQuotationForm({ data, subcontractors, close, reload }) {
     <SelectField name="projectId" label="For which project"
       options={[['', 'Not tied to a project yet'], ...data.projects.map(project => [project.id, project.name])]} />
     <Field name="quoteDate" label="Dated" type="date" defaultValue={todayInput()} />
-    <Field name="validityDays" label="Stands for (days)" type="number" min="1" defaultValue="7" required={false} />
+    <Field name="validityDays" label="Stands for (days)" type="number" min="1" max="365" defaultValue="7" required={false} />
     <Field name="siteAddress" label="Delivery / site address" wide required={false}
       placeholder="Hemas Manufactures, Industrial Zone, Dankotuwa" />
     <Field name="contactPerson" label="Their contact" required={false} />
@@ -698,8 +712,8 @@ function QuotationForm({ data, close, reload }) {
     <Field name="title" label="Quotation title" required={false} />
     <Field name="quoteDate" label="Quotation date" type="date" defaultValue={todayInput()} />
     <Field name="validUntil" label="Valid until" type="date" required={false} />
-    <Field name="markupPercent" label="Markup %" type="number" step="0.01" min="0" defaultValue="10" required={false} />
-    <Field name="vatPercent" label="VAT %" type="number" step="0.01" min="0" defaultValue="18" required={false} />
+    <Field name="markupPercent" label="Markup %" type="number" step="0.01" min="0" max="100" defaultValue="10" required={false} />
+    <Field name="vatPercent" label="VAT %" type="number" step="0.01" min="0" max="100" defaultValue="18" required={false} />
     <TextArea name="notes" label="Notes to the client" required={false} placeholder="Optional" />
     <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
       Every priced line is copied from the BOQ, so nothing is retyped. If the client accepts,
@@ -785,7 +799,7 @@ function TenderForm({ close, reload }) {
     <Field name="documentFee" label="Document fee (LKR)" type="number" min="0" defaultValue="0" required={false} />
     <Field name="closingDate" label="Bids close on" type="date" defaultValue={todayInput()} />
     <Field name="closingTime" label="…at" type="time" defaultValue="10:00" required={false} />
-    <Field name="validityDays" label="Bid valid for (days)" type="number" min="1" defaultValue="91" required={false} />
+    <Field name="validityDays" label="Bid valid for (days)" type="number" min="1" max="365" defaultValue="91" required={false} />
 
     <Field name="securityAmount" label="Bid security (LKR)" type="number" min="0" defaultValue="0" required={false} />
     <SelectField name="securityForm" label="Security form"

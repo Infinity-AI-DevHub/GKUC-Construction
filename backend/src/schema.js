@@ -1045,6 +1045,193 @@ async function createQsTables() {
  * by being moved. Making something public is always a decision somebody took about that
  * thing, and it is written into the audit trail.
  */
+/*
+ * The money the company is owed, and the money it holds on trust.
+ *
+ * Everything here already existed on the supplier side — bills coming in, and reminders when
+ * they fall due. This is the other direction, which for a contractor is the harder half: an
+ * interim certificate is not a simple bill. Retention is held back, an advance is recovered
+ * against it, and the tax may be charged, suspended under SVAT, or not applicable at all.
+ * Getting those three wrong is how a contractor invoices confidently for the wrong figure.
+ */
+async function createReceivableTables() {
+  await addColumn('company_settings', 'vat_number', 'VARCHAR(40) NULL');
+  await addColumn('company_settings', 'svat_number', 'VARCHAR(40) NULL');
+  await addColumn('company_settings', 'default_vat_rate', 'DECIMAL(5,2) NOT NULL DEFAULT 18.00');
+
+  await query(`CREATE TABLE IF NOT EXISTS client_invoices (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    reference VARCHAR(60) NOT NULL UNIQUE,
+    project_id BIGINT UNSIGNED NOT NULL,
+    client VARCHAR(180) NOT NULL,
+    /* An interim certificate bills the work done to date; a final one closes the account. */
+    kind ENUM('Interim','Final','Advance','Variation','Other') NOT NULL DEFAULT 'Interim',
+    title VARCHAR(200) NOT NULL,
+    invoice_date DATE NOT NULL,
+    due_date DATE NULL,
+    period_from DATE NULL,
+    period_to DATE NULL,
+
+    /* Work in this certificate, before anything is added or held back. */
+    gross DECIMAL(15,2) NOT NULL DEFAULT 0,
+
+    /*
+     * How the tax is treated.
+     *   Standard  — VAT charged and collected in the ordinary way.
+     *   SVAT      — suspended: the figure is shown and a credit voucher passes instead of
+     *               money, which is how registered purchasers here settle.
+     *   Exempt    — no VAT applies to this work.
+     */
+    tax_treatment ENUM('Standard','SVAT','Exempt') NOT NULL DEFAULT 'Standard',
+    vat_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+    vat_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    svat_voucher VARCHAR(60) NULL,
+
+    /* Held back against defects, released later — tracked in retentions once certified. */
+    retention_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+    retention_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    /* An advance already paid is recovered a slice at a time out of each certificate. */
+    advance_recovery DECIMAL(15,2) NOT NULL DEFAULT 0,
+    other_deductions DECIMAL(15,2) NOT NULL DEFAULT 0,
+    deduction_note VARCHAR(300) NULL,
+
+    net_payable DECIMAL(15,2) NOT NULL DEFAULT 0,
+    paid_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    status ENUM('Draft','Issued','Part paid','Paid','Cancelled') NOT NULL DEFAULT 'Draft',
+    notes VARCHAR(1000) NULL,
+    created_by BIGINT UNSIGNED NOT NULL,
+    issued_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_cinvoice_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_cinvoice_user FOREIGN KEY(created_by) REFERENCES users(id),
+    INDEX idx_cinvoice_due (status, due_date)
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS client_invoice_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    invoice_id BIGINT UNSIGNED NOT NULL,
+    boq_item_id BIGINT UNSIGNED NULL,
+    description VARCHAR(300) NOT NULL,
+    unit VARCHAR(30) NULL,
+    quantity DECIMAL(14,3) NOT NULL DEFAULT 0,
+    rate DECIMAL(14,2) NOT NULL DEFAULT 0,
+    amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    CONSTRAINT fk_cinvoice_item FOREIGN KEY(invoice_id) REFERENCES client_invoices(id) ON DELETE CASCADE,
+    INDEX idx_cinvoice_item (invoice_id)
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS client_receipts (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    invoice_id BIGINT UNSIGNED NOT NULL,
+    amount DECIMAL(15,2) NOT NULL,
+    received_date DATE NOT NULL,
+    method VARCHAR(60) NOT NULL DEFAULT 'Bank transfer',
+    reference VARCHAR(120) NULL,
+    recorded_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_receipt_invoice FOREIGN KEY(invoice_id) REFERENCES client_invoices(id) ON DELETE CASCADE,
+    CONSTRAINT fk_receipt_recorder FOREIGN KEY(recorded_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+
+  /*
+   * Bank guarantees.
+   *
+   * A contractor's bonds are money the bank has promised on their behalf, against security
+   * the company has actually put up. They expire, and an expired advance-payment bond on a
+   * live contract is a breach; an unreleased one after completion is the company's own cash
+   * sitting in somebody else's account. Both are worth being told about.
+   */
+  await query(`CREATE TABLE IF NOT EXISTS bank_bonds (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    reference VARCHAR(60) NOT NULL UNIQUE,
+    project_id BIGINT UNSIGNED NULL,
+    kind ENUM('Advance payment','Performance','Retention','Bid','Other') NOT NULL DEFAULT 'Performance',
+    beneficiary VARCHAR(180) NOT NULL,
+    bank VARCHAR(180) NOT NULL,
+    bond_number VARCHAR(80) NULL,
+    amount DECIMAL(15,2) NOT NULL,
+    /* What the bank holds against it — usually cash or a lien, and the company's money. */
+    margin_held DECIMAL(15,2) NOT NULL DEFAULT 0,
+    commission DECIMAL(15,2) NOT NULL DEFAULT 0,
+    issued_date DATE NOT NULL,
+    expiry_date DATE NOT NULL,
+    status ENUM('Live','Expired','Released','Called') NOT NULL DEFAULT 'Live',
+    released_date DATE NULL,
+    notes VARCHAR(600) NULL,
+    created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_bond_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_bond_user FOREIGN KEY(created_by) REFERENCES users(id),
+    INDEX idx_bond_expiry (status, expiry_date)
+  ) ENGINE=InnoDB`);
+
+  /*
+   * Petty cash.
+   *
+   * A float given to a site, spent in small amounts, topped up when it runs low. Kept as a
+   * running account rather than a balance field so the balance is always the sum of what
+   * happened — a stored balance and a list of movements will disagree eventually, and then
+   * nobody knows which to believe.
+   */
+  await query(`CREATE TABLE IF NOT EXISTS petty_cash_floats (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    project_id BIGINT UNSIGNED NULL,
+    holder_id BIGINT UNSIGNED NULL,
+    holder_name VARCHAR(120) NOT NULL,
+    /* What it is meant to hold, so a top-up knows what it is topping up to. */
+    ceiling DECIMAL(15,2) NOT NULL DEFAULT 0,
+    low_at DECIMAL(15,2) NOT NULL DEFAULT 0,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_float_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_float_holder FOREIGN KEY(holder_id) REFERENCES users(id),
+    CONSTRAINT fk_float_creator FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+
+  await query(`CREATE TABLE IF NOT EXISTS petty_cash_entries (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    float_id BIGINT UNSIGNED NOT NULL,
+    kind ENUM('Top up','Spend','Return','Adjustment') NOT NULL,
+    /* Positive puts money in, negative takes it out. One column, so the balance is a sum. */
+    amount DECIMAL(15,2) NOT NULL,
+    entry_date DATE NOT NULL,
+    description VARCHAR(300) NOT NULL,
+    category VARCHAR(60) NULL,
+    project_id BIGINT UNSIGNED NULL,
+    receipt_attachment_id BIGINT UNSIGNED NULL,
+    recorded_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_petty_float FOREIGN KEY(float_id) REFERENCES petty_cash_floats(id) ON DELETE CASCADE,
+    CONSTRAINT fk_petty_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_petty_user FOREIGN KEY(recorded_by) REFERENCES users(id),
+    INDEX idx_petty_float (float_id, entry_date)
+  ) ENGINE=InnoDB`);
+
+  /*
+   * Tools go out and are meant to come back.
+   *
+   * The lending record existed but had no date by which anything was due, so nothing could
+   * be overdue and nothing was ever chased. A due date is what turns a list of what went out
+   * into a list of what has not come back.
+   */
+  await addColumn('equipment_assignments', 'due_back', 'DATE NULL');
+  await addColumn('equipment_assignments', 'issued_condition', "VARCHAR(60) NULL");
+  await addColumn('equipment_assignments', 'returned_condition', "VARCHAR(60) NULL");
+  await addColumn('equipment_assignments', 'employee_id', 'BIGINT UNSIGNED NULL');
+
+  /*
+   * What each person is entitled to in a year.
+   *
+   * Held per employee rather than as one company figure: the statutory minimum is a floor,
+   * and a firm that has been running a while has people on better terms than that. A single
+   * constant would quietly overwrite those arrangements.
+   */
+  await addColumn('employees', 'annual_leave_entitlement', 'DECIMAL(5,1) NOT NULL DEFAULT 14');
+  await addColumn('employees', 'casual_leave_entitlement', 'DECIMAL(5,1) NOT NULL DEFAULT 7');
+}
+
 async function createDriveTables() {
   await query(`CREATE TABLE IF NOT EXISTS drive_items (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1679,7 +1866,74 @@ async function migrateExistingInstalls() {
   await addForeignKey('fleet', 'fk_fleet_driver', 'CONSTRAINT fk_fleet_driver FOREIGN KEY(driver_employee_id) REFERENCES employees(id)');
   await addIndex('notifications', 'uq_notification_dedupe', 'UNIQUE KEY uq_notification_dedupe(dedupe_key)');
   await addForeignKey('attendance', 'fk_attendance_employee', 'CONSTRAINT fk_attendance_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');
+  await onlyOneOpenLendingPerAsset();
 }
+
+/**
+ * One asset can be out on one lending at a time — enforced by the database, not by hope.
+ *
+ * The application already refuses to lend out something that is already out, but that check
+ * could only ever be as good as the column it read, and a tool was found committed to two
+ * sites at once. Every screen that lists equipment then showed it twice, and React dropped
+ * one of the two.
+ *
+ * A partial unique index would be the natural fit and MySQL has none; a generated column
+ * standing in for one cannot be added to a table that carries foreign keys. So the rule is
+ * stated as a trigger, the way the gallery's evidence lock already is.
+ */
+async function onlyOneOpenLendingPerAsset() {
+  /* Older duplicates are closed first: a rule cannot be imposed on data that already breaks
+     it, and refusing to migrate would leave the customer with no rule at all. */
+  const duplicates = await query(`
+    SELECT equipment_id, MAX(id) keep FROM equipment_assignments
+     WHERE returned_at IS NULL GROUP BY equipment_id HAVING COUNT(*) > 1`);
+  for (const row of duplicates) {
+    await query(
+      `UPDATE equipment_assignments SET returned_at = COALESCE(due_back, assigned_at),
+              condition_note = CONCAT(COALESCE(condition_note,''),
+                ' [closed automatically: superseded by a later lending of the same asset]')
+        WHERE equipment_id = ? AND returned_at IS NULL AND id <> ?`, [row.equipment_id, row.keep]);
+  }
+  if (duplicates.length) {
+    console.warn(`Closed stale lendings on ${duplicates.length} asset(s) that were out twice.`);
+  }
+
+  /*
+   * The status column is a summary of the lending table, so drift is repaired here too: an
+   * asset with an open lending reads Assigned, one without reads Available. Retired and
+   * Maintenance are left alone — those say something the lending table does not.
+   */
+  await query(`
+    UPDATE equipment eq SET eq.status='Assigned'
+     WHERE eq.status='Available'
+       AND EXISTS (SELECT 1 FROM equipment_assignments a
+                    WHERE a.equipment_id=eq.id AND a.returned_at IS NULL)`);
+  await query(`
+    UPDATE equipment eq SET eq.status='Available'
+     WHERE eq.status='Assigned'
+       AND NOT EXISTS (SELECT 1 FROM equipment_assignments a
+                        WHERE a.equipment_id=eq.id AND a.returned_at IS NULL)`);
+
+  const existing = await query(
+    `SELECT TRIGGER_NAME FROM information_schema.triggers
+      WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='equipment_one_open_lending'`);
+  if (existing.length) return;
+  try {
+    await ddl(`CREATE TRIGGER equipment_one_open_lending BEFORE INSERT ON equipment_assignments
+      FOR EACH ROW
+      BEGIN
+        IF NEW.returned_at IS NULL AND EXISTS (
+          SELECT 1 FROM equipment_assignments a
+           WHERE a.equipment_id = NEW.equipment_id AND a.returned_at IS NULL) THEN
+          SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'That equipment is already out. Record its return first.';
+        END IF;
+      END`);
+  } catch (error) {
+    console.warn('Equipment lending rule not installed (needs the TRIGGER privilege):', error.message);
+  }
+}
+
 
 /**
  * Writes the starting roles once. It never rewrites an existing role's permissions, so a
@@ -1784,6 +2038,7 @@ export async function migrate() {
   await createOcrTables();
   await createOnboardingColumns();
   await createChatTables();
+  await createReceivableTables();
   await createDriveTables();
   await createIntegrityTables();
   await createOptionTables();

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BellRing } from 'lucide-react';
+import { BellRing, Send } from 'lucide-react';
 import { api, patch, post, slug } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Page, Row, SelectField, Table, Tabs, useLiveList } from '../ui.jsx';
 import AccessControl from './AccessControl.jsx';
@@ -11,7 +11,7 @@ import Messaging from '../Messaging.jsx';
 import OptionLists from '../OptionLists.jsx';
 import Integrity from '../Integrity.jsx';
 
-export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Messages', 'Lists', 'Fraud watch', 'Audit log', 'My account'];
+export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Evening summary', 'Messages', 'Lists', 'Fraud watch', 'Audit log', 'My account'];
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
 export default function Admin({ can, user, reload, initialTab = TABS[0], onTabChange }) {
@@ -34,6 +34,7 @@ export default function Admin({ can, user, reload, initialTab = TABS[0], onTabCh
     {tab === 'Documents' && <DocumentSettings can={can} />}
     {tab === 'Designer' && <DocumentDesigner can={can} />}
     {tab === 'Notifications' && <Notifications can={can} reload={reload} />}
+    {tab === 'Evening summary' && <EveningSummary can={can} />}
     {tab === 'Messages' && (can.messages
       ? <Messaging />
       : <p className="empty-state">You do not have permission to send messages.</p>)}
@@ -113,6 +114,53 @@ function Notifications({ can, reload }) {
 }
 
 const AUDIT_TEMPLATE = '190px minmax(150px,1fr) 140px minmax(150px,1fr) 130px';
+
+/**
+ * What tonight's message to the MD will say.
+ *
+ * Shown as the message rather than as a dashboard on purpose: it goes out as a block of
+ * WhatsApp text, and the only way to know whether that text reads well is to read it.
+ */
+function EveningSummary({ can }) {
+  const [preview, setPreview] = useState(null);
+  const [error, setError] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(null);
+
+  const load = () => api('/summary/preview')
+    .then(result => { setPreview(result); setError(''); })
+    .catch(failure => { setPreview(null); setError(failure.message); });
+  useLiveList(load);
+
+  const sendNow = async () => {
+    setSending(true);
+    setError('');
+    try { setSent(await post('/summary/send')); }
+    catch (failure) { setError(failure.message); }
+    finally { setSending(false); }
+  };
+
+  return <section className="table-panel">
+    <div className="table-tools">
+      <h2>Evening summary</h2>
+      {can.audit && <button className="secondary" disabled={sending} onClick={sendNow}>
+        <Send size={14} />{sending ? 'Sending…' : 'Send it now'}
+      </button>}
+    </div>
+    <div className="summary-preview">
+      <p className="risk-intro">
+        This goes out each evening to everyone holding the daily summary permission. Nobody
+        is sent anything until a WhatsApp number is on their account.
+      </p>
+      {error && <p className="form-error">{error}</p>}
+      {sent && <p className="form-note">
+        Sent to {sent.sent.length} recipient{sent.sent.length === 1 ? '' : 's'}.
+      </p>}
+      {preview ? <pre className="summary-text">{preview.text}</pre>
+        : !error && <p className="empty-state">Building tonight's message…</p>}
+    </div>
+  </section>;
+}
 
 function AuditLog() {
   const [rows, setRows] = useState([]);

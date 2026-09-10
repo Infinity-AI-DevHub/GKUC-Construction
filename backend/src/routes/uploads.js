@@ -85,6 +85,35 @@ router.get('/limits', auth, (_req, res) => res.json({
  * search must never become a way to learn the contents of a payslip or a contract that the
  * ordinary listing would refuse.
  */
+/*
+ * What a person typed, turned into something the full-text parser will accept.
+ *
+ * The search term used to be handed to MATCH ... IN BOOLEAN MODE exactly as typed, which
+ * gets two things wrong. The punctuation in it is not punctuation to that parser, it is
+ * operators: the hyphen means NOT, so searching for a reference like QUO-2026-0042 asked
+ * for documents containing QUO but *not* 2026 and *not* 0042 — reliably excluding the one
+ * document being looked for. Every reference this company issues is hyphenated. And an
+ * expression the parser cannot read at all, which an email address or a stray +++ produces,
+ * raised a syntax error that reached the person as "Unexpected server error".
+ *
+ * So the term is reduced to the words inside it and rebuilt: every word required, each
+ * allowed to match on its prefix, which is how somebody half-remembering a file name
+ * expects search to behave. Words shorter than the index's minimum are dropped because the
+ * index does not hold them; requiring one would match nothing at all.
+ */
+const MIN_INDEXED_WORD = Number(process.env.FT_MIN_WORD_LEN || 3);
+
+export function searchExpression(term) {
+  const words = String(term).match(/[\p{L}\p{N}]+/gu) || [];
+  const usable = words.filter(word => word.length >= MIN_INDEXED_WORD);
+  return {
+    words,
+    usable,
+    /* e.g. QUO-2026-0042 -> +QUO* +2026* +0042* */
+    expression: usable.map(word => `+${word}*`).join(' ')
+  };
+}
+
 router.get('/search/documents', auth, wrap(async (req, res) => {
   const term = String(req.query.q || '').trim();
   if (term.length < 3) return res.json({ term, results: [], note: 'Type at least three characters' });
@@ -95,6 +124,18 @@ router.get('/search/documents', auth, wrap(async (req, res) => {
     .map(([type]) => type);
   if (!readable.length) return res.json({ term, results: [] });
 
+  const { usable, expression } = searchExpression(term);
+  if (!expression) {
+    return res.json({
+      term, results: [],
+      note: `Use a word of at least ${MIN_INDEXED_WORD} letters or numbers`
+    });
+  }
+
+  /* The excerpt is centred on the first real word, since the whole term as typed —
+     punctuation and all — may not appear in the text verbatim. */
+  const anchor = usable[0];
+
   const rows = await query(
     `SELECT a.id,a.owner_type ownerType,a.owner_id ownerId,a.filename,a.title,a.mime,
        t.source,t.pages,t.characters,
@@ -104,7 +145,7 @@ router.get('/search/documents', auth, wrap(async (req, res) => {
      WHERE a.owner_type IN (${readable.map(() => '?').join(',')})
        AND MATCH(t.content) AGAINST (? IN BOOLEAN MODE)
      ORDER BY score DESC LIMIT 50`,
-    [term, term, ...readable, term]);
+    [expression, anchor, ...readable, expression]);
 
   res.json({ term, results: rows });
 }));

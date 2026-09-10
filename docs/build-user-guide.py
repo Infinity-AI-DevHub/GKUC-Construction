@@ -178,7 +178,12 @@ contents = [
     ('18', 'Messaging your colleagues', 'Chats and groups inside the system'),
     ('19', 'The fraud and mistake watch', 'What the system checks for on its own'),
     ('20', 'The document drive', 'Storing and sharing files'),
-    ('21', 'If something looks wrong', 'Simple things to check first'),
+    ('21', 'Billing the client', 'Certificates, VAT and SVAT, retention and bonds'),
+    ('22', 'Petty cash', 'The float held on each site'),
+    ('23', 'The HR registers', 'The muster roll and the leave register'),
+    ('24', 'Lending tools out', 'Due-back dates and what comes back'),
+    ('25', 'The evening summary', 'The message that goes to the Managing Director'),
+    ('26', 'If something looks wrong', 'Simple things to check first'),
 ]
 story += table([['', 'Section', 'What it covers']] +
                [[n, f'<b>{t}</b>', d] for n, t, d in contents],
@@ -891,7 +896,155 @@ A(Paragraph(
     'actually produces are fine.', S['body']))
 A(PageBreak())
 
-A(Paragraph('21. If something looks wrong', S['h1']))
+A(Paragraph('21. Billing the client', S['h1']))
+A(Paragraph(
+    'An interim payment certificate is not one figure. It is the work certified for the '
+    'period, the tax on it, the retention the client holds back, and whatever advance is '
+    'being recovered &mdash; and the amount the client is asked for is what is left after '
+    'all four. The system shows the four steps as you type them, so the figure is checked '
+    'before it goes out rather than after it comes back queried.', S['body']))
+A(steps([
+    'Open <b>Finance</b> and go to the <b>Client invoices</b> tab.',
+    'Press <b>Raise a certificate</b>. Choose the project and give it a title &mdash; "IPA No. 3 &mdash; works to 25 August" reads better in six months than "Invoice 3".',
+    'Add a line for each item of work: what it is, the unit, the quantity and the rate.',
+    'Set the tax treatment, the retention percentage, and anything being recovered or deducted.',
+    'Check the working at the bottom of the form, then save it as a draft.',
+    'When you are satisfied, press <b>Issue</b> on the row. Nothing is owed by the client until you do.',
+]))
+story += note(
+    'The arithmetic is the system\'s, not the screen\'s',
+    'Every total on a certificate is worked out again on the server when you save it. The '
+    'figures shown as you type are there so a person can check them &mdash; the company '
+    'stands behind what is stored, and that is calculated in one place.')
+
+A(Paragraph('Standard VAT, SVAT and exempt', S['h2']))
+story += table([
+    ['Treatment', 'What happens'],
+    ['<b>Standard VAT</b>', 'VAT is added at the rate you set and the client pays it with the invoice.'],
+    ['<b>SVAT &mdash; suspended</b>', 'The VAT is shown on the certificate but not collected. A credit voucher passes instead, so it is <b>not</b> part of what the client pays.'],
+    ['<b>Exempt</b>', 'No VAT at all.'],
+], [50 * mm, 120 * mm])
+A(Paragraph(
+    'If you record an SVAT certificate as standard, the system will show the client owing '
+    'the VAT as well &mdash; and the money will be chased. Get this right at the point of '
+    'raising it.', S['body']))
+
+A(Paragraph('Money coming in', S['h2']))
+A(steps([
+    'When a payment arrives, press <b>Record payment</b> on the invoice row.',
+    'Enter what was actually received, the date, and the bank reference.',
+    'The invoice moves to <b>Part paid</b> or <b>Paid</b> on its own, and the money is posted as project income at the same time. Do not also record it under Income &mdash; that would count it twice.',
+]))
+A(Paragraph(
+    'The <b>How long it has been owed</b> table underneath sorts what is outstanding into '
+    'not yet due, one to thirty days, thirty-one to sixty, and over sixty. Anything in the '
+    'last column has been owed for two months and somebody needs to make a phone call.', S['body']))
+
+A(Paragraph('Retention', S['h2']))
+A(Paragraph(
+    'Retention is money the client keeps back against defects. It is deducted on every '
+    'certificate and released later, so it is your money held elsewhere &mdash; the total '
+    'across all live certificates is shown at the top of the tab so it is never forgotten.', S['body']))
+
+A(Paragraph('Bank guarantees', S['h2']))
+A(Paragraph(
+    'The <b>Bonds</b> tab holds the advance payment, performance, retention and bid bonds the '
+    'bank has issued on the company\'s behalf. Record each one with its expiry date and the '
+    'margin the bank is holding against it.', S['body']))
+story += note(
+    'Both ends of a bond matter',
+    'A bond that lapses while the contract is live is a breach the client can act on. A bond '
+    'still live after the work is finished is the company\'s own cash sitting in the bank\'s '
+    'account. The system warns about a bond within a month of expiry, and both of those are '
+    'why.')
+A(PageBreak())
+
+A(Paragraph('22. Petty cash', S['h1']))
+A(Paragraph(
+    'Each site keeps a float for the small things &mdash; diesel, a courier, refreshments for '
+    'a pour. The <b>Petty cash</b> tab under Finance keeps that float honest.', S['body']))
+A(steps([
+    'Press <b>Open a float</b> to start one: who holds it, which site, how much it holds, and the level at which it should be topped up.',
+    'Click the float\'s card to see everything that has moved through it.',
+    'Press <b>Record a movement</b> for each top-up, spend or return, with a description of what it was for.',
+]))
+A(Paragraph(
+    'The balance shown is always the sum of what has been recorded &mdash; it is never a '
+    'figure somebody typed. A spend on a site is also posted as a cost against that project, '
+    'so petty cash appears in the project\'s budget like every other cost. Spending more than '
+    'the float holds is refused: record the top-up first.', S['body']))
+A(PageBreak())
+
+A(Paragraph('23. The HR registers', S['h1']))
+A(Paragraph(
+    'Two views that HR offices are asked for by name. Neither holds anything new &mdash; it '
+    'is the attendance and leave you already record, in the shape somebody needs it in.', S['body']))
+
+A(Paragraph('The attendance register', S['h2']))
+A(Paragraph(
+    'Under <b>People</b>, the <b>Attendance register</b> tab is the muster roll: every '
+    'employee down the side, every day of the month across, and a mark in each square.', S['body']))
+story += table([
+    ['Mark', 'Meaning'],
+    ['<b>P</b>', 'On site'],
+    ['<b>L</b>', 'Late &mdash; counted as present, but recorded as late'],
+    ['<b>V</b>', 'On approved leave'],
+    ['<b>A</b>', 'Absent'],
+    ['<b>&middot;</b>', 'Nothing recorded for that person on that day'],
+], [30 * mm, 140 * mm])
+A(Paragraph(
+    'Change the month at the top. On a phone the roll scrolls sideways with the names held '
+    'against the left edge, the way a paper roll is read.', S['body']))
+
+A(Paragraph('The leave register', S['h2']))
+A(Paragraph(
+    'The <b>Leave register</b> tab shows a year at a time: annual and casual leave taken '
+    'against what each person is entitled to, and what is left.', S['body']))
+story += note(
+    'Pending days are counted separately',
+    'Days awaiting approval are shown in their own column, not folded into days taken. '
+    'Somebody with two days left and three still pending is a conversation to have before '
+    'the approval, not after it.')
+A(PageBreak())
+
+A(Paragraph('24. Lending tools out', S['h1']))
+A(Paragraph(
+    'Equipment leaves the store and does not always come back. The lending record now asks '
+    'two more things, and both of them are the ones that get argued about later.', S['body']))
+A(steps([
+    'Open <b>Fleet &amp; equipment</b> and go to the <b>Equipment</b> tab.',
+    'Press <b>Assign</b> on the row. Choose the project and the person responsible.',
+    'Set the <b>due back</b> date, and record the <b>condition on issue</b>.',
+    'When it returns, press <b>Return</b> and record the condition it came back in.',
+]))
+A(Paragraph(
+    'The register shows the due-back date on every item that is out, and anything past it is '
+    'marked in red with how many days late it is. The store keeper and the site are both '
+    'alerted, daily, until it comes back.', S['body']))
+story += note(
+    'Record the condition both ways',
+    'A tool that goes out worn and comes back worn is nobody\'s fault. A tool that goes out '
+    'good and comes back damaged is a conversation &mdash; but only if somebody wrote down '
+    'that it went out good.')
+A(PageBreak())
+
+A(Paragraph('25. The evening summary', S['h1']))
+A(Paragraph(
+    'Every evening the system sends a short WhatsApp message summarising the day: how many '
+    'people were on site, what was finished and what is overdue, what was spent and what came '
+    'in, what is owed by clients, and anything that needs a decision.', S['body']))
+A(steps([
+    'Go to <b>Administration</b> and open the <b>Evening summary</b> tab.',
+    'The message shown is exactly what will be sent tonight, built from today\'s figures.',
+    'Press <b>Send it now</b> if it is wanted early, or to check the WhatsApp connection.',
+]))
+A(Paragraph(
+    'It goes to everybody holding the daily summary permission &mdash; normally the Managing '
+    'Director &mdash; and only to those with a WhatsApp number on their account. Who receives '
+    'it is changed under <b>Access control</b>, like every other permission.', S['body']))
+A(PageBreak())
+
+A(Paragraph('26. If something looks wrong', S['h1']))
 story += table([
     ['What you see', 'What to do'],
     ['<b>The screen is not updating</b>', 'Look under the bell for the small green dot. No dot means your internet has dropped. It reconnects on its own; if it does not, refresh the page.'],

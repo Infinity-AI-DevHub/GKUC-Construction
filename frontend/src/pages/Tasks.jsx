@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
-import { api, patch, post, slug, todayInput } from '../api.js';
+import { api, openRecord, patch, post, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 
@@ -28,7 +28,7 @@ export default function Tasks({ data, reload, can }) {
     action={can.site ? 'Create task' : null} onAction={() => setCreating(true)}>
     <Tabs tabs={FILTERS} active={filter} onChange={setFilter} />
     <Table columns={COLUMNS} template={TEMPLATE} empty="No tasks in this view.">
-      {shown.map(task => <Row template={TEMPLATE} key={task.id} onClick={async () => setDetail(await api(`/tasks/${task.id}`))}>
+      {shown.map(task => <Row template={TEMPLATE} key={task.id} onClick={() => openRecord(`/tasks/${task.id}`, setDetail)}>
         <div><strong>{task.title}</strong><small>{task.project}</small></div>
         <div className="person"><Avatar name={task.assignee} /><span>{task.assignee}</span></div>
         <span className={task.due === 'Yesterday' ? 'overdue' : ''}>{task.due}</span>

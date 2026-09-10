@@ -423,3 +423,61 @@ test('deactivating a user ends their session', async () => {
   await call(owner, 'PATCH', `/users/${created.body.id}`, { active: false });
   assert.equal((await call(viewer, 'GET', '/bootstrap')).status, 401);
 });
+
+/*
+ * Searching inside documents.
+ *
+ * Both of these were live defects. A reference is the commonest thing anybody searches for
+ * and every one this company issues is hyphenated, which the full-text parser reads as a
+ * string of NOT operators — so the search reliably excluded the document being looked for.
+ * And an expression that parser cannot read at all, which an ordinary email address
+ * produces, came back to the person as "Unexpected server error".
+ */
+test('a hyphenated reference is searched for as its words, not as NOT operators', async () => {
+  const { searchExpression } = await import('../src/routes/uploads.js');
+  assert.equal(searchExpression('QUO-2026-0042').expression, '+QUO* +2026* +0042*');
+  assert.equal(searchExpression('delivery note').expression, '+delivery* +note*');
+});
+
+test('words too short for the index are dropped rather than required', async () => {
+  const { searchExpression } = await import('../src/routes/uploads.js');
+  assert.equal(searchExpression('EQ-RACE-6087').expression, '+RACE* +6087*');
+  assert.equal(searchExpression('a b c').expression, '');
+});
+
+test('punctuation a person types never reaches the full-text parser', async () => {
+  const { searchExpression } = await import('../src/routes/uploads.js');
+  for (const typed of ['a@b.com', '+++', '"unclosed', '~test', 'ref (2026)', '>>>']) {
+    const words = searchExpression(typed).expression.split(' ').filter(Boolean);
+    for (const word of words) {
+      assert.match(word, /^\+[\p{L}\p{N}]+\*$/u, `${typed} produced an unsafe term: ${word}`);
+    }
+  }
+});
+
+test('a document is found by the reference printed on it', async () => {
+  const token = await login();
+  const project = await call(token, 'POST', '/projects', {
+    name: 'Search Regression Site', client: 'Search Client', manager: 'Kasun Perera',
+    site: 'Colombo', stage: 'Testing', budget: 1000000, progress: 0, health: 'On track'
+  });
+  assert.equal(project.status, 201);
+
+  const form = new FormData();
+  form.append('file', new Blob(['Order reference QQX-4417-ZP for 20mm aggregate'],
+    { type: 'text/plain' }), 'delivery-note.txt');
+  const upload = await fetch(`${base}/uploads/project/${project.body.id}`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form
+  });
+  assert.equal(upload.status, 201);
+
+  /* The reader runs in the background, so the text arrives a moment after the upload. */
+  let found = [];
+  for (let attempt = 0; attempt < 20 && !found.length; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const search = await call(token, 'GET', '/uploads/search/documents?q=QQX-4417-ZP');
+    found = search.body.results || [];
+  }
+  assert.equal(found.length, 1, 'the hyphenated reference should find the document');
+  assert.equal(found[0].filename, 'delivery-note.txt');
+});

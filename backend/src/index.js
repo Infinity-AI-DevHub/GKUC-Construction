@@ -29,6 +29,9 @@ import optionRoutes from './routes/options.js';
 import chatRoutes from './routes/chat.js';
 import integrityRoutes from './routes/integrity.js';
 import driveRoutes from './routes/drive.js';
+import receivableRoutes from './routes/receivables.js';
+import hrRegisterRoutes from './routes/hr-registers.js';
+import { startDailySummary } from './lib/daily-summary.js';
 import publicShareRoutes from './routes/public-share.js';
 import financeRoutes from './routes/finance.js';
 import dailyReportRoutes from './routes/dailyReports.js';
@@ -196,6 +199,8 @@ app.use('/api', optionRoutes);
 app.use('/api', chatRoutes);
 app.use('/api', integrityRoutes);
 app.use('/api', driveRoutes);
+app.use('/api', receivableRoutes);
+app.use('/api', hrRegisterRoutes);
 app.use('/api', boqImportRoutes);
 app.use('/api/boq', boqRoutes);
 app.use('/api/finance', financeRoutes);
@@ -261,4 +266,6 @@ await startOcrWorker();
 startPresence();
 /* Watches the company's own records for fraud and for the mistakes that look like it. */
 startIntegrityWatch();
+/* One message at the end of the day to whoever is meant to read it. */
+startDailySummary();
 app.listen(port, () => console.log(`GKUC SiteOps running with MySQL at http://127.0.0.1:${port}`));

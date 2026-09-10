@@ -1,15 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import {
-  Building2, Calculator, CircleDollarSign, ClipboardCheck, ClipboardList, FileText,
-  LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse, MessageSquare, HardDrive } from 'lucide-react';
+import { Building2, Calculator, CircleDollarSign, ClipboardCheck, ClipboardList, FileText, LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse, MessageSquare, HardDrive } from 'lucide-react';
 import './styles.css';
 import './theme.css';
 import './reference.css';
 import './responsive.css';
 
 import { announceDataChanged, api, post, setUploadLimit, slug, token } from './api.js';
-import { Avatar, Modal } from './ui.jsx';
+import { Modal } from './ui.jsx';
 import NotificationBell from './NotificationBell.jsx';
 import Banners, { useBanners, SoundToggle } from './Banners.jsx';
 import DocumentSearch, { DocumentSearchButton } from './DocumentSearch.jsx';
@@ -33,21 +31,35 @@ import Admin, { TABS as ADMIN_TABS } from './pages/Admin.jsx';
 import Coordination from './pages/Coordination.jsx';
 import QuantitySurveying from './pages/QuantitySurveying.jsx';
 
+/*
+ * The menu, and who sees each entry.
+ *
+ * A module is listed if the person holds *any* of its permissions, because several of them
+ * serve more than one trade. People is the HR office's record of everybody, and it is also
+ * where a site supervisor marks who turned up this morning; Fleet is the transport office's
+ * register, and it is also where the store keeper books tools out. Gating each on a single
+ * permission hid exactly those screens from the people whose daily work they are: the
+ * supervisor held site.attendance and had nowhere to use it, and the store keeper held
+ * store.lending and could not reach the equipment.
+ *
+ * This mirrors what the API already does — `permit()` has always accepted several keys —
+ * so the menu and the server now agree about who may do what.
+ */
 const NAV = [
-  ['Dashboard', LayoutDashboard, null],
-  ['Coordination', Radar, 'projects.view'],
-  ['Projects', Building2, 'projects.view'],
-  ['Tasks', ClipboardCheck, 'projects.view'],
-  ['Quantity Surveying', Calculator, 'qs.view'],
-  ['People', Users, 'hr.view'],
-  ['Materials', Warehouse, 'store.view'],
-  ['Fleet', Truck, 'transport.view'],
-  ['Finance', CircleDollarSign, 'finance.view'],
-  ['Daily reports', FileText, 'projects.view'],
-  ['Chat', MessageSquare, 'chat.use'],
-  ['Drive', HardDrive, 'drive.use'],
-  ['Reports', ClipboardList, null],
-  ['Administration', ShieldCheck, 'admin.users']
+  ['Dashboard', LayoutDashboard, []],
+  ['Coordination', Radar, ['projects.view']],
+  ['Projects', Building2, ['projects.view']],
+  ['Tasks', ClipboardCheck, ['projects.view']],
+  ['Quantity Surveying', Calculator, ['qs.view']],
+  ['People', Users, ['hr.view', 'hr.attendance', 'hr.leave', 'hr.payroll', 'site.attendance']],
+  ['Materials', Warehouse, ['store.view', 'store.manage']],
+  ['Fleet', Truck, ['transport.view', 'transport.manage', 'store.lending']],
+  ['Finance', CircleDollarSign, ['finance.view', 'finance.manage', 'finance.invoice', 'finance.pay']],
+  ['Daily reports', FileText, ['projects.view']],
+  ['Chat', MessageSquare, ['chat.use']],
+  ['Drive', HardDrive, ['drive.use']],
+  ['Reports', ClipboardList, []],
+  ['Administration', ShieldCheck, ['admin.users', 'admin.roles', 'admin.audit', 'admin.lists', 'admin.notifications']]
 ];
 
 /**
@@ -85,6 +97,11 @@ const capabilities = permissions => {
     hr: any('hr.manage'),
     hrImport: any('hr.attendance'),
     payroll: any('hr.payroll'),
+    /* Named for what the server accepts, so a button is offered exactly when it will work:
+       leave and overtime are approved by the HR office or by whoever holds leave, and
+       overtime is also recorded by the site that worked it. */
+    leave: any('hr.manage', 'hr.leave'),
+    overtime: any('site.attendance', 'hr.leave', 'hr.manage'),
     qs: any('qs.boq'),
     quotation: any('qs.quotation'),
     tender: any('qs.tender'),
@@ -328,7 +345,7 @@ function App() {
     }
   };
 
-  const visibleNav = NAV.filter(([, , permission]) => !permission || can.has(permission));
+  const visibleNav = NAV.filter(([, , keys]) => !keys.length || keys.some(key => can.has(key)));
   /*
    * The page being viewed is state, but whether it may be viewed is not — it follows the
    * permissions, which can change underneath it: signing in as someone else, or the MD

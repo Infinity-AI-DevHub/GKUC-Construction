@@ -1,11 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, QrCode, Truck, Wrench } from 'lucide-react';
-import { api, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { api, openRecord, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { allowedTabs, Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { toSvg } from '../qr.js';
 import { useOptions } from '../options.js';
 
-const TABS = ['Vehicles', 'Compliance', 'Fuel & service', 'Equipment'];
+/* Fleet is two registers under one roof: the transport office's vehicles, and the store's
+   tools. Each tab names what the server will accept for it — see allowedTabs. */
+const TABS = [
+  ['Vehicles', ['transport.view', 'transport.manage']],
+  ['Compliance', ['transport.view', 'transport.manage']],
+  ['Fuel & service', ['transport.view', 'transport.manage']],
+  ['Equipment', ['store.view', 'store.manage', 'store.lending']]
+];
 
 /** Renders a QR label as inline SVG — no image request, so it prints cleanly. */
 function QrCodeImage({ value }) {
@@ -19,19 +26,20 @@ const DOC_TYPES = ['Insurance', 'Revenue licence', 'Emission test', 'Service', '
 
 /** PID 2.8 and 2.9 — vehicles with their compliance dates, and equipment with its whereabouts. */
 export default function Fleet({ data, reload, can }) {
-  const [tab, setTab] = useState(TABS[0]);
+  const tabs = allowedTabs(TABS, can);
+  const [tab, setTab] = useState(tabs[0]);
   const [open, setOpen] = useState('');
 
   const actions = {
     Vehicles: can.transport && 'Add asset',
     Compliance: can.transport && 'Record renewal',
     'Fuel & service': can.transport && 'Record fuel',
-    Equipment: can.projects && 'Add equipment'
+    Equipment: can.lending && 'Add equipment'
   };
 
   return <Page title="Fleet & equipment" subtitle="Keep vehicles available, assigned, maintained, and compliant."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
-    <Tabs tabs={TABS} active={tab} onChange={setTab} />
+    <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
     {tab === 'Vehicles' && <Vehicles data={data} can={can} />}
     {tab === 'Compliance' && <Compliance />}
@@ -49,7 +57,7 @@ function Vehicles({ data, can }) {
   const [detail, setDetail] = useState(null);
   return <>
     <div className="fleet-grid">
-      {data.fleet.map(vehicle => <article className="fleet-card" key={vehicle.id} onClick={async () => setDetail(await api(`/fleet/${vehicle.id}`))}>
+      {data.fleet.map(vehicle => <article className="fleet-card" key={vehicle.id} onClick={() => openRecord(`/fleet/${vehicle.id}`, setDetail)}>
         <div className="fleet-visual"><Truck size={34} /><Badge tone={slug(vehicle.status)}>{vehicle.status}</Badge></div>
         <h3>{vehicle.vehicle}</h3>
         <p>{vehicle.reg}</p>
@@ -191,8 +199,8 @@ function FuelAndService({ data }) {
   </Table>;
 }
 
-const EQUIPMENT_COLUMNS = ['Code', 'Equipment', 'Category', 'Assigned to', 'Status', ''];
-const EQUIPMENT_TEMPLATE = '110px minmax(180px,1.3fr) minmax(140px,1fr) minmax(160px,1.1fr) 120px 210px';
+const EQUIPMENT_COLUMNS = ['Code', 'Equipment', 'Category', 'Assigned to', 'Due back', 'Status', ''];
+const EQUIPMENT_TEMPLATE = '110px minmax(180px,1.2fr) minmax(130px,1fr) minmax(150px,1.1fr) 130px 120px 210px';
 
 function Equipment({ data, reload, can }) {
   const [acting, setActing] = useState(null);
@@ -204,10 +212,17 @@ function Equipment({ data, reload, can }) {
         <span>{item.name}</span>
         <span>{item.category}</span>
         <span>{item.project ? `${item.project}` : '—'}</span>
+        <div>
+          <span className={Number(item.daysOverdue) > 0 ? 'overdue' : ''}>
+            {item.dueBack ? shortDate(item.dueBack) : '—'}
+          </span>
+          {Number(item.daysOverdue) > 0
+            ? <small className="overdue">{item.daysOverdue} days late</small> : null}
+        </div>
         <Badge tone={slug(item.status)}>{item.status}</Badge>
         <span className="row-actions">
-          <button className="status-button" onClick={async () => setDetail(await api(`/equipment/${item.id}`))}>Open</button>
-          {can.site && <button className="status-button" onClick={() => setActing(item)}>
+          <button className="status-button" onClick={() => openRecord(`/equipment/${item.id}`, setDetail)}>Open</button>
+          {can.lending && <button className="status-button" onClick={() => setActing(item)}>
             {item.status === 'Assigned' ? 'Return' : 'Assign'}
           </button>}
         </span>
@@ -224,7 +239,7 @@ function Equipment({ data, reload, can }) {
 /** Assignment history, maintenance record, and the printable QR label (PID 2.9). */
 function EquipmentDetail({ item, close, refresh, can }) {
   const [servicing, setServicing] = useState(false);
-  const assignTemplate = 'minmax(150px,1.2fr) minmax(140px,1fr) 120px 120px';
+  const assignTemplate = 'minmax(150px,1.2fr) minmax(140px,1fr) 110px 110px 110px';
   const maintTemplate = '130px 120px minmax(180px,1.6fr) 120px';
 
   const issueQr = async () => { await post(`/equipment/${item.id}/qr`); await refresh(); };
@@ -247,26 +262,29 @@ function EquipmentDetail({ item, close, refresh, can }) {
           {item.qrToken && <code>{`${window.location.origin}/scan/${item.qrToken}`}</code>}
         </div>
         {item.qrToken && <QrCodeImage value={`${window.location.origin}/scan/${item.qrToken}`} />}
-        {can.projects && <button type="button" className="secondary" onClick={issueQr}>
+        {can.lending && <button type="button" className="secondary" onClick={issueQr}>
           <QrCode size={15} />{item.qrToken ? 'Reissue label' : 'Issue label'}
         </button>}
       </div>
 
       <div className="wide">
-        <Table columns={['Project', 'Held by', 'From', 'Returned']} template={assignTemplate}
+        <Table columns={['Project', 'Held by', 'From', 'Due back', 'Returned']} template={assignTemplate}
           title="Assignment history" empty="Never assigned.">
           {item.assignments.map(row => <Row template={assignTemplate} key={row.id}>
             <strong>{row.project}</strong>
             <span>{row.assignedTo}</span>
             <span>{shortDate(row.assignedAt)}</span>
-            <span>{row.returnedAt ? shortDate(row.returnedAt) : 'Still out'}</span>
+            <span>{row.dueBack ? shortDate(row.dueBack) : '—'}</span>
+            <span className={!row.returnedAt && row.dueBack && row.dueBack < todayInput() ? 'overdue' : ''}>
+              {row.returnedAt ? shortDate(row.returnedAt) : 'Still out'}
+            </span>
           </Row>)}
         </Table>
       </div>
 
       <div className="wide">
         <Table columns={['Date', 'Type', 'Notes', 'Cost']} template={maintTemplate} title="Maintenance and repairs"
-          tools={can.projects ? <button className="secondary" onClick={() => setServicing(true)}><Wrench size={14} /> Log work</button> : null}
+          tools={can.lending ? <button className="secondary" onClick={() => setServicing(true)}><Wrench size={14} /> Log work</button> : null}
           empty="No maintenance recorded.">
           {item.maintenance.map(row => <Row template={maintTemplate} key={row.id}>
             <span>{shortDate(row.performedAt)}</span>
@@ -400,6 +418,8 @@ function AssignForm({ item, data, close, reload }) {
       projectId: Number(values.projectId),
       assignedTo: values.assignedTo,
       assignedAt: values.assignedAt,
+      dueBack: values.dueBack || undefined,
+      issuedCondition: values.issuedCondition,
       conditionNote: values.conditionNote || undefined
     });
     await reload();
@@ -407,7 +427,11 @@ function AssignForm({ item, data, close, reload }) {
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
     <SelectField name="assignedTo" label="Responsible person" options={data.employees.map(employee => [employee.name, employee.name])} />
     <Field name="assignedAt" label="Assigned from" type="date" defaultValue={todayInput()} />
-    <TextArea name="conditionNote" label="Condition on issue" required={false} placeholder="Optional" />
+    {/* Everything lent out is chased once it is late, so the date is the whole point of the record. */}
+    <Field name="dueBack" label="Due back on" type="date" required={false} />
+    <SelectField name="issuedCondition" label="Condition on issue"
+      options={['Good', 'Fair', 'Worn', 'Damaged']} />
+    <TextArea name="conditionNote" label="Notes on issue" required={false} placeholder="Optional" />
   </FormModal>;
 }
 
@@ -416,12 +440,15 @@ function ReturnForm({ item, close, reload }) {
     await post(`/equipment/${item.id}/return`, {
       returnedAt: values.returnedAt,
       status: values.status,
+      returnedCondition: values.returnedCondition,
       conditionNote: values.conditionNote || undefined
     });
     await reload();
   }}>
     <Field name="returnedAt" label="Returned on" type="date" defaultValue={todayInput()} />
-    <SelectField name="status" label="Condition" options={['Available', 'Maintenance', 'Retired']} />
-    <TextArea name="conditionNote" label="Condition on return" required={false} placeholder="Optional" />
+    <SelectField name="returnedCondition" label="Condition it came back in"
+      options={['Good', 'Fair', 'Worn', 'Damaged']} />
+    <SelectField name="status" label="Where it goes now" options={['Available', 'Maintenance', 'Retired']} />
+    <TextArea name="conditionNote" label="Notes on return" required={false} placeholder="Optional" />
   </FormModal>;
 }

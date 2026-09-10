@@ -81,7 +81,7 @@ export default function Attachments({
         {item.mime.startsWith('image/')
           ? <AttachmentThumbnail item={item} />
           : <button type="button" className="attachment-icon" title="Open this file"
-            onClick={() => openAttachment(item.id).catch(failure => setError(failure.message))}>
+            onClick={() => openAttachment(item.id)}>
             <FileText size={20} />
           </button>}
         <div>
@@ -126,7 +126,7 @@ function AttachmentThumbnail({ item }) {
   if (failed) return <span className="attachment-icon" title="This photo could not be loaded"><FileText size={20} /></span>;
   if (!source) return <span className="attachment-icon" aria-busy="true" />;
   return <button type="button" className="attachment-thumb" title="Open this photo"
-    onClick={() => openAttachment(item.id).catch(() => setFailed(true))}>
+    onClick={() => openAttachment(item.id)}>
     <img src={source} alt={item.title || item.filename} />
   </button>;
 }
