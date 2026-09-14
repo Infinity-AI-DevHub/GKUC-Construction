@@ -13,17 +13,33 @@ export default function Projects({ data, reload, can }) {
   const [tab, setTab] = useState(TABS[0]);
   const [open, setOpen] = useState('');
 
-  const [detailId, setDetailId] = useState(null);
+  const projectFromPath = () => Number(window.location.pathname.match(/^\/projects\/(\d+)\/?$/)?.[1]) || null;
+  const [detailId, setDetailId] = useState(projectFromPath);
+  useEffect(() => {
+    const sync = () => setDetailId(projectFromPath());
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
+  const openProject = id => {
+    window.history.pushState({}, '', `/projects/${id}`);
+    setDetailId(id);
+  };
+  const closeProject = () => {
+    window.history.pushState({}, '', '/projects');
+    setDetailId(null);
+  };
   const actionFor = {
     Projects: 'New project', Milestones: 'Add milestone', 'BOQ & estimates': 'Create BOQ',
     Variations: null, Inquiries: 'Log inquiry'
   }[tab];
 
+  if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} reload={reload} close={closeProject} />;
+
   return <Page title="Projects" subtitle="Monitor progress, cost, and site health across active work."
     action={can.projects ? actionFor : null} onAction={() => setOpen(tab)}>
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
-    {tab === 'Projects' && <ProjectCards data={data} onOpen={setDetailId} />}
+    {tab === 'Projects' && <ProjectCards data={data} onOpen={openProject} />}
     {tab === 'Milestones' && <Milestones data={data} reload={reload} can={can} />}
     {tab === 'BOQ & estimates' && <BoqList data={data} reload={reload} can={can} />}
     {tab === 'Variations' && <Variations can={can} reload={reload} />}
@@ -33,7 +49,6 @@ export default function Projects({ data, reload, can }) {
     {open === 'Milestones' && <MilestoneForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'BOQ & estimates' && <BoqForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Inquiries' && <InquiryForm close={() => setOpen('')} reload={reload} />}
-    {detailId && <ProjectDetail projectId={detailId} data={data} can={can} reload={reload} close={() => setDetailId(null)} />}
   </Page>;
 }
 

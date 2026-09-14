@@ -38,7 +38,9 @@ router.get('/', auth, permit('projects.view'), wrap(async (_req, res) => res.jso
 router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
   const project = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
   if (!project) return res.status(404).json({ error: 'Project not found' });
-  const [milestones, documents, team, tasks, expenses, incomes, boqs] = await Promise.all([
+  const [milestones, documents, team, tasks, expenses, incomes, boqs, reports, quotations,
+    invoices, purchaseOrders, costBreakdown, expenseLedger, incomeLedger, attendanceLedger,
+    materialUsage, equipmentUsage, supplierInvoices] = await Promise.all([
     query('SELECT id,title,due_date dueDate,status,completed_at completedAt,notes FROM project_milestones WHERE project_id=? ORDER BY due_date', [project.id]),
     listAttachments('project', project.id),
     query(`SELECT t.id,t.project_role projectRole,e.name,e.designation,e.code FROM project_team t
@@ -46,7 +48,37 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
     query('SELECT id,title,assignee,due,priority,status FROM tasks WHERE project_id=? ORDER BY id DESC', [project.id]),
     query(`SELECT ${spendSql('p')} total FROM projects p WHERE p.id=?`, [project.id]),
     query('SELECT COALESCE(SUM(amount),0) total FROM incomes WHERE project_id=?', [project.id]),
-    query('SELECT id,reference,title,status,total FROM boqs WHERE project_id=? ORDER BY id DESC', [project.id])
+    query('SELECT id,reference,title,status,total FROM boqs WHERE project_id=? ORDER BY id DESC', [project.id]),
+    query(`SELECT id,report_date reportDate,supervisor,workforce,work_completed workCompleted,
+      issue,weather,delay_hours delayHours,created_at createdAt
+      FROM daily_reports WHERE project_id=? ORDER BY report_date DESC,id DESC LIMIT 12`, [project.id]),
+    query(`SELECT id,reference,title,status,total,quote_date quoteDate,valid_until validUntil
+      FROM quotations_client WHERE project_id=? ORDER BY id DESC LIMIT 20`, [project.id]),
+    query(`SELECT id,reference,title,kind,status,net_payable netPayable,paid_amount paidAmount,
+      invoice_date invoiceDate,due_date dueDate
+      FROM client_invoices WHERE project_id=? ORDER BY id DESC LIMIT 20`, [project.id]),
+    query(`SELECT o.id,o.reference,o.status,o.order_date orderDate,o.total,s.name supplier
+      FROM purchase_orders o JOIN suppliers s ON s.id=o.supplier_id
+      WHERE o.project_id=? ORDER BY o.id DESC LIMIT 20`, [project.id]),
+    query(`SELECT source,COALESCE(SUM(amount),0) total FROM expenses
+      WHERE project_id=? GROUP BY source ORDER BY total DESC`, [project.id]),
+    query(`SELECT id,expense_date date,source,description,amount,reference FROM expenses
+      WHERE project_id=? ORDER BY expense_date DESC,id DESC LIMIT 500`, [project.id]),
+    query(`SELECT id,received_date date,description,amount,method,reference FROM incomes
+      WHERE project_id=? ORDER BY received_date DESC,id DESC LIMIT 500`, [project.id]),
+    query(`SELECT work_date date,state,COUNT(DISTINCT COALESCE(CAST(employee_id AS CHAR),CONCAT('name:',employee_name))) people,
+      MIN(check_in) firstIn,MAX(check_out) lastOut FROM attendance WHERE project_id=?
+      GROUP BY work_date,state ORDER BY work_date DESC LIMIT 500`, [project.id]),
+    query(`SELECT m.name,m.unit,SUM(sm.quantity) quantity,COUNT(*) movements
+      FROM stock_movements sm JOIN materials m ON m.id=sm.material_id
+      WHERE sm.project_id=? AND sm.movement_type='Issue' GROUP BY m.id,m.name,m.unit ORDER BY quantity DESC`, [project.id]),
+    query(`SELECT e.code,e.name,a.assigned_to assignedTo,a.assigned_at assignedAt,a.returned_at returnedAt,
+      a.condition_note conditionNote FROM equipment_assignments a JOIN equipment e ON e.id=a.equipment_id
+      WHERE a.project_id=? ORDER BY a.assigned_at DESC`, [project.id]),
+    query(`SELECT si.invoice_no invoiceNo,s.name supplier,si.invoice_date invoiceDate,si.due_date dueDate,
+      si.amount,si.paid_amount paidAmount,si.status FROM supplier_invoices si
+      JOIN suppliers s ON s.id=si.supplier_id JOIN purchase_orders po ON po.id=si.order_id
+      WHERE po.project_id=? ORDER BY si.invoice_date DESC`, [project.id])
   ]);
   res.json({
     ...project,
@@ -55,6 +87,12 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
     team,
     tasks,
     boqs,
+    reports,
+    quotations,
+    invoices,
+    purchaseOrders,
+    costBreakdown,
+    reporting: { expenseLedger, incomeLedger, attendanceLedger, materialUsage, equipmentUsage, supplierInvoices },
     finance: { expenses: expenses[0].total, income: incomes[0].total, budget: project.budget }
   });
 }));

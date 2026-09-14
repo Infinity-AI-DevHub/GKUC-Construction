@@ -58,9 +58,10 @@ router.get('/hr/attendance-register', auth, permit('hr.view', 'hr.attendance', '
         const person = ensure(row.name);
         const day = Number(String(row.workDate).slice(8, 10));
         const mark = row.state === 'On site' ? 'P' : row.state === 'Late' ? 'L'
-          : row.state === 'On leave' ? 'V' : row.state === 'Absent' ? 'A' : 'P';
+          : row.state === 'On leave' ? 'V' : row.state === 'Business trip' ? 'B'
+            : row.state === 'Absent' ? 'A' : 'P';
         person.days[day] = { mark, project: row.project, in: row.checkIn, out: row.checkOut };
-        if (mark === 'P') person.present += 1;
+        if (mark === 'P' || mark === 'B') person.present += 1;
         else if (mark === 'L') { person.late += 1; person.present += 1; }
         else if (mark === 'A') person.absent += 1;
       }

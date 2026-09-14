@@ -55,6 +55,14 @@ async function modifyColumn(table, column, definition) {
   await query(`ALTER TABLE ${table} MODIFY ${column} ${definition}`);
 }
 
+async function columnIsNullable(table, column) {
+  const rows = await query(
+    'SELECT IS_NULLABLE nullable FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name=?',
+    [table, column]
+  );
+  return rows[0]?.nullable === 'YES';
+}
+
 async function constraintExists(table, name) {
   const rows = await query(
     `SELECT 1 FROM information_schema.table_constraints
@@ -108,7 +116,7 @@ async function createCoreTables() {
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS attendance (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_name VARCHAR(120) NOT NULL, role VARCHAR(100) NOT NULL, project_id BIGINT UNSIGNED NOT NULL,
-    work_date DATE NOT NULL, check_in TIME NULL, check_out TIME NULL, state ENUM('On site','Late','Checked out','Absent','On leave') NOT NULL,
+    work_date DATE NOT NULL, check_in TIME NULL, check_out TIME NULL, state ENUM('On site','Late','Checked out','Absent','On leave','Business trip') NOT NULL,
     confirmed_by BIGINT UNSIGNED NULL, correction_reason VARCHAR(500) NULL,
     CONSTRAINT fk_attendance_project FOREIGN KEY(project_id) REFERENCES projects(id),
     CONSTRAINT fk_attendance_confirmer FOREIGN KEY(confirmed_by) REFERENCES users(id),
@@ -1820,7 +1828,7 @@ async function migrateExistingInstalls() {
   await modifyColumn('users', 'role', 'VARCHAR(120) NOT NULL');
   await addColumn('users', 'role_id', 'BIGINT UNSIGNED NULL');
   await addForeignKey('users', 'fk_users_role', 'CONSTRAINT fk_users_role FOREIGN KEY(role_id) REFERENCES roles(id)');
-  await modifyColumn('attendance', 'state', "ENUM('On site','Late','Checked out','Absent','On leave') NOT NULL");
+  await modifyColumn('attendance', 'state', "ENUM('On site','Late','Checked out','Absent','On leave','Business trip') NOT NULL");
   await modifyColumn('stock_movements', 'movement_type', "ENUM('Receipt','Issue','Return','Adjustment','Transfer') NOT NULL");
   await addColumn('materials', 'unit_cost', 'DECIMAL(14,2) NOT NULL DEFAULT 0');
   await addColumn('stock_movements', 'project_id', 'BIGINT UNSIGNED NULL');
@@ -1859,10 +1867,24 @@ async function migrateExistingInstalls() {
   await addColumn('boqs', 'terms', 'TEXT NULL');
   await addColumn('employees', 'biometric_id', 'VARCHAR(40) NULL');
   await addIndex('employees', 'uq_employee_biometric', 'UNIQUE KEY uq_employee_biometric(biometric_id)');
+  /* Office employees may normally work at head office or be sent to a site. Site workers
+     are either allocated to a site or available. Nullable first lets legacy rows be
+     classified once without overwriting later HR decisions on every restart. */
+  await addColumn('employees', 'worker_type', "ENUM('Office','Site') NULL");
+  await query(`UPDATE employees e LEFT JOIN departments d ON d.id=e.department_id
+    SET e.worker_type=CASE
+      WHEN LOWER(COALESCE(d.name,'')) REGEXP 'human resources|(^| )hr($| )|account|finance|administration|(^| )admin($| )|quantity survey|(^| )qs($| )'
+        THEN 'Office' ELSE 'Site' END
+    WHERE e.worker_type IS NULL`);
+  if (await columnIsNullable('employees', 'worker_type'))
+    await query("ALTER TABLE employees MODIFY worker_type ENUM('Office','Site') NOT NULL DEFAULT 'Site'");
   /* A day with a single punch cannot say whether the person arrived or left; it is imported
      but flagged, so payroll is never quietly built on a guess. */
   await addColumn('attendance', 'needs_review', 'TINYINT(1) NOT NULL DEFAULT 0');
   await addColumn('attendance', 'source', "VARCHAR(20) NOT NULL DEFAULT 'Manual'");
+  await addColumn('attendance', 'work_location', "ENUM('Office','Site') NOT NULL DEFAULT 'Site'");
+  if (!(await columnIsNullable('attendance', 'project_id')))
+    await query('ALTER TABLE attendance MODIFY project_id BIGINT UNSIGNED NULL');
   await addForeignKey('fleet', 'fk_fleet_driver', 'CONSTRAINT fk_fleet_driver FOREIGN KEY(driver_employee_id) REFERENCES employees(id)');
   await addIndex('notifications', 'uq_notification_dedupe', 'UNIQUE KEY uq_notification_dedupe(dedupe_key)');
   await addForeignKey('attendance', 'fk_attendance_employee', 'CONSTRAINT fk_attendance_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');

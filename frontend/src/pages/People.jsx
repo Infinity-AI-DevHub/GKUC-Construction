@@ -1,15 +1,18 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowDownToLine, Check, Clock3, PencilLine, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
-import { api, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { api, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { allowedTabs, Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import BiometricImport from './BiometricImport.jsx';
 import { useOptions } from '../options.js';
 import { AttendanceRegister, LeaveRegister } from '../Registers.jsx';
+import EmployeeProfile from './EmployeeProfile.jsx';
+import WorkforceMap from './WorkforceMap.jsx';
 
 /* Each tab beside the permissions the server will accept for it — see allowedTabs. */
 const TABS = [
   ['Employees', ['hr.view', 'hr.manage']],
+  ['Workforce map', ['hr.view', 'hr.manage', 'hr.attendance', 'site.attendance']],
   ['Attendance', ['hr.view', 'hr.attendance', 'site.attendance']],
   ['Attendance register', ['hr.view', 'hr.attendance', 'site.attendance']],
   ['Biometric import', ['hr.attendance']],
@@ -28,10 +31,20 @@ export default function People({ data, reload, can }) {
   const tabs = allowedTabs(TABS, can);
   const [tab, setTab] = useState(tabs[0]);
   const [open, setOpen] = useState('');
+  const employeeFromPath = () => Number(window.location.pathname.match(/^\/people\/(\d+)\/?$/)?.[1]) || null;
+  const [employeeId, setEmployeeId] = useState(employeeFromPath);
+  useEffect(() => {
+    const sync = () => setEmployeeId(employeeFromPath());
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
+  const openEmployee = id => { window.history.pushState({}, '', `/people/${id}`); setEmployeeId(id); };
+  const closeEmployee = () => { window.history.pushState({}, '', '/people'); setEmployeeId(null); };
 
   const actions = {
     Employees: can.hr && 'Add employee',
-    Attendance: can.attendance && 'Record attendance',
+    'Workforce map': null,
+    Attendance: (can.attendance || can.hrImport) && 'Record attendance',
     'Attendance register': null,
     'Biometric import': null,
     'Leave register': null,
@@ -42,11 +55,14 @@ export default function People({ data, reload, can }) {
     Departments: can.hr && 'Add department'
   };
 
+  if (employeeId) return <EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} />;
+
   return <Page title="People" subtitle="Employee records, live workforce presence, leave and overtime."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
-    {tab === 'Employees' && <Employees data={data} can={can} />}
+    {tab === 'Employees' && <Employees data={data} can={can} onOpen={openEmployee} />}
+    {tab === 'Workforce map' && <WorkforceMap canManage={can.hr} />}
     {tab === 'Attendance' && <Attendance data={data} reload={reload} can={can} />}
     {tab === 'Attendance register' && <AttendanceRegister />}
     {tab === 'Leave register' && <LeaveRegister />}
@@ -67,17 +83,16 @@ export default function People({ data, reload, can }) {
   </Page>;
 }
 
-const EMPLOYEE_COLUMNS = ['Employee', 'Department', 'Designation', 'Basic salary', 'Daily rate', 'Status'];
-const EMPLOYEE_TEMPLATE = 'minmax(190px,1.4fr) minmax(140px,1fr) minmax(140px,1fr) 130px 110px 100px';
+const EMPLOYEE_COLUMNS = ['Employee', 'Type', 'Department', 'Designation', 'Basic salary', 'Daily rate', 'Status'];
+const EMPLOYEE_TEMPLATE = 'minmax(190px,1.4fr) 100px minmax(140px,1fr) minmax(140px,1fr) 130px 110px 100px';
 
 /* The server withholds pay from anyone who does not maintain it, so the columns come and
    go with the data. Showing them as "LKR 0" would read as a wage of nothing. */
 const PAY_COLUMNS = ['Basic salary', 'Daily rate'];
 const NO_PAY_COLUMNS = EMPLOYEE_COLUMNS.filter(column => !PAY_COLUMNS.includes(column));
-const NO_PAY_TEMPLATE = 'minmax(190px,1.4fr) minmax(140px,1fr) minmax(140px,1fr) 100px';
+const NO_PAY_TEMPLATE = 'minmax(190px,1.4fr) 100px minmax(140px,1fr) minmax(140px,1fr) 100px';
 
-function Employees({ data, can }) {
-  const [detail, setDetail] = useState(null);
+function Employees({ data, onOpen }) {
   const showsPay = data.employees.some(employee => employee.basicSalary !== undefined);
   const columns = showsPay ? EMPLOYEE_COLUMNS : NO_PAY_COLUMNS;
   const template = showsPay ? EMPLOYEE_TEMPLATE : NO_PAY_TEMPLATE;
@@ -90,8 +105,9 @@ function Employees({ data, can }) {
     </div>
     <Table columns={columns} template={template} title="Employee register">
       {data.employees.map(employee => <Row template={template} key={employee.id}
-        onClick={() => openRecord(`/employees/${employee.id}`, setDetail)}>
+        onClick={() => onOpen(employee.id)}>
         <div className="person"><Avatar name={employee.name} /><div><strong>{employee.name}</strong><small>{employee.code}</small></div></div>
+        <Badge tone={employee.workerType === 'Office' ? 'active' : 'pending'}>{employee.workerType}</Badge>
         <span>{employee.department || '—'}</span>
         <span>{employee.designation}</span>
         {showsPay && <span>{rupees(employee.basicSalary)}</span>}
@@ -99,64 +115,7 @@ function Employees({ data, can }) {
         <Badge tone={slug(employee.status)}>{employee.status}</Badge>
       </Row>)}
     </Table>
-    {detail && <EmployeeDetail employee={detail} close={() => setDetail(null)} canManage={can.hr} />}
   </>;
-}
-
-function EmployeeDetail({ employee, close, canManage }) {
-  return <Modal title={`${employee.name} — ${employee.code}`} close={close}>
-    <div className="report-form">
-      <div className="project-stats wide">
-        <div><span>Department</span><strong>{employee.department || '—'}</strong></div>
-        <div><span>Designation</span><strong>{employee.designation}</strong></div>
-      </div>
-      <div className="project-stats wide">
-        <div><span>Joined</span><strong>{shortDate(employee.joinDate)}</strong></div>
-        <div><span>Overtime rate</span><strong>{rupees(employee.overtimeRate)}/h</strong></div>
-      </div>
-      <div className="wide">
-        <Table columns={['Date', 'Site', 'In', 'Out', 'Status']} template="120px minmax(150px,1fr) 80px 80px 110px"
-          title="Recent attendance" empty="No attendance recorded.">
-          {employee.attendance.slice(0, 10).map(row => <Row template="120px minmax(150px,1fr) 80px 80px 110px" key={row.id}>
-            <span>{shortDate(row.workDate)}</span><span>{row.site}</span>
-            <span>{row.in || '—'}</span><span>{row.out || '—'}</span>
-            <Badge tone={slug(row.state)}>{row.state}</Badge>
-          </Row>)}
-        </Table>
-      </div>
-      <div className="wide">
-        <Table columns={['Leave type', 'From', 'To', 'Days', 'Status']} template="130px 120px 120px 80px 110px"
-          title="Leave history" empty="No leave recorded.">
-          {employee.leave.map(row => <Row template="130px 120px 120px 80px 110px" key={row.id}>
-            <span>{row.leaveType}</span><span>{shortDate(row.fromDate)}</span><span>{shortDate(row.toDate)}</span>
-            <span>{row.days}</span><Badge tone={slug(row.status)}>{row.status}</Badge>
-          </Row>)}
-        </Table>
-      </div>
-      <div className="wide">
-        <Table columns={['Date', 'Project', 'Hours', 'Rate', 'Status']} template="120px minmax(150px,1fr) 80px 110px 110px"
-          title="Overtime" empty="No overtime recorded.">
-          {employee.overtime.map(row => <Row template="120px minmax(150px,1fr) 80px 110px 110px" key={row.id}>
-            <span>{shortDate(row.workDate)}</span><span>{row.project || '—'}</span>
-            <span>{row.hours}</span><span>{rupees(row.rate)}</span>
-            <Badge tone={slug(row.status)}>{row.status}</Badge>
-          </Row>)}
-        </Table>
-      </div>
-      {employee.projects.length > 0 && <div className="wide">
-        <Table columns={['Project', 'Role on project']} template="minmax(200px,1fr) minmax(150px,1fr)" title="Current assignments">
-          {employee.projects.map((row, index) => <Row template="minmax(200px,1fr) minmax(150px,1fr)" key={index}>
-            <strong>{row.project}</strong><span>{row.projectRole}</span>
-          </Row>)}
-        </Table>
-      </div>}
-      <div className="wide">
-        <Attachments ownerType="employee" ownerId={employee.id} title="Employee documents"
-          canUpload={canManage} canDelete={canManage} withCategory withExpiry />
-      </div>
-      <div className="form-actions"><button type="button" className="secondary" onClick={close}>Close</button></div>
-    </div>
-  </Modal>;
 }
 
 const PAYROLL_TEMPLATE = 'minmax(130px,.9fr) 130px 130px 100px 140px 110px 130px';
@@ -285,50 +244,96 @@ const ATTENDANCE_TEMPLATE = 'minmax(170px,1.3fr) minmax(160px,1fr) 90px 90px 110
 
 function Attendance({ data, reload, can }) {
   const [correcting, setCorrecting] = useState(null);
-  const present = data.attendance.filter(row => row.state === 'On site' || row.state === 'Late').length;
-  const toggle = async id => { await post(`/attendance/${id}/toggle`); await reload(); };
+  const [date, setDate] = useState(todayInput());
+  const [rows, setRows] = useState(data.attendance);
+  const [analytics, setAnalytics] = useState(null);
+  const loadRows = () => api(`/attendance?date=${date}`).then(setRows).catch(() => setRows([]));
+  const loadAnalytics = () => api('/attendance/analytics').then(setAnalytics).catch(() => setAnalytics(null));
+  useEffect(() => { loadRows(); }, [date]);
+  useLiveList(loadAnalytics);
+  const present = rows.filter(row => ['On site', 'Late', 'Checked out', 'Business trip'].includes(row.state)).length;
+  const refresh = async () => { await Promise.all([loadRows(), loadAnalytics(), reload()]); };
+  const toggle = async id => { await post(`/attendance/${id}/toggle`); await refresh(); };
+  const canCorrect = can.attendance || can.hrImport;
 
   return <>
-    <div className="attendance-summary">
+    {analytics && <AttendanceVisuals analytics={analytics} />}
+    <div className="attendance-day-toolbar">
+      <div><span>Daily record</span><h2>{date === todayInput() ? 'Today’s attendance' : shortDate(date)}</h2></div>
+      <label>View date<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label>
+    </div>
+    <div className="attendance-summary compact-attendance-summary">
       <Summary label="Present" value={present} icon={UserRoundCheck} />
-      <Summary label="Late" value={data.attendance.filter(row => row.state === 'Late').length} icon={Clock3} />
-      <Summary label="Absent" value={data.attendance.filter(row => row.state === 'Absent').length} icon={XCircle} />
-      <Summary label="Records today" value={data.attendance.length} icon={ShieldCheck} />
+      <Summary label="Late" value={rows.filter(row => row.state === 'Late').length} icon={Clock3} />
+      <Summary label="Absent" value={rows.filter(row => row.state === 'Absent').length} icon={XCircle} />
+      <Summary label="Records" value={rows.length} icon={ShieldCheck} />
     </div>
     <Table columns={ATTENDANCE_COLUMNS} template={ATTENDANCE_TEMPLATE} title="Today’s attendance"
-      empty="No attendance recorded for today yet.">
-      {data.attendance.map(row => <Row template={ATTENDANCE_TEMPLATE} key={row.id}>
+      empty="No attendance recorded for this date yet.">
+      {rows.map(row => <Row template={ATTENDANCE_TEMPLATE} key={row.id}>
         <div className="person"><Avatar name={row.name} /><div><strong>{row.name}</strong><small>{row.role}</small></div></div>
         <span>{row.site}</span>
         <span>{row.in || '—'}</span>
         <span>{row.out || '—'}</span>
         <Badge tone={slug(row.state)}>{row.state}</Badge>
-        {can.attendance
+        {canCorrect
           ? <span className="row-actions">
-            <button className="icon-btn" onClick={() => toggle(row.id)} title={row.in && !row.out ? 'Check out' : 'Check in'}>
+            {date === todayInput() && can.attendance && <button className="icon-btn" onClick={() => toggle(row.id)} title={row.in && !row.out ? 'Check out' : 'Check in'}>
               {row.in && !row.out ? <ArrowDownToLine size={17} /> : <Check size={17} />}
-            </button>
+            </button>}
             <button className="icon-btn" onClick={() => setCorrecting(row)} title="Correct this record"><PencilLine size={15} /></button>
           </span>
           : <span />}
       </Row>)}
     </Table>
-    {correcting && <CorrectionForm record={correcting} close={() => setCorrecting(null)} reload={reload} />}
+    {correcting && <CorrectionForm record={correcting} projects={data.projects} close={() => setCorrecting(null)} reload={refresh} />}
   </>;
 }
 
+function AttendanceVisuals({ analytics }) {
+  const periods = [
+    ['Today', analytics.today.rate, `${analytics.today.present} of ${analytics.today.total} people`],
+    ['Last 7 days', analytics.weekly.rate, 'Weekly attendance rate'],
+    ['Last 30 days', analytics.monthly.rate, 'Monthly attendance rate']
+  ];
+  return <div className="attendance-visual-dashboard">
+    <section className="attendance-rate-cards">{periods.map(([label, rate, detail]) => <article key={label}>
+      <div className="attendance-rate-ring" style={{ '--attendance-rate': `${rate}%` }}><strong>{rate}%</strong></div>
+      <div><span>{label}</span><h3>{detail}</h3><small>Compared with the active workforce</small></div>
+    </article>)}</section>
+    <section className="attendance-chart-card">
+      <div className="attendance-chart-title"><div><span>30-day attendance</span><h2>Workforce rhythm</h2></div><b>{analytics.monthly.rate}% average</b></div>
+      <div className="attendance-bars">{analytics.monthly.series.map(point => <i key={point.day}
+        style={{ height: `${Math.max(3, point.rate)}%` }} title={`${shortDate(point.day)} — ${point.rate}%`} />)}</div>
+      <div className="attendance-axis"><span>30 days ago</span><span>Today</span></div>
+    </section>
+    <section className="attendance-watch-card">
+      <div className="attendance-chart-title"><div><span>Relative attendance</span><h2>People to check in with</h2></div><b>Cohort median {analytics.cohortMedian}%</b></div>
+      <p>Flagged from the lowest-performing quarter of their colleagues—not from an arbitrary pass mark.</p>
+      <div className="attendance-watch-list">{analytics.lowAttendance.slice(0, 5).map(person => <article key={person.id}>
+        <Avatar name={person.name} /><div><strong>{person.name}</strong><span>{person.designation}</span></div>
+        <b>{person.rate}%</b>
+      </article>)}{!analytics.lowAttendance.length && <p className="empty-state">No relative attendance concerns in the available history.</p>}</div>
+    </section>
+  </div>;
+}
+
 /** Corrections are allowed but always carry a reason, and land in the audit log. */
-function CorrectionForm({ record, close, reload }) {
+function CorrectionForm({ record, projects, close, reload }) {
   return <FormModal title={`Correct attendance — ${record.name}`} close={close} label="Save correction" onSubmit={async values => {
     await patch(`/attendance/${record.id}`, {
       state: values.state || undefined,
-      checkIn: values.checkIn || undefined,
-      checkOut: values.checkOut || undefined,
+      checkIn: values.checkIn || null,
+      checkOut: values.checkOut || null,
+      workDate: values.workDate,
+      projectId: Number(values.projectId),
       reason: values.reason
     });
     await reload();
   }}>
-    <SelectField name="state" label="Status" options={['On site', 'Late', 'Checked out', 'Absent', 'On leave']} defaultValue={record.state} />
+    <SelectField name="state" label="Status" options={['On site', 'Late', 'Checked out', 'Absent', 'On leave', 'Business trip']} defaultValue={record.state} />
+    <Field name="workDate" label="Work date" type="date" defaultValue={inputDate(record.workDate)} />
+    <SelectField name="projectId" label="Project / site" options={projects.map(project => [project.id, project.name])} defaultValue={record.projectId} />
     <Field name="checkIn" label="Check in (HH:MM)" required={false} defaultValue={record.in || ''} placeholder="07:30" />
     <Field name="checkOut" label="Check out (HH:MM)" required={false} defaultValue={record.out || ''} placeholder="16:30" />
     <TextArea name="reason" label="Reason for the correction" placeholder="Required — recorded in the audit log" />
@@ -408,6 +413,7 @@ function EmployeeForm({ data, close, reload }) {
       name: values.name,
       departmentId: values.departmentId ? Number(values.departmentId) : undefined,
       designation: values.designation,
+      workerType: values.workerType,
       phone: values.phone || undefined,
       email: values.email || undefined,
       joinDate: values.joinDate,
@@ -421,6 +427,7 @@ function EmployeeForm({ data, close, reload }) {
     <Field name="name" label="Full name" />
     <SelectField name="departmentId" label="Department" options={data.departments.map(department => [department.id, department.name])} />
     <Field name="designation" label="Designation / trade" />
+    <SelectField name="workerType" label="Employee type" options={[["Office", "Office employee"], ["Site", "Site worker"]]} />
     <Field name="phone" label="Phone" required={false} />
     <Field name="email" label="Email" type="email" required={false} />
     <Field name="joinDate" label="Join date" type="date" defaultValue={todayInput()} />
@@ -431,22 +438,29 @@ function EmployeeForm({ data, close, reload }) {
 }
 
 function AttendanceForm({ data, close, reload }) {
+  const [workLocation, setWorkLocation] = useState('Site');
   return <FormModal title="Record attendance" close={close} label="Record attendance" onSubmit={async values => {
     const employee = data.employees.find(row => String(row.id) === values.employeeId);
     await post('/attendance', {
       name: employee.name,
       role: employee.designation,
       employeeId: employee.id,
-      projectId: Number(values.projectId),
+      projectId: workLocation === 'Site' ? Number(values.projectId) : null,
+      workLocation,
       date: values.date,
-      state: values.state
+      state: values.state,
+      checkIn: values.checkIn || null,
+      checkOut: values.checkOut || null
     });
     await reload();
   }}>
     <SelectField name="employeeId" label="Employee" options={data.employees.map(employee => [employee.id, `${employee.name} — ${employee.designation}`])} />
-    <SelectField name="projectId" label="Project / site" options={data.projects.map(project => [project.id, project.name])} />
+    <label>Work location<select name="workLocation" value={workLocation} onChange={event => setWorkLocation(event.target.value)}><option value="Site">Project site</option><option value="Office">Head office</option></select></label>
+    {workLocation === 'Site' && <SelectField name="projectId" label="Project / site" options={data.projects.map(project => [project.id, project.name])} />}
     <Field name="date" label="Work date" type="date" defaultValue={todayInput()} />
-    <SelectField name="state" label="Status" options={['On site', 'Late', 'Absent', 'On leave']} />
+    <SelectField name="state" label="Status" options={['On site', 'Late', 'Absent', 'On leave', 'Business trip']} />
+    <Field name="checkIn" label="Check in (optional)" type="time" required={false} />
+    <Field name="checkOut" label="Check out (optional)" type="time" required={false} />
   </FormModal>;
 }
 

@@ -11,7 +11,7 @@ import { EmptyState, Row, Table } from './ui.jsx';
 const monthValue = (date = new Date()) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
-const MARK_TITLES = { P: 'On site', L: 'Late', V: 'On leave', A: 'Absent' };
+const MARK_TITLES = { P: 'On site', L: 'Late', V: 'On leave', B: 'Business trip', A: 'Absent' };
 
 /**
  * The muster roll.

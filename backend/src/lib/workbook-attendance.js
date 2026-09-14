@@ -16,6 +16,7 @@ import { readWorkbook } from './xlsx.js';
 const HEADER_LABELS = { id: 'id', name: 'name', date: 'date' };
 const SHEET_LOGS = ['attendance logs', 'attendance log', 'logs'];
 const SHEET_SUMMARY = ['attendance summary', 'summary'];
+const SHEET_SCHEDULE = ['schedule information sheet', 'schedule information', 'schedule'];
 
 const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 const lower = value => clean(value).toLowerCase();
@@ -95,6 +96,47 @@ function departments(workbook) {
   return map;
 }
 
+/**
+ * The terminal's schedule is the difference between "no punch" and "not expected".
+ * Codes 1-10 are working shifts, 25 is leave, 26 is business travel and an empty/zero
+ * cell is a holiday. Without this grid, every absence silently vanished from the import
+ * and every attendance percentage was biased upward.
+ */
+function schedules(workbook, period) {
+  const found = findSheet(workbook, SHEET_SCHEDULE);
+  const map = new Map();
+  if (!found || !period) return map;
+  const { sheet } = found;
+
+  let daysRow = null;
+  for (let row = 1; row <= Math.min(sheet.rowCount, 10); row += 1) {
+    if (lower(sheet.rows[row]?.[1]) === 'id' && lower(sheet.rows[row]?.[2]) === 'name') {
+      daysRow = row;
+      break;
+    }
+  }
+  if (!daysRow) return map;
+
+  const dayColumns = [];
+  for (let column = 1; column <= sheet.columnCount; column += 1) {
+    const day = Number(sheet.rows[daysRow]?.[column]);
+    if (Number.isInteger(day) && day >= 1 && day <= 31) dayColumns.push([column, day]);
+  }
+
+  for (let row = daysRow + 2; row <= sheet.rowCount; row += 1) {
+    const code = clean(sheet.rows[row]?.[1]);
+    if (!code) continue;
+    const person = new Map();
+    for (const [column, day] of dayColumns) {
+      const date = dateForDay(period, day);
+      const schedule = Number(sheet.rows[row]?.[column]);
+      if (date && Number.isInteger(schedule) && schedule > 0) person.set(date, schedule);
+    }
+    map.set(code, person);
+  }
+  return map;
+}
+
 export function isWorkbook(buffer, filename = '') {
   if (/\.xlsx$/i.test(filename)) return true;
   /* A .xlsx is a ZIP, which always starts "PK\x03\x04". */
@@ -115,6 +157,7 @@ export function parseAttendanceWorkbook(buffer) {
   const { sheet } = found;
   const period = periodFrom(sheet);
   const staff = departments(workbook);
+  const roster = schedules(workbook, period);
   const problems = [];
   const rows = [];
 
@@ -133,6 +176,7 @@ export function parseAttendanceWorkbook(buffer) {
     const times = sheet.rows[row + 3] || [];
     if (!code) { problems.push(`An employee block at row ${row} has no ID and was skipped.`); continue; }
 
+    const recordedDates = new Set();
     for (let column = 1; column <= width; column += 1) {
       const day = Number(days[column]);
       const cell = times[column];
@@ -161,6 +205,25 @@ export function parseAttendanceWorkbook(buffer) {
         checkOut: single ? (morning ? null : punches[0]) : punches[punches.length - 1],
         punches,
         needsReview: single
+      });
+      recordedDates.add(date);
+    }
+
+    /* Add scheduled days without punches. Leave and business travel remain explicit so
+       neither is misreported as an absence. */
+    for (const [date, schedule] of roster.get(code) || []) {
+      if (recordedDates.has(date)) continue;
+      rows.push({
+        code,
+        name: name || staff.get(code)?.name || '',
+        department: staff.get(code)?.department || '',
+        date,
+        checkIn: null,
+        checkOut: null,
+        punches: [],
+        declaredState: schedule === 25 ? 'On leave' : schedule === 26 ? 'Business trip' : 'Absent',
+        scheduled: true,
+        needsReview: false
       });
     }
   }

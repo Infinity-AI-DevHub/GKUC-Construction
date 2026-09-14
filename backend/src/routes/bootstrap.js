@@ -33,8 +33,8 @@ router.get('/', auth, wrap(async (req, res) => {
     suppliers, purchaseRequests, boqs, milestones, notifications, finance, inquiries, weekly] = await Promise.all([
     gated(['projects.view'], () => query('SELECT * FROM projects WHERE active=1 ORDER BY id')),
     gated(['site.tasks','projects.view'], () => query(`SELECT t.id,t.title,t.project_id projectId,t.assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project FROM tasks t JOIN projects p ON p.id=t.project_id ORDER BY t.id`)),
-    gated(['hr.view','site.attendance','hr.attendance'], () => query(`SELECT a.id,a.employee_name name,a.role,p.name site,a.check_in \`in\`,a.check_out \`out\`,a.state,a.work_date workDate
-      FROM attendance a JOIN projects p ON p.id=a.project_id WHERE a.work_date=CURDATE() ORDER BY a.id`)),
+    gated(['hr.view','site.attendance','hr.attendance'], () => query(`SELECT a.id,a.employee_name name,a.role,COALESCE(p.name,'Head office') site,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,a.state,a.work_date workDate
+      FROM attendance a LEFT JOIN projects p ON p.id=a.project_id WHERE a.work_date=CURDATE() ORDER BY a.id`)),
     gated(['store.view','store.manage'], () => query('SELECT * FROM materials WHERE active=1 ORDER BY id')),
     gated(['transport.view','transport.manage'], () => query(`SELECT f.id,f.vehicle,f.registration reg,f.driver,f.status,f.renewal_type renewal,f.due_date,f.odometer,p.name project
       FROM fleet f LEFT JOIN projects p ON p.id=f.project_id ORDER BY f.id`)),
@@ -54,7 +54,7 @@ router.get('/', auth, wrap(async (req, res) => {
     gated(['hr.view','hr.manage','hr.attendance','site.attendance','store.lending'], () => query(`SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,
       ${['hr.payroll', 'hr.manage'].some(key => req.user.permissions.includes(key))
     ? 'e.basic_salary basicSalary,e.daily_rate dailyRate,e.overtime_rate overtimeRate,' : ''}
-      e.join_date joinDate,d.name department,e.department_id departmentId
+      e.join_date joinDate,e.worker_type workerType,d.name department,e.department_id departmentId
       FROM employees e LEFT JOIN departments d ON d.id=e.department_id ORDER BY e.code`)),
     gated(['hr.view','hr.manage'], () => query('SELECT id,name,description FROM departments ORDER BY name')),
     gated(['store.view','store.manage'], () => query(`SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_cost purchaseCost,

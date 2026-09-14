@@ -22,7 +22,9 @@ before(async () => {
   await admin.query(`DROP DATABASE IF EXISTS \`${testDatabase}\``);
   await admin.query(`CREATE DATABASE \`${testDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   server = spawn(process.execPath, ['src/index.js'], { cwd: new URL('..', import.meta.url), env: { ...process.env, PORT: String(port), DB_NAME: testDatabase }, stdio: 'ignore' });
-  for (let attempt = 0; attempt < 60; attempt++) {
+  /* A cold schema build can take more than nine seconds on the bundled MySQL runtime.
+     Give it enough room without weakening the health check itself. */
+  for (let attempt = 0; attempt < 120; attempt++) {
     try { if ((await fetch(`${base}/health`)).ok) return; } catch {}
     await new Promise(resolve => setTimeout(resolve, 150));
   }
@@ -377,6 +379,14 @@ test('logging a service resets the vehicle service schedule', async () => {
 
 test('the completion report is assembled from live project data', async () => {
   const owner = await login();
+  const workspace = await call(owner, 'GET', '/projects/1');
+  assert.equal(workspace.status, 200);
+  assert.ok(Array.isArray(workspace.body.reporting.expenseLedger));
+  assert.ok(Array.isArray(workspace.body.reporting.incomeLedger));
+  assert.ok(Array.isArray(workspace.body.reporting.attendanceLedger));
+  assert.ok(Array.isArray(workspace.body.reporting.materialUsage));
+  assert.ok(Array.isArray(workspace.body.reporting.equipmentUsage));
+  assert.ok(Array.isArray(workspace.body.reporting.supplierInvoices));
   const report = await call(owner, 'GET', '/projects/1/completion');
   assert.equal(report.status, 200);
   assert.equal(report.body.project.name, 'Riverside Residences');
@@ -396,6 +406,80 @@ test('performance reviews average their four scores', async () => {
   });
   assert.equal(review.status, 201);
   assert.equal(Number(review.body.overall), 4);
+});
+
+test('HR reconciles a new scanner identity and records historical site attendance', async () => {
+  const token = await login();
+  const created = await call(token, 'POST', '/biometric/people', {
+    code: 'TEST-991', name: 'Scanner New Person', department: 'Roadworks', firstDate: shift(-45)
+  });
+  assert.equal(created.status, 201);
+  assert.match(created.body.code, /^BIO-TEST-991/);
+
+  const profile = await call(token, 'GET', `/employees/${created.body.id}`);
+  assert.equal(profile.status, 200);
+  assert.equal(profile.body.biometricId, 'TEST-991');
+
+  const recorded = await call(token, 'POST', '/attendance', {
+    name: profile.body.name,
+    role: profile.body.designation,
+    employeeId: profile.body.id,
+    projectId: 1,
+    date: shift(-45),
+    state: 'Checked out',
+    checkIn: '07:15',
+    checkOut: '17:20'
+  });
+  assert.equal(recorded.status, 201);
+  assert.match(recorded.body.in, /^07:15/);
+  assert.match(recorded.body.out, /^17:20/);
+
+  const corrected = await call(token, 'PATCH', `/attendance/${recorded.body.id}`, {
+    workDate: shift(-44),
+    checkIn: '08:00',
+    checkOut: null,
+    state: 'On site',
+    projectId: 2,
+    reason: 'Employee travelled directly to the site'
+  });
+  assert.equal(corrected.status, 200);
+  assert.equal(String(corrected.body.work_date).slice(0, 10), shift(-44));
+  assert.equal(corrected.body.check_out, null);
+
+  const analytics = await call(token, 'GET', '/attendance/analytics');
+  assert.equal(analytics.status, 200);
+  assert.equal(analytics.body.weekly.series.length, 7);
+  assert.equal(analytics.body.monthly.series.length, 30);
+  assert.ok(Array.isArray(analytics.body.lowAttendance));
+});
+
+test('workforce map distinguishes office presence, site allocation and free workers', async () => {
+  const token = await login();
+  const date = shift(40);
+  const departments = await call(token, 'GET', '/employees/departments');
+  const created = await call(token, 'POST', '/employees', {
+    code: 'EMP-FREE-01', name: 'Available Test Worker', departmentId: departments.body[0]?.id,
+    designation: 'General worker', workerType: 'Site', joinDate: today(),
+    basicSalary: 0, dailyRate: 0, overtimeRate: 0
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.workerType, 'Site');
+
+  const employee = (await call(token, 'GET', '/employees')).body.find(row => row.id !== created.body.id);
+  await call(token, 'PATCH', `/employees/${employee.id}`, { workerType: 'Office' });
+  const present = await call(token, 'POST', '/attendance', {
+    name: employee.name, role: employee.designation, employeeId: employee.id,
+    workLocation: 'Office', projectId: null, date, state: 'On site', checkIn: '07:45'
+  });
+  assert.equal(present.status, 201);
+  assert.equal(present.body.workLocation, 'Office');
+  assert.equal(present.body.site, 'Head office');
+
+  const map = await call(token, 'GET', `/employees/availability?date=${date}`);
+  assert.equal(map.status, 200);
+  assert.equal(map.body.people.find(row => row.id === employee.id).status, 'At office');
+  assert.equal(map.body.people.find(row => row.id === created.body.id).status, 'Free');
+  assert.ok(map.body.summary.free >= 1);
 });
 
 test('deactivating a user ends their session', async () => {
