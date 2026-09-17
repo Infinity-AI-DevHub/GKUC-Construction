@@ -9,7 +9,7 @@ const TABS = ['Projects', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquir
 const healthTone = health => (health === 'On track' ? 'on-track' : health === 'At risk' ? 'at-risk' : 'watch');
 
 /** PID 2.4 / 2.5 — projects, their milestones, and the estimates the budget comes from. */
-export default function Projects({ data, reload, can }) {
+export default function Projects({ data, reload, can, companyId, company }) {
   const [tab, setTab] = useState(TABS[0]);
   const [open, setOpen] = useState('');
 
@@ -35,7 +35,7 @@ export default function Projects({ data, reload, can }) {
 
   if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} reload={reload} close={closeProject} />;
 
-  return <Page title="Projects" subtitle="Monitor progress, cost, and site health across active work."
+  return <Page title="Projects" subtitle={`Monitor progress, cost, and site health for ${company?.name || 'the selected company'}.`}
     action={can.projects ? actionFor : null} onAction={() => setOpen(tab)}>
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
@@ -45,10 +45,10 @@ export default function Projects({ data, reload, can }) {
     {tab === 'Variations' && <Variations can={can} reload={reload} />}
     {tab === 'Inquiries' && <Inquiries data={data} can={can} reload={reload} />}
 
-    {open === 'Projects' && <ProjectForm close={() => setOpen('')} reload={reload} />}
+    {open === 'Projects' && <ProjectForm companyId={companyId} close={() => setOpen('')} reload={reload} />}
     {open === 'Milestones' && <MilestoneForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'BOQ & estimates' && <BoqForm data={data} close={() => setOpen('')} reload={reload} />}
-    {open === 'Inquiries' && <InquiryForm close={() => setOpen('')} reload={reload} />}
+    {open === 'Inquiries' && <InquiryForm companyId={companyId} close={() => setOpen('')} reload={reload} />}
   </Page>;
 }
 
@@ -287,9 +287,10 @@ function Inquiries({ data, can, reload }) {
   </>;
 }
 
-function InquiryForm({ close, reload }) {
+function InquiryForm({ companyId, close, reload }) {
   return <FormModal title="Log customer inquiry" close={close} label="Log inquiry" onSubmit={async values => {
     await post('/inquiries', {
+      companyId,
       customer: values.customer,
       contact: values.contact || undefined,
       phone: values.phone || undefined,
@@ -335,9 +336,10 @@ function ConvertForm({ inquiry, close, reload }) {
   </FormModal>;
 }
 
-function ProjectForm({ close, reload }) {
+function ProjectForm({ companyId, close, reload }) {
   return <FormModal title="Create project" close={close} label="Create project" onSubmit={async values => {
     await post('/projects', {
+      companyId,
       name: values.name,
       client: values.client,
       manager: values.manager,
@@ -384,6 +386,9 @@ const CATEGORIES = ['Material', 'Labour', 'Equipment', 'Subcontract', 'Overhead'
 export function BoqForm({ data, close, reload }) {
   const boqCategories = useOptions('boq.category');
   const units = useOptions('boq.unit');
+  const [projectId,setProjectId]=useState(data.projects[0]?.id||'');
+  const [subRates,setSubRates]=useState([]);
+  useEffect(()=>{if(projectId)api(`/qs/subcontractor-rates?projectId=${projectId}`).then(setSubRates).catch(()=>setSubRates([]));},[projectId]);
   const [lines, setLines] = useState([{ category: '', description: '', unit: '', quantity: '', rate: '' }]);
   const update = (index, key, value) => setLines(current => current.map((line, position) => (position === index ? { ...line, [key]: value } : line)));
   const total = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.rate) || 0), 0);
@@ -410,12 +415,14 @@ export function BoqForm({ data, close, reload }) {
         description: line.description,
         unit: line.unit || 'item',
         quantity: Number(line.quantity),
-        rate: Number(line.rate) || 0
+        rate: Number(line.rate) || 0,
+        materialId:line.materialId?Number(line.materialId):undefined,
+        subcontractRateId:line.subcontractRateId?Number(line.subcontractRateId):undefined
       }))
     });
     await reload();
   }}>
-    <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
+    <label>Project *<select name="projectId" value={projectId} onChange={event=>setProjectId(event.target.value)} required>{data.projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
     <Field name="title" label="BOQ title" />
     {/* Laid out by class rather than inline, so a phone can stack what will not fit:
         the five fixed columns needed 464px inside a 303px dialog. */}
@@ -435,6 +442,8 @@ export function BoqForm({ data, close, reload }) {
         onChange={event => update(index, 'quantity', event.target.value)} /></label>
       <label>Rate<input type="number" step="any" min="0" value={line.rate} required={mustComplete(line, index)}
         onChange={event => update(index, 'rate', event.target.value)} /></label>
+      {line.category==='Material'&&<label>Tracked material<select value={line.materialId||''} onChange={event=>{const material=data.materials.find(m=>String(m.id)===event.target.value);setLines(current=>current.map((row,pos)=>pos===index?{...row,materialId:event.target.value,description:material?.name||row.description,unit:material?.unit||row.unit,rate:material?.unit_cost??row.rate}:row));}}><option value="">Not linked to stock</option>{data.materials.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>}
+      {line.category==='Subcontract'&&<label>Agreed subcontract rate<select value={line.subcontractRateId||''} onChange={event=>{const rate=subRates.find(r=>String(r.id)===event.target.value);setLines(current=>current.map((row,pos)=>pos===index?{...row,subcontractRateId:event.target.value,description:rate?.workItem||row.description,unit:rate?.unit||row.unit,rate:rate?.rate??row.rate}:row));}}><option value="">Manual rate</option>{subRates.map(r=><option key={r.id} value={r.id}>{r.subcontractor} · {r.workItem} · {rupees(r.rate)}/{r.unit}</option>)}</select></label>}
     </div>)}
     {/* The units the company keeps, offered as suggestions without preventing a new one. */}
     <datalist id="boq-units">{units.map(unit => <option key={unit} value={unit} />)}</datalist>

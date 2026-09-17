@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, can, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
+import { OVERTIME_TYPES, PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES,
+  payProfileError, resolveOvertimeRate } from '../lib/payroll-policy.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -18,13 +20,29 @@ const employeeSchema = z.object({
   joinDate: isoDate,
   basicSalary: z.number().nonnegative().default(0),
   dailyRate: z.number().nonnegative().default(0),
+  weeklyRate: z.number().nonnegative().default(0),
   overtimeRate: z.number().nonnegative().default(0),
+  payBasis: z.enum(PAY_BASES).default('Monthly salary'),
+  payFrequency: z.enum(PAY_FREQUENCIES).default('Monthly'),
+  payrollCategory: z.enum(PAYROLL_CATEGORIES).default('Site labourer'),
+  payrollCompanyId: z.number().int().positive().default(1),
+  compensationEffectiveFrom: isoDate.optional(),
+  epfEligible: z.boolean().default(false),
+  etfEligible: z.boolean().default(false),
+  customOfficeOtRate: z.number().nonnegative().nullable().optional(),
+  customSiteOtRate: z.number().nonnegative().nullable().optional(),
+  customTravelOtRate: z.number().nonnegative().nullable().optional(),
   status: z.enum(['Active', 'On leave', 'Suspended', 'Left']).default('Active'),
   notes: z.string().max(600).optional()
 });
 
 const listQuery = `SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,e.join_date joinDate,
-  e.basic_salary basicSalary,e.daily_rate dailyRate,e.overtime_rate overtimeRate,e.department_id departmentId,d.name department,
+  e.basic_salary basicSalary,e.daily_rate dailyRate,e.weekly_rate weeklyRate,e.overtime_rate overtimeRate,
+  e.pay_basis payBasis,e.pay_frequency payFrequency,e.payroll_category payrollCategory,
+  e.payroll_company_id payrollCompanyId,
+  e.compensation_effective_from compensationEffectiveFrom,e.epf_eligible epfEligible,e.etf_eligible etfEligible,
+  e.custom_office_ot_rate customOfficeOtRate,e.custom_site_ot_rate customSiteOtRate,e.custom_travel_ot_rate customTravelOtRate,
+  e.department_id departmentId,d.name department,
   e.notes,e.photo_url photoUrl,e.biometric_id biometricId,e.worker_type workerType,e.current_project_id currentProjectId,cp.name currentProject
   FROM employees e LEFT JOIN departments d ON d.id=e.department_id LEFT JOIN projects cp ON cp.id=e.current_project_id`;
 
@@ -37,7 +55,9 @@ const listQuery = `SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.sta
  * rates travel only to people who hold one of those, and everyone else gets the record
  * without them rather than a different, second endpoint to keep in step.
  */
-const PAY_FIELDS = ['basicSalary', 'dailyRate', 'overtimeRate'];
+const PAY_FIELDS = ['basicSalary', 'dailyRate', 'weeklyRate', 'overtimeRate', 'payBasis', 'payFrequency',
+  'payrollCategory', 'payrollCompanyId', 'compensationEffectiveFrom', 'epfEligible', 'etfEligible',
+  'customOfficeOtRate', 'customSiteOtRate', 'customTravelOtRate'];
 const seesPay = req => ['hr.payroll', 'hr.manage'].some(key => req.user.permissions.includes(key));
 const withoutPay = row => {
   const copy = { ...row };
@@ -113,7 +133,7 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
   const employee = forViewer(req, found);
   const [leave, overtime, documents, attendance, projects, tasks, reports, reviews] = await Promise.all([
     query('SELECT id,leave_type leaveType,from_date fromDate,to_date toDate,days,reason,status FROM leave_requests WHERE employee_id=? ORDER BY id DESC', [employee.id]),
-    query(`SELECT o.id,o.work_date workDate,o.hours,o.rate,o.status,p.name project FROM overtime_records o
+    query(`SELECT o.id,o.work_date workDate,o.overtime_type overtimeType,o.hours,o.rate,o.status,p.name project FROM overtime_records o
       LEFT JOIN projects p ON p.id=o.project_id WHERE o.employee_id=? ORDER BY o.id DESC`, [employee.id]),
     listAttachments('employee', employee.id),
     query(`SELECT a.id,a.work_date workDate,a.check_in \`in\`,a.check_out \`out\`,a.state,a.source,a.work_location workLocation,a.needs_review needsReview,
@@ -165,10 +185,18 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
 
 router.post('/', auth, permit('hr.manage'), validate(employeeSchema), wrap(async (req, res) => {
   const body = req.body;
+  const profileError = payProfileError(body);
+  if (profileError) return res.status(400).json({ error: profileError });
   try {
-    const result = await query(`INSERT INTO employees (code,name,department_id,designation,worker_type,phone,email,join_date,basic_salary,daily_rate,overtime_rate,status,notes)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [body.code, body.name, body.departmentId || null, body.designation, body.workerType, body.phone || null,
-      body.email || null, body.joinDate, body.basicSalary, body.dailyRate, body.overtimeRate, body.status, body.notes || null]);
+    const result = await query(`INSERT INTO employees
+      (code,name,department_id,designation,worker_type,phone,email,join_date,basic_salary,daily_rate,weekly_rate,overtime_rate,
+       pay_basis,pay_frequency,payroll_category,payroll_company_id,compensation_effective_from,epf_eligible,etf_eligible,
+       custom_office_ot_rate,custom_site_ot_rate,custom_travel_ot_rate,status,notes)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [body.code, body.name, body.departmentId || null, body.designation, body.workerType, body.phone || null,
+      body.email || null, body.joinDate, body.basicSalary, body.dailyRate, body.weeklyRate, body.overtimeRate,
+      body.payBasis, body.payFrequency, body.payrollCategory, body.payrollCompanyId, body.compensationEffectiveFrom || body.joinDate,
+      body.epfEligible, body.etfEligible, body.customOfficeOtRate ?? null, body.customSiteOtRate ?? null,
+      body.customTravelOtRate ?? null, body.status, body.notes || null]);
     const row = await getOne(`${listQuery} WHERE e.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'employee', row.id, null, row, req.ip);
     res.status(201).json(row);
@@ -181,9 +209,17 @@ router.post('/', auth, permit('hr.manage'), validate(employeeSchema), wrap(async
 router.patch('/:id', auth, permit('hr.manage'), validate(employeeSchema.partial()), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
+  const profileError = payProfileError({
+    payBasis: req.body.payBasis ?? before.pay_basis,
+    payFrequency: req.body.payFrequency ?? before.pay_frequency
+  });
+  if (profileError) return res.status(400).json({ error: profileError });
   const columns = {
     departmentId: 'department_id', joinDate: 'join_date', basicSalary: 'basic_salary',
-    dailyRate: 'daily_rate', overtimeRate: 'overtime_rate', workerType: 'worker_type'
+    dailyRate: 'daily_rate', weeklyRate: 'weekly_rate', overtimeRate: 'overtime_rate', workerType: 'worker_type',
+    payBasis: 'pay_basis', payFrequency: 'pay_frequency', payrollCategory: 'payroll_category', payrollCompanyId: 'payroll_company_id',
+    compensationEffectiveFrom: 'compensation_effective_from', epfEligible: 'epf_eligible', etfEligible: 'etf_eligible',
+    customOfficeOtRate: 'custom_office_ot_rate', customSiteOtRate: 'custom_site_ot_rate', customTravelOtRate: 'custom_travel_ot_rate'
   };
   const entries = Object.entries(req.body);
   if (entries.length) {
@@ -229,18 +265,26 @@ router.patch('/leave/:id', auth, permit('hr.manage', 'hr.leave'), validate(z.obj
 
 /* Overtime */
 router.get('/overtime/all', auth, permit('hr.view','hr.leave'), wrap(async (_req, res) => res.json(await query(`SELECT o.id,o.work_date workDate,o.hours,o.rate,o.status,
-  e.name employee,e.code employeeCode,p.name project FROM overtime_records o JOIN employees e ON e.id=o.employee_id
+  o.overtime_type overtimeType,e.name employee,e.code employeeCode,p.name project FROM overtime_records o JOIN employees e ON e.id=o.employee_id
   LEFT JOIN projects p ON p.id=o.project_id ORDER BY o.id DESC`))));
 
 router.post('/:id/overtime', auth, permit('site.attendance', 'hr.leave', 'hr.manage'), validate(z.object({
   projectId: z.number().int().positive().optional(),
   workDate: isoDate,
-  hours: z.number().positive().max(24)
+  hours: z.number().positive().max(24),
+  overtimeType: z.enum(OVERTIME_TYPES).default('Site')
 })), wrap(async (req, res) => {
   const employee = await getOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
-  const result = await query('INSERT INTO overtime_records (employee_id,project_id,work_date,hours,rate) VALUES (?,?,?,?,?)',
-    [employee.id, req.body.projectId || null, req.body.workDate, req.body.hours, employee.overtime_rate]);
+  const policy = await getOne(`SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=?
+    ORDER BY effective_from DESC,id DESC LIMIT 1`, [employee.payroll_company_id, req.body.workDate]);
+  if (!policy) return res.status(409).json({ error: 'Configure an overtime policy for this date first' });
+  let rate;
+  try { rate = resolveOvertimeRate(employee, req.body.overtimeType, policy); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  const result = await query(`INSERT INTO overtime_records
+    (employee_id,project_id,work_date,overtime_type,hours,rate,policy_id) VALUES (?,?,?,?,?,?,?)`,
+  [employee.id, req.body.projectId || null, req.body.workDate, req.body.overtimeType, req.body.hours, rate, policy.id]);
   const row = await getOne('SELECT * FROM overtime_records WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'overtime', row.id, null, row, req.ip);
   res.status(201).json(row);

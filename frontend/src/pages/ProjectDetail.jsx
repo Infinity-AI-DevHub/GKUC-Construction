@@ -4,18 +4,19 @@ import {
   Download, FileText, HardHat, MapPin, TrendingUp, Users, WalletCards
 } from 'lucide-react';
 import { api, money, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Avatar, Badge, Progress, Row, SelectField, Table, Tabs, Field, FormModal } from '../ui.jsx';
+import { Avatar, Badge, Progress, Row, SelectField, Table, Tabs, Field, FormModal, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import ProjectGallery from '../ProjectGallery.jsx';
 import ProjectReports from './ProjectReports.jsx';
 
-const TABS = ['Command centre', 'Reports', 'Programme', 'Commercial', 'Team', 'Gallery', 'Documents', 'Close-out'];
+const TABS = ['Command centre', 'Activity & issues', 'Reports', 'Programme', 'Commercial', 'Subcontractors', 'Team', 'Gallery', 'Documents', 'Close-out'];
 
 /** A project is a workspace, not a form dialog: every operational record converges here. */
 export default function ProjectDetail({ projectId, data, close, reload, can }) {
   const [tab, setTab] = useState(TABS[0]);
   const [project, setProject] = useState(null);
   const [adding, setAdding] = useState('');
+  const [editingTask,setEditingTask]=useState(null);
   const [error, setError] = useState('');
   const load = () => api(`/projects/${projectId}`).then(setProject).catch(failure => setError(failure.message));
   useEffect(() => { load(); }, [projectId]);
@@ -29,24 +30,50 @@ export default function ProjectDetail({ projectId, data, close, reload, can }) {
     <ProjectMetrics project={project} />
     <div className="project-workspace-tabs"><Tabs tabs={TABS} active={tab} onChange={setTab} /></div>
     {tab === 'Command centre' && <CommandCentre project={project} />}
+    {tab === 'Activity & issues' && <ProjectActivity project={project} can={can} refresh={refresh} onAdd={setAdding} onEditTask={setEditingTask} />}
     {tab === 'Reports' && <ProjectReports project={project} />}
     {tab === 'Programme' && <Programme project={project} can={can} refresh={refresh} onAdd={() => setAdding('milestone')} />}
     {tab === 'Commercial' && <Commercial project={project} />}
+    {tab === 'Subcontractors' && <ProjectSubcontractors project={project} can={can} onAdd={()=>setAdding('rate')} />}
     {tab === 'Team' && <Team project={project} can={can} onAdd={() => setAdding('team')} />}
     {tab === 'Gallery' && <section className="workspace-surface"><ProjectGallery projectId={project.id} canManage={can.gallery} /></section>}
     {tab === 'Documents' && <Attachments ownerType="project" ownerId={project.id} title="Project document library" canUpload={can.projects} canDelete={can.projects} withCategory />}
     {tab === 'Close-out' && <CompletionReport projectId={project.id} />}
     {adding === 'milestone' && <MilestoneForm projectId={project.id} close={() => setAdding('')} reload={refresh} />}
+    {adding === 'update' && <ProjectUpdateForm projectId={project.id} close={()=>setAdding('')} reload={refresh} />}
+    {adding === 'task' && <ProjectTaskForm projectId={project.id} close={()=>setAdding('')} reload={refresh} />}
+    {editingTask && <ProjectTaskForm projectId={project.id} task={editingTask} close={()=>setEditingTask(null)} reload={refresh} />}
+    {adding === 'rate' && <ProjectRateForm projectId={project.id} close={()=>setAdding('')} reload={refresh} />}
     {adding === 'team' && <TeamForm projectId={project.id} employees={data.employees} close={() => setAdding('')} reload={refresh} />}
   </div>;
 }
+
+function ProjectActivity({project,can,refresh,onAdd,onEditTask}){
+  const openIssues=project.updates.filter(row=>row.kind==='Issue'&&row.status!=='Resolved');
+  const blocked=project.tasks.filter(row=>row.status==='Blocked');
+  const advance=async row=>{await patch(`/projects/updates/${row.id}`,{status:row.status==='Open'?'In progress':'Resolved'});await refresh();};
+  const taskStatus=async(task,status)=>{await patch(`/tasks/${task.id}`,{status});await refresh();};
+  const t='minmax(220px,2fr) 120px 130px minmax(130px,1fr) 130px 115px';
+  return <div className="project-section-stack">
+    <div className="attendance-summary"><article><strong>{project.updates.length}</strong><span>Project updates</span></article><article><strong>{openIssues.length}</strong><span>Open issues</span></article><article><strong>{blocked.length}</strong><span>Blocked tasks</span></article></div>
+    <section className="workspace-surface"><div className="workspace-section-heading"><div><span className="section-kicker">Coordination log</span><h2>Updates and site issues</h2></div>{(can.projects||can.site)&&<button className="secondary" onClick={()=>onAdd('update')}>Add update or issue</button>}</div>
+      {openIssues.length>0&&<div className="project-task-list">{openIssues.slice(0,3).map(row=><div key={row.id}><AlertTriangle size={17}/><div><strong>{row.title}</strong><span>{row.category} · {row.owner||'Unassigned'}</span></div><Badge tone="at-risk">{row.status}</Badge></div>)}</div>}
+      <Table columns={['Update / issue','Type','Priority','Owner / due','Status','']} template={t} empty="No project updates yet.">{project.updates.map(row=><Row template={t} key={row.id}><div><strong>{row.title}</strong><small>{row.details}</small><small>{row.author} · {shortDate(row.createdAt)}</small></div><Badge tone={slug(row.kind)}>{row.kind}</Badge><Badge tone={slug(row.priority)}>{row.priority}</Badge><span>{row.owner||'—'}{row.dueDate?` · ${shortDate(row.dueDate)}`:''}</span><Badge tone={slug(row.status)}>{row.status}</Badge>{(can.projects||can.site)&&row.status!=='Resolved'?<button className="status-button" onClick={()=>advance(row)}>{row.status==='Open'?'Start':'Resolve'}</button>:<span>—</span>}</Row>)}</Table>
+    </section>
+    <Table columns={['Task','Owner','Due','Priority','Status','']} template={t} title="Project tasks" tools={can.site?<button className="secondary" onClick={()=>onAdd('task')}>Add task</button>:null} empty="No tasks assigned.">{project.tasks.map(task=><Row template={t} key={task.id}><div><strong>{task.title}</strong><small>{task.notes}</small></div><span>{task.assignee}</span><span>{task.due}</span><Badge tone={slug(task.priority)}>{task.priority}</Badge><Badge tone={slug(task.status)}>{task.status}</Badge>{can.site?<div className="row-actions"><button className="status-button" onClick={()=>onEditTask(task)}>Edit</button>{task.status!=='Approved'&&<button className="status-button" onClick={()=>taskStatus(task,task.status==='Blocked'?'In progress':'Completed')}>{task.status==='Blocked'?'Resume':'Complete'}</button>}</div>:<span>—</span>}</Row>)}</Table>
+  </div>;
+}
+function ProjectUpdateForm({projectId,close,reload}){return <FormModal title="Project update or issue" close={close} label="Post to project" onSubmit={async v=>{await post(`/projects/${projectId}/updates`,{kind:v.kind,title:v.title,details:v.details,category:v.category,status:v.status,priority:v.priority,owner:v.owner||undefined,dueDate:v.dueDate||undefined});await reload();}}><SelectField name="kind" label="Type" options={['Update','Issue']}/><Field name="title" label="Headline" wide/><TextArea name="details" label="Details" rows={4}/><SelectField name="category" label="Category" options={['General','Materials delay','Programme','Safety','Quality','Commercial','Other']}/><SelectField name="status" label="Status" options={['Open','In progress','Resolved']}/><SelectField name="priority" label="Priority" options={['Low','Medium','High']}/><Field name="owner" label="Responsible person" required={false}/><Field name="dueDate" label="Follow-up date" type="date" required={false}/></FormModal>}
+function ProjectTaskForm({projectId,task,close,reload}){return <FormModal title={task?'Update project task':'Add project task'} close={close} label={task?'Save task':'Assign task'} onSubmit={async v=>{const values={title:v.title,assignee:v.assignee,due:v.dueDate,dueDate:v.dueDate,priority:v.priority,notes:v.notes||''};if(task)await patch(`/tasks/${task.id}`,values);else await post('/tasks',{projectId,...values,status:'Not started'});await reload();}}><Field name="title" label="Task" wide defaultValue={task?.title}/><Field name="assignee" label="Assigned to" defaultValue={task?.assignee}/><Field name="dueDate" label="Due date" type="date" defaultValue={task?.dueDate?.slice(0,10)}/><SelectField name="priority" label="Priority" options={['Medium','High','Low']} defaultValue={task?.priority}/><TextArea name="notes" label="Instructions" required={false} defaultValue={task?.notes}/></FormModal>}
+function ProjectSubcontractors({project,can,onAdd}){const rates=project.subcontractRates||[];const t='minmax(190px,1.3fr) minmax(170px,1.2fr) 110px 120px minmax(160px,1fr)';return <div className="project-section-stack"><section className="workspace-surface"><div className="workspace-section-heading"><div><span className="section-kicker">Project supply chain</span><h2>Subcontractors and agreed rates</h2></div>{can.subcontractors&&<button className="secondary" onClick={onAdd}>Add agreed rate</button>}</div><div className="attendance-summary"><article><strong>{new Set(rates.map(r=>r.subcontractorId)).size}</strong><span>Subcontractors</span></article><article><strong>{rates.length}</strong><span>Agreed work rates</span></article></div><Table columns={['Subcontractor','Work package','Unit','Rate','Contact / validity']} template={t} empty="No subcontractor rates assigned to this project.">{rates.map(r=><Row template={t} key={r.id}><div><strong>{r.subcontractor}</strong><small>{r.trade} · {r.contactType}</small></div><strong>{r.workItem}</strong><span>{r.unit}</span><strong>{rupees(r.rate)}</strong><div><span>{r.phone||r.email||'—'}</span><small>{r.validUntil?`Valid until ${shortDate(r.validUntil)}`:r.address||'No expiry set'}</small></div></Row>)}</Table></section></div>}
+function ProjectRateForm({projectId,close,reload}){const [subs,setSubs]=useState([]);useEffect(()=>{api('/qs/subcontractors').then(setSubs).catch(()=>setSubs([]));},[]);return <FormModal title="Agree subcontractor rate" close={close} label="Save project rate" onSubmit={async v=>{await post('/qs/subcontractor-rates',{projectId,subcontractorId:Number(v.subcontractorId),workItem:v.workItem,unit:v.unit,rate:Number(v.rate),agreedOn:v.agreedOn||undefined,validUntil:v.validUntil||undefined,notes:v.notes||undefined});await reload();}}><SelectField name="subcontractorId" label="Subcontractor" options={subs.map(s=>[s.id,`${s.name} · ${s.trade}`])}/><Field name="workItem" label="Work item / package"/><Field name="unit" label="Unit" placeholder="m², m³, day, item"/><Field name="rate" label="Agreed rate (LKR)" type="number" min="0" step="0.01"/><Field name="agreedOn" label="Agreed on" type="date" required={false}/><Field name="validUntil" label="Valid until" type="date" required={false}/><TextArea name="notes" label="Terms / notes" required={false}/></FormModal>}
 
 function ProjectHero({ project, close }) {
   return <section className="project-hero">
     <img src="/construction-site.jpg" alt="" className="project-hero-image" /><div className="project-hero-shade" />
     <button className="project-back" onClick={close}><ArrowLeft size={17} />All projects</button>
     <div className="project-hero-content">
-      <div className="project-kicker"><Badge tone={project.health === 'On track' ? 'on-track' : project.health === 'At risk' ? 'at-risk' : 'watch'}>{project.health}</Badge><span>{project.stage}</span></div>
+      <div className="project-kicker"><Badge tone={project.health === 'On track' ? 'on-track' : project.health === 'At risk' ? 'at-risk' : 'watch'}>{project.health}</Badge><span>{project.company} · {project.stage}</span></div>
       <h1>{project.name}</h1><p><MapPin size={16} />{project.site}<span /><Building2 size={16} />{project.client}</p>
     </div>
     <div className="project-hero-progress"><span>Overall delivery</span><strong>{project.progress}%</strong><Progress value={project.progress} /></div>
@@ -79,7 +106,19 @@ function CommandCentre({ project }) {
     <section className="workspace-surface health-visual"><SectionHeading kicker="Financial control" title="Budget position" /><div className="budget-ring" style={{ '--budget': `${burn * 3.6}deg` }}><div><strong>{burn}%</strong><span>utilised</span></div></div><div className="budget-legend"><span><i />Spent <b>{money(spent)}</b></span><span><i />Available <b>{money(Math.max(0, budget - spent))}</b></span></div></section>
     <section className="workspace-surface"><div className="workspace-section-heading"><div><span className="section-kicker">Action queue</span><h2>Priority work</h2></div><span className="section-count">{openTasks.length} open</span></div><div className="project-task-list">{openTasks.slice(0, 5).map(task => <div key={task.id}><i className={slug(task.priority)} /><div><strong>{task.title}</strong><span>{task.assignee} · {task.due}</span></div><Badge tone={slug(task.status)}>{task.status}</Badge></div>)}</div>{!openTasks.length && <EmptyVisual icon={CheckCircle2} title="Work queue clear" text="All project tasks have been completed or approved." />}</section>
     <section className="workspace-surface"><SectionHeading kicker="Programme pulse" title="Milestone status" icon={CalendarDays} /><div className="milestone-score"><strong>{completedMilestones}</strong><span>of {project.milestones.length} milestones complete</span></div><Progress value={project.milestones.length ? completedMilestones / project.milestones.length * 100 : 0} /><div className="next-milestones">{project.milestones.filter(item => item.status !== 'Completed').slice(0, 3).map(item => <div key={item.id}><span>{shortDate(item.dueDate)}</span><strong>{item.title}</strong><Badge tone={slug(item.status)}>{item.status}</Badge></div>)}</div></section>
+    <ProjectMaterialPulse projectId={project.id} />
   </div>;
+}
+
+function ProjectMaterialPulse({projectId}) {
+  const [rows,setRows]=useState(null);
+  useEffect(()=>{let active=true;api('/materials/inventory').then(result=>{if(active)setRows(result.siteIssues.filter(row=>Number(row.projectId)===Number(projectId)));}).catch(()=>{if(active)setRows([]);});return()=>{active=false;};},[projectId]);
+  if(rows===null)return null;
+  const exceptions=rows.filter(row=>row.forecastOverrun||row.quoteForecastOverrun||row.unplanned);
+  return <section className="workspace-surface"><div className="workspace-section-heading"><div><span className="section-kicker">Material control</span><h2>BOQ and quote quantity watch</h2></div><Badge tone={exceptions.length?'at-risk':'on-track'}>{exceptions.length} flag{exceptions.length===1?'':'s'}</Badge></div>
+    {rows.length?<div className="cost-bars">{[...rows].sort((a,b)=>Number(Boolean(b.forecastOverrun||b.quoteForecastOverrun||b.unplanned))-Number(Boolean(a.forecastOverrun||a.quoteForecastOverrun||a.unplanned))).slice(0,6).map(row=>{const limits=[row.allowedQuantity,row.quotedQuantity].filter(value=>value!==null).map(Number),limit=limits.length?Math.min(...limits):null;const ratio=limit?Math.min(100,Number(row.forecastQuantity)/limit*100):100;return <div key={row.materialId}><span>{row.material}</span><i><b style={{width:`${ratio}%`,background:row.forecastOverrun||row.quoteForecastOverrun||row.unplanned?'#b32539':undefined}}/></i><strong>{row.forecastQuantity}/{limit??'unplanned'} {row.unit}</strong></div>;})}</div>:<EmptyVisual icon={CheckCircle2} title="No material movement yet" text="Approved BOQ materials, accepted quotes and site issues will appear here." />}
+    {exceptions.length>0&&<p className="insight-alert"><AlertTriangle size={15}/>{exceptions.length} material line{exceptions.length===1?' needs':'s need'} a quantity review before further site supply.</p>}
+  </section>;
 }
 
 function Programme({ project, can, refresh, onAdd }) {
@@ -103,7 +142,7 @@ function Team({ project, can, onAdd }) { return <section className="workspace-su
 function CompletionReport({ projectId }) {
   const [report, setReport] = useState(null); useEffect(() => { api(`/projects/${projectId}/completion`).then(setReport).catch(() => setReport(null)); }, [projectId]);
   if (!report) return <div className="project-workspace-state compact"><span className="workspace-loader" /><h2>Compiling close-out intelligence</h2></div>;
-  const download = () => { const lines = [['GKUC Construction — project completion report'], [], ['Project', report.project.name], ['Client', report.project.client], ['Site', report.project.site], ['Manager', report.project.manager], ['Progress', `${report.project.progress}%`], [], ['Approved budget', report.financial.budget], ['Recorded cost', report.financial.spent], ['Income received', report.financial.income], ['Margin', report.financial.margin], [], ['Tasks completed', `${report.delivery.tasks.completed}/${report.delivery.tasks.total}`], ['Milestones completed', `${report.delivery.milestones.completed}/${report.delivery.milestones.total}`], ['Daily reports', report.delivery.reports]]; const csv = lines.map(row => row.map(value => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\n'); const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); const link = document.createElement('a'); link.href = url; link.download = `completion-${slug(report.project.name)}.csv`; link.click(); URL.revokeObjectURL(url); };
+  const download = () => { const lines = [[`${report.project.company} — project completion report`], [], ['Project', report.project.name], ['Client', report.project.client], ['Site', report.project.site], ['Manager', report.project.manager], ['Progress', `${report.project.progress}%`], [], ['Approved budget', report.financial.budget], ['Recorded cost', report.financial.spent], ['Income received', report.financial.income], ['Margin', report.financial.margin], [], ['Tasks completed', `${report.delivery.tasks.completed}/${report.delivery.tasks.total}`], ['Milestones completed', `${report.delivery.milestones.completed}/${report.delivery.milestones.total}`], ['Daily reports', report.delivery.reports]]; const csv = lines.map(row => row.map(value => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\n'); const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); const link = document.createElement('a'); link.href = url; link.download = `completion-${slug(report.project.name)}.csv`; link.click(); URL.revokeObjectURL(url); };
   return <div className="project-section-stack"><section className="closeout-hero"><div><span className="section-kicker">Project close-out</span><h2>{report.project.progress === 100 ? 'Ready for handover' : `${100 - report.project.progress}% of delivery remains`}</h2><p>The live completion pack combines commercial, delivery and resource records.</p></div><button className="primary" onClick={download}><Download size={16} />Export report</button></section><div className="closeout-grid"><article><CheckCircle2 /><strong>{report.delivery.tasks.completed}/{report.delivery.tasks.total}</strong><span>tasks delivered</span></article><article><CalendarDays /><strong>{report.delivery.milestones.completed}/{report.delivery.milestones.total}</strong><span>milestones complete</span></article><article><FileText /><strong>{report.delivery.reports}</strong><span>daily reports</span></article><article><HardHat /><strong>{report.resources.labour.people}</strong><span>people recorded</span></article></div><Table columns={['Cost category', 'Total']} template="minmax(220px,1fr) 180px" title="Final cost position">{report.financial.byCategory.map(row => <Row template="minmax(220px,1fr) 180px" key={row.source}><span>{row.source}</span><strong>{rupees(row.total)}</strong></Row>)}</Table></div>;
 }
 

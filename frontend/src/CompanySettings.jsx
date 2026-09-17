@@ -10,20 +10,23 @@ import { Field, TextArea } from './ui.jsx';
  * account changes without a developer — and a quotation carrying last year's VAT number is
  * a problem for GKUC, not for us.
  */
-export default function CompanySettings({ can }) {
+export default function CompanySettings({ can, companyId }) {
   const [company, setCompany] = useState(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { api('/company').then(setCompany).catch(failure => setError(failure.message)); }, []);
+  useEffect(() => {
+    setCompany(null);setError('');setMessage('');
+    api(`/company?companyId=${companyId}`).then(setCompany).catch(failure => setError(failure.message));
+  }, [companyId]);
 
   const submit = async event => {
     event.preventDefault();
     setBusy(true); setError(''); setMessage('');
     const form = new FormData(event.currentTarget);
     try {
-      const saved = await api('/company', {
+      const saved = await api(`/company?companyId=${companyId}`, {
         method: 'PUT',
         body: JSON.stringify({
           name: form.get('name'),
@@ -46,7 +49,7 @@ export default function CompanySettings({ can }) {
   if (!company) return <p className="empty-state">{error || 'Loading company details…'}</p>;
 
   return <section className="table-panel">
-    <div className="table-tools"><h2><Building2 size={16} /> Company details on client documents</h2></div>
+    <div className="table-tools"><h2><Building2 size={16} /> {company.name} details on client documents</h2></div>
     <form className="report-form" onSubmit={submit}>
       <Field name="name" label="Registered name" defaultValue={company.name} />
       <Field name="telephone" label="Telephone" defaultValue={company.telephone} required={false} />

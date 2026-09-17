@@ -108,7 +108,12 @@ export default function EmployeeProfile({ employeeId, close, canManage }) {
           <div><dt><Mail size={14} />Email</dt><dd>{employee.email || 'Not recorded'}</dd></div>
           <div><dt><BriefcaseBusiness size={14} />Department</dt><dd>{employee.department || 'Not assigned'}</dd></div>
           <div><dt><UserRound size={14} />Employee type</dt><dd>{employee.workerType} employee</dd></div>
+          {employee.payBasis !== undefined && <div><dt>Pay arrangement</dt><dd>{employee.payBasis} · {employee.payFrequency}</dd></div>}
+          {employee.payrollCategory !== undefined && <div><dt>Overtime policy</dt><dd>{employee.payrollCategory}</dd></div>}
+          {employee.basicSalary !== undefined && <div><dt>Monthly basic</dt><dd>{rupees(employee.basicSalary)}</dd></div>}
+          {employee.weeklyRate !== undefined && Number(employee.weeklyRate) > 0 && <div><dt>Weekly rate</dt><dd>{rupees(employee.weeklyRate)}</dd></div>}
           {employee.dailyRate !== undefined && <div><dt>Daily rate</dt><dd>{rupees(employee.dailyRate)}</dd></div>}
+          {employee.epfEligible !== undefined && <div><dt>Statutory eligibility</dt><dd>EPF {employee.epfEligible ? 'eligible' : 'not eligible'} · ETF {employee.etfEligible ? 'eligible' : 'not eligible'}</dd></div>}
         </dl>
         {employee.notes && <p className="employee-notes">{employee.notes}</p>}
       </section>

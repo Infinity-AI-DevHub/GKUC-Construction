@@ -14,7 +14,7 @@ import Integrity from '../Integrity.jsx';
 export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designer', 'Notifications', 'Evening summary', 'Messages', 'Lists', 'Fraud watch', 'Audit log', 'My account'];
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
-export default function Admin({ can, user, reload, initialTab = TABS[0], onTabChange }) {
+export default function Admin({ can, user, reload, companyId, initialTab = TABS[0], onTabChange }) {
   const [tab, setTab] = useState(TABS.includes(initialTab) ? initialTab : TABS[0]);
   const [creating, setCreating] = useState(false);
 
@@ -30,7 +30,7 @@ export default function Admin({ can, user, reload, initialTab = TABS[0], onTabCh
     <Tabs tabs={TABS} active={tab} onChange={chooseTab} />
     {tab === 'Users' && <Users can={can} creating={creating} closeCreate={() => setCreating(false)} />}
     {tab === 'Access control' && <AccessControl user={user} />}
-    {tab === 'Company' && <CompanySettings can={can} />}
+    {tab === 'Company' && <CompanySettings can={can} companyId={companyId} />}
     {tab === 'Documents' && <DocumentSettings can={can} />}
     {tab === 'Designer' && <DocumentDesigner can={can} />}
     {tab === 'Notifications' && <Notifications can={can} reload={reload} />}

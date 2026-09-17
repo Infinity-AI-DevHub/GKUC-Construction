@@ -12,17 +12,19 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 const quoteSelect = `SELECT q.id,q.reference,q.title,q.client_name client,q.engagement,q.main_contractor mainContractor,q.quote_date quoteDate,q.valid_until validUntil,
   q.subtotal,q.markup_percent markupPercent,q.vat_percent vatPercent,q.total,q.status,q.notes,q.terms,
-  q.boq_id boqId,b.reference boqReference,q.project_id projectId,p.name project,q.inquiry_id inquiryId,u.name preparedBy
+  q.company_id companyId,c.name company,q.boq_id boqId,b.reference boqReference,q.project_id projectId,p.name project,q.inquiry_id inquiryId,u.name preparedBy
   FROM quotations_client q LEFT JOIN boqs b ON b.id=q.boq_id LEFT JOIN projects p ON p.id=q.project_id
-  JOIN users u ON u.id=q.prepared_by`;
+  JOIN companies c ON c.id=q.company_id JOIN users u ON u.id=q.prepared_by`;
 
-router.get('/quotations', auth, permit('qs.view'), wrap(async (_req, res) =>
-  res.json(await query(`${quoteSelect} ORDER BY q.id DESC`))));
+router.get('/quotations', auth, permit('qs.view'), wrap(async (req, res) => {
+  const companyId=Number(req.query.companyId);
+  res.json(await query(`${quoteSelect} ${companyId>0?'WHERE q.company_id=?':''} ORDER BY q.id DESC`,companyId>0?[companyId]:[]));
+}));
 
 router.get('/quotations/:id', auth, permit('qs.view'), wrap(async (req, res) => {
   const quotation = await getOne(`${quoteSelect} WHERE q.id=?`, [req.params.id]);
   if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
-  const items = await query('SELECT id,category,description,unit,quantity,rate,amount,source_subquote_id sourceSubquoteId FROM quotation_items WHERE quotation_id=? ORDER BY id',
+  const items = await query('SELECT id,category,description,unit,quantity,rate,amount,material_id materialId,source_subquote_id sourceSubquoteId FROM quotation_items WHERE quotation_id=? ORDER BY id',
     [quotation.id]);
   res.json({ ...quotation, items });
 }));
@@ -45,7 +47,7 @@ router.get('/quotations/:id/document', auth, permit('qs.view'), wrap(async (req,
   const [items, context] = await Promise.all([
     query(`SELECT category,description,unit,quantity,rate,amount
       FROM quotation_items WHERE quotation_id=? ORDER BY id`, [quotation.id]),
-    documentContext(getOne)
+    documentContext(getOne, quotation.companyId)
   ]);
 
   const page = quotationDocument({
@@ -134,6 +136,7 @@ router.patch('/methods/:id', auth, permit('qs.quotation'), validate(z.object({
  * follows from the work instead of being typed by hand.
  */
 router.post('/quotations/from-methods', auth, permit('qs.quotation'), validate(z.object({
+  companyId: z.number().int().positive().default(1),
   clientName: z.string().min(2).max(180),
   projectId: z.number().int().positive().optional(),
   inquiryId: z.number().int().positive().optional(),
@@ -152,6 +155,14 @@ router.post('/quotations/from-methods', auth, permit('qs.quotation'), validate(z
   })).min(1).max(60)
 })), wrap(async (req, res) => {
   const body = req.body;
+  if (body.projectId) {
+    const project = await getOne('SELECT id FROM projects WHERE id=? AND company_id=?', [body.projectId, body.companyId]);
+    if (!project) return res.status(400).json({ error: 'That project belongs to the other company' });
+  }
+  if (body.inquiryId) {
+    const inquiry = await getOne('SELECT id FROM inquiries WHERE id=? AND company_id=?', [body.inquiryId, body.companyId]);
+    if (!inquiry) return res.status(400).json({ error: 'That inquiry belongs to the other company' });
+  }
   const ids = [...new Set(body.lines.map(line => line.methodId))];
   const methods = await query(
     `SELECT * FROM work_methods WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
@@ -188,10 +199,10 @@ router.post('/quotations/from-methods', auth, permit('qs.quotation'), validate(z
 
   const id = await transaction(async connection => {
     const [result] = await connection.execute(`INSERT INTO quotations_client
-      (reference,project_id,inquiry_id,client_name,title,quote_date,valid_until,subtotal,
+      (company_id,reference,project_id,inquiry_id,client_name,title,quote_date,valid_until,subtotal,
        markup_percent,vat_percent,total,notes,method_codes,location,contact,payment_terms,prepared_by)
-      VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?)`,
-    [reference, body.projectId || null, body.inquiryId || null, body.clientName,
+      VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?)`,
+    [body.companyId, reference, body.projectId || null, body.inquiryId || null, body.clientName,
       names.join(' / '), body.quoteDate || today(), body.validUntil || null, subtotal,
       body.vatPercent, total, body.notes || null, codes.join(','),
       body.location || null, body.contact || null, terms, req.user.id]);
@@ -226,10 +237,10 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
   mainContractor: z.string().max(180).optional(),
   notes: z.string().max(1000).optional()
 })), wrap(async (req, res) => {
-  const boq = await getOne(`SELECT b.*,p.name project,p.client FROM boqs b JOIN projects p ON p.id=b.project_id WHERE b.id=?`,
+  const boq = await getOne(`SELECT b.*,p.name project,p.client,p.company_id FROM boqs b JOIN projects p ON p.id=b.project_id WHERE b.id=?`,
     [req.body.boqId]);
   if (!boq) return res.status(404).json({ error: 'BOQ not found' });
-  const items = await query('SELECT category,description,unit,quantity,rate,amount FROM boq_items WHERE boq_id=? ORDER BY id', [boq.id]);
+  const items = await query('SELECT category,description,unit,quantity,rate,amount,material_id materialId FROM boq_items WHERE boq_id=? ORDER BY id', [boq.id]);
   if (!items.length) return res.status(409).json({ error: 'That BOQ has no priced lines to quote from' });
 
   const subtotal = items.reduce((sum, item) => sum + Number(item.amount), 0);
@@ -239,10 +250,10 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
 
   const id = await transaction(async connection => {
     const [result] = await connection.execute(`INSERT INTO quotations_client
-      (reference,boq_id,project_id,inquiry_id,client_name,title,quote_date,valid_until,subtotal,
+      (company_id,reference,boq_id,project_id,inquiry_id,client_name,title,quote_date,valid_until,subtotal,
        markup_percent,vat_percent,total,notes,engagement,main_contractor,prepared_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [reference, boq.id, boq.project_id, req.body.inquiryId || null,
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [boq.company_id, reference, boq.id, boq.project_id, req.body.inquiryId || null,
       req.body.clientName || boq.client, req.body.title || describe(boq),
       req.body.quoteDate || today(), req.body.validUntil || null, subtotal,
       req.body.markupPercent, req.body.vatPercent, total, req.body.notes || null,
@@ -250,9 +261,9 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
     /* The lines are copied, not referenced: a later BOQ edit must not silently restate a
        quotation the client has already been given. */
     for (const item of items) {
-      await connection.execute(`INSERT INTO quotation_items (quotation_id,category,description,unit,quantity,rate,amount)
-        VALUES (?,?,?,?,?,?,?)`,
-      [result.insertId, item.category, item.description, item.unit, item.quantity, item.rate, item.amount]);
+      await connection.execute(`INSERT INTO quotation_items (quotation_id,category,description,unit,quantity,rate,amount,material_id)
+        VALUES (?,?,?,?,?,?,?,?)`,
+      [result.insertId, item.category, item.description, item.unit, item.quantity, item.rate, item.amount,item.materialId]);
     }
     await audit(connection, req.user.id, 'CREATE', 'quotation', result.insertId, null, { reference, total }, req.ip);
     return result.insertId;
@@ -364,6 +375,7 @@ const STANDARD_CHECKLIST = [
 ];
 
 const tenderSelect = `SELECT t.id,t.reference,t.contract_no contractNo,t.title,t.client,t.source,
+  t.company_id companyId,c.name company,
   t.bidding_entity biddingEntity,t.procurement_method procurementMethod,t.specialty,t.cida_grade cidaGrade,
   t.employer_office employerOffice,t.employer_contact employerContact,t.max_contract_value maxContractValue,
   t.document_fee documentFee,t.docs_from docsFrom,t.docs_until docsUntil,t.receipt_no receiptNo,
@@ -378,12 +390,14 @@ const tenderSelect = `SELECT t.id,t.reference,t.contract_no contractNo,t.title,t
   (SELECT COUNT(*) FROM tender_checklist c WHERE c.tender_id=t.id) checklistTotal,
   (SELECT COUNT(*) FROM tender_checklist c WHERE c.tender_id=t.id AND c.done=1) checklistDone,
   (SELECT COUNT(*) FROM tender_checklist c WHERE c.tender_id=t.id AND c.done=0 AND c.mandatory=1) checklistOutstanding
-  FROM tenders t LEFT JOIN projects p ON p.id=t.project_id JOIN users u ON u.id=t.owner_id`;
+  FROM tenders t JOIN companies c ON c.id=t.company_id LEFT JOIN projects p ON p.id=t.project_id JOIN users u ON u.id=t.owner_id`;
 
 /** The live bids, soonest deadline first — which is the order the QS works in. */
 router.get('/tenders', auth, permit('qs.view'), wrap(async (req, res) => {
   const filters = [];
   const params = [];
+  const companyId = Number(req.query.companyId);
+  if (companyId > 0) { filters.push('t.company_id=?'); params.push(companyId); }
   if (req.query.status) { filters.push('t.status=?'); params.push(req.query.status); }
   if (req.query.open === 'true') filters.push("t.status IN ('Identified','Document purchased','Preparing')");
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
@@ -394,9 +408,10 @@ router.get('/tenders', auth, permit('qs.view'), wrap(async (req, res) => {
 
 /* Declared before /tenders/:id, which would otherwise match this as a tender whose id
    is the word "commitments". */
-router.get('/tenders/commitments', auth, permit('qs.view'), wrap(async (_req, res) => {
+router.get('/tenders/commitments', auth, permit('qs.view'), wrap(async (req, res) => {
+  const companyId=Number(req.query.companyId);
   const rows = await query(`SELECT p.id,p.name,p.client,p.stage,p.budget,${spendSql('p')} spent
-    FROM projects p WHERE p.active=1 AND p.site_status <> 'Completed' ORDER BY p.name`);
+    FROM projects p WHERE p.active=1 AND p.site_status <> 'Completed' ${companyId>0?'AND p.company_id=?':''} ORDER BY p.name`,companyId>0?[companyId]:[]);
   const commitments = rows.map(row => ({
     project: row.name,
     client: row.client,
@@ -426,6 +441,7 @@ router.get('/tenders/:id', auth, permit('qs.view'), wrap(async (req, res) => {
 }));
 
 const tenderShape = z.object({
+  companyId: z.number().int().positive().default(1),
   contractNo: z.string().max(120).optional(),
   title: z.string().min(3).max(220),
   client: z.string().min(2).max(180),
@@ -460,6 +476,7 @@ const datesRunForwards = value =>
 const dateOrder = { message: 'The dates run backwards: documents go on sale, then bids close', path: ['closingDate'] };
 
 const columns = {
+  companyId: 'company_id',
   contractNo: 'contract_no', biddingEntity: 'bidding_entity', procurementMethod: 'procurement_method',
   cidaGrade: 'cida_grade', employerOffice: 'employer_office', employerContact: 'employer_contact',
   maxContractValue: 'max_contract_value', documentFee: 'document_fee', docsFrom: 'docs_from',
@@ -604,9 +621,9 @@ router.post('/tenders/:id/outcome', auth, permit('qs.tender'), validate(z.object
     if (body.status === 'Won' && body.registerProject) {
       const budget = body.awardValue || Number(tender.bid_value) || Number(tender.estimated_value);
       const [project] = await connection.execute(
-        `INSERT INTO projects (name,client,manager,site,stage,budget,progress,health,start_date,end_date)
-         VALUES (?,?,?,?, 'Mobilisation', ?, 0, 'On track', ?, ?)`,
-        [tender.title.slice(0, 180), tender.client, body.manager || 'To be assigned',
+        `INSERT INTO projects (company_id,name,client,manager,site,stage,budget,progress,health,start_date,end_date)
+         VALUES (?,?,?,?,?, 'Mobilisation', ?, 0, 'On track', ?, ?)`,
+        [tender.company_id,tender.title.slice(0, 180), tender.client, body.manager || 'To be assigned',
           tender.employer_office || tender.client, budget, body.startDate || today(), body.endDate || null]);
       projectId = project.insertId;
     }
@@ -659,11 +676,13 @@ router.post('/tenders/:id/outcome', auth, permit('qs.tender'), validate(z.object
 router.get('/tenders/:id/commitments/document', auth, permit('qs.view'), wrap(async (req, res) => {
   const tender = req.params.id === 'blank'
     ? null
-    : await getOne(`SELECT reference,contract_no contractNo,bidding_entity biddingEntity,specialty FROM tenders WHERE id=?`, [req.params.id]);
+    : await getOne(`SELECT reference,contract_no contractNo,bidding_entity biddingEntity,specialty,company_id companyId FROM tenders WHERE id=?`, [req.params.id]);
   if (req.params.id !== 'blank' && !tender) return res.status(404).json({ error: 'Tender not found' });
 
+  const companyId = tender?.companyId || Number(req.query.companyId) || 1;
+
   const rows = await query(`SELECT p.name,p.client,p.budget,${spendSql('p')} spent
-    FROM projects p WHERE p.active=1 AND p.site_status <> 'Completed' ORDER BY p.name`);
+    FROM projects p WHERE p.active=1 AND p.site_status <> 'Completed' AND p.company_id=? ORDER BY p.name`, [companyId]);
   const commitments = rows.map(row => ({
     project: row.name, client: row.client,
     initialAmount: Number(row.budget),
@@ -673,7 +692,7 @@ router.get('/tenders/:id/commitments/document', auth, permit('qs.view'), wrap(as
     initialAmount: commitments.reduce((sum, row) => sum + row.initialAmount, 0),
     outstanding: commitments.reduce((sum, row) => sum + row.outstanding, 0)
   };
-  const context = await documentContext(getOne);
+  const context = await documentContext(getOne, companyId);
   res.type('html').send(commitmentsDocument({ ...context, tender, commitments, totals, asAt: today() }));
 }));
 
@@ -693,7 +712,7 @@ const subQuoteSelect = `SELECT q.id,q.reference,q.their_reference theirReference
   q.site_address siteAddress,q.contact_person contactPerson,q.contact_phone contactPhone,
   q.subtotal,q.discount_total discountTotal,q.total,q.notes,q.status,
   q.decision_note decisionNote,q.decided_at decidedAt,
-  q.project_id projectId,p.name project,q.boq_id boqId,
+  q.company_id companyId,q.project_id projectId,p.name project,q.boq_id boqId,
   s.id subcontractorId,s.name subcontractor,s.trade,
   u.name recordedBy,d.name decidedBy,
   (SELECT COUNT(*) FROM quotation_items qi WHERE qi.source_subquote_id=q.id) usedInQuotations
@@ -709,6 +728,8 @@ const lineTotal = item =>
 router.get('/subcontract-quotations', auth, permit('qs.view', 'projects.view'), wrap(async (req, res) => {
   const filters = [];
   const params = [];
+  const companyId = Number(req.query.companyId);
+  if (companyId > 0) { filters.push('q.company_id=?'); params.push(companyId); }
   if (req.query.projectId) { filters.push('q.project_id=?'); params.push(req.query.projectId); }
   if (req.query.status) { filters.push('q.status=?'); params.push(req.query.status); }
   if (req.query.package) { filters.push('q.package=?'); params.push(req.query.package); }
@@ -726,6 +747,7 @@ router.get('/subcontract-quotations/:id', auth, permit('qs.view', 'projects.view
 }));
 
 router.post('/subcontract-quotations', auth, permit('subcontractors.manage'), validate(z.object({
+  companyId: z.number().int().positive().default(1),
   subcontractorId: z.number().int().positive(),
   projectId: z.number().int().positive().optional(),
   boqId: z.number().int().positive().optional(),
@@ -748,8 +770,8 @@ router.post('/subcontract-quotations', auth, permit('subcontractors.manage'), va
   const body = req.body;
   const sub = await getOne('SELECT id,name FROM subcontractors WHERE id=? AND active=1', [body.subcontractorId]);
   if (!sub) return res.status(404).json({ error: 'Subcontractor not found' });
-  if (body.projectId && !await getOne('SELECT id FROM projects WHERE id=?', [body.projectId])) {
-    return res.status(404).json({ error: 'Project not found' });
+  if (body.projectId && !await getOne('SELECT id FROM projects WHERE id=? AND company_id=?', [body.projectId, body.companyId])) {
+    return res.status(400).json({ error: 'That project belongs to the other company' });
   }
 
   const subtotal = body.items.reduce((sum, item) => sum + Number(item.quantity) * Number(item.rate), 0);
@@ -760,10 +782,10 @@ router.post('/subcontract-quotations', auth, permit('subcontractors.manage'), va
   const id = await transaction(async connection => {
     const [result] = await connection.execute(
       `INSERT INTO subcontractor_quotations
-        (reference,subcontractor_id,project_id,boq_id,their_reference,package,quote_date,validity_days,
+        (company_id,reference,subcontractor_id,project_id,boq_id,their_reference,package,quote_date,validity_days,
          valid_until,site_address,contact_person,contact_phone,subtotal,discount_total,total,notes,created_by)
-       VALUES (?,?,?,?,?,?,?,?,DATE_ADD(?, INTERVAL ? DAY),?,?,?,?,?,?,?,?)`,
-      [reference, sub.id, body.projectId || null, body.boqId || null, body.theirReference || null,
+       VALUES (?,?,?,?,?,?,?,?,?,DATE_ADD(?, INTERVAL ? DAY),?,?,?,?,?,?,?,?)`,
+      [body.companyId, reference, sub.id, body.projectId || null, body.boqId || null, body.theirReference || null,
         body.package, body.quoteDate, body.validityDays, body.quoteDate, body.validityDays,
         body.siteAddress || null, body.contactPerson || null, body.contactPhone || null,
         subtotal, discountTotal, total, body.notes || null, req.user.id]);
@@ -841,6 +863,9 @@ router.post('/quotations/:id/subcontract-line', auth, permit('qs.quotation'), va
     `SELECT q.*, s.name subcontractor FROM subcontractor_quotations q
      JOIN subcontractors s ON s.id=q.subcontractor_id WHERE q.id=?`, [req.body.subQuotationId]);
   if (!sub) return res.status(404).json({ error: 'Subcontract quotation not found' });
+  if (Number(sub.company_id) !== Number(quotation.company_id)) {
+    return res.status(400).json({ error: 'Those quotations belong to different companies' });
+  }
   if (sub.status === 'Rejected' || sub.status === 'Superseded') {
     return res.status(409).json({ error: `That subcontract quotation was ${sub.status.toLowerCase()}` });
   }
@@ -876,8 +901,10 @@ const retentionSelect = `SELECT r.id,r.description,r.amount,r.percent,r.held_fro
   r.project_id projectId,p.name project,p.client,u.name createdBy
   FROM retentions r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.created_by`;
 
-router.get('/retentions', auth, permit('qs.view', 'finance.view'), wrap(async (_req, res) =>
-  res.json(await query(`${retentionSelect} ORDER BY r.release_date`))));
+router.get('/retentions', auth, permit('qs.view', 'finance.view'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId);
+  res.json(await query(`${retentionSelect} ${companyId > 0 ? 'WHERE p.company_id=?' : ''} ORDER BY r.release_date`, companyId > 0 ? [companyId] : []));
+}));
 
 router.post('/retentions', auth, permit('qs.retention'), validate(z.object({
   projectId: z.number().int().positive(),
@@ -918,12 +945,17 @@ router.post('/retentions/:id/release', auth, permit('qs.retention'), validate(z.
 
 /* ------------------------------------------------------------------ Subcontractors */
 
-router.get('/subcontractors', auth, permit('qs.view', 'projects.view'), wrap(async (_req, res) =>
+router.get('/subcontractors', auth, permit('qs.view', 'projects.view'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId);
+  const params = companyId > 0 ? [companyId, companyId] : [];
   res.json(await query(`SELECT s.id,s.name,s.trade,s.contact_person contact,s.phone,s.email,s.notes,
-    (SELECT COUNT(*) FROM subcontractor_bills b WHERE b.subcontractor_id=s.id) bills,
-    (SELECT COALESCE(SUM(b.amount-b.paid_amount),0) FROM subcontractor_bills b
-      WHERE b.subcontractor_id=s.id AND b.status<>'Paid') outstanding
-    FROM subcontractors s WHERE s.active=1 ORDER BY s.name`))));
+    s.address,s.business_id businessId,s.contact_type contactType,
+    (SELECT COUNT(*) FROM subcontractor_bills b JOIN projects bp ON bp.id=b.project_id
+      WHERE b.subcontractor_id=s.id ${companyId > 0 ? 'AND bp.company_id=?' : ''}) bills,
+    (SELECT COALESCE(SUM(b.amount-b.paid_amount),0) FROM subcontractor_bills b JOIN projects bp ON bp.id=b.project_id
+      WHERE b.subcontractor_id=s.id AND b.status<>'Paid' ${companyId > 0 ? 'AND bp.company_id=?' : ''}) outstanding
+    FROM subcontractors s WHERE s.active=1 ORDER BY s.name`, params));
+}));
 
 router.post('/subcontractors', auth, permit('subcontractors.manage'), validate(z.object({
   name: z.string().min(2).max(180),
@@ -931,12 +963,16 @@ router.post('/subcontractors', auth, permit('subcontractors.manage'), validate(z
   contact: z.string().max(120).optional(),
   phone: z.string().max(40).optional(),
   email: z.string().email().optional().or(z.literal('')),
+  address:z.string().max(400).optional(),businessId:z.string().max(100).optional(),
+  contactType:z.enum(['Company','Individual']).default('Company'),
   notes: z.string().max(600).optional()
 })), wrap(async (req, res) => {
   const body = req.body;
   try {
-    const result = await query('INSERT INTO subcontractors (name,trade,contact_person,phone,email,notes) VALUES (?,?,?,?,?,?)',
-      [body.name, body.trade, body.contact || null, body.phone || null, body.email || null, body.notes || null]);
+    const result = await query(`INSERT INTO subcontractors
+      (name,trade,contact_person,phone,email,address,business_id,contact_type,notes) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [body.name, body.trade, body.contact || null, body.phone || null, body.email || null,
+        body.address||null,body.businessId||null,body.contactType,body.notes || null]);
     await audit(pool, req.user.id, 'CREATE', 'subcontractor', result.insertId, null, body, req.ip);
     res.status(201).json(await getOne('SELECT * FROM subcontractors WHERE id=?', [result.insertId]));
   } catch (error) {
@@ -945,11 +981,41 @@ router.post('/subcontractors', auth, permit('subcontractors.manage'), validate(z
   }
 }));
 
-router.get('/subcontractor-bills', auth, permit('qs.view', 'finance.view'), wrap(async (_req, res) =>
+router.get('/subcontractor-rates',auth,permit('qs.view','projects.view'),wrap(async(req,res)=>{
+  const projectId=Number(req.query.projectId),companyId=Number(req.query.companyId);
+  const where=projectId>0?'WHERE r.project_id=?':companyId>0?'WHERE p.company_id=?':'';
+  res.json(await query(`SELECT r.id,r.project_id projectId,p.name project,r.subcontractor_id subcontractorId,
+    s.name subcontractor,s.trade,s.address,s.contact_person contact,s.phone,s.email,s.business_id businessId,
+    r.work_item workItem,r.unit,r.rate,r.agreed_on agreedOn,r.valid_until validUntil,r.notes
+    FROM subcontractor_project_rates r JOIN projects p ON p.id=r.project_id
+    JOIN subcontractors s ON s.id=r.subcontractor_id ${where} ORDER BY p.name,s.name,r.work_item`,
+    projectId>0?[projectId]:companyId>0?[companyId]:[]));
+}));
+router.post('/subcontractor-rates',auth,permit('subcontractors.manage'),validate(z.object({
+  projectId:z.number().int().positive(),subcontractorId:z.number().int().positive(),
+  workItem:z.string().trim().min(3).max(220),unit:z.string().trim().min(1).max(30),
+  rate:z.number().nonnegative(),agreedOn:isoDate.optional(),validUntil:isoDate.optional(),
+  notes:z.string().max(600).optional()
+})),wrap(async(req,res)=>{
+  const b=req.body;
+  const [project,sub]=await Promise.all([getOne('SELECT id FROM projects WHERE id=? AND active=1',[b.projectId]),
+    getOne('SELECT id FROM subcontractors WHERE id=? AND active=1',[b.subcontractorId])]);
+  if(!project||!sub)return res.status(404).json({error:'Project or subcontractor not found'});
+  try{const result=await query(`INSERT INTO subcontractor_project_rates
+    (project_id,subcontractor_id,work_item,unit,rate,agreed_on,valid_until,notes,created_by) VALUES (?,?,?,?,?,?,?,?,?)`,
+    [b.projectId,b.subcontractorId,b.workItem,b.unit,b.rate,b.agreedOn||null,b.validUntil||null,b.notes||null,req.user.id]);
+    await audit(pool,req.user.id,'CREATE','subcontract_rate',result.insertId,null,b,req.ip);
+    res.status(201).json({id:result.insertId});
+  }catch(error){if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'This work item already has a rate for that subcontractor on this project'});throw error;}
+}));
+
+router.get('/subcontractor-bills', auth, permit('qs.view', 'finance.view'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId);
   res.json(await query(`SELECT b.id,b.reference,b.description,b.amount,b.paid_amount paidAmount,b.bill_date billDate,
     b.due_date dueDate,b.status,s.name subcontractor,p.name project,b.project_id projectId
     FROM subcontractor_bills b JOIN subcontractors s ON s.id=b.subcontractor_id
-    JOIN projects p ON p.id=b.project_id ORDER BY b.id DESC`))));
+    JOIN projects p ON p.id=b.project_id ${companyId > 0 ? 'WHERE p.company_id=?' : ''} ORDER BY b.id DESC`, companyId > 0 ? [companyId] : []));
+}));
 
 /** A subcontractor bill is a project cost, so it posts against the budget like any other. */
 router.post('/subcontractor-bills', auth, permit('subcontractors.manage'), validate(z.object({

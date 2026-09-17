@@ -23,6 +23,7 @@ import Projects from './pages/Projects.jsx';
 import Tasks from './pages/Tasks.jsx';
 import People from './pages/People.jsx';
 import Materials from './pages/Materials.jsx';
+import Inventory from './pages/Inventory.jsx';
 import Fleet from './pages/Fleet.jsx';
 import Finance from './pages/Finance.jsx';
 import DailyReports from './pages/DailyReports.jsx';
@@ -53,6 +54,7 @@ const NAV = [
   ['Quantity Surveying', Calculator, ['qs.view']],
   ['People', Users, ['hr.view', 'hr.attendance', 'hr.leave', 'hr.payroll', 'site.attendance']],
   ['Materials', Warehouse, ['store.view', 'store.manage']],
+  ['Stock locations', Warehouse, ['store.view', 'store.manage', 'projects.view']],
   ['Fleet', Truck, ['transport.view', 'transport.manage', 'store.lending']],
   ['Finance', CircleDollarSign, ['finance.view', 'finance.manage', 'finance.invoice', 'finance.pay']],
   ['Daily reports', FileText, ['projects.view']],
@@ -103,6 +105,7 @@ const capabilities = permissions => {
     leave: any('hr.manage', 'hr.leave'),
     overtime: any('site.attendance', 'hr.leave', 'hr.manage'),
     qs: any('qs.boq'),
+    boq: any('qs.boq'),
     quotation: any('qs.quotation'),
     tender: any('qs.tender'),
     retention: any('qs.retention'),
@@ -231,6 +234,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [companyId, setCompanyId] = useState(() => Number(localStorage.getItem('gkuc:company-id')) || 1);
 
   /*
    * Always takes the user from the server's answer, never from a value handed in.
@@ -376,7 +380,41 @@ function App() {
   if (!user || !data) return <Login onLogin={async () => { setLoading(true); await load(); }} />;
 
   const reload = () => load();
-  const shared = { data, reload, can, user };
+  const companies = data.companies || [];
+  const selectedCompany = companies.find(company => Number(company.id) === Number(companyId)) || companies[0];
+  const selectedCompanyId = Number(selectedCompany?.id || 1);
+  const chooseCompany = id => {
+    const next = Number(id);
+    localStorage.setItem('gkuc:company-id', String(next));
+    setCompanyId(next);
+  };
+  const scopedProjects = data.projects.filter(project => Number(project.company_id || project.companyId || 1) === selectedCompanyId);
+  const scopedProjectIds = new Set(scopedProjects.map(project => Number(project.id)));
+  const byProject = rows => (rows || []).filter(row => row.companyId
+    ? Number(row.companyId) === selectedCompanyId
+    : row.projectId ? scopedProjectIds.has(Number(row.projectId)) : true);
+  const scopedFinance = byProject(data.finance);
+  const revenue = scopedFinance.reduce((sum, row) => sum + Number(row.income || 0), 0);
+  const spend = scopedFinance.reduce((sum, row) => sum + Number(row.expenses || 0), 0);
+  const scopedData = {
+    ...data,
+    projects: scopedProjects,
+    tasks: byProject(data.tasks),
+    reports: byProject(data.reports),
+    purchaseRequests: byProject(data.purchaseRequests),
+    boqs: byProject(data.boqs),
+    milestones: byProject(data.milestones),
+    finance: scopedFinance,
+    inquiries: (data.inquiries || []).filter(row => Number(row.companyId || 1) === selectedCompanyId),
+    dashboard: {
+      ...data.dashboard,
+      delayed: (data.dashboard?.delayed || []).filter(row => scopedProjectIds.has(Number(row.id))),
+      revenue, spend, margin: revenue - spend,
+      overBudget: scopedFinance.filter(row => Number(row.budget) > 0 && Number(row.expenses) > Number(row.budget)).length
+    }
+  };
+  const shared = { data: scopedData, allData: data, reload, can, user, companies,
+    companyId: selectedCompanyId, company: selectedCompany, setCompanyId: chooseCompany };
 
   /* Declared above the page map, which now references it: the dashboard's alert card offers
      a way through to the full notification centre. */
@@ -390,6 +428,7 @@ function App() {
     Tasks: <Tasks {...shared} />,
     People: <People {...shared} />,
     Materials: <Materials {...shared} />,
+    'Stock locations': <Inventory {...shared} />,
     Fleet: <Fleet {...shared} />,
     Finance: <Finance {...shared} />,
     'Daily reports': <DailyReports {...shared} />,
@@ -455,7 +494,18 @@ function App() {
           <AccountMenu user={user} onLogout={logout} onAccount={openAccount} />
         </div>
       </header>
-      <main>{content}</main>
+      <main>
+        <div className="company-scope" aria-label="Active company">
+          <div><span>Operating company</span><strong>{selectedCompany?.name || 'GKUC Construction'}</strong></div>
+          <div className="company-scope-options">
+            {companies.map(company => <button type="button" key={company.id}
+              className={Number(company.id) === selectedCompanyId ? 'active' : ''}
+              onClick={() => chooseCompany(company.id)}>{company.name}</button>)}
+          </div>
+          <small>People, materials and vehicles stay shared.</small>
+        </div>
+        {content}
+      </main>
     </div>
   </div>;
 }

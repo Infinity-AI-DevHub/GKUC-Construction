@@ -384,11 +384,11 @@ main { width:100% }
 }
 
 body { background: var(--brand-ice) }
-.app { background: linear-gradient(180deg,var(--brand-navy) 0,var(--brand-navy) 168px,var(--brand-ice) 168px) }
-.page-heading,.page-heading h1 { color:#fff }
-.page-heading p,.page-heading .eyebrow { color:#b6c5d5 }
-.reference-welcome,.reference-welcome h1,.reference-welcome .welcome-counters b { color:#fff }
-.reference-welcome p,.reference-welcome .welcome-counters span { color:#aebfd1 }
+.app { background:var(--brand-ice) }
+.page-heading,.page-heading h1 { color:var(--brand-navy) }
+.page-heading p,.page-heading .eyebrow { color:#63758a }
+.reference-welcome,.reference-welcome h1,.reference-welcome .welcome-counters b { color:var(--brand-navy) }
+.reference-welcome p,.reference-welcome .welcome-counters span { color:#63758a }
 .app > aside { background:var(--brand-navy);border-color:#24405f }
 .brand small,.profile span { color:#8fa6c0 }
 nav button { color:#b9c7d7 }
@@ -2444,6 +2444,7 @@ label:has(> textarea[required]):not(:has(.req))::after {
   width: 100%; border: 1px solid var(--line); border-radius: 6px;
   padding: 9px 10px; font-size: 13.5px; background: #fff; outline: none;
 }
+.invoice-line > select { grid-column: 1 / -1; width: 100%; min-width: 0 }
 .invoice-line > span { font-size: 13.5px; font-weight: 700; text-align: right }
 .invoice-line .icon-btn { width: 34px; height: 34px; font-size: 18px; line-height: 1 }
 .invoice-line .icon-btn:disabled { opacity: .4; cursor: default }
@@ -2473,6 +2474,7 @@ label:has(> textarea[required]):not(:has(.req))::after {
 .invoice-note svg { flex: none; margin-top: 2px }
 
 .petty-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 13px }
+.petty-account-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 16px}.petty-account{position:relative;overflow:hidden;padding:17px 18px;border:1px solid #d8e3ea;border-radius:12px;background:#fff;box-shadow:0 8px 24px rgba(10,38,63,.045)}.petty-account:before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:#193e63}.petty-account.salary-advance:before{background:#b51f3f}.petty-account.fuel:before{background:#d38318}.petty-account span,.petty-account strong,.petty-account small{display:block}.petty-account span{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.7px;color:#667e8e}.petty-account strong{margin:6px 0 3px;font:800 21px Manrope;color:#12314c}.petty-account small{font-size:10px;color:#7a8c98}.petty-ledger-heading{display:flex;align-items:center;gap:9px;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#f3f7fa;color:#617887;font-size:11px}.petty-card>.badge{margin-bottom:9px}
 .petty-card {
   display: block; text-align: left; border: 0; border-radius: 8px; background: #fff;
   padding: 17px 18px; box-shadow: 0 8px 24px #12241b0b;
@@ -2538,9 +2540,10 @@ table.register thead .register-name { background: #f3f6f7 }
     border: 1px solid var(--line); border-radius: 9px; padding: 11px;
   }
   .invoice-line > input { grid-column: 1 }
-  .invoice-line .icon-btn { grid-column: 2; grid-row: 1 }
+  .invoice-line .icon-btn { grid-column: 2; grid-row: auto }
   .invoice-line > span { grid-column: 1 / -1; text-align: left }
   .petty-grid { grid-template-columns: 1fr }
+  .petty-account-summary{grid-template-columns:1fr}
   .register-legend { gap: 10px }
   table.register .register-name { min-width: 132px; padding-inline: 11px }
 }
@@ -2564,6 +2567,26 @@ table.register thead .register-name { background: #f3f6f7 }
 .app > aside .profile .avatar { background:#e8f1ff;color:#174f91;box-shadow:none }
 .mobile-brand { color:var(--brand-navy);font-weight:800 }
 .mobile-brand img { object-fit:contain;filter:none }
+.company-scope{display:grid;grid-template-columns:minmax(180px,.7fr) auto minmax(190px,.65fr);align-items:center;gap:18px;margin:-10px 0 24px;padding:12px 15px;border:1px solid #d7e1ea;border-radius:13px;background:#fff;box-shadow:0 8px 24px rgba(7,29,59,.045)}
+.company-scope>div:first-child span,.company-scope>div:first-child strong{display:block}.company-scope>div:first-child span{font-size:9px;text-transform:uppercase;letter-spacing:1.1px;color:#76889a;font-weight:800}.company-scope>div:first-child strong{margin-top:3px;color:var(--brand-navy);font-size:13px}.company-scope-options{display:flex;gap:4px;padding:3px;border-radius:9px;background:#edf2f7}.company-scope-options button{border:0;border-radius:7px;padding:8px 12px;background:transparent;color:#52677b;font-size:11px;font-weight:750;white-space:nowrap}.company-scope-options button.active{background:var(--brand-navy);color:#fff;box-shadow:0 2px 7px rgba(7,29,59,.18)}.company-scope>small{color:#718294;font-size:10px;text-align:right}
+@media(max-width:760px){.company-scope{grid-template-columns:1fr;margin:-5px 0 18px;gap:9px}.company-scope-options{width:100%;overflow-x:auto}.company-scope-options button{flex:1}.company-scope>small{text-align:left}}
+
+@media (min-width:1024px) {
+  .app > aside {
+    background:#fff;border-color:#d9e3ed;box-shadow:0 9px 28px rgba(7,29,59,.07)
+  }
+  .app > aside .brand strong { color:var(--brand-navy) }
+  .app > aside .brand small { color:#6d7f92 }
+  .app > aside nav button { color:#52677e }
+  .app > aside nav button:hover { background:#f1f5f9;color:var(--brand-navy) }
+  .app > aside nav button.active { background:#edf3f8;color:var(--brand-navy) }
+  .app > aside .sidebar-bottom { border-color:#d9e3ed }
+  .app > aside .account-trigger { color:var(--brand-navy);border-color:transparent }
+  .app > aside .account-trigger:hover,
+  .app > aside .account.open .account-trigger { background:#edf3f8;border-color:#d9e3ed }
+  .app > aside .account-identity strong { color:var(--brand-navy) }
+  .app > aside .account-identity small,.app > aside .account-chevron { color:#63758a }
+}
 
 /* At laptop widths the measured More menu protects the horizontal bar. The brand and
    account are allowed to shrink to sensible limits instead of stealing the nav's room. */
@@ -2668,3 +2691,14 @@ table.register thead .register-name { background: #f3f6f7 }
 .report-library nav{display:grid;flex:none;flex-direction:column;gap:2px}.report-library nav button{flex:none}
 @media(max-width:1000px){.report-library nav{display:flex;flex-direction:row;justify-content:flex-start;overflow-x:auto;overflow-y:hidden}.report-library nav button{width:190px}}
 @media(max-width:600px){.report-library nav button{width:165px;min-width:165px}.report-library nav button strong{white-space:normal}}
+.finance-report-filters{display:grid;grid-template-columns:minmax(260px,1fr) repeat(3,minmax(145px,190px));gap:10px;align-items:end;margin-bottom:16px;padding:15px 17px;border:1px solid #d5e1e9;border-radius:14px;background:linear-gradient(135deg,#f9fbfd,#fff);box-shadow:0 8px 25px rgba(10,38,63,.045)}.finance-report-filters>div{display:flex;align-items:center;gap:11px;color:#143653;align-self:center}.finance-report-filters>div>svg{color:#b51f3f}.finance-report-filters>div span,.finance-report-filters>div strong,.finance-report-filters>div small,.finance-report-filters label{display:block}.finance-report-filters>div strong{font:800 13px Manrope}.finance-report-filters>div small{color:#748794;font-size:9px;margin-top:3px}.finance-report-filters label{color:#6b7f8e;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.6px}.finance-report-filters select,.finance-report-filters input{display:block;width:100%;height:38px;margin-top:5px;padding:0 10px;border:1px solid #ccd9e2;border-radius:8px;background:#fff;color:#173650;font:600 11px Inter;outline:0}.finance-report-filters select:focus,.finance-report-filters input:focus{border-color:#1b699d;box-shadow:0 0 0 3px rgba(27,105,157,.09)}
+@media(max-width:1050px){.finance-report-filters{grid-template-columns:1fr repeat(3,minmax(130px,1fr))}.finance-report-filters>div{grid-column:1/-1}}
+@media(max-width:650px){.finance-report-filters{grid-template-columns:1fr 1fr;padding:13px}.finance-report-filters label:first-of-type{grid-column:1/-1}.finance-report-centre{margin-top:0}}
+@media(max-width:600px){.petty-cash-management>.toolbar{align-items:stretch;flex-direction:column}.petty-cash-management>.toolbar .segments,.petty-cash-management>.toolbar>button{width:100%;justify-content:center}.petty-ledger-heading{align-items:flex-start;flex-direction:column}}
+.cheque-section-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:2px 0 12px;padding:16px 18px;border-radius:12px;background:linear-gradient(135deg,#0b2c4d,#154b76);color:#fff}.cheque-section-heading.outgoing{margin-top:22px;background:linear-gradient(135deg,#5e1629,#9f2441)}.cheque-section-heading span{font-size:9px;text-transform:uppercase;letter-spacing:1px;opacity:.72}.cheque-section-heading h2{margin:3px 0 0;font:800 17px Manrope}.cheque-section-heading button{background:#fff}@media(max-width:600px){.cheque-section-heading{align-items:stretch;flex-direction:column}.cheque-section-heading button{width:100%;justify-content:center}}
+
+/* QS live project cost control */
+.qs-cost-control{display:grid;gap:15px}.cost-control-hero{display:grid;grid-template-columns:minmax(260px,1fr) minmax(230px,.6fr) auto;gap:18px;align-items:end;padding:23px 25px;border-radius:18px;background:linear-gradient(120deg,#092745,#123f69);color:#fff;box-shadow:0 16px 38px rgba(8,34,58,.16)}.cost-control-hero>div>span,.cost-health-copy>span,.cost-category-panel>div>span,.daily-cost-panel>div>span,.cost-section-heading>div>span{text-transform:uppercase;letter-spacing:1.3px;font-size:9px;font-weight:800}.cost-control-hero>div>span{color:#aec5d9}.cost-control-hero h2{font:800 24px Manrope;margin:4px 0}.cost-control-hero p{font-size:11px;line-height:1.5;color:#c3d4e2;margin:0}.cost-control-hero label{font-size:10px;color:#c8d7e4;font-weight:700}.cost-control-hero select{display:block;width:100%;height:40px;margin-top:6px;border:1px solid rgba(255,255,255,.25);border-radius:8px;background:#fff;color:#183750;padding:0 10px}.cost-control-hero .primary{height:40px;white-space:nowrap}.cost-control-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.cost-control-summary article,.cost-health-panel,.cost-category-panel,.daily-cost-panel,.cost-ledger-panel{background:#fff;border:1px solid #d8e3eb;border-radius:15px;box-shadow:0 9px 28px rgba(10,38,63,.055)}.cost-control-summary article{position:relative;padding:17px 18px;overflow:hidden;border-top:3px solid #1b689f}.cost-control-summary article.danger{border-top-color:#b51f3f;background:linear-gradient(145deg,#fff,#fff7f8)}.cost-control-summary article.good{border-top-color:#2b7c58}.cost-control-summary article>svg{position:absolute;right:13px;top:14px;color:#d9e6ed}.cost-control-summary span,.cost-control-summary strong,.cost-control-summary small{display:block}.cost-control-summary>article>span{font-size:10px;color:#758895}.cost-control-summary strong{font:800 18px Manrope;color:#12304b;margin:5px 0}.cost-control-summary small{font-size:9px;color:#7d8d98}.cost-negative{color:#b51f3f!important}.cost-positive{color:#2b7c58!important}.cost-health-panel{display:grid;grid-template-columns:minmax(230px,.75fr) minmax(300px,1.25fr);gap:25px;padding:22px}.cost-health-copy>span,.cost-category-panel>div>span,.daily-cost-panel>div>span,.cost-section-heading>div>span{color:#748896}.cost-health-copy h2{font:800 20px Manrope;color:#102f4c;margin:5px 0 8px}.cost-health-copy p{font-size:11px;line-height:1.55;color:#617788;margin:0}.cost-comparison-visual{display:grid;gap:9px}.cost-comparison-visual>div{display:grid;grid-template-columns:120px 1fr 125px;gap:9px;align-items:center}.cost-comparison-visual span{font-size:9px;color:#687d8c}.cost-comparison-visual i{height:8px;background:#edf2f5;border-radius:9px;overflow:hidden}.cost-comparison-visual i b{display:block;height:100%;background:linear-gradient(90deg,#123f68,#237aae);border-radius:inherit}.cost-comparison-visual i b.over{background:linear-gradient(90deg,#b51f3f,#e64c6b)}.cost-comparison-visual strong{text-align:right;font-size:10px;color:#183650}.cost-intelligence-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:15px}.cost-category-panel,.daily-cost-panel{padding:20px;min-width:0}.cost-category-panel>div h2,.daily-cost-panel>div h2,.cost-section-heading h2{font:700 17px Manrope;color:#12314d;margin:4px 0 16px}.cost-category-panel>article{display:grid;grid-template-columns:100px 1fr 210px;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #edf1f4}.cost-category-panel>article strong{font-size:10px;color:#28485f}.cost-category-panel>article>div{display:grid;gap:2px}.cost-category-panel>article>div i{display:block;height:3px;background:#9ab3c5;border-radius:5px}.cost-category-panel>article>div i.actual{background:#b51f3f}.cost-category-panel>article>div i.forecast{background:#145f93}.cost-category-panel>article>span{font-size:9px;color:#6e8290;text-align:right}.cost-category-panel>footer{display:flex;gap:14px;margin-top:12px;font-size:9px;color:#6c8090}.cost-category-panel>footer i{display:inline-block;width:8px;height:8px;margin-right:4px;border-radius:2px;background:#9ab3c5}.cost-category-panel>footer span:nth-child(2) i{background:#b51f3f}.cost-category-panel>footer span:nth-child(3) i{background:#145f93}.daily-cost-bars{height:140px;display:flex;align-items:flex-end;gap:5px;padding-top:12px;border-bottom:1px solid #dce5eb;background:repeating-linear-gradient(to top,transparent 0,transparent 32%,#eef3f6 33%)}.daily-cost-bars article{height:100%;flex:1;display:grid;grid-template-rows:1fr 16px;align-items:end;text-align:center}.daily-cost-bars article i{display:block;min-height:3px;border-radius:4px 4px 0 0;background:linear-gradient(180deg,#df3154,#a91736)}.daily-cost-bars article span{font-size:8px;color:#80909b}.daily-cost-bars>p{align-self:center;font-size:10px;color:#7b8c98}.daily-cost-total{display:grid;grid-template-columns:1fr auto;gap:6px 12px;margin-top:14px;padding-top:12px;border-top:1px solid #e7edf1}.daily-cost-total span{font-size:9px;color:#718593}.daily-cost-total strong{font-size:10px;color:#173650}.cost-ledger-panel{overflow:hidden;min-width:0}.cost-section-heading{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:18px 20px}.cost-section-heading h2{margin-bottom:0}.cost-section-heading>span{font-size:10px;color:#728593}.cost-table-scroll{overflow:auto}.cost-table-scroll table{width:100%;min-width:940px;border-collapse:collapse}.cost-table-scroll th{padding:10px 13px;text-align:left;background:#f2f6f8;color:#657989;text-transform:uppercase;letter-spacing:.65px;font-size:8px}.cost-table-scroll td{padding:12px 13px;border-top:1px solid #e6edf1;color:#354f63;font-size:10px;vertical-align:top;line-height:1.45}.cost-table-scroll td>strong,.cost-table-scroll td>small{display:block}.cost-table-scroll td>strong{color:#173650}.cost-table-scroll td>small{font-size:8px;color:#7a8b96;margin-top:3px;max-width:280px}.forecast-baseline{display:flex;align-items:flex-start;gap:10px;padding:13px;border:1px solid #edc8d0;border-radius:9px;background:#fff7f8;color:#b51f3f}.forecast-baseline span,.forecast-baseline strong{display:block}.forecast-baseline span{font-size:9px;text-transform:uppercase;letter-spacing:.8px}.forecast-baseline strong{font-size:11px;color:#753246;margin-top:3px}
+@media(max-width:1050px){.cost-control-hero{grid-template-columns:1fr 1fr}.cost-control-hero>div{grid-column:1/-1}.cost-control-summary{grid-template-columns:1fr 1fr}.cost-intelligence-grid{grid-template-columns:1fr}}
+@media(max-width:720px){.cost-control-hero{grid-template-columns:1fr;padding:20px}.cost-control-hero>div{grid-column:auto}.cost-control-hero .primary{width:100%}.cost-health-panel{grid-template-columns:1fr}.cost-comparison-visual>div{grid-template-columns:100px 1fr 100px}.cost-category-panel>article{grid-template-columns:80px 1fr}.cost-category-panel>article>span{grid-column:1/-1;text-align:left}.cost-section-heading{align-items:flex-start}.cost-control-summary{gap:8px}.cost-control-summary article{padding:14px}.cost-control-summary strong{font-size:15px}}
+@media(max-width:430px){.cost-control-summary{grid-template-columns:1fr}.cost-comparison-visual>div{grid-template-columns:85px 1fr}.cost-comparison-visual strong{grid-column:2;text-align:left}.cost-category-panel,.daily-cost-panel{padding:16px}}

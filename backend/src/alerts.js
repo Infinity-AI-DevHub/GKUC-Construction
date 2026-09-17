@@ -198,6 +198,28 @@ async function invoiceAlerts(stamp, alerts) {
   }
 }
 
+async function operatingBillAlerts(stamp,alerts){
+  const rows=await query(`SELECT id,bill_type billType,provider,reference,total_amount totalAmount,due_date dueDate,
+    reminder_days reminderDays,DATEDIFF(due_date,CURDATE()) remaining FROM operating_bills
+    WHERE status='Unpaid' AND due_date<=DATE_ADD(CURDATE(),INTERVAL reminder_days DAY)`);
+  for(const row of rows){const remaining=Number(row.remaining);alerts.push({key:`operating-bill:${row.id}:${stamp}`,audience:'finance.pay',
+    severity:remaining<0?'Critical':remaining===0?'Warning':'Info',title:remaining<0?`Bill overdue — ${row.provider}`:`${row.billType} bill due soon — ${row.provider}`,
+    message:`${row.reference}: ${money(row.totalAmount)} is ${remaining<0?`${Math.abs(remaining)} day(s) overdue`:remaining===0?'due today':`due in ${remaining} day(s)`}.`,
+    referenceType:'operating_bill',referenceId:row.id});}
+}
+
+async function creditCardAlerts(stamp,alerts){
+  const rows=await query(`SELECT s.id,c.name card,c.bank,c.last_four lastFour,s.amount,s.paid_amount paidAmount,s.minimum_due minimumDue,
+    s.due_date dueDate,s.reminder_days reminderDays,DATEDIFF(s.due_date,CURDATE()) remaining FROM credit_card_statements s
+    JOIN company_credit_cards c ON c.id=s.card_id WHERE s.status IN ('Unpaid','Partially paid')
+      AND s.due_date<=DATE_ADD(CURDATE(),INTERVAL s.reminder_days DAY)`);
+  for(const row of rows){const remaining=Number(row.remaining),outstanding=Number(row.amount)-Number(row.paidAmount);alerts.push({
+    key:`credit-card:${row.id}:${stamp}`,audience:'finance.pay',severity:remaining<0?'Critical':remaining===0?'Warning':'Info',
+    title:remaining<0?`Credit card payment overdue — ${row.card}`:`Credit card payment approaching — ${row.card}`,
+    message:`${row.bank} •••• ${row.lastFour}: ${money(outstanding)} outstanding${Number(row.minimumDue)>0?`, minimum ${money(row.minimumDue)}`:''}; ${remaining<0?`${Math.abs(remaining)} day(s) overdue`:remaining===0?'due today':`due in ${remaining} day(s)`}.`,
+    referenceType:'credit_card_statement',referenceId:row.id});}
+}
+
 async function serviceScheduleAlerts(stamp, alerts) {
   const rows = await query(`SELECT id,vehicle,registration,odometer,service_interval_km,service_interval_months,
       last_service_date,last_service_odometer FROM fleet
@@ -395,6 +417,8 @@ export async function runAlertScan() {
     milestoneAlerts(stamp, alerts),
     employeeDocumentAlerts(stamp, alerts),
     invoiceAlerts(stamp, alerts),
+    operatingBillAlerts(stamp,alerts),
+    creditCardAlerts(stamp,alerts),
     serviceScheduleAlerts(stamp, alerts),
     retentionAlerts(stamp, alerts),
     tenderAlerts(stamp, alerts),
@@ -402,11 +426,48 @@ export async function runAlertScan() {
     pendingApprovalAlerts(stamp, alerts),
     bondAlerts(stamp, alerts),
     receivableAlerts(stamp, alerts),
-    toolReturnAlerts(stamp, alerts)
+    toolReturnAlerts(stamp, alerts),
+    chequeAlerts(stamp, alerts),
+    receivedChequeAlerts(stamp, alerts)
   ]);
   for (const alert of alerts) await raise(alert);
   await dispatchQueued().catch(error => console.error('Channel dispatch failed', error));
   return alerts.length;
+}
+
+async function chequeAlerts(stamp, alerts) {
+  const rows = await query(`SELECT id,cheque_number chequeNumber,bank,payee,amount,cheque_date chequeDate,
+    reminder_days reminderDays,status,DATEDIFF(cheque_date,CURDATE()) remaining
+    FROM issued_cheques WHERE status IN ('Prepared','Issued')
+      AND cheque_date <= DATE_ADD(CURDATE(),INTERVAL reminder_days DAY)`);
+  for (const row of rows) {
+    const remaining = Number(row.remaining);
+    alerts.push({
+      key: `cheque:${row.id}:${stamp}`, audience: 'finance.pay',
+      severity: remaining < 0 ? 'Critical' : remaining === 0 ? 'Warning' : 'Info',
+      title: remaining < 0 ? `Cheque confirmation overdue — ${row.chequeNumber}`
+        : remaining === 0 ? `Cheque due today — ${row.chequeNumber}` : `Future cheque approaching — ${row.chequeNumber}`,
+      message: `${money(row.amount)} to ${row.payee} from ${row.bank}, dated ${onDate(row.chequeDate)}. `
+        + (remaining < 0 ? `It is ${Math.abs(remaining)} day(s) past date; confirm whether it cleared, returned, was replaced or cancelled.`
+          : `Due ${remaining === 0 ? 'today' : `in ${remaining} day(s)`}; follow up and confirm its outcome.`),
+      referenceType: 'cheque', referenceId: row.id
+    });
+  }
+}
+
+async function receivedChequeAlerts(stamp, alerts) {
+  const rows=await query(`SELECT id,cheque_number chequeNumber,bank,payer,amount,status,deposit_by depositBy,
+    cheque_date chequeDate,reminder_days reminderDays,
+    DATEDIFF(CASE WHEN status='On hand' THEN deposit_by ELSE cheque_date END,CURDATE()) remaining
+    FROM received_cheques WHERE status IN ('On hand','Deposited','Re-deposited')
+      AND CASE WHEN status='On hand' THEN deposit_by ELSE cheque_date END <= DATE_ADD(CURDATE(),INTERVAL reminder_days DAY)`);
+  for(const row of rows){const remaining=Number(row.remaining),deposit=row.status==='On hand';alerts.push({
+    key:`received-cheque:${row.id}:${stamp}`,audience:'finance.invoice',severity:remaining<0?'Critical':remaining===0?'Warning':'Info',
+    title:deposit?(remaining<0?`Cheque deposit overdue — ${row.chequeNumber}`:`Cheque deposit approaching — ${row.chequeNumber}`)
+      :(remaining<0?`Received cheque confirmation overdue — ${row.chequeNumber}`:`Received cheque clearing follow-up — ${row.chequeNumber}`),
+    message:`${money(row.amount)} received from ${row.payer}, ${row.bank}. ${deposit?'Deposit':'Confirm clearance'} ${remaining<0?`${Math.abs(remaining)} day(s) overdue`:remaining===0?'today':`in ${remaining} day(s)`}.`,
+    referenceType:'received_cheque',referenceId:row.id
+  });}
 }
 
 /**
@@ -421,8 +482,7 @@ async function bondAlerts(stamp, alerts) {
     SELECT b.id,b.reference,b.kind,b.beneficiary,b.bank,b.amount,b.margin_held marginHeld,
            b.expiry_date expiryDate,p.name project
       FROM bank_bonds b LEFT JOIN projects p ON p.id=b.project_id
-     WHERE b.status='Live' AND b.expiry_date <= DATE_ADD(CURDATE(), INTERVAL ? DAY)`,
-  [ALERT_WINDOW_DAYS]);
+     WHERE b.status='Live' AND b.expiry_date <= DATE_ADD(CURDATE(), INTERVAL b.reminder_days DAY)`);
 
   for (const row of rows) {
     const remaining = days(row.expiryDate);

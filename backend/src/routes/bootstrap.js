@@ -29,16 +29,20 @@ router.get('/', auth, wrap(async (req, res) => {
   /* Runs the query only for those allowed the data; everyone else gets an empty set. */
   const gated = (keys, run) => (keys.some(key => can(req, key)) ? run() : Promise.resolve([]));
 
-  const [projects, tasks, attendance, materials, fleet, reports, employees, departments, equipment,
+  const [companies, projects, tasks, attendance, materials, fleet, reports, employees, departments, equipment,
     suppliers, purchaseRequests, boqs, milestones, notifications, finance, inquiries, weekly] = await Promise.all([
-    gated(['projects.view'], () => query('SELECT * FROM projects WHERE active=1 ORDER BY id')),
-    gated(['site.tasks','projects.view'], () => query(`SELECT t.id,t.title,t.project_id projectId,t.assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project FROM tasks t JOIN projects p ON p.id=t.project_id ORDER BY t.id`)),
+    query('SELECT id,code,name FROM companies WHERE active=1 ORDER BY id'),
+    gated(['projects.view'], () => query(`SELECT p.*,c.name company,c.code companyCode FROM projects p
+      JOIN companies c ON c.id=p.company_id WHERE p.active=1 ORDER BY p.id`)),
+    gated(['site.tasks','projects.view'], () => query(`SELECT t.id,t.title,t.project_id projectId,t.assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project,p.company_id companyId FROM tasks t JOIN projects p ON p.id=t.project_id ORDER BY t.id`)),
     gated(['hr.view','site.attendance','hr.attendance'], () => query(`SELECT a.id,a.employee_name name,a.role,COALESCE(p.name,'Head office') site,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,a.state,a.work_date workDate
       FROM attendance a LEFT JOIN projects p ON p.id=a.project_id WHERE a.work_date=CURDATE() ORDER BY a.id`)),
     gated(['store.view','store.manage'], () => query('SELECT * FROM materials WHERE active=1 ORDER BY id')),
-    gated(['transport.view','transport.manage'], () => query(`SELECT f.id,f.vehicle,f.registration reg,f.driver,f.status,f.renewal_type renewal,f.due_date,f.odometer,p.name project
-      FROM fleet f LEFT JOIN projects p ON p.id=f.project_id ORDER BY f.id`)),
-    gated(['site.reports','projects.view'], () => query(`SELECT r.id,r.project_id projectId,p.name site,r.supervisor,DATE_FORMAT(r.report_date,'%d %b %Y') date,
+    gated(['transport.view','transport.manage'], () => query(`SELECT f.id,f.vehicle,f.registration reg,f.driver,f.status,
+      f.renewal_type renewal,COALESCE(d.expiry_date,f.due_date) due_date,f.odometer,p.name project
+      FROM fleet f LEFT JOIN projects p ON p.id=f.project_id
+      LEFT JOIN vehicle_documents d ON d.vehicle_id=f.id AND d.doc_type=f.renewal_type ORDER BY f.id`)),
+    gated(['site.reports','projects.view'], () => query(`SELECT r.id,r.project_id projectId,p.company_id companyId,p.name site,r.supervisor,DATE_FORMAT(r.report_date,'%d %b %Y') date,
       r.workforce,r.work_completed work,r.issue,r.weather,r.delay_hours delayHours
       FROM daily_reports r JOIN projects p ON p.id=r.project_id ORDER BY r.report_date DESC,r.id DESC LIMIT 60`)),
     /*
@@ -53,7 +57,10 @@ router.get('/', auth, wrap(async (req, res) => {
      */
     gated(['hr.view','hr.manage','hr.attendance','site.attendance','store.lending'], () => query(`SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,
       ${['hr.payroll', 'hr.manage'].some(key => req.user.permissions.includes(key))
-    ? 'e.basic_salary basicSalary,e.daily_rate dailyRate,e.overtime_rate overtimeRate,' : ''}
+    ? `e.basic_salary basicSalary,e.daily_rate dailyRate,e.weekly_rate weeklyRate,e.overtime_rate overtimeRate,
+       e.pay_basis payBasis,e.pay_frequency payFrequency,e.payroll_category payrollCategory,e.payroll_company_id payrollCompanyId,
+       e.compensation_effective_from compensationEffectiveFrom,e.epf_eligible epfEligible,e.etf_eligible etfEligible,
+       e.custom_office_ot_rate customOfficeOtRate,e.custom_site_ot_rate customSiteOtRate,e.custom_travel_ot_rate customTravelOtRate,` : ''}
       e.join_date joinDate,e.worker_type workerType,d.name department,e.department_id departmentId
       FROM employees e LEFT JOIN departments d ON d.id=e.department_id ORDER BY e.code`)),
     gated(['hr.view','hr.manage'], () => query('SELECT id,name,description FROM departments ORDER BY name')),
@@ -66,13 +73,13 @@ router.get('/', auth, wrap(async (req, res) => {
         WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) daysOverdue
       FROM equipment e ORDER BY e.code`)),
     gated(['store.view','store.manage','finance.pay'], () => query('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE active=1 ORDER BY name')),
-    gated(['store.view','store.manage'], () => query(`SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,p.name project,u.name requestedBy,
+    gated(['store.view','store.manage'], () => query(`SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,p.name project,p.company_id companyId,u.name requestedBy,
       (SELECT COUNT(*) FROM purchase_request_items i WHERE i.request_id=r.id) lineCount,
       (SELECT COALESCE(SUM(i.quantity*i.estimated_rate),0) FROM purchase_request_items i WHERE i.request_id=r.id) estimate
       FROM purchase_requests r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.requested_by ORDER BY r.id DESC`)),
-    gated(['qs.view','qs.boq'], () => query(`SELECT b.id,b.reference,b.title,b.status,b.total,b.version,p.name project,b.project_id projectId,u.name preparedBy
+    gated(['qs.view','qs.boq'], () => query(`SELECT b.id,b.reference,b.title,b.status,b.total,b.version,p.name project,p.company_id companyId,b.project_id projectId,u.name preparedBy
       FROM boqs b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=b.prepared_by ORDER BY b.id DESC`)),
-    gated(['projects.view'], () => query(`SELECT m.id,m.title,m.due_date dueDate,m.status,m.project_id projectId,p.name project
+    gated(['projects.view'], () => query(`SELECT m.id,m.title,m.due_date dueDate,m.status,m.project_id projectId,p.company_id companyId,p.name project
       FROM project_milestones m JOIN projects p ON p.id=m.project_id ORDER BY m.due_date`)),
     (async () => {
       /* Addressed to this person, or to nobody in particular and to a permission they
@@ -87,11 +94,11 @@ router.get('/', auth, wrap(async (req, res) => {
         [req.user.id, ...perms]
       );
     })(),
-    gated(['finance.view','finance.manage'], () => query(`SELECT p.id projectId,p.name project,p.budget,
+    gated(['finance.view','finance.manage'], () => query(`SELECT p.id projectId,p.company_id companyId,p.name project,p.budget,
       ${spendSql('p')} expenses,
       COALESCE((SELECT SUM(i.amount) FROM incomes i WHERE i.project_id=p.id),0) income
       FROM projects p WHERE p.active=1 ORDER BY p.id`)),
-    gated(['enquiries.manage','projects.view'], () => query(`SELECT i.id,i.reference,i.customer_name customer,i.location,i.status,i.expected_value expectedValue,
+    gated(['enquiries.manage','projects.view'], () => query(`SELECT i.id,i.company_id companyId,i.reference,i.customer_name customer,i.location,i.status,i.expected_value expectedValue,
       i.expected_start expectedStart,i.project_id projectId FROM inquiries i ORDER BY i.id DESC LIMIT 40`)),
     /* Real site activity for the last seven days, replacing the placeholder chart. */
     gated(['projects.view','site.reports'], () => query(`SELECT DATE_FORMAT(d.day,'%a') label, DATE_FORMAT(d.day,'%Y-%m-%d') day,
@@ -120,6 +127,7 @@ router.get('/', auth, wrap(async (req, res) => {
      */
     limits: { maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024) },
     data: {
+      companies,
       projects,
       tasks,
       attendance,
