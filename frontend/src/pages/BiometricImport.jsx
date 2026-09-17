@@ -35,13 +35,13 @@ export default function BiometricImport({ data, can, reload }) {
       form.append('file', file);
       const body = await api('/biometric/preview', { method: 'POST', body: form });
       setPreview(body);
-      return true;
+      return body;
     } catch (failure) {
       setError(`Could not read ${file.name}. ${failure.message} Check that this is the attendance export, then try again.`);
       if (!keepPreview && failure.details?.problems?.length) {
         setPreview({ problems: failure.details.problems, columns: failure.details.columns || [], rows: [] });
       }
-      return false;
+      return null;
     } finally {
       setBusy(false);
       if (input.current) input.current.value = '';
@@ -66,8 +66,11 @@ export default function BiometricImport({ data, can, reload }) {
     try {
       await post('/biometric/mappings', { code, employeeId: Number(employeeId), replaceExisting: true });
       const refreshed = lastFile.current ? await read(lastFile.current, true) : false;
-      if (refreshed) notice({ title: 'Scanner identity linked', message: `Device #${code} will now match this employee on future imports.`, severity: 'Info' });
-      else setIdentityErrors(current => ({ ...current, [code]: 'The link was saved, but the file preview could not refresh. Choose the export file again to check the match.' }));
+      if (refreshed && !refreshed.unknownDevices?.some(device => String(device.code) === String(code))) {
+        notice({ title: 'Scanner identity linked', message: `Device #${code} is matched in this file and will match on future imports.`, severity: 'Info' });
+      } else setIdentityErrors(current => ({ ...current, [code]: refreshed
+        ? `Device #${code} is still unmatched after saving the link. Refresh the file preview and contact an administrator if it remains unmatched.`
+        : 'The link was saved, but the file preview could not refresh. Choose the export file again to check the match.' }));
     } catch (failure) {
       setIdentityErrors(current => ({ ...current, [code]: `Could not link device #${code}. ${failure.message} Check that you selected the correct employee, then try again.` }));
     } finally { setBusy(false); }
@@ -224,17 +227,17 @@ export default function BiometricImport({ data, can, reload }) {
         </select></label>}
         <button className="primary" onClick={() => preview.summary.unmatched > 0 ? setConfirmPartial(true) : commit()}
           disabled={busy || !matched || (workLocation === 'Site' && !projectId)}>
-          {busy ? 'Importing…' : `Import ${matched} matched day(s)`}
+          {busy ? 'Importing…' : preview.summary.unmatched > 0 ? `Review import of ${matched} matched day(s)` : `Import ${matched} matched day(s)`}
         </button>
         <small>
           {preview.from === preview.to ? shortDate(preview.from) : `${shortDate(preview.from)} → ${shortDate(preview.to)}`}
           {preview.summary.unmatched > 0 && ` · ${preview.summary.unmatched} unmatched day(s) will be left out`}
         </small>
         {confirmPartial && <div className="import-partial-confirm" role="alert">
-          <strong>Import the {matched} matched day(s) now?</strong>
+          <strong>Review before saving: {matched} matched day(s)</strong>
           <span>The {preview.summary.unmatched} unmatched day(s) will not be saved. Link their scanner numbers below and import them later. Previously imported days will be updated, not duplicated, if you use this file again.</span>
           <div><button className="secondary" type="button" onClick={() => setConfirmPartial(false)}>Wait and link people</button>
-            <button className="primary" type="button" onClick={commit}>Import matched days</button></div>
+            <button className="primary" type="button" onClick={commit}>Yes, save {matched} matched days</button></div>
         </div>}
         {commitError && <p className="form-error" role="alert">{commitError}</p>}
       </div>

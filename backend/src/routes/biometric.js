@@ -17,16 +17,12 @@ const LATE_AFTER = process.env.ATTENDANCE_LATE_AFTER || '08:00:00';
  * the payroll input, so somebody should see what it contains before it lands.
  */
 
-/**
- * Matches a device row to an employee: by the terminal's enrolment number first, since that
- * is the only identifier the device is sure about, then by GKUC's employee code, then by
- * name. A name is the weakest of the three — the terminal holds first names only — so it is
- * the last resort rather than the first.
- */
+/** Only HR-approved scanner numbers match automatically. One employee can have several. */
 async function resolveEmployees(rows) {
-  const employees = await query("SELECT id,code,name,biometric_id biometricId FROM employees WHERE status <> 'Left'");
+  const mappings = await query(`SELECT b.code,e.id,e.name FROM employee_biometric_ids b
+    JOIN employees e ON e.id=b.employee_id WHERE e.status <> 'Left'`);
   const key = value => String(value ?? '').trim().toLowerCase();
-  const byDevice = new Map(employees.filter(item => item.biometricId).map(item => [key(item.biometricId), item]));
+  const byDevice = new Map(mappings.map(item => [key(item.code), item]));
 
   return rows.map(row => {
     /* Only a mapping approved by HR is automatic. Names in this export are often first
@@ -202,18 +198,26 @@ router.post('/mappings', auth, permit('hr.attendance'), validate(z.object({
   const employee = await getOne('SELECT id,name,code FROM employees WHERE id=?', [req.body.employeeId]);
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
-  const taken = await getOne('SELECT id,name FROM employees WHERE biometric_id=? AND id<>?',
-    [req.body.code, employee.id]);
-  if (taken && !req.body.replaceExisting) return res.status(409).json({ error: `Device number ${req.body.code} is already ${taken.name}'s` });
-
   await transaction(async connection => {
-    if (taken) await connection.execute('UPDATE employees SET biometric_id=NULL WHERE id=?', [taken.id]);
-    await connection.execute('UPDATE employees SET biometric_id=NULL WHERE biometric_id IS NOT NULL AND id=?', [employee.id]);
-    await connection.execute('UPDATE employees SET biometric_id=? WHERE id=?', [req.body.code, employee.id]);
+    const [[owner]] = await connection.execute(`SELECT e.id,e.name FROM employee_biometric_ids b
+      JOIN employees e ON e.id=b.employee_id WHERE b.code=? FOR UPDATE`, [req.body.code]);
+    const taken = owner?.id !== employee.id ? owner : null;
+    if (taken && !req.body.replaceExisting) throw Object.assign(
+      new Error(`Device number ${req.body.code} is already ${taken.name}'s. Confirm reassignment before changing it.`),
+      { status: 409 });
+    if (taken) {
+      await connection.execute('UPDATE employees SET biometric_id=NULL WHERE id=? AND biometric_id=?', [taken.id, req.body.code]);
+      await connection.execute('UPDATE employee_biometric_ids SET employee_id=? WHERE code=?', [employee.id, req.body.code]);
+    } else {
+      await connection.execute(`INSERT INTO employee_biometric_ids (code,employee_id) VALUES (?,?)
+        ON DUPLICATE KEY UPDATE employee_id=VALUES(employee_id)`, [req.body.code, employee.id]);
+    }
+    await connection.execute('UPDATE employees SET biometric_id=? WHERE id=? AND biometric_id IS NULL', [req.body.code, employee.id]);
     await audit(connection, req.user.id, taken ? 'REASSIGN' : 'UPDATE', 'employee_biometric', employee.id,
       taken ? { employeeId: taken.id, name: taken.name } : null, { biometricId: req.body.code }, req.ip);
   });
-  res.json({ employeeId: employee.id, name: employee.name, code: req.body.code });
+  const codes = await query('SELECT code FROM employee_biometric_ids WHERE employee_id=? ORDER BY code', [employee.id]);
+  res.json({ employeeId: employee.id, name: employee.name, code: req.body.code, codes: codes.map(row => row.code) });
 }));
 
 /** Create the minimum safe employee profile from a scanner identity. HR can enrich it later. */
@@ -224,7 +228,8 @@ router.post('/people', auth, permit('hr.attendance'), validate(z.object({
   firstDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 })), wrap(async (req, res) => {
   const body = req.body;
-  const taken = await getOne('SELECT id,name FROM employees WHERE biometric_id=?', [body.code]);
+  const taken = await getOne(`SELECT e.id,e.name FROM employee_biometric_ids b
+    JOIN employees e ON e.id=b.employee_id WHERE b.code=?`, [body.code]);
   if (taken) return res.status(409).json({ error: `Device number ${body.code} already belongs to ${taken.name}` });
 
   const created = await transaction(async connection => {
@@ -250,6 +255,7 @@ router.post('/people', auth, permit('hr.attendance'), validate(z.object({
       VALUES (?,?,?,?,?,?,'Active',?,?)`, [employeeCode, body.name.trim(), departmentId,
       body.department?.trim() ? `${body.department.trim()} team` : 'Worker', officeDepartment ? 'Office' : 'Site', body.firstDate, body.code,
       'Profile created from biometric import; HR review required.']);
+    await connection.execute('INSERT INTO employee_biometric_ids (code,employee_id) VALUES (?,?)', [body.code, result.insertId]);
     await audit(connection, req.user.id, 'CREATE', 'employee', result.insertId, null,
       { code: employeeCode, name: body.name.trim(), biometricId: body.code, source: 'Biometric import' }, req.ip);
     return { id: result.insertId, code: employeeCode };

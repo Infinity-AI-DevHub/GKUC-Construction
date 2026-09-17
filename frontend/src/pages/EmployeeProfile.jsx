@@ -76,7 +76,8 @@ export default function EmployeeProfile({ employeeId, close, canManage }) {
           <div className="employee-hero-tags"><Badge tone={slug(employee.status)}>{employee.status}</Badge>
             <span><BriefcaseBusiness size={13} />{employee.workerType} employee</span>
             {employee.currentProject && <span><MapPin size={13} />{employee.currentProject}</span>}
-            {employee.biometricId && <span><ShieldCheck size={13} />Biometric #{employee.biometricId}</span>}
+            {(employee.biometricIds?.length ? employee.biometricIds : employee.biometricId ? [employee.biometricId] : [])
+              .map(code => <span key={code}><ShieldCheck size={13} />Biometric #{code}</span>)}
           </div>
         </div>
       </div>

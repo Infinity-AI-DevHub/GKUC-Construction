@@ -1193,6 +1193,37 @@ test('HR links an existing person from a scanner preview and imports the matched
   assert.equal(imported.body.inserted, 1);
 });
 
+test('one employee keeps multiple scanner numbers when another number is linked', async () => {
+  const authToken = await login();
+  const oldCode = `ALIAS-OLD-${Date.now()}`;
+  const newCode = `ALIAS-NEW-${Date.now()}`;
+  const date = shift(-82);
+  const person = await call(authToken, 'POST', '/biometric/people', {
+    code: oldCode, name: 'Multiple Scanner Worker', firstDate: date
+  });
+  assert.equal(person.status, 201);
+  const linked = await call(authToken, 'POST', '/biometric/mappings', {
+    code: newCode, employeeId: person.body.id
+  });
+  assert.equal(linked.status, 200, JSON.stringify(linked.body));
+  assert.deepEqual(linked.body.codes, [newCode, oldCode].sort());
+  const file = new FormData();
+  file.append('file', new Blob([
+    `ID,Name,Date,In,Out\n${oldCode},Multiple Scanner Worker,${date},08:00,17:00\n`
+    + `${newCode},Multiple Scanner Worker,${shift(-81)},08:10,17:10\n`
+  ], { type: 'text/csv' }), 'multiple-scanner-numbers.csv');
+  const response = await fetch(`${base}/biometric/preview`, {
+    method: 'POST', headers: { authorization: `Bearer ${authToken}` }, body: file
+  });
+  assert.equal(response.status, 200);
+  const preview = await response.json();
+  assert.equal(preview.summary.matched, 2);
+  assert.equal(preview.summary.unmatched, 0);
+  assert.deepEqual([...new Set(preview.rows.map(row => row.employeeId))], [person.body.id]);
+  const profile = await call(authToken, 'GET', `/employees/${person.body.id}`);
+  assert.deepEqual(profile.body.biometricIds, [newCode, oldCode].sort());
+});
+
 test('HR can import matched biometric days while leaving unknown scanner days untouched', async () => {
   const authToken = await login();
   const knownCode = `PARTIAL-KNOWN-${Date.now()}`;
