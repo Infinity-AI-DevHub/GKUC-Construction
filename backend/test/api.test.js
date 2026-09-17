@@ -1193,6 +1193,42 @@ test('HR links an existing person from a scanner preview and imports the matched
   assert.equal(imported.body.inserted, 1);
 });
 
+test('HR can import matched biometric days while leaving unknown scanner days untouched', async () => {
+  const authToken = await login();
+  const knownCode = `PARTIAL-KNOWN-${Date.now()}`;
+  const unknownCode = `PARTIAL-UNKNOWN-${Date.now()}`;
+  const date = shift(-83);
+  const person = await call(authToken, 'POST', '/biometric/people', {
+    code: knownCode, name: 'Partial Import Worker', firstDate: date
+  });
+  assert.equal(person.status, 201);
+  const file = new FormData();
+  file.append('file', new Blob([
+    `ID,Name,Date,In,Out\n${knownCode},Partial Import Worker,${date},08:00,17:00\n`
+    + `${unknownCode},Not Yet Identified,${date},08:05,16:55\n`
+  ], { type: 'text/csv' }), 'partial.csv');
+  const preview = async () => {
+    const response = await fetch(`${base}/biometric/preview`, {
+      method: 'POST', headers: { authorization: `Bearer ${authToken}` }, body: file
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const before = await preview();
+  assert.equal(before.summary.matched, 1);
+  assert.equal(before.summary.unmatched, 1);
+  const saved = await call(authToken, 'POST', '/biometric/commit', {
+    projectId: 1, workLocation: 'Site', filename: 'partial.csv',
+    rows: before.rows.filter(row => row.employeeId)
+  });
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  assert.equal(saved.body.inserted, 1);
+  const after = await preview();
+  assert.equal(after.summary.unmatched, 1);
+  assert.equal(after.unknownDevices[0].code, unknownCode);
+  assert.equal(after.summary.duplicates, 1);
+});
+
 test('workforce map distinguishes office presence, site allocation and free workers', async () => {
   const token = await login();
   const date = shift(40);

@@ -19,6 +19,7 @@ export default function BiometricImport({ data, can, reload }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [commitError, setCommitError] = useState('');
+  const [confirmPartial, setConfirmPartial] = useState(false);
   const [result, setResult] = useState(null);
   const [choices, setChoices] = useState({});
   const [identityErrors, setIdentityErrors] = useState({});
@@ -27,6 +28,7 @@ export default function BiometricImport({ data, can, reload }) {
 
   const read = async (file, keepPreview = false) => {
     setBusy(true); setError(''); setResult(null);
+    setConfirmPartial(false);
     if (!keepPreview) { setPreview(null); setIdentityErrors({}); }
     try {
       const form = new FormData();
@@ -95,9 +97,11 @@ export default function BiometricImport({ data, can, reload }) {
   };
 
   const commit = async () => {
-    setBusy(true); setError(''); setCommitError('');
+    if (!preview?.rows?.some(row => row.employeeId)) return;
+    setBusy(true); setError(''); setCommitError(''); setConfirmPartial(false);
     try {
       const usable = preview.rows.filter(row => row.employeeId);
+      const leftOut = preview.rows.length - usable.length;
       const outcome = await post('/biometric/commit', {
         projectId: workLocation === 'Site' ? Number(projectId) : null,
         workLocation,
@@ -108,9 +112,15 @@ export default function BiometricImport({ data, can, reload }) {
           needsReview: Boolean(row.needsReview), declaredState: row.declaredState || null
         }))
       });
-      setResult(outcome);
-      setPreview(null);
-      await reload();
+      setResult({ ...outcome, leftOut });
+      setPreview(current => leftOut && current ? {
+        ...current,
+        rows: current.rows.filter(row => !row.employeeId),
+        summary: { ...current.summary, rows: leftOut, matched: 0, unmatched: leftOut,
+          needsReview: current.rows.filter(row => !row.employeeId && row.needsReview).length }
+      } : null);
+      try { await reload(); }
+      catch (failure) { setCommitError(`Attendance was saved, but the page could not refresh. ${failure.message} Refresh the page before importing again.`); }
     } catch (failure) {
       setCommitError(`Attendance could not be imported. ${failure.message} Your preview is still here; check the site and identities before trying again.`);
     } finally { setBusy(false); }
@@ -157,14 +167,14 @@ export default function BiometricImport({ data, can, reload }) {
         <span>
           Imported into <strong>{result.site}</strong> — {result.inserted} new day(s),
           {' '}{result.updated} updated{result.skipped.length ? `, ${result.skipped.length} skipped` : ''}.
-          Payroll and leave now read from this record.
+          {result.leftOut ? ` ${result.leftOut} unmatched day(s) were not imported; link those people below and import them later.` : ' Payroll and leave now read from this record.'}
         </span>
       </div>
     )}
 
     {preview?.rows?.length > 0 && <>
       <div className="attendance-summary">
-        <Summary label="Days read" value={preview.summary.rows} icon={CheckCircle2} />
+        <Summary label={result?.leftOut ? 'Days still unmatched' : 'Days read'} value={preview.summary.rows} icon={CheckCircle2} />
         <Summary label="Matched to staff" value={preview.summary.matched} icon={CheckCircle2} />
         <Summary label="Unmatched" value={preview.summary.unmatched} icon={AlertTriangle} />
         <Summary label="Need review" value={preview.summary.needsReview || 0} icon={AlertTriangle} />
@@ -212,13 +222,20 @@ export default function BiometricImport({ data, can, reload }) {
         {workLocation === 'Site' && <label>Project / site<select value={projectId} onChange={event => setProjectId(event.target.value)}>
           {data.projects.map(project => <option value={project.id} key={project.id}>{project.name}</option>)}
         </select></label>}
-        <button className="primary" onClick={commit} disabled={busy || !matched || preview.summary.unmatched > 0}>
-          {busy ? 'Importing…' : `Import ${matched} day(s)`}
+        <button className="primary" onClick={() => preview.summary.unmatched > 0 ? setConfirmPartial(true) : commit()}
+          disabled={busy || !matched || (workLocation === 'Site' && !projectId)}>
+          {busy ? 'Importing…' : `Import ${matched} matched day(s)`}
         </button>
         <small>
           {preview.from === preview.to ? shortDate(preview.from) : `${shortDate(preview.from)} → ${shortDate(preview.to)}`}
-          {preview.summary.unmatched > 0 && ` · resolve ${preview.unknownDevices.length} identity decision(s) before importing`}
+          {preview.summary.unmatched > 0 && ` · ${preview.summary.unmatched} unmatched day(s) will be left out`}
         </small>
+        {confirmPartial && <div className="import-partial-confirm" role="alert">
+          <strong>Import the {matched} matched day(s) now?</strong>
+          <span>The {preview.summary.unmatched} unmatched day(s) will not be saved. Link their scanner numbers below and import them later. Previously imported days will be updated, not duplicated, if you use this file again.</span>
+          <div><button className="secondary" type="button" onClick={() => setConfirmPartial(false)}>Wait and link people</button>
+            <button className="primary" type="button" onClick={commit}>Import matched days</button></div>
+        </div>}
         {commitError && <p className="form-error" role="alert">{commitError}</p>}
       </div>
 

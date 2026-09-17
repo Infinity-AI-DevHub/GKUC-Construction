@@ -6,3 +6,4 @@ data/
 .claude
 uploads/
 fixtures/dl-template.xlsx
+tmp/
