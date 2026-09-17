@@ -253,6 +253,104 @@ test('project coordination, subcontract rates and site stock custody stay linked
   assert.equal(Number(inventory.body.loans.find(row=>Number(row.id)===Number(loan.body.id)).outstanding),0);
 });
 
+test('client directory links projects, quotations, invoices and payments without deleting history', async () => {
+  const owner = await login();
+  const name = `Client Profile ${Date.now()}`;
+  const created = await call(owner, 'POST', '/clients', { type: 'Private', name,
+    contactPerson: 'Client contact', phone: '0771234567', email: 'client@example.com',
+    billingAddress: '1 Main Street', siteAddress: 'Site Road', city: 'Kandy', notes: 'Prefers email updates' });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const clientId = created.body.id;
+  assert.equal((await call(owner, 'POST', '/clients', { type: 'Private', name })).status, 409);
+  const project = await call(owner, 'POST', '/projects', { companyId: 1, name: `Client-linked works ${Date.now()}`,
+    clientId, manager: 'Project Manager', site: 'Site Road', stage: 'Planning', budget: 10000 });
+  assert.equal(project.status, 201, JSON.stringify(project.body));
+  assert.equal(project.body.clientId, clientId);
+  const boq = await call(owner, 'POST', '/boq', { projectId: project.body.id, title: 'Client-linked package',
+    items: [{ category: 'Labour', description: 'Construction labour', unit: 'day', quantity: 2, rate: 1000 }] });
+  assert.equal(boq.status, 201, JSON.stringify(boq.body));
+  const quote = await call(owner, 'POST', '/qs/quotations', { boqId: boq.body.id, clientId,
+    markupPercent: 0, vatPercent: 0 });
+  assert.equal(quote.status, 201, JSON.stringify(quote.body));
+  assert.equal(quote.body.clientId, clientId);
+  const invoiceBody = { projectId: project.body.id, clientId, kind: 'Interim', title: 'Client-linked invoice',
+    invoiceDate: today(), taxTreatment: 'Exempt', retentionPercent: 0, advanceRecovery: 0,
+    otherDeductions: 0, items: [{ description: 'Construction labour', quantity: 2, rate: 1000 }] };
+  const wrong = await call(owner, 'POST', '/receivables/invoices', { ...invoiceBody, clientId: clientId + 99999 });
+  assert.equal(wrong.status, 400);
+  const invoice = await call(owner, 'POST', '/receivables/invoices', invoiceBody);
+  assert.equal(invoice.status, 201, JSON.stringify(invoice.body));
+  assert.equal((await call(owner, 'POST', `/receivables/invoices/${invoice.body.id}/issue`)).status, 204);
+  assert.equal((await call(owner, 'POST', `/receivables/invoices/${invoice.body.id}/receipts`, {
+    amount: 500, receivedDate: today(), method: 'Bank transfer', reference: `CLI-${Date.now()}`
+  })).status, 201);
+  let profile = await call(owner, 'GET', `/clients/${clientId}`);
+  assert.equal(profile.status, 200, JSON.stringify(profile.body));
+  assert.equal(profile.body.projects.length, 1);
+  assert.equal(profile.body.quotations.length, 1);
+  assert.equal(profile.body.invoices.length, 1);
+  assert.equal(profile.body.payments.length, 1);
+  assert.equal(profile.body.summary.received, 500);
+  const renamed = await call(owner, 'PATCH', `/clients/${clientId}`, { name: `${name} Updated`, phone: '0777654321' });
+  assert.equal(renamed.status, 200);
+  assert.equal((await call(owner, 'GET', `/projects/${project.body.id}`)).body.client, `${name} Updated`);
+  assert.equal((await call(owner, 'DELETE', `/clients/${clientId}`)).status, 409);
+  assert.equal((await call(owner, 'PATCH', `/clients/${clientId}`, { active: false })).status, 200);
+  assert.equal((await call(owner, 'GET', '/clients?archived=1')).body.some(row => row.id === clientId), true);
+  profile = await call(owner, 'GET', `/clients/${clientId}`);
+  assert.equal(profile.body.invoices.length, 1, 'archiving keeps commercial history');
+});
+
+test('project managers and task assignees remain linked to employee work histories', async () => {
+  const owner = await login();
+  const bootstrap = (await call(owner, 'GET', '/bootstrap')).body.data;
+  const [first, second] = bootstrap.employees.filter(employee => employee.status === 'Active');
+  const clientId = (await call(owner, 'GET', '/clients')).body[0].id;
+  const project = await call(owner, 'POST', '/projects', { companyId: 1,
+    name: `Managed site ${Date.now()}`, clientId, managerEmployeeId: first.id,
+    site: 'Test site', stage: 'Planning', budget: 10000 });
+  assert.equal(project.status, 201, JSON.stringify(project.body));
+  assert.equal(project.body.managerEmployeeId, first.id);
+  assert.equal(project.body.manager, first.name);
+  const task = await call(owner, 'POST', '/tasks', { title: 'Inspect new project site', projectId: project.body.id,
+    assigneeEmployeeId: first.id, due: 'Tomorrow', dueDate: shift(1), priority: 'Medium', notes: 'Document findings' });
+  assert.equal(task.status, 201, JSON.stringify(task.body));
+  assert.equal(task.body.assigneeEmployeeId, first.id);
+  let profile = (await call(owner, 'GET', `/employees/${first.id}`)).body;
+  const assignment = profile.projects.find(row => row.projectId === project.body.id);
+  assert.equal(assignment.projectRole, 'Project manager');
+  assert.equal(assignment.tasks, 1);
+  assert.equal(profile.tasks.some(row => row.id === task.body.id), true);
+  assert.equal((await call(owner, 'GET', `/projects/${project.body.id}`)).body.team.some(row => row.projectRole === 'Project manager'), true);
+  const reassigned = await call(owner, 'PATCH', `/projects/${project.body.id}`, { managerEmployeeId: second.id });
+  assert.equal(reassigned.status, 200, JSON.stringify(reassigned.body));
+  profile = (await call(owner, 'GET', `/employees/${second.id}`)).body;
+  assert.equal(profile.projects.some(row => row.projectId === project.body.id && row.projectRole === 'Project manager'), true);
+  const former = (await call(owner, 'GET', `/employees/${first.id}`)).body.projects.find(row => row.projectId === project.body.id);
+  assert.equal(former.projectRole, 'Project manager');
+  assert.ok(former.releasedAt, 'the former manager keeps a dated history');
+});
+
+test('a new project belongs to the selected operating company', async () => {
+  const owner = await login();
+  const data = (await call(owner, 'GET', '/bootstrap')).body.data;
+  const manager = data.employees.find(employee => employee.status === 'Active');
+  const client = (await call(owner, 'GET', '/clients')).body[0];
+  const created = await call(owner, 'POST', '/projects', {
+    companyId: 2, name: `Readymix site ${Date.now()}`, clientId: client.id,
+    managerEmployeeId: manager.id, site: 'Readymix yard', stage: 'Planning', budget: 0
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.companyId, 2);
+  assert.equal(created.body.company, 'GKUC Readymix');
+  assert.equal((await call(owner, 'GET', '/projects?companyId=2')).body.some(project => project.id === created.body.id), true);
+  assert.equal((await call(owner, 'GET', '/projects?companyId=1')).body.some(project => project.id === created.body.id), false);
+  assert.equal((await call(owner, 'POST', '/projects', {
+    companyId: 999, name: 'Invalid company project', clientId: client.id,
+    managerEmployeeId: manager.id, site: 'Nowhere', stage: 'Planning', budget: 0
+  })).status, 400);
+});
+
 test('approving a BOQ and its variation sets the project budget', async () => {
   const qs = await login('qs@gkuc.lk');
   const owner = await login();
@@ -829,6 +927,12 @@ test('payroll is calculated from recorded attendance and approved overtime', asy
   assert.equal(settings.status, 200);
   assert.equal(Number(settings.body.activePolicy.officeOtRate), 225);
   assert.equal((await call(hr, 'POST', '/payroll/settings/policies', {
+    effectiveFrom: shift(-2), officeOtRate: 225, siteLabourSiteOtRate: 200,
+    siteLabourTravelOtRate: 100, driverOtRate: 225, supervisorSiteOtRate: 225,
+    supervisorTravelOtRate: 100, epfEmployeeRate: 8, epfEmployerRate: 12,
+    etfEmployerRate: 3, epfBasis: 'Gross earnings', etfBasis: 'Gross earnings'
+  })).status, 400, 'gross pay cannot be selected as the contribution base');
+  assert.equal((await call(hr, 'POST', '/payroll/settings/policies', {
     effectiveFrom: shift(-1), officeOtRate: 225, siteLabourSiteOtRate: 200,
     siteLabourTravelOtRate: 100, driverOtRate: 225, supervisorSiteOtRate: 225,
     supervisorTravelOtRate: 100, epfEmployeeRate: 8, epfEmployerRate: 12,
@@ -1187,7 +1291,7 @@ test('HR links an existing person from a scanner preview and imports the matched
   assert.equal(after.body.rows[0].employeeId, employee.id);
 
   const imported = await call(authToken, 'POST', '/biometric/commit', {
-    projectId: 1, workLocation: 'Site', filename: 'scanner.csv', rows: after.body.rows
+    filename: 'scanner.csv', rows: after.body.rows.map(row => ({ ...row, projectId: 1, workLocation: 'Site' }))
   });
   assert.equal(imported.status, 201, JSON.stringify(imported.body));
   assert.equal(imported.body.inserted, 1);
@@ -1249,8 +1353,8 @@ test('HR can import matched biometric days while leaving unknown scanner days un
   assert.equal(before.summary.matched, 1);
   assert.equal(before.summary.unmatched, 1);
   const saved = await call(authToken, 'POST', '/biometric/commit', {
-    projectId: 1, workLocation: 'Site', filename: 'partial.csv',
-    rows: before.rows.filter(row => row.employeeId)
+    filename: 'partial.csv',
+    rows: before.rows.filter(row => row.employeeId).map(row => ({ ...row, projectId: 1, workLocation: 'Site' }))
   });
   assert.equal(saved.status, 201, JSON.stringify(saved.body));
   assert.equal(saved.body.inserted, 1);
@@ -1258,6 +1362,121 @@ test('HR can import matched biometric days while leaving unknown scanner days un
   assert.equal(after.summary.unmatched, 1);
   assert.equal(after.unknownDevices[0].code, unknownCode);
   assert.equal(after.summary.duplicates, 1);
+});
+
+test('edited Excel times are audited and later imports preserve HR corrections', async () => {
+  const authToken = await login();
+  const code = `EDIT-TIME-${Date.now()}`;
+  const date = shift(-96);
+  const employee = await call(authToken, 'POST', '/biometric/people', {
+    code, name: 'Import Time Review Worker', firstDate: date
+  });
+  assert.equal(employee.status, 201);
+  const row = { employeeId: employee.body.id, code, name: employee.body.name, date,
+    checkIn: '07:30:00', checkOut: '17:15:00', needsReview: false,
+    correctionReason: 'Supervisor confirmed arrival and departure at site', projectId: 1, workLocation: 'Site' };
+  const imported = await call(authToken, 'POST', '/biometric/commit', {
+    filename: 'edited.xlsx', rows: [row]
+  });
+  assert.equal(imported.status, 201, JSON.stringify(imported.body));
+  const day = (await call(authToken, 'GET', `/attendance?date=${date}`)).body
+    .find(item => item.employeeId === employee.body.id);
+  assert.ok(day);
+  assert.match(day.in, /^07:30/);
+  const profile = await call(authToken, 'GET', `/employees/${employee.body.id}`);
+  assert.equal(profile.body.attendance.find(item => item.id === day.id).correctionReason, row.correctionReason);
+
+  const correction = await call(authToken, 'PATCH', `/attendance/${day.id}`, {
+    checkIn: '07:10', checkOut: '17:20', reason: 'Supervisor corrected the signed site register'
+  });
+  assert.equal(correction.status, 200);
+  const register = await call(authToken, 'GET', `/hr/attendance-register?month=${date.slice(0, 7)}`);
+  assert.equal(register.status, 200);
+  const registerDay = register.body.rows.find(person => person.name === employee.body.name)
+    ?.days[Number(date.slice(8, 10))];
+  assert.equal(registerDay.id, day.id);
+  assert.match(registerDay.in, /^07:10/);
+  assert.equal((await call(authToken, 'PATCH', `/attendance/${day.id}`, {
+    checkIn: '25:99', reason: 'Invalid clock time'
+  })).status, 400);
+  const repeated = await call(authToken, 'POST', '/biometric/commit', {
+    filename: 'edited.xlsx',
+    rows: [{ ...row, checkIn: '08:40:00', checkOut: '16:00:00', correctionReason: null }]
+  });
+  assert.equal(repeated.status, 201);
+  assert.equal(repeated.body.updated, 0);
+  assert.equal(repeated.body.skipped.length, 1);
+  const after = (await call(authToken, 'GET', `/attendance?date=${date}`)).body.find(item => item.id === day.id);
+  assert.match(after.in, /^07:10/);
+  assert.match(after.out, /^17:20/);
+});
+
+test('biometric import keeps each day at its own office, site, or non-working location', async () => {
+  const token = await login();
+  const code = `MIXED-LOC-${Date.now()}`;
+  const start = shift(-101);
+  const person = await call(token, 'POST', '/biometric/people', {
+    code, name: 'Mixed Location Worker', firstDate: start
+  });
+  assert.equal(person.status, 201);
+  const baseRow = { employeeId: person.body.id, code, name: person.body.name,
+    checkIn: '08:00:00', checkOut: '17:00:00' };
+  const rows = [
+    { ...baseRow, date: start, workLocation: 'Office', projectId: null },
+    { ...baseRow, date: shift(-100), workLocation: 'Site', projectId: 1 },
+    { ...baseRow, date: shift(-99), workLocation: 'Site', projectId: 2 },
+    { ...baseRow, date: shift(-98), declaredState: 'On leave', workLocation: 'Not working', projectId: null }
+  ];
+  const missing = await call(token, 'POST', '/biometric/commit', {
+    filename: 'mixed.xlsx', rows: [{ ...rows[0], workLocation: undefined }, ...rows.slice(1)]
+  });
+  assert.equal(missing.status, 400);
+  assert.equal((await call(token, 'GET', `/attendance?date=${start}`)).body
+    .filter(item => item.employeeId === person.body.id).length, 0);
+  const wrongSite = await call(token, 'POST', '/biometric/commit', {
+    filename: 'mixed.xlsx', rows: [rows[0], { ...rows[1], projectId: 999999 }, ...rows.slice(2)]
+  });
+  assert.equal(wrongSite.status, 400);
+  const saved = await call(token, 'POST', '/biometric/commit', { filename: 'mixed.xlsx', rows });
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  assert.equal(saved.body.inserted, 4);
+  for (const row of rows) {
+    const day = (await call(token, 'GET', `/attendance?date=${row.date}`)).body
+      .find(item => item.employeeId === person.body.id);
+    assert.equal(day.workLocation, row.workLocation);
+    assert.equal(day.projectId, row.projectId);
+  }
+});
+
+test('dated workforce locations guide a two-week biometric import without rewriting saved attendance', async () => {
+  const token = await login();
+  const code = `DATED-LOC-${Date.now()}`;
+  const first = shift(-114), second = shift(-113);
+  const person = await call(token, 'POST', '/biometric/people', { code, name: 'Dated Site Worker', firstDate: first });
+  assert.equal(person.status, 201);
+  const location = (from, to, workLocation, projectId) => ({ employeeId: person.body.id, from, to,
+    workLocation, projectId, reason: 'Supervisor confirmed the daily site roster' });
+  assert.equal((await call(token, 'POST', '/employees/work-locations', location(first, first, 'Office', null))).status, 400,
+    'site workers cannot be assigned to the office');
+  assert.equal((await call(token, 'POST', '/employees/work-locations', location(first, first, 'Site', 1))).status, 200);
+  assert.equal((await call(token, 'POST', '/employees/work-locations', location(second, second, 'Site', 2))).status, 200);
+  const planned = await call(token, 'GET', `/employees/work-locations?from=${first}&to=${second}`);
+  assert.equal(planned.status, 200);
+  assert.deepEqual(planned.body.filter(row => row.employeeId === person.body.id).map(row => row.projectId), [1, 2]);
+  const availability = await call(token, 'GET', `/employees/availability?date=${second}`);
+  assert.equal(availability.body.people.find(row => row.id === person.body.id).projectId, 2);
+  const file = new FormData();
+  file.append('file', new Blob([`ID,Name,Date,In,Out\n${code},Dated Site Worker,${first},08:00,17:00\n${code},Dated Site Worker,${second},08:00,17:00\n`], { type: 'text/csv' }), 'fortnight.csv');
+  const response = await fetch(`${base}/biometric/preview`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: file });
+  assert.equal(response.status, 200);
+  const preview = await response.json();
+  assert.deepEqual(preview.rows.map(row => row.plannedProjectId), [1, 2]);
+  const saved = await call(token, 'POST', '/biometric/commit', { filename: 'fortnight.csv',
+    rows: preview.rows.map(row => ({ ...row, workLocation: row.plannedWorkLocation, projectId: row.plannedProjectId })) });
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  assert.equal((await call(token, 'POST', '/employees/work-locations', location(first, first, 'Site', 2))).status, 200);
+  const existing = (await call(token, 'GET', `/attendance?date=${first}`)).body.find(row => row.employeeId === person.body.id);
+  assert.equal(existing.projectId, 1, 'changing a plan does not silently rewrite imported attendance');
 });
 
 test('workforce map distinguishes office presence, site allocation and free workers', async () => {

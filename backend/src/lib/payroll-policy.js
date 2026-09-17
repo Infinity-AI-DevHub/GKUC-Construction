@@ -62,16 +62,16 @@ export function calculatePayslip(employee, policy, components = []) {
   const grossEarnings = money(basic + overtimePay + allowanceTotal);
   const adjustedBasic = Math.max(0, money(basic - unpaidLeaveDeduction));
   const adjustedGross = Math.max(0, money(grossEarnings - unpaidLeaveDeduction));
-  const epfBasis = policy.epf_basis === 'Gross earnings' ? adjustedGross : adjustedBasic;
-  const etfBasis = policy.etf_basis === 'Gross earnings' ? adjustedGross : adjustedBasic;
+  // GKUC contributions are based only on earned basic pay (after unpaid leave).
+  // A legacy gross-basis policy must never bring overtime or allowances into EPF/ETF.
   const epfEmployeeDeduction = employee.epf_eligible
-    ? money(epfBasis * Number(policy.epf_employee_rate) / 100)
+    ? money(adjustedBasic * Number(policy.epf_employee_rate) / 100)
     : 0;
   const epfEmployerContribution = employee.epf_eligible
-    ? money(epfBasis * Number(policy.epf_employer_rate) / 100)
+    ? money(adjustedBasic * Number(policy.epf_employer_rate) / 100)
     : 0;
   const etfEmployerContribution = employee.etf_eligible
-    ? money(etfBasis * Number(policy.etf_employer_rate) / 100)
+    ? money(adjustedBasic * Number(policy.etf_employer_rate) / 100)
     : 0;
   const beforeAdvance = Math.max(0,
     grossEarnings + reimbursementTotal - unpaidLeaveDeduction - otherDeduction - epfEmployeeDeduction);

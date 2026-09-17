@@ -5,6 +5,7 @@ import { auth, permit, validate, fail, fromOptions } from '../lib/http.js';
 import { readUpload, readUploadedFile, store, checksumFile, remove,
   isLocalStore, localPathFor, signedDownloadUrl } from '../lib/storage.js';
 import { buildTemplate, parseBoqWorkbook, CATEGORIES } from '../lib/boq-template.js';
+import { parseBoqPdf } from '../lib/boq-pdf.js';
 import { optionsFor } from '../lib/options.js';
 import { notify } from '../alerts.js';
 
@@ -43,7 +44,8 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
     const { file, fields } = upload;
 
     const buffer = await readUploadedFile(file.path);
-    const parsed = parseBoqWorkbook(buffer);
+    const isPdf = file.mime === 'application/pdf' || /\.pdf$/i.test(file.filename || '');
+    const parsed = isPdf ? await parseBoqPdf(file.path) : parseBoqWorkbook(buffer);
     if (!parsed.ok) throw fail(422, parsed.error);
 
     const projectId = fields.projectId ? Number(fields.projectId) : null;
@@ -68,12 +70,14 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
     const importId = await transaction(async connection => {
       const [created] = await connection.execute(
         `INSERT INTO boq_imports (project_id,filename,storage_key,file_url,file_size,file_mime,
-           checksum,source,layout_json,title,client,status,row_count,problem_count,total,uploaded_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,'Review',?,?,?,?)`,
+           checksum,source,layout_json,title,client,document_reference,location,document_date,notes,
+           status,row_count,problem_count,total,uploaded_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'Review',?,?,?,?)`,
         [projectId, file.filename.slice(0, 190), stored.key, stored.url, stored.size, stored.mime,
           checksum, parsed.layout?.foreign ? 'Foreign' : 'Template',
           parsed.layout ? JSON.stringify(parsed.layout) : null,
-          parsed.title, parsed.client,
+          parsed.title, parsed.client, parsed.layout?.reference || null, parsed.layout?.location || null,
+          parsed.layout?.documentDate || null, parsed.layout?.notes?.join(' ') || null,
           parsed.items.length, problemCount, total, req.user.id]);
 
       for (const item of parsed.items) {
@@ -103,7 +107,8 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
 const detail = async importId => {
   const record = await getOne(`SELECT i.id,i.project_id projectId,i.boq_id boqId,i.filename,i.title,i.client,
     i.status,i.row_count rowCount,i.problem_count problemCount,i.total,i.created_at createdAt,
-    i.source,i.layout_json layout,i.file_size fileSize,i.checksum,
+    i.source,i.layout_json layout,i.file_size fileSize,i.checksum,i.document_reference documentReference,
+    i.location,i.document_date documentDate,i.notes,
     u.name uploadedBy,p.name project
     FROM boq_imports i JOIN users u ON u.id=i.uploaded_by
     LEFT JOIN projects p ON p.id=i.project_id WHERE i.id=?`, [importId]);
@@ -133,6 +138,32 @@ router.get('/boq/imports/:id', auth, permit('qs.boq', 'qs.view'), async (req, re
     res.json(record);
   } catch (error) { next(error); }
 });
+
+/* The document header is editable too: PDFs often have a client/reference typed into a
+   header that is not machine-readable, and the reviewer must be able to correct it without
+   abandoning the staged rows. */
+const documentSchema = z.object({
+  title: z.string().trim().max(180).nullable().optional(),
+  client: z.string().trim().max(180).nullable().optional(),
+  documentReference: z.string().trim().max(120).nullable().optional(),
+  location: z.string().trim().max(500).nullable().optional(),
+  documentDate: z.string().trim().max(30).nullable().optional(),
+  notes: z.string().trim().max(1000).nullable().optional()
+});
+
+router.patch('/boq/imports/:id', auth, permit('qs.boq'), validate(documentSchema),
+  async (req, res, next) => {
+    try {
+      const record = await getOne('SELECT status FROM boq_imports WHERE id=?', [req.params.id]);
+      if (!record) return res.status(404).json({ error: 'That import was not found' });
+      if (record.status !== 'Review') return res.status(409).json({ error: 'This import has already been dealt with' });
+      const existing = await getOne('SELECT title,client,document_reference documentReference,location,document_date documentDate,notes FROM boq_imports WHERE id=?', [req.params.id]);
+      const value = key => req.body[key] === undefined ? existing[key] : (req.body[key] || null);
+      await query(`UPDATE boq_imports SET title=?,client=?,document_reference=?,location=?,document_date=?,notes=? WHERE id=?`,
+        [value('title'), value('client'), value('documentReference'), value('location'), value('documentDate'), value('notes'), req.params.id]);
+      res.json(await detail(req.params.id));
+    } catch (error) { next(error); }
+  });
 
 /* Correcting a staged row. The original is kept in raw_json, so this is never destructive. */
 const rowSchema = z.object({
@@ -229,13 +260,19 @@ router.post('/boq/imports/:id/commit', auth, permit('qs.boq'),
 
       const reference = await nextReference('BOQ', 'boqs');
       const total = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const sourceNotes = [
+        req.body.notes || record.notes,
+        record.document_reference ? `Source reference: ${record.document_reference}` : null,
+        record.location ? `Source location: ${record.location}` : null,
+        record.document_date ? `Source document date: ${record.document_date}` : null
+      ].filter(Boolean).join('\n') || null;
 
       const boqId = await transaction(async connection => {
         const [created] = await connection.execute(
           `INSERT INTO boqs (project_id,reference,title,status,total,prepared_by,notes)
            VALUES (?,?,?,'Draft',?,?,?)`,
           [project.id, reference, record.title || `${project.name} — Bill of Quantities`,
-            total, req.user.id, req.body.notes || record.notes || null]);
+            total, req.user.id, sourceNotes]);
 
         for (const item of items) {
           await connection.execute(

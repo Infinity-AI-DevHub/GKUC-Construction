@@ -34,8 +34,9 @@ router.get('/hr/attendance-register', auth, permit('hr.view', 'hr.attendance', '
     try {
       const period = monthRange(req.query.month);
       const rows = await query(`
-        SELECT a.employee_name name, a.work_date workDate, a.state, a.check_in checkIn,
-               a.check_out checkOut, p.name project
+        SELECT a.id,a.employee_name name,a.work_date workDate,a.state,a.check_in checkIn,
+               a.check_out checkOut,a.project_id projectId,a.work_location workLocation,
+               a.source,a.correction_reason correctionReason,p.name project
           FROM attendance a LEFT JOIN projects p ON p.id=a.project_id
          WHERE a.work_date BETWEEN ? AND ?
          ORDER BY a.employee_name, a.work_date`, [period.from, period.to]);
@@ -60,7 +61,10 @@ router.get('/hr/attendance-register', auth, permit('hr.view', 'hr.attendance', '
         const mark = row.state === 'On site' ? 'P' : row.state === 'Late' ? 'L'
           : row.state === 'On leave' ? 'V' : row.state === 'Business trip' ? 'B'
             : row.state === 'Absent' ? 'A' : 'P';
-        person.days[day] = { mark, project: row.project, in: row.checkIn, out: row.checkOut };
+        person.days[day] = { id: row.id, mark, state: row.state, workDate: row.workDate,
+          project: row.project, projectId: row.projectId, workLocation: row.workLocation,
+          in: row.checkIn, out: row.checkOut, source: row.source,
+          correctionReason: row.correctionReason };
         if (mark === 'P' || mark === 'B') person.present += 1;
         else if (mark === 'L') { person.late += 1; person.present += 1; }
         else if (mark === 'A') person.absent += 1;

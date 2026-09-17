@@ -7,6 +7,7 @@ import BiometricImport from './BiometricImport.jsx';
 import { useOptions } from '../options.js';
 import { AttendanceRegister, LeaveRegister } from '../Registers.jsx';
 import EmployeeProfile from './EmployeeProfile.jsx';
+import AttendanceCorrection from './AttendanceCorrection.jsx';
 import WorkforceMap from './WorkforceMap.jsx';
 
 /* Each tab beside the permissions the server will accept for it — see allowedTabs. */
@@ -26,12 +27,13 @@ const TABS = [
 ];
 
 /** PID 2.2 — one record per employee covering profile, attendance, leave and overtime. */
-export default function People({ data, reload, can, companies, companyId, company }) {
+export default function People({ data, allData, reload, can, companies, companyId, company }) {
   /* Offering a tab the server will refuse only sends somebody into an error they can do
      nothing about, so each is shown against the permissions it actually needs. */
   const tabs = allowedTabs(TABS, can);
   const [tab, setTab] = useState(tabs[0]);
   const [open, setOpen] = useState('');
+  const allProjects = allData?.projects || data.projects;
   const employeeFromPath = () => Number(window.location.pathname.match(/^\/people\/(\d+)\/?$/)?.[1]) || null;
   const [employeeId, setEmployeeId] = useState(employeeFromPath);
   useEffect(() => {
@@ -57,18 +59,19 @@ export default function People({ data, reload, can, companies, companyId, compan
     Departments: can.hr && 'Add department'
   };
 
-  if (employeeId) return <EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} />;
+  if (employeeId) return <EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr}
+    canCorrect={can.attendance || can.hrImport} projects={allProjects} />;
 
   return <Page title="People" subtitle="Employee records, live workforce presence, leave and overtime."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
     {tab === 'Employees' && <Employees data={data} can={can} onOpen={openEmployee} />}
-    {tab === 'Workforce map' && <WorkforceMap canManage={can.hr} />}
-    {tab === 'Attendance' && <Attendance data={data} reload={reload} can={can} />}
-    {tab === 'Attendance register' && <AttendanceRegister />}
+    {tab === 'Workforce map' && <WorkforceMap canManage={can.hr} canPlan={can.hr || can.hrImport} projects={allProjects} />}
+    {tab === 'Attendance' && <Attendance data={data} projects={allProjects} reload={reload} can={can} />}
+    {tab === 'Attendance register' && <AttendanceRegister projects={allProjects} canCorrect={can.attendance || can.hrImport} />}
     {tab === 'Leave register' && <LeaveRegister />}
-    {tab === 'Biometric import' && <BiometricImport data={data} reload={reload} can={can} />}
+    {tab === 'Biometric import' && <BiometricImport data={data} projects={allProjects} reload={reload} can={can} />}
     {tab === 'Leave' && <Leave can={can} />}
     {tab === 'Overtime' && <Overtime can={can} />}
     {tab === 'Payroll' && <Payroll can={can} companyId={companyId} />}
@@ -225,7 +228,7 @@ function PolicyForm({ companyId, policy, close, reload }) {
       siteLabourTravelOtRate: Number(values.siteLabourTravelOtRate), driverOtRate: Number(values.driverOtRate),
       supervisorSiteOtRate: Number(values.supervisorSiteOtRate), supervisorTravelOtRate: Number(values.supervisorTravelOtRate),
       epfEmployeeRate: Number(values.epfEmployeeRate), epfEmployerRate: Number(values.epfEmployerRate),
-      etfEmployerRate: Number(values.etfEmployerRate), epfBasis: values.epfBasis, etfBasis: values.etfBasis
+      etfEmployerRate: Number(values.etfEmployerRate), epfBasis: 'Basic earnings', etfBasis: 'Basic earnings'
     });
     await reload();
   }}>
@@ -239,8 +242,7 @@ function PolicyForm({ companyId, policy, close, reload }) {
     <Field name="epfEmployeeRate" label="EPF employee rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.epfEmployeeRate ?? 0} />
     <Field name="epfEmployerRate" label="EPF employer rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.epfEmployerRate ?? 0} />
     <Field name="etfEmployerRate" label="ETF employer rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.etfEmployerRate ?? 0} />
-    <SelectField name="epfBasis" label="EPF calculation basis" options={['Basic earnings', 'Gross earnings']} defaultValue={policy?.epfBasis || 'Basic earnings'} />
-    <SelectField name="etfBasis" label="ETF calculation basis" options={['Basic earnings', 'Gross earnings']} defaultValue={policy?.etfBasis || 'Basic earnings'} />
+    <p className="form-note wide">EPF and ETF use basic earnings only, after unpaid leave. Overtime, allowances and reimbursements are excluded. Eligibility is set separately for each employee in their compensation profile.</p>
     <p className="form-note wide">Saving creates a new dated policy. Previously recorded overtime and completed salary sheets keep their original rates.</p>
   </FormModal>;
 }
@@ -419,7 +421,7 @@ function ReviewForm({ data, close, reload }) {
 const ATTENDANCE_COLUMNS = ['Employee', 'Site', 'Check in', 'Check out', 'Status', ''];
 const ATTENDANCE_TEMPLATE = 'minmax(170px,1.3fr) minmax(160px,1fr) 90px 90px 110px 90px';
 
-function Attendance({ data, reload, can }) {
+function Attendance({ data, projects, reload, can }) {
   const [correcting, setCorrecting] = useState(null);
   const [date, setDate] = useState(todayInput());
   const [rows, setRows] = useState(data.attendance);
@@ -463,7 +465,7 @@ function Attendance({ data, reload, can }) {
           : <span />}
       </Row>)}
     </Table>
-    {correcting && <CorrectionForm record={correcting} projects={data.projects} close={() => setCorrecting(null)} reload={refresh} />}
+    {correcting && <AttendanceCorrection record={correcting} projects={projects} close={() => setCorrecting(null)} reload={refresh} />}
   </>;
 }
 
@@ -493,28 +495,6 @@ function AttendanceVisuals({ analytics }) {
       </article>)}{!analytics.lowAttendance.length && <p className="empty-state">No relative attendance concerns in the available history.</p>}</div>
     </section>
   </div>;
-}
-
-/** Corrections are allowed but always carry a reason, and land in the audit log. */
-function CorrectionForm({ record, projects, close, reload }) {
-  return <FormModal title={`Correct attendance — ${record.name}`} close={close} label="Save correction" onSubmit={async values => {
-    await patch(`/attendance/${record.id}`, {
-      state: values.state || undefined,
-      checkIn: values.checkIn || null,
-      checkOut: values.checkOut || null,
-      workDate: values.workDate,
-      projectId: values.projectId ? Number(values.projectId) : undefined,
-      reason: values.reason
-    });
-    await reload();
-  }}>
-    <SelectField name="state" label="Status" options={['On site', 'Late', 'Checked out', 'Absent', 'On leave', 'Business trip']} defaultValue={record.state} />
-    <Field name="workDate" label="Work date" type="date" defaultValue={inputDate(record.workDate)} />
-    <SelectField name="projectId" label="Project / site" options={projects.map(project => [project.id, project.name])} defaultValue={record.projectId} />
-    <Field name="checkIn" label="Check in (HH:MM)" required={false} defaultValue={record.in || ''} placeholder="07:30" />
-    <Field name="checkOut" label="Check out (HH:MM)" required={false} defaultValue={record.out || ''} placeholder="16:30" />
-    <TextArea name="reason" label="Reason for the correction" placeholder="Required — recorded in the audit log" />
-  </FormModal>;
 }
 
 const LEAVE_COLUMNS = ['Employee', 'Type', 'From', 'To', 'Days', 'Status', ''];

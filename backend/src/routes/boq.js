@@ -12,10 +12,10 @@ const router = Router();
    may choose come from the option list, which the company maintains itself. */
 const CATEGORIES = ['Material', 'Labour', 'Equipment', 'Subcontract', 'Overhead'];
 
-const select = `SELECT b.id,b.reference,b.title,b.status,b.version,b.total,b.notes,b.terms,b.project_id projectId,p.name project,
+const select = `SELECT b.id,b.reference,b.title,b.status,b.version,b.total,b.notes,b.terms,b.project_id projectId,p.name project,p.client_id clientId,COALESCE(d.name,p.client) client,
   p.company_id companyId,c.name company,
   u.name preparedBy,a.name approvedBy,b.approved_at approvedAt,b.created_at createdAt
-  FROM boqs b JOIN projects p ON p.id=b.project_id JOIN companies c ON c.id=p.company_id
+  FROM boqs b JOIN projects p ON p.id=b.project_id JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id
   JOIN users u ON u.id=b.prepared_by LEFT JOIN users a ON a.id=b.approved_by`;
 
 /**

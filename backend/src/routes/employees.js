@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, getOne, pool, query } from '../db.js';
+import { audit, getOne, pool, query, transaction } from '../db.js';
 import { auth, can, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
 import { OVERTIME_TYPES, PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES,
@@ -84,10 +84,58 @@ router.post('/departments', auth, permit('hr.manage'), validate(z.object({
 router.get('/', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
   res.json(forViewer(req, await query(`${listQuery} ORDER BY e.code`)))));
 
+/** Daily deployment plan, independent of scanner attendance and project-team membership. */
+router.get('/work-locations', auth, permit('hr.view','hr.manage','hr.attendance','site.attendance'), wrap(async (req, res) => {
+  const from = isoDate.safeParse(req.query.from);
+  const to = isoDate.safeParse(req.query.to);
+  if (!from.success || !to.success || to.data < from.data)
+    return res.status(400).json({ error: 'Choose a valid work-location date range.' });
+  const rows = await query(`SELECT w.id,w.employee_id employeeId,w.work_date workDate,w.work_location workLocation,
+    w.project_id projectId,p.name project,w.note,w.updated_at updatedAt
+    FROM employee_work_locations w LEFT JOIN projects p ON p.id=w.project_id
+    WHERE w.work_date BETWEEN ? AND ? ORDER BY w.work_date,w.employee_id`, [from.data, to.data]);
+  res.json(rows);
+}));
+
+router.post('/work-locations', auth, permit('hr.manage','hr.attendance'), validate(z.object({
+  employeeId: z.number().int().positive(),
+  from: isoDate, to: isoDate,
+  workLocation: z.enum(['Office','Site','Unassigned']),
+  projectId: z.number().int().positive().nullable(),
+  reason: z.string().trim().min(3).max(500)
+})), wrap(async (req, res) => {
+  const { employeeId, from, to, workLocation, projectId, reason } = req.body;
+  const days = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
+  if (!Number.isFinite(days) || days < 1 || days > 62)
+    return res.status(400).json({ error: 'Choose a date range of no more than 62 days, with the end on or after the start.' });
+  const employee = await getOne("SELECT id,name,worker_type workerType FROM employees WHERE id=? AND status <> 'Left'", [employeeId]);
+  if (!employee) return res.status(404).json({ error: 'This active employee could not be found.' });
+  if (workLocation === 'Office' && employee.workerType === 'Site')
+    return res.status(400).json({ error: 'Site workers cannot be scheduled at the office. Change the employee type first if needed.' });
+  if (workLocation === 'Site' && (!projectId || !await getOne('SELECT id FROM projects WHERE id=? AND active=1', [projectId])))
+    return res.status(400).json({ error: 'Choose an active project site for these dates.' });
+  if (workLocation !== 'Site' && projectId !== null)
+    return res.status(400).json({ error: 'Only a project-site assignment can include a project.' });
+  const dates = Array.from({ length: days }, (_, index) => new Date(Date.parse(`${from}T00:00:00Z`) + index * 86400000).toISOString().slice(0, 10));
+  await transaction(async connection => {
+    const [before] = await connection.execute('SELECT * FROM employee_work_locations WHERE employee_id=? AND work_date BETWEEN ? AND ?', [employeeId, from, to]);
+    for (const date of dates) {
+      if (workLocation === 'Unassigned') await connection.execute('DELETE FROM employee_work_locations WHERE employee_id=? AND work_date=?', [employeeId, date]);
+      else await connection.execute(`INSERT INTO employee_work_locations
+        (employee_id,work_date,work_location,project_id,note,updated_by) VALUES (?,?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE work_location=VALUES(work_location),project_id=VALUES(project_id),note=VALUES(note),updated_by=VALUES(updated_by)`,
+      [employeeId, date, workLocation, projectId, reason, req.user.id]);
+    }
+    await audit(connection, req.user.id, 'WORK_LOCATION_PLAN', 'employee', employeeId, before,
+      { from, to, workLocation, projectId, reason }, req.ip);
+  });
+  res.status(200).json({ employeeId, from, to, workLocation, projectId, days });
+}));
+
 /** A date-specific deployment board: leave wins over attendance, which wins over plans. */
 router.get('/availability', auth, permit('hr.view','hr.manage','site.attendance','hr.attendance'), wrap(async (req, res) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : new Date().toLocaleDateString('en-CA');
-  const [employees, attendance, leave, assignments] = await Promise.all([
+  const [employees, attendance, leave, assignments, locations] = await Promise.all([
     query(`SELECT e.id,e.code,e.name,e.designation,e.worker_type workerType,e.photo_url photoUrl,e.status employmentStatus,
       d.name department FROM employees e LEFT JOIN departments d ON d.id=e.department_id
       WHERE e.status <> 'Left' AND e.join_date<=? ORDER BY e.name`, [date]),
@@ -98,23 +146,31 @@ router.get('/availability', auth, permit('hr.view','hr.manage','site.attendance'
     query(`SELECT pt.employee_id employeeId,p.id projectId,p.name project,pt.project_role projectRole
       FROM project_team pt JOIN projects p ON p.id=pt.project_id
       WHERE DATE(pt.assigned_at)<=? AND (pt.released_at IS NULL OR DATE(pt.released_at)>=?)
-      ORDER BY pt.assigned_at DESC`, [date, date])
+      ORDER BY pt.assigned_at DESC`, [date, date]),
+    query(`SELECT w.employee_id employeeId,w.work_location workLocation,w.project_id projectId,p.name project
+      FROM employee_work_locations w LEFT JOIN projects p ON p.id=w.project_id WHERE w.work_date=?`, [date])
   ]);
   const byAttendance = new Map(attendance.map(row => [row.employeeId || `name:${row.employeeName}`, row]));
   const byLeave = new Map(leave.map(row => [row.employeeId, row]));
   const byAssignment = new Map();
   for (const row of assignments) if (!byAssignment.has(row.employeeId)) byAssignment.set(row.employeeId, row);
+  const byLocation = new Map(locations.map(row => [row.employeeId, row]));
   const people = employees.map(person => {
     const day = byAttendance.get(person.id) || byAttendance.get(`name:${person.name}`);
     const away = byLeave.get(person.id);
     const plan = byAssignment.get(person.id);
+    const datedLocation = byLocation.get(person.id);
     let status = 'Free', group = 'free', location = 'Not assigned', projectId = null, available = true;
     if (person.employmentStatus === 'Suspended') { status = 'Not working'; group = 'not-working'; location = 'Suspended'; available = false; }
     else if (away) { status = 'On leave'; group = 'leave'; location = away.leaveType; available = false; }
     else if (day?.state === 'Absent') { status = 'Not working'; group = 'not-working'; location = 'Absent'; available = false; }
+    else if (day?.state === 'On leave') { status = 'On leave'; group = 'leave'; location = 'On leave'; available = false; }
+    else if (day?.workLocation === 'Not working') { status = 'Not working'; group = 'not-working'; location = day.state || 'Not working'; available = false; }
     else if (day?.state === 'Business trip') { status = 'Business trip'; group = 'business-trip'; location = day.project || 'Away'; projectId = day.projectId; available = false; }
     else if (day?.workLocation === 'Office') { status = 'At office'; group = 'office'; location = 'Head office'; available = false; }
     else if (day) { status = 'At site'; group = 'site'; location = day.project || 'Site'; projectId = day.projectId; available = false; }
+    else if (datedLocation?.workLocation === 'Office') { status = 'Scheduled at office'; group = 'office'; location = 'Head office'; available = false; }
+    else if (datedLocation) { status = 'Scheduled at site'; group = 'site'; location = datedLocation.project || 'Site'; projectId = datedLocation.projectId; available = false; }
     else if (plan) { status = 'Scheduled at site'; group = 'site'; location = plan.project; projectId = plan.projectId; available = false; }
     else if (person.workerType === 'Office') { status = 'Expected at office'; group = 'office'; location = 'Head office'; available = false; }
     return { ...person, status, group, location, projectId, available };
@@ -137,14 +193,25 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
       LEFT JOIN projects p ON p.id=o.project_id WHERE o.employee_id=? ORDER BY o.id DESC`, [employee.id]),
     listAttachments('employee', employee.id),
     query(`SELECT a.id,a.work_date workDate,a.check_in \`in\`,a.check_out \`out\`,a.state,a.source,a.work_location workLocation,a.needs_review needsReview,
-      a.correction_reason correctionReason,COALESCE(p.name,'Head office') site,p.id projectId FROM attendance a
+      a.correction_reason correctionReason,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,p.id projectId FROM attendance a
       LEFT JOIN projects p ON p.id=a.project_id WHERE a.employee_id=? OR a.employee_name=? ORDER BY a.work_date DESC LIMIT 1500`, [employee.id, employee.name]),
-    query(`SELECT t.project_role projectRole,t.assigned_at assignedAt,t.released_at releasedAt,p.id projectId,p.name project
-      FROM project_team t JOIN projects p ON p.id=t.project_id WHERE t.employee_id=? ORDER BY t.assigned_at DESC`, [employee.id]),
+    query(`SELECT 'Project manager' projectRole,a.assigned_at assignedAt,a.released_at releasedAt,
+      p.id projectId,p.name project
+      FROM project_manager_assignments a JOIN projects p ON p.id=a.project_id WHERE a.employee_id=?
+      UNION ALL
+      SELECT t.project_role projectRole,t.assigned_at assignedAt,t.released_at releasedAt,p.id projectId,p.name project
+      FROM project_team t JOIN projects p ON p.id=t.project_id
+      WHERE t.employee_id=? AND (p.manager_employee_id IS NULL OR p.manager_employee_id<>?)
+      ORDER BY assignedAt DESC`, [employee.id, employee.id, employee.id]),
     query(`SELECT t.id,t.title,t.status,t.priority,t.due_date dueDate,t.updated_at updatedAt,p.id projectId,p.name project
-      FROM tasks t JOIN projects p ON p.id=t.project_id WHERE LOWER(t.assignee)=LOWER(?) ORDER BY t.updated_at DESC`, [employee.name]),
+      FROM tasks t JOIN projects p ON p.id=t.project_id
+      WHERE t.assignee_employee_id=? OR (t.assignee_employee_id IS NULL AND LOWER(t.assignee)=LOWER(?)
+        AND (SELECT COUNT(*) FROM employees WHERE LOWER(name)=LOWER(?))=1)
+      ORDER BY t.updated_at DESC`, [employee.id, employee.name, employee.name]),
     query(`SELECT r.id,r.report_date reportDate,r.work_completed work,r.issue,r.workforce,p.id projectId,p.name project
-      FROM daily_reports r JOIN projects p ON p.id=r.project_id WHERE LOWER(r.supervisor)=LOWER(?) ORDER BY r.report_date DESC LIMIT 100`, [employee.name]),
+      FROM daily_reports r JOIN projects p ON p.id=r.project_id WHERE LOWER(r.supervisor)=LOWER(?)
+      AND (SELECT COUNT(*) FROM employees WHERE LOWER(name)=LOWER(?))=1
+      ORDER BY r.report_date DESC LIMIT 1500`, [employee.name, employee.name]),
     (can(req, 'hr.payroll') || can(req, 'hr.manage'))
       ? query(`SELECT r.id,r.review_date reviewDate,r.period,r.quality,r.productivity,r.safety,r.reliability,r.overall,
           r.strengths,r.improvements,u.name reviewer FROM performance_reviews r JOIN users u ON u.id=r.reviewer_id
@@ -178,9 +245,29 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
   attendanceStats.rate = attendanceStats.present + attendanceStats.absent
     ? Math.round(attendanceStats.present / (attendanceStats.present + attendanceStats.absent) * 100) : 0;
   const completedTasks = tasks.filter(task => ['Completed', 'Approved'].includes(task.status)).length;
+  const projectWork = new Map(projects.map(project => [project.projectId, { ...project, tasks: 0, completedTasks: 0, reports: 0, attendanceDays: 0 }]));
+  const recordWork = (projectId, project, date) => {
+    if (!projectId) return null;
+    if (!projectWork.has(projectId)) projectWork.set(projectId, {
+      projectId, project, projectRole: 'Work recorded', assignedAt: date, releasedAt: null,
+      tasks: 0, completedTasks: 0, reports: 0, attendanceDays: 0
+    });
+    return projectWork.get(projectId);
+  };
+  for (const task of tasks) {
+    const work = recordWork(task.projectId, task.project, task.updatedAt);
+    if (work) { work.tasks += 1; if (['Completed', 'Approved'].includes(task.status)) work.completedTasks += 1; }
+  }
+  for (const report of reports) { const work = recordWork(report.projectId, report.project, report.reportDate); if (work) work.reports += 1; }
+  for (const day of attendance) {
+    if (!presentStates.has(day.state)) continue;
+    const work = recordWork(day.projectId, day.site, day.workDate);
+    if (work) work.attendanceDays += 1;
+  }
   const averagePerformance = reviews.length
     ? Number((reviews.reduce((sum, review) => sum + Number(review.overall), 0) / reviews.length).toFixed(1)) : null;
-  res.json({ ...employee, biometricIds: biometricIds.map(row => row.code), leave, overtime, documents, attendance, projects, tasks, reports, reviews, monthlyTrend,
+  res.json({ ...employee, biometricIds: biometricIds.map(row => row.code), leave, overtime, documents, attendance,
+    projects: [...projectWork.values()], tasks, reports, reviews, monthlyTrend,
     attendanceStats, workStats: { tasks: tasks.length, completedTasks, reports: reports.length, averagePerformance } });
 }));
 

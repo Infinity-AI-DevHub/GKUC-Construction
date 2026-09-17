@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, BriefcaseBusiness, CalendarDays, CheckCircle2, ClipboardCheck,
-  Clock3, Mail, MapPin, Phone, ShieldCheck, Star, TrendingUp, UserRound } from 'lucide-react';
+  Clock3, Mail, MapPin, PencilLine, Phone, ShieldCheck, Star, TrendingUp, UserRound } from 'lucide-react';
 import { api, rupees, shortDate, slug } from '../api.js';
 import { Avatar, Badge, Row, Table } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
+import AttendanceCorrection from './AttendanceCorrection.jsx';
 
 function RateRing({ value, label }) {
   return <div className="people-rate-ring" style={{ '--people-rate': `${Math.max(0, Math.min(100, value || 0))}%` }}>
@@ -44,9 +45,11 @@ function ReviewRadar({ review }) {
   </div>;
 }
 
-export default function EmployeeProfile({ employeeId, close, canManage }) {
+export default function EmployeeProfile({ employeeId, close, canManage, canCorrect, projects = [] }) {
   const [employee, setEmployee] = useState(null);
   const [error, setError] = useState('');
+  const [correcting, setCorrecting] = useState(null);
+  const reloadEmployee = async () => setEmployee(await api(`/employees/${employeeId}`));
   useEffect(() => {
     setEmployee(null); setError('');
     api(`/employees/${employeeId}`).then(setEmployee).catch(failure => setError(failure.message));
@@ -135,21 +138,43 @@ export default function EmployeeProfile({ employeeId, close, canManage }) {
 
     <section className="employee-panel employee-wide-panel">
       <div className="employee-section-title"><div><span>Project history</span><h2>Assignments</h2></div><BriefcaseBusiness size={20} /></div>
-      <Table columns={['Project', 'Role', 'Assigned', 'Released']} template="minmax(180px,1.3fr) minmax(160px,1fr) 130px 130px" empty="No project assignment recorded.">
-        {employee.projects.map((row, index) => <Row template="minmax(180px,1.3fr) minmax(160px,1fr) 130px 130px" key={index}>
-          <strong>{row.project}</strong><span>{row.projectRole}</span><span>{shortDate(row.assignedAt)}</span><span>{row.releasedAt ? shortDate(row.releasedAt) : 'Current'}</span>
+      <Table columns={['Project', 'Role', 'Assigned', 'Tasks completed', 'Reports', 'Days on site']} template="minmax(180px,1.3fr) minmax(160px,1fr) 130px 130px 100px 110px" empty="No project work recorded.">
+        {employee.projects.map((row, index) => <Row template="minmax(180px,1.3fr) minmax(160px,1fr) 130px 130px 100px 110px" key={index}>
+          <strong>{row.project}</strong><span>{row.projectRole}{row.releasedAt ? <small>Released {shortDate(row.releasedAt)}</small> : null}</span>
+          <span>{shortDate(row.assignedAt)}</span><span>{row.completedTasks}/{row.tasks}</span><span>{row.reports}</span><span>{row.attendanceDays}</span>
+        </Row>)}
+      </Table>
+    </section>
+
+    <section className="employee-panel employee-wide-panel">
+      <div className="employee-section-title"><div><span>Delivery contribution</span><h2>Tasks and work completed</h2></div><ClipboardCheck size={20} /></div>
+      <Table columns={['Task', 'Project', 'Status', 'Updated']} template="minmax(220px,1.5fr) minmax(180px,1fr) 130px 130px" empty="No tasks assigned to this employee.">
+        {employee.tasks.map(task => <Row template="minmax(220px,1.5fr) minmax(180px,1fr) 130px 130px" key={task.id}>
+          <strong>{task.title}</strong><span>{task.project}</span><Badge tone={slug(task.status)}>{task.status}</Badge><span>{shortDate(task.updatedAt)}</span>
+        </Row>)}
+      </Table>
+      <Table title="Daily work reported" columns={['Date', 'Project', 'Work completed', 'Issues']} template="130px minmax(180px,1fr) minmax(240px,1.6fr) minmax(180px,1fr)" empty="No daily reports linked to this employee.">
+        {employee.reports.map(report => <Row template="130px minmax(180px,1fr) minmax(240px,1.6fr) minmax(180px,1fr)" key={report.id}>
+          <span>{shortDate(report.reportDate)}</span><span>{report.project}</span><span>{report.work || '—'}</span><span>{report.issue || '—'}</span>
         </Row>)}
       </Table>
     </section>
 
     <section className="employee-panel employee-wide-panel">
       <div className="employee-section-title"><div><span>Daily record</span><h2>Attendance history</h2></div><CalendarDays size={20} /></div>
-      <Table columns={['Date', 'Site', 'In', 'Out', 'Status', 'Source']} template="120px minmax(170px,1fr) 90px 90px 110px 100px" empty="No attendance recorded.">
-        {employee.attendance.map(row => <Row template="120px minmax(170px,1fr) 90px 90px 110px 100px" key={row.id}>
+      <Table columns={canCorrect ? ['Date', 'Site', 'In', 'Out', 'Status', 'Source', ''] : ['Date', 'Site', 'In', 'Out', 'Status', 'Source']}
+        template={canCorrect ? '120px minmax(170px,1fr) 90px 90px 110px 100px 48px' : '120px minmax(170px,1fr) 90px 90px 110px 100px'} empty="No attendance recorded.">
+        {employee.attendance.map(row => <Row template={canCorrect ? '120px minmax(170px,1fr) 90px 90px 110px 100px 48px' : '120px minmax(170px,1fr) 90px 90px 110px 100px'} key={row.id}>
           <span>{shortDate(row.workDate)}</span><span>{row.site}</span><span>{row.in || '—'}</span><span>{row.out || '—'}</span>
-          <Badge tone={slug(row.state)}>{row.state}</Badge><span>{row.source}</span>
+          <Badge tone={slug(row.state)}>{row.state}</Badge><span>{row.source}{row.correctionReason ? <small>Corrected: {row.correctionReason}</small> : null}</span>
+          {canCorrect && <button className="icon-btn" type="button" title={`Edit attendance for ${shortDate(row.workDate)}`}
+            aria-label={`Edit attendance for ${shortDate(row.workDate)}`} onClick={() => setCorrecting({ ...row, name: employee.name })}>
+            <PencilLine size={15} />
+          </button>}
         </Row>)}
       </Table>
+      {correcting && <AttendanceCorrection record={correcting} projects={projects}
+        close={() => setCorrecting(null)} reload={reloadEmployee} />}
     </section>
 
     <section className="employee-panel employee-wide-panel employee-documents">

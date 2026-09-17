@@ -1880,6 +1880,9 @@ async function createBoqImportTables() {
     layout_json JSON NULL,
     title VARCHAR(180) NULL,
     client VARCHAR(180) NULL,
+    document_reference VARCHAR(120) NULL,
+    location VARCHAR(500) NULL,
+    document_date VARCHAR(30) NULL,
     notes VARCHAR(1000) NULL,
     status ENUM('Review','Committed','Discarded') NOT NULL DEFAULT 'Review',
     row_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
@@ -1930,7 +1933,9 @@ async function createBoqImportTables() {
     ['storage_key', 'VARCHAR(400) NULL'], ['file_url', 'VARCHAR(600) NULL'],
     ['file_size', 'BIGINT UNSIGNED NULL'], ['file_mime', 'VARCHAR(120) NULL'],
     ['checksum', 'CHAR(64) NULL'], ['layout_json', 'JSON NULL'],
-    ['source', "ENUM('Template','Foreign') NOT NULL DEFAULT 'Template'"]
+    ['source', "ENUM('Template','Foreign') NOT NULL DEFAULT 'Template'"],
+    ['document_reference', 'VARCHAR(120) NULL'], ['location', 'VARCHAR(500) NULL'],
+    ['document_date', 'VARCHAR(30) NULL'], ['notes', 'VARCHAR(1000) NULL']
   ]) await addColumn('boq_imports', column, definition);
 
   /* Reachable from the bill itself, not only from the import that produced it. */
@@ -2359,6 +2364,22 @@ async function migrateExistingInstalls() {
   await addColumn('attendance', 'needs_review', 'TINYINT(1) NOT NULL DEFAULT 0');
   await addColumn('attendance', 'source', "VARCHAR(20) NOT NULL DEFAULT 'Manual'");
   await addColumn('attendance', 'work_location', "ENUM('Office','Site') NOT NULL DEFAULT 'Site'");
+  await modifyColumn('attendance', 'work_location', "ENUM('Office','Site','Not working') NOT NULL DEFAULT 'Site'");
+  await query(`CREATE TABLE IF NOT EXISTS employee_work_locations (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    employee_id BIGINT UNSIGNED NOT NULL,
+    work_date DATE NOT NULL,
+    work_location ENUM('Office','Site') NOT NULL,
+    project_id BIGINT UNSIGNED NULL,
+    note VARCHAR(500) NOT NULL,
+    updated_by BIGINT UNSIGNED NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_employee_work_location_day(employee_id,work_date),
+    KEY idx_employee_work_location_date(work_date),
+    CONSTRAINT fk_employee_work_location_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
+    CONSTRAINT fk_employee_work_location_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_employee_work_location_user FOREIGN KEY(updated_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   if (!(await columnIsNullable('attendance', 'project_id')))
     await query('ALTER TABLE attendance MODIFY project_id BIGINT UNSIGNED NULL');
   await addColumn('expenses', 'boq_item_id', 'BIGINT UNSIGNED NULL');
@@ -2515,6 +2536,90 @@ async function seedAccessControl() {
   }
 }
 
+async function createClientDirectory() {
+  await query(`CREATE TABLE IF NOT EXISTS clients (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    type ENUM('Private','Organisation') NOT NULL DEFAULT 'Organisation',
+    name VARCHAR(180) NOT NULL,
+    contact_person VARCHAR(120) NULL,
+    phone VARCHAR(40) NULL,
+    alternate_phone VARCHAR(40) NULL,
+    email VARCHAR(190) NULL,
+    billing_address VARCHAR(500) NULL,
+    site_address VARCHAR(500) NULL,
+    city VARCHAR(120) NULL,
+    district VARCHAR(120) NULL,
+    province VARCHAR(120) NULL,
+    country VARCHAR(100) NULL,
+    registration_number VARCHAR(100) NULL,
+    tax_number VARCHAR(100) NULL,
+    notes TEXT NULL,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_clients_name(name)
+  ) ENGINE=InnoDB`);
+  for (const table of ['projects', 'inquiries', 'quotations_client', 'client_invoices', 'tenders']) {
+    await addColumn(table, 'client_id', 'BIGINT UNSIGNED NULL');
+    await addForeignKey(table, `fk_${table}_client_directory`,
+      `CONSTRAINT fk_${table}_client_directory FOREIGN KEY(client_id) REFERENCES clients(id)`);
+  }
+  // Keep historical document names intact; the link supplies the live client profile.
+  const names = await query(`SELECT DISTINCT name FROM (
+    SELECT client name FROM projects WHERE client_id IS NULL UNION ALL
+    SELECT customer_name name FROM inquiries WHERE client_id IS NULL UNION ALL
+    SELECT client_name name FROM quotations_client WHERE client_id IS NULL UNION ALL
+    SELECT client name FROM client_invoices WHERE client_id IS NULL UNION ALL
+    SELECT client name FROM tenders WHERE client_id IS NULL
+  ) legacy WHERE name IS NOT NULL AND TRIM(name)<>''`);
+  for (const { name } of names) {
+    if (!await query('SELECT id FROM clients WHERE LOWER(name)=LOWER(?) LIMIT 1', [name]).then(rows => rows[0]))
+      await query('INSERT INTO clients (name) VALUES (?)', [name]);
+  }
+  await query(`UPDATE projects p JOIN clients c ON LOWER(c.name)=LOWER(p.client)
+    SET p.client_id=c.id WHERE p.client_id IS NULL`);
+  await query(`UPDATE inquiries i JOIN clients c ON LOWER(c.name)=LOWER(i.customer_name)
+    SET i.client_id=c.id WHERE i.client_id IS NULL`);
+  await query(`UPDATE quotations_client q JOIN clients c ON LOWER(c.name)=LOWER(q.client_name)
+    SET q.client_id=c.id WHERE q.client_id IS NULL`);
+  await query(`UPDATE client_invoices i JOIN clients c ON LOWER(c.name)=LOWER(i.client)
+    SET i.client_id=c.id WHERE i.client_id IS NULL`);
+  await query(`UPDATE tenders t JOIN clients c ON LOWER(c.name)=LOWER(t.client)
+    SET t.client_id=c.id WHERE t.client_id IS NULL`);
+}
+
+async function createProjectManagerLinks() {
+  await addColumn('projects', 'manager_employee_id', 'BIGINT UNSIGNED NULL');
+  await addForeignKey('projects', 'fk_project_manager_employee',
+    'CONSTRAINT fk_project_manager_employee FOREIGN KEY(manager_employee_id) REFERENCES employees(id)');
+  // Link old names only when exactly one employee has that name. Ambiguous names need a human decision.
+  await query(`UPDATE projects p JOIN (
+    SELECT MIN(id) employee_id,LOWER(TRIM(name)) matched_name FROM employees
+    GROUP BY LOWER(TRIM(name)) HAVING COUNT(*)=1
+  ) e ON LOWER(TRIM(p.manager))=e.matched_name
+    SET p.manager_employee_id=e.employee_id WHERE p.manager_employee_id IS NULL`);
+  await query(`CREATE TABLE IF NOT EXISTS project_manager_assignments (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    project_id BIGINT UNSIGNED NOT NULL,employee_id BIGINT UNSIGNED NOT NULL,
+    assigned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,released_at DATETIME NULL,
+    CONSTRAINT fk_manager_assignment_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_manager_assignment_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
+    INDEX idx_manager_assignment_employee(employee_id,project_id)
+  ) ENGINE=InnoDB`);
+  await query(`INSERT INTO project_manager_assignments (project_id,employee_id,assigned_at)
+    SELECT p.id,p.manager_employee_id,p.created_at FROM projects p
+    WHERE p.manager_employee_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM project_manager_assignments a WHERE a.project_id=p.id AND a.released_at IS NULL)`);
+  await addColumn('tasks', 'assignee_employee_id', 'BIGINT UNSIGNED NULL');
+  await addForeignKey('tasks', 'fk_task_assignee_employee',
+    'CONSTRAINT fk_task_assignee_employee FOREIGN KEY(assignee_employee_id) REFERENCES employees(id)');
+  await query(`UPDATE tasks t JOIN (
+    SELECT MIN(id) employee_id,LOWER(TRIM(name)) matched_name FROM employees
+    GROUP BY LOWER(TRIM(name)) HAVING COUNT(*)=1
+  ) e ON LOWER(TRIM(t.assignee))=e.matched_name
+    SET t.assignee_employee_id=e.employee_id WHERE t.assignee_employee_id IS NULL`);
+}
+
 export async function migrate() {
   await createCompaniesTable();
   await createCoreTables();
@@ -2551,6 +2656,8 @@ export async function migrate() {
   await migrateExistingInstalls();
   await createConstructionOperationsTables();
   await createFleetHistoryTables();
+  await createClientDirectory();
+  await createProjectManagerLinks();
   await seedWorkMethods();
   await seedAccessControl();
 }

@@ -6,7 +6,7 @@ import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, Te
 const TABS = ['Stock', 'Movements', 'Purchase requests', 'Orders', 'Suppliers'];
 
 /** PID 2.6 and 2.7 — stock the stores actually hold, and the purchasing trail behind it. */
-export default function Materials({ data, reload, can }) {
+export default function Materials({ data, reload, can, companyId }) {
   const [tab, setTab] = useState(TABS[0]);
   const [open, setOpen] = useState('');
 
@@ -24,8 +24,8 @@ export default function Materials({ data, reload, can }) {
 
     {tab === 'Stock' && <Stock data={data} reload={reload} can={can} />}
     {tab === 'Movements' && <Movements />}
-    {tab === 'Purchase requests' && <Requests reload={reload} can={can} />}
-    {tab === 'Orders' && <Orders reload={reload} can={can} />}
+    {tab === 'Purchase requests' && <Requests reload={reload} can={can} companyId={companyId} />}
+    {tab === 'Orders' && <Orders reload={reload} can={can} companyId={companyId} />}
     {tab === 'Suppliers' && <Suppliers />}
 
     {open === 'Stock' && <MaterialForm close={() => setOpen('')} reload={reload} />}
@@ -84,10 +84,10 @@ function Movements() {
 const REQUEST_COLUMNS = ['Reference', 'Project', 'Needed by', 'Lines', 'Estimate', 'Status', ''];
 const REQUEST_TEMPLATE = 'minmax(130px,.9fr) minmax(150px,1fr) 120px 70px 130px 110px 160px';
 
-function Requests({ reload, can }) {
+function Requests({ reload, can, companyId }) {
   const [rows, setRows] = useState([]);
   const [detail, setDetail] = useState(null);
-  const load = () => api('/purchasing/requests').then(setRows).catch(() => setRows([]));
+  const load = () => api(`/purchasing/requests?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
   const decide = async (id, status) => { await patch(`/purchasing/requests/${id}`, { status }); await load(); await reload(); };
 
@@ -185,10 +185,10 @@ function QuotationForm({ requestId, close, reload }) {
 const ORDER_COLUMNS = ['Reference', 'Supplier', 'Project', 'Order date', 'Total', 'Status', ''];
 const ORDER_TEMPLATE = 'minmax(130px,.9fr) minmax(160px,1.1fr) minmax(140px,1fr) 120px 130px 130px 110px';
 
-function Orders({ reload, can }) {
+function Orders({ reload, can, companyId }) {
   const [rows, setRows] = useState([]);
   const [detail, setDetail] = useState(null);
-  const load = () => api('/purchasing/orders').then(setRows).catch(() => setRows([]));
+  const load = () => api(`/purchasing/orders?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
 
   return <>

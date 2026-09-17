@@ -5,8 +5,9 @@ import { auth, permit, validate, wrap } from '../lib/http.js';
 
 const router = Router();
 const LATE_AFTER = process.env.ATTENDANCE_LATE_AFTER || '08:00:00';
+const attendanceTime = z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?$/, 'Enter a time between 00:00 and 23:59');
 
-const select = `SELECT a.id,a.employee_name name,a.role,COALESCE(p.name,'Head office') site,a.project_id projectId,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,
+const select = `SELECT a.id,a.employee_name name,a.role,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,a.project_id projectId,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,
   a.state,a.work_date workDate,a.employee_id employeeId FROM attendance a LEFT JOIN projects p ON p.id=a.project_id`;
 
 router.get('/', auth, permit('hr.view','site.attendance','hr.attendance'), wrap(async (req, res) => {
@@ -86,8 +87,8 @@ router.post('/', auth, permit('site.attendance','hr.attendance'), validate(z.obj
   employeeId: z.number().int().positive().optional(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   state: z.enum(['On site', 'Late', 'Checked out', 'Absent', 'On leave', 'Business trip']).default('On site'),
-  checkIn: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).nullable().optional(),
-  checkOut: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).nullable().optional()
+  checkIn: attendanceTime.nullable().optional(),
+  checkOut: attendanceTime.nullable().optional()
 }).refine(value => value.workLocation !== 'Site' || Boolean(value.projectId), {
   message: 'Choose the site where this person worked', path: ['projectId']
 })), wrap(async (req, res) => {
@@ -127,18 +128,21 @@ router.post('/:id/toggle', auth, permit('site.attendance'), wrap(async (req, res
 /** Corrections are allowed but always carry a reason and land in the audit log. */
 router.patch('/:id', auth, permit('site.attendance','hr.attendance'), validate(z.object({
   state: z.enum(['On site', 'Late', 'Checked out', 'Absent', 'On leave', 'Business trip']).optional(),
-  checkIn: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).nullable().optional(),
-  checkOut: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).nullable().optional(),
+  checkIn: attendanceTime.nullable().optional(),
+  checkOut: attendanceTime.nullable().optional(),
   workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   projectId: z.number().int().positive().nullable().optional(),
-  workLocation: z.enum(['Office', 'Site']).optional(),
-  reason: z.string().min(3).max(500)
+  workLocation: z.enum(['Office', 'Site', 'Not working']).optional(),
+  reason: z.string().trim().min(3).max(500)
 })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM attendance WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Attendance record not found' });
   const columns = { state: 'state', checkIn: 'check_in', checkOut: 'check_out', workDate: 'work_date', projectId: 'project_id', workLocation: 'work_location' };
   const body = { ...req.body };
-  if (body.workLocation === 'Office') body.projectId = null;
+  if (body.workLocation === 'Office' || body.workLocation === 'Not working') body.projectId = null;
+  if (body.workLocation === 'Not working' && !['Absent', 'On leave'].includes(body.state || before.state)) {
+    return res.status(400).json({ error: 'Not working is only for absent or leave days. Choose Office or a project site for worked days.' });
+  }
   const changes = Object.entries(body).filter(([key]) => key !== 'reason');
   try {
     await query(`UPDATE attendance SET ${changes.map(([key]) => `${columns[key]}=?`).join(',')}${changes.length ? ',' : ''}

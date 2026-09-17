@@ -17,6 +17,7 @@ import { publishChange } from './lib/realtime.js';
 import authRoutes from './routes/auth.js';
 import bootstrapRoutes from './routes/bootstrap.js';
 import projectRoutes from './routes/projects.js';
+import clientRoutes from './routes/clients.js';
 import taskRoutes from './routes/tasks.js';
 import employeeRoutes from './routes/employees.js';
 import attendanceRoutes from './routes/attendance.js';
@@ -189,6 +190,7 @@ app.get('/api/health', async (_req, res, next) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/bootstrap', bootstrapRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/api/clients', clientRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/attendance', attendanceRoutes);
