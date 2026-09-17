@@ -16,7 +16,7 @@ export const token = {
  * a leave request ending before it starts, a quantity out of range — said nothing more
  * than "Invalid data" and left the person to guess which box was wrong.
  */
-function readableError(body) {
+export function readableError(body) {
   /* "endDate" reads as "End date", so the message names the box to go and look at. */
   const label = name => name
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -29,7 +29,29 @@ function readableError(body) {
   const form = body?.issues?.formErrors?.filter(Boolean) || [];
   const all = [...form, ...reasons];
   if (all.length) return all.slice(0, 3).join('. ');
-  return body?.error || 'Request failed';
+  return body?.error || 'We could not complete this request. Please try again.';
+}
+
+const recentFailures = new Map();
+function reportFailure(path, message) {
+  const key = `${path}:${message}`;
+  const now = Date.now();
+  if (now - (recentFailures.get(key) || 0) < 30000) return;
+  recentFailures.set(key, now);
+  notice({ title: 'Action could not be completed', message, severity: 'Warning' });
+}
+
+function responseError(response, body) {
+  if (response.status === 401) return 'Your session has expired. Sign in again, then retry this action.';
+  if (response.status === 403) return 'Your account cannot perform this action. Ask a manager to check your access.';
+  if (response.status === 413) return 'This file is too large. Try a smaller export or ask an administrator about the upload limit.';
+  if (response.status === 429) return 'Too many attempts were made. Wait a moment, then try again.';
+  if (response.status === 404 && !body?.error) return 'The requested record was not found. It may have been removed; refresh the page and try again.';
+  if (response.status >= 500) return body?.reference
+    ? readableError(body)
+    : 'The system could not complete this action right now. Please try again. If it continues, tell your administrator what you were doing.';
+  if (body) return readableError(body);
+  return `The action could not be completed (error ${response.status}). Check your entries and try again.`;
 }
 
 export const api = async (path, options = {}) => {
@@ -39,7 +61,7 @@ export const api = async (path, options = {}) => {
     response = await fetch(`/api${path}`, {
       ...options,
       headers: {
-        'Content-Type': 'application/json',
+        ...(!(options.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
         ...(stored ? { Authorization: `Bearer ${stored}` } : {}),
         ...options.headers
       }
@@ -47,7 +69,9 @@ export const api = async (path, options = {}) => {
   } catch {
     /* The server is down or the network dropped. Saying so is more use than the browser's
        own wording, which talks about fetch rather than about the system. */
-    throw new Error('Could not reach the server. Check that SiteOps is running, then try again.');
+    const message = 'Cannot connect to SiteOps. Check your internet connection and try again. If other pages also fail, contact your administrator.';
+    reportFailure(path, message);
+    throw new Error(message);
   }
 
   if (response.status === 204) return null;
@@ -61,10 +85,18 @@ export const api = async (path, options = {}) => {
     try { body = JSON.parse(text); } catch { body = null; }
   }
   if (!response.ok) {
-    if (body === null) throw new Error(`The server answered with an error (${response.status}).`);
-    throw new Error(readableError(body));
+    const message = responseError(response, body);
+    reportFailure(path, message);
+    const failure = new Error(message);
+    failure.status = response.status;
+    failure.details = body;
+    throw failure;
   }
-  if (body === null && text) throw new Error('The server sent a reply that could not be read.');
+  if (body === null && text) {
+    const message = 'The system sent a response that could not be read. Refresh the page and try again; contact your administrator if it continues.';
+    reportFailure(path, message);
+    throw new Error(message);
+  }
   return body;
 };
 
@@ -127,11 +159,18 @@ export const upload = async (ownerType, ownerId, file, meta = {}) => {
   form.append('file', file);
   for (const [key, value] of Object.entries(meta)) if (value) form.append(key, value);
   const stored = token.get();
-  const response = await fetch(`/api/uploads/${ownerType}/${ownerId}`, {
-    method: 'POST',
-    headers: stored ? { Authorization: `Bearer ${stored}` } : {},
-    body: form
-  });
+  let response;
+  try {
+    response = await fetch(`/api/uploads/${ownerType}/${ownerId}`, {
+      method: 'POST',
+      headers: stored ? { Authorization: `Bearer ${stored}` } : {},
+      body: form
+    });
+  } catch {
+    const message = 'The upload could not reach SiteOps. Check your internet connection and try again.';
+    reportFailure('upload', message);
+    throw new Error(message);
+  }
 
   /*
    * Not every refusal comes from the application.
@@ -148,13 +187,15 @@ export const upload = async (ownerType, ownerId, file, meta = {}) => {
   }
 
   if (!response.ok) {
-    if (response.status === 413) {
-      throw new Error(body?.error
-        || `${file.name} is too large to upload${maxUploadMb ? ` — the limit is ${maxUploadMb}MB` : ''}.`);
-    }
-    throw new Error(body?.error || `The upload failed (${response.status}).`);
+    const message = responseError(response, body);
+    reportFailure('upload', message);
+    throw new Error(message);
   }
-  if (!body) throw new Error('The server sent a reply that could not be read.');
+  if (!body) {
+    const message = 'The upload response could not be read. Refresh the page to check whether the file was saved before trying again.';
+    reportFailure('upload', message);
+    throw new Error(message);
+  }
   return body;
 };
 
@@ -167,12 +208,21 @@ export const upload = async (ownerType, ownerId, file, meta = {}) => {
  */
 export const fetchDownload = async path => {
   const stored = token.get();
-  const response = await fetch(`/api${path}`, {
-    headers: stored ? { Authorization: `Bearer ${stored}` } : {}
-  });
+  let response;
+  try {
+    response = await fetch(`/api${path}`, {
+      headers: stored ? { Authorization: `Bearer ${stored}` } : {}
+    });
+  } catch {
+    const message = 'The file could not be downloaded. Check your internet connection and try again.';
+    reportFailure(path, message);
+    throw new Error(message);
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || 'That file could not be opened');
+    const message = responseError(response, body);
+    reportFailure(path, message);
+    throw new Error(message);
   }
   return URL.createObjectURL(await response.blob());
 };
@@ -201,12 +251,21 @@ export const fileSize = bytes => (bytes >= 1048576
  */
 export const fetchAttachment = async id => {
   const stored = token.get();
-  const response = await fetch(`/api/uploads/file/${id}`, {
-    headers: stored ? { Authorization: `Bearer ${stored}` } : {}
-  });
+  let response;
+  try {
+    response = await fetch(`/api/uploads/file/${id}`, {
+      headers: stored ? { Authorization: `Bearer ${stored}` } : {}
+    });
+  } catch {
+    const message = 'The attachment could not be opened. Check your internet connection and try again.';
+    reportFailure('attachment', message);
+    throw new Error(message);
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || 'That file could not be opened');
+    const message = responseError(response, body);
+    reportFailure('attachment', message);
+    throw new Error(message);
   }
   return URL.createObjectURL(await response.blob());
 };

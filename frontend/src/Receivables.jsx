@@ -442,13 +442,17 @@ function FloatLedger({ float, data, can, close, reload }) {
 
   return <Modal title={`${float.name} — ${rupees(float.balance)} in hand`} close={close} wide>
     <div className="petty-ledger-heading"><Badge tone={slug(float.accountType)}>{float.accountType}</Badge>
-      <span>This balance is maintained independently from the other petty-cash accounts.</span></div>
+      <span>{float.accountType === 'Fuel'
+        ? 'Top up this float here. Record fuel against a vehicle in Fleet; its cost and vehicle appear below automatically.'
+        : 'This balance is maintained independently from the other petty-cash accounts.'}</span></div>
     <Table columns={['Date', 'Description', 'Kind', 'Recorded by', 'Amount']} template={ENTRY_TEMPLATE}
       empty="Nothing has moved through this float yet."
       tools={can.finance ? <button className="secondary" onClick={() => setAdding(true)}>Record a movement</button> : null}>
       {entries.map(entry => <Row template={ENTRY_TEMPLATE} key={entry.id}>
         <span>{shortDate(entry.entryDate)}</span>
-        <div><strong>{entry.description}</strong><small>{entry.employee
+        <div><strong>{entry.description}</strong><small>{entry.vehicle
+          ? `${entry.vehicle} · ${entry.registration}${entry.project ? ` · ${entry.project}` : ''}`
+          : entry.employee
           ? `${entry.employee} · ${entry.employeeCode}${entry.outstandingAdvance > 0 ? ` · ${rupees(entry.outstandingAdvance)} awaiting payroll` : ' · recovered'}`
           : entry.project || entry.category || '—'}</small></div>
         <Badge tone={slug(entry.kind)}>{entry.kind}</Badge>
@@ -462,7 +466,7 @@ function FloatLedger({ float, data, can, close, reload }) {
 }
 
 function EntryForm({ float, employees, close, reload }) {
-  const [kind, setKind] = useState('Spend');
+  const [kind, setKind] = useState(float.accountType === 'Fuel' ? 'Top up' : 'Spend');
   return <FormModal title={`Movement on ${float.name}`} close={close} label="Record it" onSubmit={async values => {
     await post(`/receivables/petty-cash/${float.id}/entries`, {
       kind: values.kind,
@@ -475,7 +479,8 @@ function EntryForm({ float, employees, close, reload }) {
     await reload();
   }}>
     <label>What happened <span aria-hidden="true">*</span><select name="kind" value={kind} onChange={event => setKind(event.target.value)} required>
-      {['Spend', 'Top up', 'Return', 'Adjustment'].map(option => <option key={option}>{option}</option>)}
+      {(float.accountType === 'Fuel' ? ['Top up', 'Return', 'Adjustment'] : ['Spend', 'Top up', 'Return', 'Adjustment'])
+        .map(option => <option key={option}>{option}</option>)}
     </select></label>
     <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" />
     <Field name="entryDate" label="Date" type="date" defaultValue={todayInput()} />
@@ -484,5 +489,6 @@ function EntryForm({ float, employees, close, reload }) {
     <Field name="category" label="Category" required={false} placeholder="Fuel, refreshments, courier" />
     <Field name="description" label="Description" wide placeholder="Diesel for the site generator" />
     {float.accountType === 'Salary advance' && <p className="form-note wide">Salary advances are recovered automatically from this employee's next available payroll, with any unpaid balance carried forward.</p>}
+    {float.accountType === 'Fuel' && <p className="form-note wide">For fuel purchased for a vehicle, go to Fleet → Fuel & service → Record fuel. The float will be reduced automatically.</p>}
   </FormModal>;
 }

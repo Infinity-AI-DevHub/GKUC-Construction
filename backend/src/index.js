@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import helmet from 'helmet';
 import { query } from './db.js';
@@ -241,11 +242,15 @@ app.use(express.static(frontendDist));
 app.get('*', (_req, res) => res.sendFile(path.join(frontendDist, 'index.html')));
 
 app.use((error, req, res, _next) => {
-  console.error(error);
   if (error.status) return res.status(error.status).json({ error: error.message });
   if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This record already exists' });
   if (error.code === 'ER_NO_REFERENCED_ROW_2') return res.status(400).json({ error: 'A referenced record does not exist' });
-  res.status(500).json({ error: 'Unexpected server error' });
+  const reference = randomUUID().slice(0, 8).toUpperCase();
+  console.error(`Request ${reference} failed at ${req.method} ${req.originalUrl}`, error);
+  res.status(500).json({
+    error: `The system could not complete this action. Try again, or give support reference ${reference} to your administrator.`,
+    reference
+  });
 });
 
 await migrate();

@@ -487,6 +487,7 @@ router.get('/receivables/petty-cash/:id/entries', auth, permit('finance.view', '
       res.json(await query(`
         SELECT e.id,e.kind,e.amount,e.entry_date entryDate,e.description,e.category,
                e.employee_id employeeId,emp.name employee,emp.code employeeCode,
+               e.fuel_record_id fuelRecordId,fr.vehicle_id vehicleId,v.vehicle vehicle,v.registration registration,
                CASE WHEN f.account_type='Salary advance' AND e.kind='Spend'
                     THEN GREATEST(0,ABS(e.amount)-COALESCE((SELECT SUM(r.amount) FROM salary_advance_recoveries r WHERE r.entry_id=e.id),0))
                     ELSE NULL END outstandingAdvance,
@@ -494,6 +495,8 @@ router.get('/receivables/petty-cash/:id/entries', auth, permit('finance.view', '
           FROM petty_cash_entries e JOIN users u ON u.id=e.recorded_by
           JOIN petty_cash_floats f ON f.id=e.float_id
           LEFT JOIN employees emp ON emp.id=e.employee_id
+          LEFT JOIN fuel_records fr ON fr.id=e.fuel_record_id
+          LEFT JOIN fleet v ON v.id=fr.vehicle_id
           LEFT JOIN projects p ON p.id=e.project_id
          WHERE e.float_id=? ORDER BY e.entry_date DESC, e.id DESC LIMIT 300`, [req.params.id]));
     } catch (error) { next(error); }
@@ -513,6 +516,8 @@ router.post('/receivables/petty-cash/:id/entries', auth, permit('finance.manage'
     try {
       const float = await getOne('SELECT * FROM petty_cash_floats WHERE id=? AND active=1', [req.params.id]);
       if (!float) throw fail(404, 'That float was not found');
+      if (float.account_type === 'Fuel' && req.body.kind === 'Spend')
+        throw fail(400, 'Record fuel in Fleet. Choose the vehicle and this fuel float there; the spending will appear here automatically.');
       if (float.account_type === 'Salary advance' && req.body.kind === 'Spend' && !req.body.employeeId)
         throw fail(400, 'Choose the employee receiving this salary advance');
       if (req.body.employeeId) {

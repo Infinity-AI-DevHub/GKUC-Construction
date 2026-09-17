@@ -102,16 +102,7 @@ export default function ProjectGallery({ projectId, canManage }) {
       if (thumb) form.append('thumbnail', new File([thumb], 'thumb.jpg', { type: 'image/jpeg' }));
       if (open !== undefined && open !== null) form.append('folderId', String(open));
       try {
-        const token = sessionStorage.getItem('gkuc-token');
-        const response = await fetch(`/api/projects/${projectId}/gallery/photos`, {
-          method: 'POST',
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          body: form
-        });
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          throw new Error(body.error || 'That photo could not be saved');
-        }
+        await api(`/projects/${projectId}/gallery/photos`, { method: 'POST', body: form });
         done += 1;
       } catch (failure) {
         setError(`${file.name}: ${failure.message}`);

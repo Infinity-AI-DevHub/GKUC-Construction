@@ -3,10 +3,12 @@ import { z } from 'zod';
 import { audit, getOne, pool, query, today, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
 import { dueLabel } from './bootstrap.js';
+import { publishChange } from '../lib/realtime.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const DOC_TYPES = ['Insurance', 'Revenue licence', 'Emission test', 'Service', 'Fitness certificate'];
+const money = amount => `LKR ${Number(amount || 0).toLocaleString('en-LK', { maximumFractionDigits: 2 })}`;
 
 const select = `SELECT f.id,f.vehicle,f.registration reg,f.driver,f.status,f.renewal_type renewal,
   COALESCE(primary_doc.expiry_date,f.due_date) due_date,f.odometer,
@@ -55,13 +57,29 @@ router.get('/', auth, permit('transport.view','transport.manage'), wrap(async (_
   res.json(vehicles.map(vehicle => ({ ...vehicle, due: dueLabel(vehicle.due_date), service: serviceDue(vehicle) })));
 }));
 
+/* Vehicles are shared; the selected company determines which funded fuel float can pay. */
+router.get('/fuel-floats', auth, permit('transport.view','transport.manage'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId);
+  if (!Number.isInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a company to see its fuel floats' });
+  const floats = await query(`SELECT f.id,f.name,f.company_id companyId,f.project_id projectId,
+    COALESCE(SUM(e.amount),0) balance FROM petty_cash_floats f
+    LEFT JOIN petty_cash_entries e ON e.float_id=f.id
+    WHERE f.account_type='Fuel' AND f.active=1 AND f.company_id=?
+    GROUP BY f.id,f.name,f.company_id,f.project_id ORDER BY f.name`, [companyId]);
+  res.json(floats);
+}));
+
 router.get('/:id', auth, permit('transport.view','transport.manage'), wrap(async (req, res) => {
   const vehicle = await getOne(`${select} WHERE f.id=?`, [req.params.id]);
   if (!vehicle) return res.status(404).json({ error: 'Asset not found' });
   const [documents, fuel, maintenance, running, drivers, readings, renewals] = await Promise.all([
     query('SELECT id,doc_type docType,reference,expiry_date expiryDate,cost FROM vehicle_documents WHERE vehicle_id=? ORDER BY expiry_date', [vehicle.id]),
-    query(`SELECT f.id,f.fuel_date fuelDate,f.litres,f.cost,f.odometer,f.driver,p.name project FROM fuel_records f
-      LEFT JOIN projects p ON p.id=f.project_id WHERE f.vehicle_id=? ORDER BY f.fuel_date DESC LIMIT 50`, [vehicle.id]),
+    query(`SELECT f.id,f.fuel_date fuelDate,f.litres,f.cost,f.odometer,f.driver,p.name project,
+      pcf.name fuelFloat FROM fuel_records f
+      LEFT JOIN projects p ON p.id=f.project_id
+      LEFT JOIN petty_cash_entries pce ON pce.fuel_record_id=f.id
+      LEFT JOIN petty_cash_floats pcf ON pcf.id=pce.float_id
+      WHERE f.vehicle_id=? ORDER BY f.fuel_date DESC LIMIT 50`, [vehicle.id]),
     query(`SELECT m.id,m.service_date serviceDate,m.maintenance_kind kind,m.description,m.cost,m.garage,m.odometer,
       p.name project FROM vehicle_maintenance m LEFT JOIN projects p ON p.id=m.project_id
       WHERE m.vehicle_id=? ORDER BY m.service_date DESC,m.id DESC`, [vehicle.id]),
@@ -239,6 +257,7 @@ router.post('/:id/documents', auth, permit('transport.manage'), validate(z.objec
 }));
 
 router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
+  fuelFloatId: z.number().int().positive(),
   projectId: z.number().int().positive().nullable().optional(),
   fuelDate: isoDate,
   litres: z.number().positive().max(2000),
@@ -253,11 +272,25 @@ router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
     if(body.odometer<Number(vehicle.odometer))throw Object.assign(new Error(
       `The odometer cannot go backwards — ${vehicle.registration} was last recorded at ${vehicle.odometer} km`),{status:409});
     const projectId=body.projectId===undefined?vehicle.project_id:body.projectId;
-    if(projectId){const [[project]]=await connection.execute('SELECT id FROM projects WHERE id=? AND active=1',[projectId]);
-      if(!project)throw Object.assign(new Error('Project site not found'),{status:400});}
+    const [[fuelFloat]]=await connection.execute(`SELECT id,name,company_id companyId,project_id projectId
+      FROM petty_cash_floats WHERE id=? AND account_type='Fuel' AND active=1 FOR UPDATE`,[body.fuelFloatId]);
+    if(!fuelFloat)throw Object.assign(new Error('Choose an active fuel float before recording fuel'),{status:400});
+    if(projectId){
+      const [[project]]=await connection.execute('SELECT id,company_id companyId FROM projects WHERE id=? AND active=1',[projectId]);
+      if(!project)throw Object.assign(new Error('Project site not found'),{status:400});
+      if(Number(project.companyId)!==Number(fuelFloat.companyId))throw Object.assign(new Error(
+        'The selected fuel float belongs to a different company than this project. Choose the matching float or project.'),{status:400});
+    }
+    const [[{balance}]]=await connection.execute('SELECT COALESCE(SUM(amount),0) balance FROM petty_cash_entries WHERE float_id=?',[fuelFloat.id]);
+    if(Number(body.cost)>Number(balance)+0.001)throw Object.assign(new Error(
+      `The ${fuelFloat.name} fuel float has ${money(balance)} available. Top it up in Finance or enter an amount within the balance.`),{status:409});
     const [result]=await connection.execute(`INSERT INTO fuel_records
       (vehicle_id,project_id,fuel_date,litres,cost,odometer,driver,created_by) VALUES (?,?,?,?,?,?,?,?)`,
       [vehicle.id,projectId,body.fuelDate,body.litres,body.cost,body.odometer,body.driver||vehicle.driver,req.user.id]);
+    await connection.execute(`INSERT INTO petty_cash_entries
+      (float_id,kind,amount,entry_date,description,category,project_id,fuel_record_id,recorded_by)
+      VALUES (?,'Spend',?,?,?,'Fuel',?,?,?)`,
+      [fuelFloat.id,-body.cost,body.fuelDate,`Fuel — ${vehicle.vehicle} (${vehicle.registration})`,projectId,result.insertId,req.user.id]);
     await connection.execute('UPDATE fleet SET odometer=GREATEST(odometer,?) WHERE id=?',[body.odometer,vehicle.id]);
     await connection.execute(`INSERT INTO vehicle_odometer_readings
       (vehicle_id,reading_date,odometer,source,source_id,recorded_by) VALUES (?,?,?,'Fuel',?,?)`,
@@ -270,6 +303,8 @@ router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
     return result.insertId;
   });
   const row=await getOne('SELECT * FROM fuel_records WHERE id=?',[id]);
+  publishChange('fleet', { vehicleId: Number(req.params.id) });
+  publishChange('receivables', {});
   res.status(201).json(row);
 }));
 
