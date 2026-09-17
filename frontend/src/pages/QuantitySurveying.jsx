@@ -4,11 +4,14 @@ import { api, openDocument, patch, post, rupees, shortDate, slug, todayInput } f
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import BoqImport from '../BoqImport.jsx';
 import BoqChanges from '../BoqChanges.jsx';
+import CostControl from './CostControl.jsx';
 
 /* The bills already on the system, so this tab shows what exists as well as how to add. */
-function BoqList() {
+function BoqList({ companyId }) {
   const [boqs, setBoqs] = useState([]);
-  useLiveList(() => api('/boq').then(setBoqs).catch(() => setBoqs([])));
+  const load=()=>api(`/boq?companyId=${companyId}`).then(setBoqs).catch(() => setBoqs([]));
+  useLiveList(load);
+  useEffect(()=>{load();},[companyId]);
   if (!boqs.length) return null;
   return <Table title="Bills of quantities" columns={['Reference', 'Project', 'Title', 'Total', 'Status']}
     rows={boqs.map(boq => [boq.reference, boq.project, boq.title, rupees(boq.total),
@@ -16,37 +19,39 @@ function BoqList() {
 }
 import { BoqForm } from './Projects.jsx';
 
-const TABS = ['Quotations', 'Bills of quantities', 'Tenders', 'Retention', 'Subcontractors'];
+const TABS = ['Cost control', 'Quotations', 'Bills of quantities', 'Tenders', 'Retention', 'Subcontractors'];
 
 /** PID v3 §3.3 — one connected thread from first estimate to final account. */
-export default function QuantitySurveying({ data, reload, can }) {
+export default function QuantitySurveying({ data, reload, can, companyId, company }) {
   const [tab, setTab] = useState(TABS[0]);
   const [open, setOpen] = useState('');
 
   const actions = {
+    'Cost control': null,
     Quotations: can.quotation && 'Create quotation',
     Tenders: can.tender && 'Track a tender',
     Retention: can.retention && 'Record retention',
     Subcontractors: can.subcontractors && 'Add subcontractor'
   };
 
-  return <Page title="Quantity Surveying" subtitle="Quotations built from the BOQ, tender filing, retention and subcontractors."
+  return <Page title="Quantity Surveying" subtitle={`Quotations, BOQs, tenders and commercial control for ${company?.name || 'the selected company'}.`}
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
-    {tab === 'Quotations' && <Quotations can={can} reload={reload} />}
+    {tab === 'Cost control' && <CostControl projects={data.projects} can={can} />}
+    {tab === 'Quotations' && <Quotations can={can} reload={reload} companyId={companyId} />}
     {tab === 'Bills of quantities' && <>
       <BoqImport projects={data.projects} onDone={reload} onCreate={() => setOpen('Create BOQ')} />
-      <BoqList />
+      <BoqList companyId={companyId} />
       <BoqChanges can={can} reload={reload} />
     </>}
-    {tab === 'Tenders' && <Tenders can={can} />}
-    {tab === 'Retention' && <Retention can={can} />}
-    {tab === 'Subcontractors' && <Subcontractors can={can} data={data} />}
+    {tab === 'Tenders' && <Tenders can={can} companyId={companyId} />}
+    {tab === 'Retention' && <Retention can={can} companyId={companyId} />}
+    {tab === 'Subcontractors' && <Subcontractors can={can} data={data} companyId={companyId} />}
 
     {open === 'Create BOQ' && <BoqForm data={data} close={() => setOpen('')} reload={reload} />}
-    {open === 'Quotations' && <QuotationForm data={data} close={() => setOpen('')} reload={reload} />}
-    {open === 'Tenders' && <TenderForm close={() => setOpen('')} reload={reload} />}
+    {open === 'Quotations' && <QuotationForm data={data} companyId={companyId} close={() => setOpen('')} reload={reload} />}
+    {open === 'Tenders' && <TenderForm companyId={companyId} company={company} close={() => setOpen('')} reload={reload} />}
     {open === 'Retention' && <RetentionForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Subcontractors' && <SubcontractorForm close={() => setOpen('')} reload={reload} />}
   </Page>;
@@ -54,13 +59,14 @@ export default function QuantitySurveying({ data, reload, can }) {
 
 const QUOTE_TEMPLATE = 'minmax(115px,.75fr) minmax(150px,1.2fr) minmax(120px,.9fr) 125px 100px 235px';
 
-function Quotations({ can, reload }) {
+function Quotations({ can, reload, companyId }) {
   const [rows, setRows] = useState([]);
   const [detail, setDetail] = useState(null);
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState('');
-  const load = () => api('/qs/quotations').then(setRows).catch(() => setRows([]));
+  const load = () => api(`/qs/quotations?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
+  useEffect(()=>{setDetail(null);load();},[companyId]);
 
   /* A refused status change has to say so; it used to reject into nothing. */
   const setStatus = async (id, status) => {
@@ -194,11 +200,12 @@ function Countdown({ date, time, live, past = 'closed' }) {
   </div>;
 }
 
-function Tenders({ can }) {
+function Tenders({ can, companyId }) {
   const [rows, setRows] = useState([]);
   const [detailId, setDetailId] = useState(null);
-  const load = () => api('/qs/tenders').then(setRows).catch(() => setRows([]));
+  const load = () => api(`/qs/tenders?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
+  useEffect(()=>{setDetailId(null);load();},[companyId]);
 
   const live = rows.filter(row => OPEN_STATUSES.includes(row.status));
   const awaiting = rows.filter(row => ['Submitted', 'Opened'].includes(row.status));
@@ -215,7 +222,7 @@ function Tenders({ can }) {
     </div>
 
     <div className="toolbar" style={{ marginBottom: '14px' }}>
-      <button className="secondary" onClick={() => openDocument('/qs/tenders/blank/commitments/document')}>
+      <button className="secondary" onClick={() => openDocument(`/qs/tenders/blank/commitments/document?companyId=${companyId}`)}>
         <FileText size={15} />Contract commitments declaration
       </button>
     </div>
@@ -468,11 +475,12 @@ function Outcome({ tender, can, refresh, onDone }) {
 
 const RETENTION_TEMPLATE = 'minmax(180px,1.4fr) minmax(140px,1fr) 130px 130px 130px 120px';
 
-function Retention({ can }) {
+function Retention({ can, companyId }) {
   const [rows, setRows] = useState([]);
   const [releasing, setReleasing] = useState(null);
-  const load = () => api('/qs/retentions').then(setRows).catch(() => setRows([]));
+  const load = () => api(`/qs/retentions?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
+  useEffect(()=>{load();},[companyId]);
   const held = rows.reduce((sum, row) => sum + (Number(row.amount) - Number(row.releasedAmount)), 0);
 
   return <>
@@ -502,15 +510,19 @@ function Retention({ can }) {
   </>;
 }
 
-function Subcontractors({ can, data }) {
+function Subcontractors({ can, data, companyId }) {
   const [rows, setRows] = useState([]);
   const [bills, setBills] = useState([]);
+  const [rates,setRates]=useState([]);
   const [billing, setBilling] = useState(false);
+  const [rating,setRating]=useState(false);
   const load = () => {
-    api('/qs/subcontractors').then(setRows).catch(() => setRows([]));
-    api('/qs/subcontractor-bills').then(setBills).catch(() => setBills([]));
+    api(`/qs/subcontractors?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
+    api(`/qs/subcontractor-bills?companyId=${companyId}`).then(setBills).catch(() => setBills([]));
+    api(`/qs/subcontractor-rates?companyId=${companyId}`).then(setRates).catch(()=>setRates([]));
   };
   useLiveList(load);
+  useEffect(()=>{load();},[companyId]);
   const template = 'minmax(180px,1.4fr) minmax(140px,1fr) 140px 120px 140px';
   const billTemplate = 'minmax(130px,.9fr) minmax(170px,1.3fr) minmax(140px,1fr) 130px 120px';
 
@@ -518,13 +530,17 @@ function Subcontractors({ can, data }) {
     <Table columns={['Subcontractor', 'Trade', 'Phone', 'Bills', 'Outstanding']} template={template}
       title="Subcontractors" empty="No subcontractors on file.">
       {rows.map(row => <Row template={template} key={row.id}>
-        <strong>{row.name}</strong>
+        <div><strong>{row.name}</strong><small>{row.contactType} · {row.address||'Location not recorded'}{row.businessId?` · ${row.businessId}`:''}</small></div>
         <span>{row.trade}</span>
         <span>{row.phone || '—'}</span>
         <span>{row.bills}</span>
         <span className={Number(row.outstanding) > 0 ? 'overdue' : ''}>{rupees(row.outstanding)}</span>
       </Row>)}
     </Table>
+    <div style={{ height: '14px' }} />
+    <Table columns={['Project','Subcontractor','Work item','Unit','Agreed rate']} template="minmax(160px,1fr) minmax(160px,1fr) minmax(190px,1.3fr) 90px 130px"
+      title="Project-specific rate cards" tools={can.subcontractors?<button className="secondary" onClick={()=>setRating(true)}>Agree a rate</button>:null}
+      empty="No project subcontractor rates agreed yet.">{rates.map(r=><Row template="minmax(160px,1fr) minmax(160px,1fr) minmax(190px,1.3fr) 90px 130px" key={r.id}><span>{r.project}</span><span>{r.subcontractor}</span><strong>{r.workItem}</strong><span>{r.unit}</span><strong>{rupees(r.rate)}</strong></Row>)}</Table>
     <div style={{ height: '14px' }} />
     <Table columns={['Reference', 'Subcontractor', 'Project', 'Amount', 'Status']} template={billTemplate}
       title="Subcontractor bills"
@@ -539,8 +555,9 @@ function Subcontractors({ can, data }) {
       </Row>)}
     </Table>
     <div style={{ height: '14px' }} />
-    <SubcontractQuotations can={can} data={data} subcontractors={rows} />
+    <SubcontractQuotations can={can} data={data} subcontractors={rows} companyId={companyId} />
     {billing && <BillForm data={data} subcontractors={rows} close={() => setBilling(false)} reload={load} />}
+    {rating&&<SubcontractRateForm data={data} subcontractors={rows} close={()=>setRating(false)} reload={load}/>}
   </>;
 }
 
@@ -554,12 +571,13 @@ const SUBQUOTE_TEMPLATE = 'minmax(130px,.9fr) minmax(180px,1.3fr) minmax(170px,1
  * a comparison sheet — several prices for one package, one of them chosen — and the record
  * of where a figure in GKUC's own pricing came from.
  */
-function SubcontractQuotations({ can, data, subcontractors }) {
+function SubcontractQuotations({ can, data, subcontractors, companyId }) {
   const [rows, setRows] = useState([]);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState('');
-  const load = () => api('/qs/subcontract-quotations').then(setRows).catch(() => setRows([]));
+  const load = () => api(`/qs/subcontract-quotations?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
+  useEffect(()=>{load();},[companyId]);
 
   const decide = async (row, status) => {
     setError('');
@@ -611,14 +629,14 @@ function SubcontractQuotations({ can, data, subcontractors }) {
         </Row>;
       })}
     </Table>
-    {recording && <SubcontractQuotationForm data={data} subcontractors={subcontractors}
+    {recording && <SubcontractQuotationForm data={data} subcontractors={subcontractors} companyId={companyId}
       close={() => setRecording(false)} reload={load} />}
   </>;
 }
 
 /** Follows the shape of the quotations subcontractors actually send: their reference, a
     delivery address that is the site, per-line discounts, and a short validity. */
-function SubcontractQuotationForm({ data, subcontractors, close, reload }) {
+function SubcontractQuotationForm({ data, subcontractors, companyId, close, reload }) {
   const [lines, setLines] = useState([{ description: '', unit: '', quantity: '', rate: '', discount: '0' }]);
   const total = lines.reduce((sum, line) =>
     sum + Math.max(0, (Number(line.quantity) || 0) * (Number(line.rate) || 0) - (Number(line.discount) || 0)), 0);
@@ -629,6 +647,7 @@ function SubcontractQuotationForm({ data, subcontractors, close, reload }) {
   return <FormModal title="Record a subcontractor's quotation" close={close} label="Record quotation" wide
     onSubmit={async values => {
       await post('/qs/subcontract-quotations', {
+        companyId,
         subcontractorId: Number(values.subcontractorId),
         projectId: values.projectId ? Number(values.projectId) : undefined,
         theirReference: values.theirReference || undefined,
@@ -690,9 +709,9 @@ function SubcontractQuotationForm({ data, subcontractors, close, reload }) {
 
 /* ----------------------------------------------------------------- forms */
 
-function QuotationForm({ data, close, reload }) {
+function QuotationForm({ data, companyId, close, reload }) {
   const [boqs, setBoqs] = useState([]);
-  useEffect(() => { api('/boq').then(setBoqs).catch(() => setBoqs([])); }, []);
+  useEffect(() => { api(`/boq?companyId=${companyId}`).then(setBoqs).catch(() => setBoqs([])); }, [companyId]);
   return <FormModal title="Create quotation from a BOQ" close={close} label="Build quotation" onSubmit={async values => {
     await post('/qs/quotations', {
       boqId: Number(values.boqId),
@@ -751,14 +770,15 @@ function QuotationWording({ quotation, close, reload }) {
   </FormModal>;
 }
 
-function TenderForm({ close, reload }) {
+function TenderForm({ companyId, company, close, reload }) {
   return <FormModal title="Track a tender" close={close} label="Track tender" wide onSubmit={async values => {
     await post('/qs/tenders', {
+      companyId,
       contractNo: values.contractNo || undefined,
       title: values.title,
       client: values.client,
       source: values.source || undefined,
-      biddingEntity: values.biddingEntity || undefined,
+      biddingEntity: values.biddingEntity || company?.name || undefined,
       procurementMethod: values.procurementMethod,
       specialty: values.specialty,
       cidaGrade: values.cidaGrade || undefined,
@@ -783,8 +803,7 @@ function TenderForm({ close, reload }) {
     <Field name="title" label="Works as named in the bidding document" wide />
     <Field name="client" label="Employer" placeholder="Department of Buildings" />
     <Field name="contractNo" label="Employer's contract number" required={false} placeholder="04-03-10-CT008/2026" />
-    <SelectField name="biddingEntity" label="We bid as"
-      options={['G.K.U.C. Construction (Pvt) Ltd', 'G.K.U.C. Ready Mix (Pvt) Ltd']} />
+    <Field name="biddingEntity" label="We bid as" defaultValue={company?.name || ''} />
     <SelectField name="procurementMethod" label="Procurement method"
       options={['National Competitive Bidding', 'International Competitive Bidding', 'Shopping', 'Direct']} />
     <SelectField name="specialty" label="Specialty"
@@ -858,18 +877,24 @@ function SubcontractorForm({ close, reload }) {
     await post('/qs/subcontractors', {
       name: values.name, trade: values.trade,
       contact: values.contact || undefined, phone: values.phone || undefined,
-      email: values.email || undefined, notes: values.notes || undefined
+      email: values.email || undefined, address:values.address||undefined,
+      businessId:values.businessId||undefined,contactType:values.contactType,notes: values.notes || undefined
     });
     await reload();
   }}>
     <Field name="name" label="Subcontractor" />
     <Field name="trade" label="Trade" placeholder="Waterproofing, electrical" />
+    <SelectField name="contactType" label="Type" options={['Company','Individual']}/>
     <Field name="contact" label="Contact person" required={false} />
     <Field name="phone" label="Phone" required={false} />
     <Field name="email" label="Email" type="email" required={false} />
+    <Field name="address" label="Location / address" required={false}/>
+    <Field name="businessId" label="Registration / NIC" required={false}/>
     <TextArea name="notes" label="Notes" required={false} placeholder="Optional" />
   </FormModal>;
 }
+
+function SubcontractRateForm({data,subcontractors,close,reload}){return <FormModal title="Agree a project rate" close={close} label="Save rate" onSubmit={async v=>{await post('/qs/subcontractor-rates',{projectId:Number(v.projectId),subcontractorId:Number(v.subcontractorId),workItem:v.workItem,unit:v.unit,rate:Number(v.rate),agreedOn:v.agreedOn||undefined,validUntil:v.validUntil||undefined,notes:v.notes||undefined});await reload();}}><SelectField name="projectId" label="Project" options={data.projects.map(p=>[p.id,p.name])}/><SelectField name="subcontractorId" label="Subcontractor" options={subcontractors.map(s=>[s.id,s.name])}/><Field name="workItem" label="Work item"/><Field name="unit" label="Unit"/><Field name="rate" label="Agreed rate (LKR)" type="number" step="0.01" min="0"/><Field name="agreedOn" label="Agreed on" type="date" required={false}/><Field name="validUntil" label="Valid until" type="date" required={false}/><TextArea name="notes" label="Terms" required={false}/></FormModal>}
 
 function BillForm({ data, subcontractors, close, reload }) {
   return <FormModal title="Record subcontractor bill" close={close} label="Record bill" onSubmit={async values => {

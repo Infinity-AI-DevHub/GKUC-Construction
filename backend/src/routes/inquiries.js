@@ -12,10 +12,10 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
  * project record later carries where the work came from, and nothing sits in someone's
  * phone waiting to be typed up.
  */
-const select = `SELECT i.id,i.reference,i.customer_name customer,i.contact_person contact,i.phone,i.email,i.location,
+const select = `SELECT i.id,i.company_id companyId,c.name company,i.reference,i.customer_name customer,i.contact_person contact,i.phone,i.email,i.location,
   i.description,i.expected_value expectedValue,i.expected_start expectedStart,i.source,i.status,i.lost_reason lostReason,
   i.project_id projectId,p.name project,u.name createdBy,i.created_at createdAt
-  FROM inquiries i LEFT JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=i.created_by`;
+  FROM inquiries i JOIN companies c ON c.id=i.company_id LEFT JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=i.created_by`;
 
 /**
  * The history of dealings with a client — PID v3 §3.5.
@@ -84,6 +84,7 @@ router.get('/', auth, permit('enquiries.manage','projects.view'), wrap(async (re
 }));
 
 router.post('/', auth, permit('enquiries.manage'), validate(z.object({
+  companyId: z.number().int().positive().default(1),
   customer: z.string().min(2).max(180),
   contact: z.string().max(120).optional(),
   phone: z.string().max(40).optional(),
@@ -97,9 +98,9 @@ router.post('/', auth, permit('enquiries.manage'), validate(z.object({
   const body = req.body;
   const reference = await nextReference('INQ', 'inquiries');
   const result = await query(`INSERT INTO inquiries
-    (reference,customer_name,contact_person,phone,email,location,description,expected_value,expected_start,source,created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-  [reference, body.customer, body.contact || null, body.phone || null, body.email || null, body.location,
+    (reference,company_id,customer_name,contact_person,phone,email,location,description,expected_value,expected_start,source,created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+  [reference, body.companyId, body.customer, body.contact || null, body.phone || null, body.email || null, body.location,
     body.description, body.expectedValue, body.expectedStart || null, body.source || null, req.user.id]);
   const row = await getOne(`${select} WHERE i.id=?`, [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'inquiry', row.id, null, row, req.ip);
@@ -145,8 +146,8 @@ router.post('/:id/convert', auth, permit('enquiries.manage'), validate(z.object(
 
   const body = req.body;
   const projectId = await transaction(async connection => {
-    const [result] = await connection.execute(`INSERT INTO projects (name,client,manager,site,stage,budget,start_date,end_date)
-      VALUES (?,?,?,?,?,?,?,?)`, [body.name, inquiry.customer_name, body.manager, inquiry.location, body.stage,
+    const [result] = await connection.execute(`INSERT INTO projects (company_id,name,client,manager,site,stage,budget,start_date,end_date)
+      VALUES (?,?,?,?,?,?,?,?,?)`, [inquiry.company_id, body.name, inquiry.customer_name, body.manager, inquiry.location, body.stage,
       body.budget || inquiry.expected_value, body.startDate || null, body.endDate || null]);
     await connection.execute("UPDATE inquiries SET status='Won', project_id=? WHERE id=?", [result.insertId, inquiry.id]);
     /* The conversations that won the work belong to the project from here on. */

@@ -36,11 +36,10 @@ export default function Materials({ data, reload, can }) {
   </Page>;
 }
 
-const STOCK_COLUMNS = ['Material', 'Store', 'In stock', 'Minimum', 'Stock value', 'Status', ''];
-const STOCK_TEMPLATE = 'minmax(190px,1.4fr) minmax(140px,1fr) 110px 110px 130px 100px 45px';
+const STOCK_COLUMNS = ['Material', 'Kind', 'Store', 'In stock', 'Minimum', 'Stock value', 'Status'];
+const STOCK_TEMPLATE = 'minmax(190px,1.4fr) 115px minmax(140px,1fr) 110px 110px 130px 100px';
 
 function Stock({ data, reload, can }) {
-  const receive = async id => { await post(`/materials/${id}/movements`, { type: 'Receipt', quantity: 10, reference: 'Quick receipt' }); await reload(); };
   const low = data.materials.filter(material => material.state !== 'Available').length;
 
   return <>
@@ -49,17 +48,16 @@ function Stock({ data, reload, can }) {
       <div><span>Low stock items</span><strong>{low}</strong><small>Require purchasing</small></div>
       <div><span>Healthy stock items</span><strong>{data.materials.length - low}</strong><small>At or above minimum</small></div>
     </div>
+    <p className="invoice-note">For site locations, tool custodians and BOQ quantity exceptions, open the separate Stock locations page. Receipts and issues must be recorded through Movements or handovers.</p>
     <Table columns={STOCK_COLUMNS} template={STOCK_TEMPLATE} title="Stock overview">
       {data.materials.map(material => <Row template={STOCK_TEMPLATE} key={material.id}>
         <div><strong>{material.name}</strong><small>MAT-{String(material.id).padStart(4, '0')}</small></div>
+        <Badge tone={slug(material.stock_kind||'Consumable')}>{material.stock_kind||'Consumable'}</Badge>
         <span>{material.site}</span>
         <strong>{material.stock} <small>{material.unit}</small></strong>
         <span>{material.minimum} {material.unit}</span>
         <span>{rupees(Number(material.stock) * Number(material.unit_cost || 0))}</span>
         <Badge tone={slug(material.state)}>{material.state}</Badge>
-        {can.stock
-          ? <button className="icon-btn" onClick={() => receive(material.id)} title="Receive 10 units"><PackageCheck size={17} /></button>
-          : <span />}
       </Row>)}
     </Table>
   </>;
@@ -291,11 +289,13 @@ function MaterialForm({ close, reload }) {
       minimum: Number(values.minimum),
       site: values.site,
       unitCost: Number(values.unitCost || 0)
+      ,stockKind:values.stockKind
     });
     await reload();
   }}>
     <Field name="name" label="Material name" wide />
     <Field name="unit" label="Unit" placeholder="bags, m³, sheets" />
+    <SelectField name="stockKind" label="Stock type" options={['Consumable','Returnable']}/>
     <Field name="site" label="Store" />
     <Field name="stock" label="Opening stock" type="number" step="any" min="0" defaultValue="0" />
     <Field name="minimum" label="Minimum level" type="number" step="any" min="0" />
@@ -310,16 +310,14 @@ function MovementForm({ data, close, reload }) {
       quantity: Number(values.quantity),
       reference: values.reference || undefined,
       projectId: values.projectId ? Number(values.projectId) : undefined,
-      destination: values.destination || undefined,
       notes: values.notes || undefined
     });
     await reload();
   }}>
     <SelectField name="materialId" label="Material" options={data.materials.map(material => [material.id, `${material.name} (${material.stock} ${material.unit})`])} />
-    <SelectField name="type" label="Movement type" options={['Receipt', 'Issue', 'Return', 'Adjustment', 'Transfer']} />
+    <SelectField name="type" label="Movement type" options={['Receipt', 'Issue', 'Return', 'Adjustment']} />
     <Field name="quantity" label="Quantity" type="number" step="any" min="0" />
     <SelectField name="projectId" label="Project / site" options={[['', 'Not project-specific'], ...data.projects.map(project => [project.id, project.name])]} />
-    <Field name="destination" label="Transfer to store" required={false} placeholder="Only for transfers" />
     <Field name="reference" label="Reference" required={false} />
     <TextArea name="notes" label="Notes" required={false} placeholder="Optional" />
   </FormModal>;

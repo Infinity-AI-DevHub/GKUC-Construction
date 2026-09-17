@@ -19,13 +19,21 @@ router.get('/users', auth, permit('admin.users'), wrap(async (_req, res) =>
  * The company's own details, as they appear on anything sent to a client. Readable by
  * anyone signed in, because documents render from it; changed only by an administrator.
  */
-const COMPANY = `SELECT name,address,telephone,email,tin,vat_number vatNumber,
-  bank_details bankDetails,vat_percent vatPercent
-  FROM company_settings WHERE id=1`;
+const COMPANY = `SELECT c.id,c.code,c.name,
+  COALESCE(NULLIF(c.address,''),CASE WHEN c.id=1 THEN s.address END,'') address,
+  COALESCE(NULLIF(c.telephone,''),CASE WHEN c.id=1 THEN s.telephone END,'') telephone,
+  COALESCE(NULLIF(c.email,''),CASE WHEN c.id=1 THEN s.email END,'') email,
+  COALESCE(NULLIF(c.tin,''),CASE WHEN c.id=1 THEN s.tin END,'') tin,
+  COALESCE(NULLIF(c.vat_number,''),CASE WHEN c.id=1 THEN s.vat_number END,'') vatNumber,
+  COALESCE(NULLIF(c.bank_details,''),CASE WHEN c.id=1 THEN s.bank_details END,'') bankDetails,
+  c.default_vat_rate vatPercent FROM companies c LEFT JOIN company_settings s ON s.id=1 WHERE c.id=?`;
 
 /* Bank account, TIN and VAT registration live here, so this is not general reading — it is
    the Administration screen's own data and follows the same right as editing it. */
-router.get('/company', auth, permit('admin.users'), wrap(async (_req, res) => res.json(await getOne(COMPANY) || {})));
+router.get('/company', auth, permit('admin.users'), wrap(async (req, res) => {
+  const companyId=Number(req.query.companyId)||1;
+  res.json(await getOne(COMPANY,[companyId]) || {});
+}));
 
 router.put('/company', auth, permit('admin.users'), validate(z.object({
   name: z.string().min(2).max(180),
@@ -38,13 +46,18 @@ router.put('/company', auth, permit('admin.users'), validate(z.object({
   vatPercent: z.number().min(0).max(100).default(18)
 })), wrap(async (req, res) => {
   const body = req.body;
-  const before = await getOne(COMPANY);
-  await query(`UPDATE company_settings SET name=?,address=?,telephone=?,email=?,tin=?,vat_number=?,
-      bank_details=?,vat_percent=?,updated_by=? WHERE id=1`,
+  const companyId=Number(req.query.companyId)||1;
+  const before = await getOne(COMPANY,[companyId]);
+  if(!before) return res.status(404).json({error:'Company not found'});
+  await query(`UPDATE companies SET name=?,address=?,telephone=?,email=?,tin=?,vat_number=?,
+      bank_details=?,default_vat_rate=? WHERE id=?`,
   [body.name, body.address, body.telephone, body.email, body.tin, body.vatNumber,
-    body.bankDetails, body.vatPercent, req.user.id]);
-  const after = await getOne(COMPANY);
-  await audit(pool, req.user.id, 'UPDATE', 'company', 1, before, after, req.ip);
+    body.bankDetails, body.vatPercent,companyId]);
+  if(companyId===1) await query(`UPDATE company_settings SET name=?,address=?,telephone=?,email=?,tin=?,vat_number=?,
+      bank_details=?,vat_percent=?,updated_by=? WHERE id=1`,
+  [body.name,body.address,body.telephone,body.email,body.tin,body.vatNumber,body.bankDetails,body.vatPercent,req.user.id]);
+  const after = await getOne(COMPANY,[companyId]);
+  await audit(pool, req.user.id, 'UPDATE', 'company', companyId, before, after, req.ip);
   res.json(after);
 }));
 

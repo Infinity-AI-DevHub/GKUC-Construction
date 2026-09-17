@@ -61,8 +61,11 @@ export async function seedIfEmpty() {
       ['EMP-0008', 'Tharushi Wickrama', 2, 'Site Engineer', '078 5512034', null, null, 132000, 5900, 820]
     ];
     for (const [code, name, department, designation, phone, email, userId, salary, daily, overtime] of employees) {
-      await run(`INSERT INTO employees (code,name,department_id,designation,phone,email,user_id,join_date,basic_salary,daily_rate,overtime_rate)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [code, name, department, designation, phone, email, userId, shift(-600), salary, daily, overtime]);
+      const category = designation.includes('Supervisor') ? 'Supervisor'
+        : [3, 4].includes(department) ? 'Office employee' : 'Site labourer';
+      await run(`INSERT INTO employees
+        (code,name,department_id,designation,phone,email,user_id,join_date,basic_salary,daily_rate,overtime_rate,payroll_category)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [code, name, department, designation, phone, email, userId, shift(-600), salary, daily, overtime, category]);
     }
 
     const tasks = [

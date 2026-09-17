@@ -540,10 +540,17 @@ export function commitmentsDocument({ company, tender, commitments, totals, asAt
 }
 
 /** The company identity and presentation settings a document needs, in one call. */
-export async function documentContext(getOne) {
+export async function documentContext(getOne, companyId = 1) {
   const [company, settings] = await Promise.all([
-    getOne(`SELECT name,address,telephone,email,tin,vat_number vatNumber,bank_details bankDetails,
-      quotation_terms quotationTerms FROM company_settings WHERE id=1`),
+    getOne(`SELECT c.name,
+      COALESCE(NULLIF(c.address,''),CASE WHEN c.id=1 THEN s.address END,'') address,
+      COALESCE(NULLIF(c.telephone,''),CASE WHEN c.id=1 THEN s.telephone END,'') telephone,
+      COALESCE(NULLIF(c.email,''),CASE WHEN c.id=1 THEN s.email END,'') email,
+      COALESCE(NULLIF(c.tin,''),CASE WHEN c.id=1 THEN s.tin END,'') tin,
+      COALESCE(NULLIF(c.vat_number,''),CASE WHEN c.id=1 THEN s.vat_number END,'') vatNumber,
+      COALESCE(NULLIF(c.bank_details,''),CASE WHEN c.id=1 THEN s.bank_details END,'') bankDetails,
+      CASE WHEN c.id=1 THEN s.quotation_terms ELSE NULL END quotationTerms
+      FROM companies c LEFT JOIN company_settings s ON s.id=1 WHERE c.id=?`, [companyId]),
     getOne(`SELECT accent_colour accentColour,paper_size paperSize,show_logo showLogo,
       show_signatures showSignatures,show_amount_in_words showAmountInWords,
       show_bank_details showBankDetails,footer_note footerNote,

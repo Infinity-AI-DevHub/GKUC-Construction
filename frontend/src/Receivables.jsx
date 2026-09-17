@@ -16,7 +16,7 @@ const TAX_LABELS = { Standard: 'Standard VAT', SVAT: 'SVAT — suspended', Exemp
 const INVOICE_COLUMNS = ['Reference', 'Project', 'Certificate', 'Net payable', 'Outstanding', 'Due', 'Status', ''];
 const INVOICE_TEMPLATE = 'minmax(120px,1fr) minmax(140px,1.1fr) minmax(180px,1.5fr) 130px 130px 130px 110px 130px';
 
-export function ClientInvoices({ data, can }) {
+export function ClientInvoices({ data, can, companyId }) {
   const [invoices, setInvoices] = useState([]);
   const [ageing, setAgeing] = useState(null);
   const [raising, setRaising] = useState(false);
@@ -24,10 +24,11 @@ export function ClientInvoices({ data, can }) {
   const [error, setError] = useState('');
 
   const load = () => Promise.all([
-    api('/receivables/invoices').then(setInvoices).catch(() => setInvoices([])),
-    api('/receivables/ageing').then(setAgeing).catch(() => setAgeing(null))
+    api(`/receivables/invoices?companyId=${companyId}`).then(setInvoices).catch(() => setInvoices([])),
+    api(`/receivables/ageing?companyId=${companyId}`).then(setAgeing).catch(() => setAgeing(null))
   ]);
   useLiveList(load);
+  useEffect(() => { load(); }, [companyId]);
 
   const issue = async invoice => {
     setError('');
@@ -80,7 +81,7 @@ export function ClientInvoices({ data, can }) {
       <AgeingTable rows={ageing.rows} />
     </> : null}
 
-    {raising && <CertificateForm data={data} close={() => setRaising(false)} reload={load} />}
+    {raising && <CertificateForm data={data} companyId={companyId} close={() => setRaising(false)} reload={load} />}
     {receipting && <ReceiptForm invoice={receipting} close={() => setReceipting(null)} reload={load} />}
   </>;
 }
@@ -118,8 +119,9 @@ function ReceiptForm({ invoice, close, reload }) {
     <Field name="amount" label={`Amount (outstanding ${rupees(outstanding)})`} type="number" step="any" min="0"
       defaultValue={outstanding} />
     <Field name="receivedDate" label="Received on" type="date" defaultValue={todayInput()} />
-    <SelectField name="method" label="Method" options={['Bank transfer', 'Cheque', 'Cash']} />
+    <SelectField name="method" label="Method" options={['Bank transfer', 'Card', 'Cash']} />
     <Field name="reference" label="Bank reference" required={false} />
+    <p className="invoice-note">For cheques, use Received cheques and link this invoice. Clearing the cheque records its receipt automatically.</p>
   </FormModal>;
 }
 
@@ -131,10 +133,13 @@ function ReceiptForm({ invoice, close, reload }) {
  * signing it should see all four rather than one total to take on trust. The server does the
  * same arithmetic again on submit and keeps its own answer; this preview is for the person.
  */
-const BLANK_LINE = { description: '', unit: '', quantity: '', rate: '' };
+const BLANK_LINE = { description: '', unit: '', quantity: '', rate: '',quotationItemId:'' };
 
-function CertificateForm({ data, close, reload }) {
+function CertificateForm({ data, companyId, close, reload }) {
   const [lines, setLines] = useState([{ ...BLANK_LINE }]);
+  const [projectId,setProjectId]=useState(data.projects[0]?.id||'');
+  const [quoteLines,setQuoteLines]=useState([]);
+  useEffect(()=>{if(projectId)api(`/receivables/quote-lines?projectId=${projectId}`).then(setQuoteLines).catch(()=>setQuoteLines([]));},[projectId]);
   const [terms, setTerms] = useState({
     taxTreatment: 'Standard', vatRate: '18', retentionPercent: '10', advanceRecovery: '', otherDeductions: ''
   });
@@ -150,10 +155,12 @@ function CertificateForm({ data, close, reload }) {
       description: line.description.trim(),
       unit: line.unit.trim() || undefined,
       quantity: Number(line.quantity),
-      rate: Number(line.rate) || 0
+      rate: Number(line.rate) || 0,
+      quotationItemId:line.quotationItemId?Number(line.quotationItemId):undefined
     }));
 
   const shape = {
+    companyId,
     items,
     taxTreatment: terms.taxTreatment,
     vatRate: Number(terms.vatRate) || 0,
@@ -190,7 +197,7 @@ function CertificateForm({ data, close, reload }) {
       });
       await reload();
     }}>
-    <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
+    <label>Project *<select name="projectId" value={projectId} required onChange={event=>{setProjectId(event.target.value);setLines([{...BLANK_LINE}]);}}>{data.projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
     <SelectField name="kind" label="Kind" options={['Interim', 'Final', 'Advance', 'Variation', 'Other']} />
     <Field name="title" label="Title" wide placeholder="IPA No. 3 — works to 25 August" />
     <Field name="invoiceDate" label="Invoice date" type="date" defaultValue={todayInput()} />
@@ -199,13 +206,14 @@ function CertificateForm({ data, close, reload }) {
     <div className="invoice-lines wide">
       <h3>What is being certified</h3>
       {lines.map((line, index) => <div className="invoice-line" key={index}>
+        <select value={line.quotationItemId||''} aria-label="Accepted quotation line" onChange={event=>{const quoted=quoteLines.find(row=>String(row.id)===event.target.value);setLines(current=>current.map((row,pos)=>pos===index?{...row,quotationItemId:event.target.value,description:quoted?.description||row.description,unit:quoted?.unit||row.unit,rate:quoted?.rate??row.rate}:row));}}><option value="">Manual line</option>{quoteLines.map(row=><option value={row.id} key={row.id}>{row.reference} · {row.description} · {rupees(row.rate)}/{row.unit}</option>)}</select>
         <input value={line.description} placeholder="Description of work"
           onChange={event => setLine(index, 'description', event.target.value)} />
         <input value={line.unit} placeholder="Unit"
           onChange={event => setLine(index, 'unit', event.target.value)} />
         <input value={line.quantity} type="number" step="any" min="0" placeholder="Qty"
           onChange={event => setLine(index, 'quantity', event.target.value)} />
-        <input value={line.rate} type="number" step="any" min="0" placeholder="Rate"
+        <input value={line.rate} type="number" step="any" min="0" placeholder="Rate" readOnly={Boolean(line.quotationItemId)}
           onChange={event => setLine(index, 'rate', event.target.value)} />
         <span>{rupees((Number(line.quantity) || 0) * (Number(line.rate) || 0))}</span>
         <button type="button" className="icon-btn" aria-label="Remove line"
@@ -257,17 +265,20 @@ function CertificateForm({ data, close, reload }) {
 
 /* ---- bank guarantees ------------------------------------------------------ */
 
-const BOND_COLUMNS = ['Reference', 'Kind', 'In favour of', 'Bank', 'Amount', 'Margin held', 'Expires', 'Status'];
-const BOND_TEMPLATE = 'minmax(120px,1fr) 140px minmax(160px,1.2fr) minmax(130px,1fr) 130px 130px 140px 110px';
+const BOND_COLUMNS = ['Reference','Kind','In favour of','Bank','Amount','Margin held','Expires','Status',''];
+const BOND_TEMPLATE = 'minmax(120px,1fr) 140px minmax(160px,1.2fr) minmax(130px,1fr) 130px 130px 140px 110px 100px';
 
-export function Bonds({ data, can }) {
+export function Bonds({ data, can, companyId }) {
   const [bonds, setBonds] = useState([]);
   const [recording, setRecording] = useState(false);
-  const load = () => api('/receivables/bonds').then(setBonds).catch(() => setBonds([]));
+  const [extending,setExtending]=useState(null);
+  const load = () => api(`/receivables/bonds?companyId=${companyId}`).then(setBonds).catch(() => setBonds([]));
   useLiveList(load);
+  useEffect(() => { load(); }, [companyId]);
 
   const tone = bond => (bond.status !== 'Live' ? slug(bond.status)
-    : Number(bond.daysLeft) < 0 ? 'at-risk' : Number(bond.daysLeft) <= 30 ? 'watch' : 'on-track');
+    : Number(bond.daysLeft) < 0 ? 'at-risk'
+      : Number(bond.daysLeft) <= Number(bond.reminderDays) ? 'watch' : 'on-track');
 
   return <>
     <Table columns={BOND_COLUMNS} template={BOND_TEMPLATE} title="Bank guarantees"
@@ -286,23 +297,27 @@ export function Bonds({ data, can }) {
           <span className={bond.status === 'Live' && Number(bond.daysLeft) < 0 ? 'overdue' : ''}>
             {shortDate(bond.expiry_date)}
           </span>
-          {bond.status === 'Live' && Number(bond.daysLeft) <= 30 ? <small
+          {bond.status === 'Live' && Number(bond.daysLeft) <= Number(bond.reminderDays) ? <small
             className={Number(bond.daysLeft) < 0 ? 'overdue' : ''}>
             {Number(bond.daysLeft) < 0
               ? `${Math.abs(Number(bond.daysLeft))} days ago`
               : `in ${bond.daysLeft} days`}
           </small> : null}
+          <small>{Number(bond.extensions) > 0 ? `${bond.extensions} extension${Number(bond.extensions) === 1 ? '' : 's'} · ` : ''}remind {bond.reminderDays} days before</small>
         </div>
         <Badge tone={tone(bond)}>{bond.status}</Badge>
+        {can.invoice&&bond.status==='Live'?<button className="status-button" onClick={()=>setExtending(bond)}>Extend</button>:<span>—</span>}
       </Row>)}
     </Table>
-    {recording && <BondForm data={data} close={() => setRecording(false)} reload={load} />}
+    {recording && <BondForm data={data} companyId={companyId} close={() => setRecording(false)} reload={load} />}
+    {extending&&<BondExtensionForm bond={extending} close={()=>setExtending(null)} reload={load}/>}
   </>;
 }
 
-function BondForm({ data, close, reload }) {
+function BondForm({ data, companyId, close, reload }) {
   return <FormModal title="Record a bank guarantee" close={close} label="Save bond" onSubmit={async values => {
     await post('/receivables/bonds', {
+      companyId,
       projectId: values.projectId ? Number(values.projectId) : null,
       kind: values.kind,
       beneficiary: values.beneficiary,
@@ -313,6 +328,7 @@ function BondForm({ data, close, reload }) {
       commission: Number(values.commission) || 0,
       issuedDate: values.issuedDate,
       expiryDate: values.expiryDate,
+      reminderDays:Number(values.reminderDays||30),
       notes: values.notes || undefined
     });
     await reload();
@@ -329,32 +345,55 @@ function BondForm({ data, close, reload }) {
     <Field name="commission" label="Commission paid" type="number" step="any" min="0" required={false} />
     <Field name="issuedDate" label="Issued on" type="date" defaultValue={todayInput()} />
     <Field name="expiryDate" label="Expires on" type="date" />
+    <Field name="reminderDays" label="Remind before expiry (days)" type="number" min="0" max="180" defaultValue="30" />
     <TextArea name="notes" label="Notes" required={false} rows={2} />
   </FormModal>;
 }
 
+function BondExtensionForm({bond,close,reload}){return <FormModal title={`Extend ${bond.reference}`} close={close} label="Record extension" onSubmit={async values=>{
+  await post(`/receivables/bonds/${bond.id}/extend`,{newExpiryDate:values.newExpiryDate,extendedOn:values.extendedOn,
+    reminderDays:Number(values.reminderDays),additionalCommission:Number(values.additionalCommission||0),note:values.note||undefined});await reload();}}>
+  <Field name="newExpiryDate" label="New expiry date" type="date"/><Field name="extendedOn" label="Extended on" type="date" defaultValue={todayInput()}/>
+  <Field name="reminderDays" label="Remind before expiry (days)" type="number" min="0" max="180" defaultValue={bond.reminderDays||30}/>
+  <Field name="additionalCommission" label="Additional bank commission" type="number" min="0" step="0.01" defaultValue="0" required={false}/>
+  <TextArea name="note" label="Extension reference / note" required={false} rows={2}/></FormModal>}
+
 /* ---- petty cash ----------------------------------------------------------- */
 
-export function PettyCash({ data, can }) {
+export function PettyCash({ data, can, companyId }) {
   const [floats, setFloats] = useState([]);
   const [opening, setOpening] = useState(false);
   const [open, setOpen] = useState(null);
-  const load = () => api('/receivables/petty-cash').then(setFloats).catch(() => setFloats([]));
+  const load = () => api(`/receivables/petty-cash?companyId=${companyId}`).then(setFloats).catch(() => setFloats([]));
   useLiveList(load);
+  useEffect(() => { setOpen(null); load(); }, [companyId]);
 
   /* The card the holder is looking at must follow the data, not the click that opened it. */
   const current = open ? floats.find(float => float.id === open) : null;
+  const accountTypes = ['Office expenses', 'Salary advance', 'Fuel'];
 
-  return <>
+  return <div className="petty-cash-management">
     <div className="toolbar">
-      <div className="segments"><span className="segment-label">Cash held on site</span></div>
+      <div className="segments"><span className="segment-label">Three separate petty-cash accounts</span></div>
       {can.finance && <button className="secondary" onClick={() => setOpening(true)}>Open a float</button>}
+    </div>
+
+    <div className="petty-account-summary">
+      {accountTypes.map(type => {
+        const accounts = floats.filter(float => float.accountType === type);
+        return <article key={type} className={`petty-account ${slug(type)}`}>
+          <span>{type}</span>
+          <strong>{rupees(accounts.reduce((sum, float) => sum + Number(float.balance), 0))}</strong>
+          <small>{accounts.length} active float{accounts.length === 1 ? '' : 's'} · independently funded</small>
+        </article>;
+      })}
     </div>
 
     <div className="petty-grid">
       {floats.map(float => {
         const low = Number(float.balance) <= Number(float.lowAt);
         return <button type="button" className="petty-card" key={float.id} onClick={() => setOpen(float.id)}>
+          <Badge tone={slug(float.accountType)}>{float.accountType}</Badge>
           <strong>{float.name}</strong>
           <small>{float.holderName}{float.project ? ` · ${float.project}` : ''}</small>
           <b className={low ? 'overdue' : ''}>{rupees(float.balance)}</b>
@@ -364,15 +403,17 @@ export function PettyCash({ data, can }) {
       {!floats.length && <EmptyState>No petty cash floats have been opened.</EmptyState>}
     </div>
 
-    {opening && <FloatForm data={data} close={() => setOpening(false)} reload={load} />}
-    {current && <FloatLedger float={current} can={can} close={() => setOpen(null)} reload={load} />}
-  </>;
+    {opening && <FloatForm data={data} companyId={companyId} close={() => setOpening(false)} reload={load} />}
+    {current && <FloatLedger float={current} data={data} can={can} close={() => setOpen(null)} reload={load} />}
+  </div>;
 }
 
-function FloatForm({ data, close, reload }) {
+function FloatForm({ data, companyId, close, reload }) {
   return <FormModal title="Open a petty cash float" close={close} label="Open float" onSubmit={async values => {
     await post('/receivables/petty-cash', {
+      companyId,
       name: values.name,
+      accountType: values.accountType,
       holderName: values.holderName,
       projectId: values.projectId ? Number(values.projectId) : null,
       ceiling: Number(values.ceiling) || 0,
@@ -380,6 +421,8 @@ function FloatForm({ data, close, reload }) {
     });
     await reload();
   }}>
+    <SelectField name="accountType" label="Petty cash account"
+      options={['Office expenses', 'Salary advance', 'Fuel']} />
     <Field name="name" label="Float name" placeholder="Kandy site office" />
     <Field name="holderName" label="Held by" />
     <SelectField name="projectId" label="Project" required={false}
@@ -391,44 +434,55 @@ function FloatForm({ data, close, reload }) {
 
 const ENTRY_TEMPLATE = '110px minmax(180px,1.6fr) 110px minmax(130px,1fr) 130px';
 
-function FloatLedger({ float, can, close, reload }) {
+function FloatLedger({ float, data, can, close, reload }) {
   const [entries, setEntries] = useState([]);
   const [adding, setAdding] = useState(false);
   const load = () => api(`/receivables/petty-cash/${float.id}/entries`).then(setEntries).catch(() => setEntries([]));
   useLiveList(load);
 
   return <Modal title={`${float.name} — ${rupees(float.balance)} in hand`} close={close} wide>
+    <div className="petty-ledger-heading"><Badge tone={slug(float.accountType)}>{float.accountType}</Badge>
+      <span>This balance is maintained independently from the other petty-cash accounts.</span></div>
     <Table columns={['Date', 'Description', 'Kind', 'Recorded by', 'Amount']} template={ENTRY_TEMPLATE}
       empty="Nothing has moved through this float yet."
       tools={can.finance ? <button className="secondary" onClick={() => setAdding(true)}>Record a movement</button> : null}>
       {entries.map(entry => <Row template={ENTRY_TEMPLATE} key={entry.id}>
         <span>{shortDate(entry.entryDate)}</span>
-        <div><strong>{entry.description}</strong><small>{entry.project || entry.category || '—'}</small></div>
+        <div><strong>{entry.description}</strong><small>{entry.employee
+          ? `${entry.employee} · ${entry.employeeCode}${entry.outstandingAdvance > 0 ? ` · ${rupees(entry.outstandingAdvance)} awaiting payroll` : ' · recovered'}`
+          : entry.project || entry.category || '—'}</small></div>
         <Badge tone={slug(entry.kind)}>{entry.kind}</Badge>
         <span>{entry.recordedBy}</span>
         <strong className={Number(entry.amount) < 0 ? 'overdue' : ''}>{rupees(entry.amount)}</strong>
       </Row>)}
     </Table>
-    {adding && <EntryForm float={float} close={() => setAdding(false)}
+    {adding && <EntryForm float={float} employees={data.employees} close={() => setAdding(false)}
       reload={async () => { await load(); await reload(); }} />}
   </Modal>;
 }
 
-function EntryForm({ float, close, reload }) {
+function EntryForm({ float, employees, close, reload }) {
+  const [kind, setKind] = useState('Spend');
   return <FormModal title={`Movement on ${float.name}`} close={close} label="Record it" onSubmit={async values => {
     await post(`/receivables/petty-cash/${float.id}/entries`, {
       kind: values.kind,
       amount: Number(values.amount),
       entryDate: values.entryDate,
       description: values.description,
-      category: values.category || undefined
+      category: values.category || undefined,
+      employeeId: values.employeeId ? Number(values.employeeId) : undefined
     });
     await reload();
   }}>
-    <SelectField name="kind" label="What happened" options={['Spend', 'Top up', 'Return', 'Adjustment']} />
+    <label>What happened <span aria-hidden="true">*</span><select name="kind" value={kind} onChange={event => setKind(event.target.value)} required>
+      {['Spend', 'Top up', 'Return', 'Adjustment'].map(option => <option key={option}>{option}</option>)}
+    </select></label>
     <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" />
     <Field name="entryDate" label="Date" type="date" defaultValue={todayInput()} />
+    {float.accountType === 'Salary advance' && kind === 'Spend' && <SelectField name="employeeId" label="Employee receiving the advance"
+      options={employees.filter(employee => employee.status !== 'Left').map(employee => [employee.id, `${employee.name} — ${employee.code}`])} />}
     <Field name="category" label="Category" required={false} placeholder="Fuel, refreshments, courier" />
     <Field name="description" label="Description" wide placeholder="Diesel for the site generator" />
+    {float.accountType === 'Salary advance' && <p className="form-note wide">Salary advances are recovered automatically from this employee's next available payroll, with any unpaid balance carried forward.</p>}
   </FormModal>;
 }

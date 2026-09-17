@@ -22,7 +22,9 @@ before(async () => {
   await admin.query(`DROP DATABASE IF EXISTS \`${testDatabase}\``);
   await admin.query(`CREATE DATABASE \`${testDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   server = spawn(process.execPath, ['src/index.js'], { cwd: new URL('..', import.meta.url), env: { ...process.env, PORT: String(port), DB_NAME: testDatabase }, stdio: 'ignore' });
-  for (let attempt = 0; attempt < 60; attempt++) {
+  /* A cold schema build can take more than nine seconds on the bundled MySQL runtime.
+     Give it enough room without weakening the health check itself. */
+  for (let attempt = 0; attempt < 120; attempt++) {
     try { if ((await fetch(`${base}/health`)).ok) return; } catch {}
     await new Promise(resolve => setTimeout(resolve, 150));
   }
@@ -143,6 +145,114 @@ test('issuing stock cannot drive a balance negative', async () => {
   assert.equal(result.status, 409);
 });
 
+test('an unreceived store transfer cannot make stock disappear from the location register', async () => {
+  const store = await login('store@gkuc.lk');
+  const result = await call(store, 'POST', '/materials/4/movements', { type: 'Transfer', quantity: 1, destination: 'Other store' });
+  assert.equal(result.status, 400);
+  assert.match(result.body.error, /receiving stock record/);
+});
+
+test('project coordination, subcontract rates and site stock custody stay linked',async()=>{
+  const owner=await login(),store=await login('store@gkuc.lk'),qs=await login('qs@gkuc.lk');
+  const project=await call(owner,'POST','/projects',{name:'Construction Operations Test Site',client:'Test Client',manager:'Project Manager',
+    site:'Colombo Test Site',stage:'Execution',budget:500000,progress:10,health:'Watch'});
+  assert.equal(project.status,201);const projectId=project.body.id;
+  const issue=await call(owner,'POST',`/projects/${projectId}/updates`,{kind:'Issue',title:'Cement delivery delayed',
+    details:'Supplier has not passed the cement to the site.',category:'Materials delay',priority:'High',owner:'Project Coordinator'});
+  assert.equal(issue.status,201);
+  assert.equal((await call(owner,'PATCH',`/projects/updates/${issue.body.id}`,{status:'In progress'})).status,200);
+  const projectDetail=await call(owner,'GET',`/projects/${projectId}`);
+  assert.ok(projectDetail.body.updates.some(row=>row.title==='Cement delivery delayed'&&row.status==='In progress'));
+  const assigned=await call(owner,'POST','/tasks',{projectId,title:'Confirm cement arrival',assignee:'Project Coordinator',
+    due:today(),dueDate:today(),priority:'High',status:'Not started',notes:'Call supplier and confirm gate pass.'});
+  assert.equal(assigned.status,201);
+  const revised=await call(owner,'PATCH',`/tasks/${assigned.body.id}`,{assignee:'Site Manager',priority:'Medium',
+    notes:'Escalate with the supplier and update the project issue.'});
+  assert.equal(revised.status,200);
+  assert.equal(revised.body.assignee,'Site Manager');
+
+  const subcontractor=await call(owner,'POST','/qs/subcontractors',{name:`Waterproofing Test ${Date.now()}`,trade:'Waterproofing',
+    contactType:'Company',contact:'Site Foreman',phone:'0770000000',address:'Homagama',businessId:'PV-TEST-100'});
+  assert.equal(subcontractor.status,201);
+  const rate=await call(owner,'POST','/qs/subcontractor-rates',{projectId,subcontractorId:subcontractor.body.id,
+    workItem:'Membrane installation',unit:'m2',rate:850,agreedOn:today()});
+  assert.equal(rate.status,201);
+  const material=await call(store,'POST','/materials',{name:'Test waterproofing compound',unit:'bags',stock:100,
+    minimum:10,site:'Central store',unitCost:4000,stockKind:'Consumable'});
+  assert.equal(material.status,201);
+  const boq=await call(qs,'POST','/boq',{projectId,title:'Waterproofing package',items:[
+    {category:'Subcontract',description:'Membrane installation',unit:'m2',quantity:20,rate:1,subcontractRateId:rate.body.id},
+    {category:'Material',description:'Waterproofing compound',unit:'bags',quantity:10,rate:4000,materialId:material.body.id}
+  ]});
+  assert.equal(boq.status,201);
+  const boqDetail=await call(qs,'GET',`/boq/${boq.body.id}`);
+  assert.equal(Number(boqDetail.body.items[0].rate),850,'the agreed project rate overrides an entered subcontract cost');
+  assert.equal(Number(boqDetail.body.items[0].amount),17000);
+  assert.equal((await call(owner,'PATCH',`/boq/${boq.body.id}`,{status:'Approved'})).status,200);
+  const quote=await call(qs,'POST','/qs/quotations',{boqId:boq.body.id,markupPercent:10,vatPercent:0});
+  assert.equal(quote.status,201);
+  const quoted=(await call(qs,'GET',`/qs/quotations/${quote.body.id}`)).body;
+  assert.ok(quoted.items.some(row=>Number(row.materialId)===Number(material.body.id)),
+    'the quotation snapshot retains its linked material identity');
+  const subcontractLine=quoted.items.find(row=>row.category==='Subcontract'&&Number(row.rate)===850);
+  assert.ok(subcontractLine,
+    'the agreed rate flows through the BOQ into the quotation snapshot');
+  assert.equal((await call(qs,'PATCH',`/qs/quotations/${quote.body.id}`,{status:'Accepted'})).status,200);
+  const invoice=await call(owner,'POST','/receivables/invoices',{projectId,kind:'Interim',title:'Certified membrane works',
+    invoiceDate:today(),taxTreatment:'Exempt',retentionPercent:0,advanceRecovery:0,otherDeductions:0,
+    items:[{description:'Membrane installation',unit:'m2',quantity:2,rate:1,quotationItemId:subcontractLine.id}]});
+  assert.equal(invoice.status,201);
+  assert.equal(Number(invoice.body.gross),1870,'invoicing uses the accepted client quotation rate, including its markup');
+  assert.equal((await call(store,'POST',`/materials/${material.body.id}/movements`,{
+    type:'Issue',quantity:12,projectId,reference:'SITE-ISSUE-12'})).status,201);
+
+  const tool=await call(store,'POST','/materials',{name:'Test concrete drill',unit:'items',stock:5,
+    minimum:1,site:'Central store',unitCost:35000,stockKind:'Returnable'});
+  assert.equal(tool.status,201);
+  assert.equal((await call(store,'POST',`/materials/${tool.body.id}/movements`,{type:'Issue',quantity:1,projectId})).status,400,
+    'returnable tools must use a named handover');
+  const loan=await call(store,'POST','/materials/loans',{materialId:tool.body.id,projectId,quantity:2,
+    takenBy:'Site Supervisor',handedOverBy:'Storekeeper',conditionOut:'Good'});
+  assert.equal(loan.status,201);
+  let inventory=await call(store,'GET','/materials/inventory');
+  assert.equal(inventory.status,200);
+  assert.equal(Number(inventory.body.materials.find(row=>Number(row.id)===Number(tool.body.id)).stock),3);
+  assert.equal(Number(inventory.body.loans.find(row=>Number(row.id)===Number(loan.body.id)).outstanding),2);
+  const usage=inventory.body.siteIssues.find(row=>Number(row.projectId)===Number(projectId)&&Number(row.materialId)===Number(material.body.id));
+  assert.equal(usage.allowedQuantity,10);
+  assert.equal(usage.quotedQuantity,10,'accepted quotation carries the BOQ material link and quantity');
+  assert.equal(usage.quantity,12);
+  assert.equal(usage.overrun,true);
+  assert.equal(usage.quoteOverrun,true);
+  assert.equal((await call(store,'POST','/materials/site-consumption',{
+    materialId:material.body.id,projectId,quantity:5,consumedOn:today(),notes:'Waterproofing completed'})).status,201);
+  assert.equal((await call(store,'POST','/materials/site-consumption',{
+    materialId:material.body.id,projectId,quantity:8,consumedOn:today()})).status,409,
+    'a site cannot consume more than its received and unconsumed balance');
+  inventory=await call(store,'GET','/materials/inventory');
+  assert.equal(Number(inventory.body.siteIssues.find(row=>Number(row.projectId)===Number(projectId)&&Number(row.materialId)===Number(material.body.id)).siteBalance),7);
+  assert.equal((await call(store,'POST','/materials/site-counts',{
+    materialId:material.body.id,projectId,countedQuantity:4,notes:'Physical site count'})).status,201);
+  inventory=await call(store,'GET','/materials/inventory');
+  let counted=inventory.body.siteIssues.find(row=>Number(row.projectId)===Number(projectId)&&Number(row.materialId)===Number(material.body.id));
+  assert.equal(Number(counted.siteBalance),4);
+  assert.equal(counted.balanceVerified,true);
+  assert.equal((await call(store,'POST',`/materials/${material.body.id}/movements`,{
+    type:'Issue',quantity:1,projectId,reference:'AFTER-COUNT'})).status,201);
+  inventory=await call(store,'GET','/materials/inventory');
+  counted=inventory.body.siteIssues.find(row=>Number(row.projectId)===Number(projectId)&&Number(row.materialId)===Number(material.body.id));
+  assert.equal(Number(counted.siteBalance),5,'later movements carry forward from the confirmed physical count');
+  assert.equal((await call(store,'POST',`/materials/loans/${loan.body.id}/returns`,{
+    quantity:1,receivedBackBy:'Storekeeper',conditionIn:'Good'})).status,201);
+  assert.equal((await call(store,'POST',`/materials/loans/${loan.body.id}/returns`,{
+    quantity:2,receivedBackBy:'Storekeeper'})).status,409,'cannot return more than remains on site');
+  assert.equal((await call(store,'POST',`/materials/loans/${loan.body.id}/returns`,{
+    quantity:1,receivedBackBy:'Storekeeper'})).status,201);
+  inventory=await call(store,'GET','/materials/inventory');
+  assert.equal(Number(inventory.body.materials.find(row=>Number(row.id)===Number(tool.body.id)).stock),5);
+  assert.equal(Number(inventory.body.loans.find(row=>Number(row.id)===Number(loan.body.id)).outstanding),0);
+});
+
 test('approving a BOQ and its variation sets the project budget', async () => {
   const qs = await login('qs@gkuc.lk');
   const owner = await login();
@@ -168,6 +278,129 @@ test('approving a BOQ and its variation sets the project budget', async () => {
   assert.equal(Number(project.budget), 2500000, 'an approved variation moves the approved budget');
 });
 
+test('QS tracks daily actual costs, item overruns, forecasts and unexpected expenses', async () => {
+  const qs = await login('qs@gkuc.lk');
+  const owner = await login();
+  let control = await call(qs, 'GET', '/boq/cost-control?projectId=2');
+  assert.equal(control.status, 200);
+  assert.equal(Number(control.body.summary.baseline), 2000000);
+  assert.equal(Number(control.body.summary.currentBudget), 2500000);
+  const item = control.body.items.find(row => row.description === 'Roof sheets');
+  assert.ok(item);
+
+  const actual = await call(qs, 'POST', '/boq/cost-control/expenses', {
+    projectId: 2, boqItemId: item.id, expenseDate: today(), source: 'Material', costType: 'Expected',
+    description: 'Roof sheets installed to date', quantity: 1000, unit: 'm2', unitRate: 2100, reference: 'SITE-COST-01'
+  });
+  assert.equal(actual.status, 201);
+  assert.equal(Number(actual.body.amount), 2100000);
+
+  const unexpected = await call(qs, 'POST', '/boq/cost-control/expenses', {
+    projectId: 2, boqItemId: null, expenseDate: today(), source: 'Other', costType: 'Unexpected',
+    description: 'Unplanned dewatering operation', amount: 75000
+  });
+  assert.equal(unexpected.status, 201);
+
+  const forecast = await call(qs, 'PATCH', `/boq/cost-control/items/${item.id}/forecast`, {
+    projectId: 2, forecastQuantity: 1050, forecastRate: 2100, forecastAmount: 2205000,
+    reason: 'Final measured area and supplier rate both increased'
+  });
+  assert.equal(forecast.status, 200);
+
+  control = await call(owner, 'GET', '/boq/cost-control?projectId=2');
+  const changed = control.body.items.find(row => row.id === item.id);
+  assert.equal(Number(changed.actualAmount), 2100000);
+  assert.equal(Number(changed.variance), 100000);
+  assert.equal(Number(changed.finalForecast), 2205000);
+  assert.equal(Number(control.body.summary.unexpected), 75000);
+  assert.ok(control.body.daily.length >= 1);
+});
+
+test('Finance and QS share one cost ledger and reject repeated manual entries', async () => {
+  const owner = await login();
+  assert.equal((await call(owner, 'POST', '/options/expense.source', { value: 'Audit site security' })).status, 201);
+  const entry = { projectId: 1, source: 'Other', description: 'Reconciliation test site hire',
+    amount: 3217, expenseDate: today(), reference: `AUDIT-COST-${Date.now()}` };
+  assert.equal((await call(owner, 'POST', '/finance/expenses', entry)).status, 201);
+  assert.equal((await call(owner, 'POST', '/finance/expenses', entry)).status, 409);
+  assert.equal((await call(owner, 'POST', '/boq/cost-control/expenses', entry)).status, 409);
+  const qsEntry = { ...entry, reference: `AUDIT-QS-${Date.now()}` };
+  assert.equal((await call(owner, 'POST', '/boq/cost-control/expenses', qsEntry)).status, 201);
+  assert.equal((await call(owner, 'POST', '/finance/expenses', qsEntry)).status, 409);
+  assert.equal((await call(owner, 'POST', '/finance/expenses', {
+    ...entry, source: 'Audit site security', reference: `AUDIT-CUSTOM-${Date.now()}`
+  })).status, 201);
+});
+
+test('cheque payments use dedicated clearing workflows and manual income is deduplicated', async () => {
+  const owner = await login();
+  const income = { projectId: 1, description: 'Reconciliation test receipt', amount: 4273,
+    receivedDate: today(), method: 'Bank transfer', reference: `AUDIT-INCOME-${Date.now()}` };
+  assert.equal((await call(owner, 'POST', '/finance/income', income)).status, 201);
+  assert.equal((await call(owner, 'POST', '/finance/income', income)).status, 409);
+  assert.equal((await call(owner, 'POST', '/finance/income', { ...income, method: 'Cheque' })).status, 400);
+});
+
+test('a concurrent bill payment posts one expense and counts once in the summary', async () => {
+  const owner = await login();
+  const before = (await call(owner, 'GET', '/finance/summary?companyId=1')).body;
+  const billReference = `AUDIT-BILL-${Date.now()}`;
+  const bill = await call(owner, 'POST', '/finance/bills', { companyId: 1, projectId: 1,
+    billType: 'Water', provider: 'Reconciliation test utility', reference: billReference,
+    billDate: today(), dueDate: shift(5), netAmount: 1789, taxTreatment: 'Exempt', vatRate: 0 });
+  assert.equal(bill.status, 201);
+  const results = await Promise.all([1, 2].map(() => call(owner, 'POST', `/finance/bills/${bill.body.id}/pay`,
+    { paidDate: today(), method: 'Bank transfer' })));
+  assert.deepEqual(results.map(result => result.status).sort(), [201, 409]);
+  const afterSummary = (await call(owner, 'GET', '/finance/summary?companyId=1')).body;
+  assert.equal(Math.round(afterSummary.totals.expenses - before.totals.expenses), 1789);
+  const rows = (await call(owner, 'GET', '/finance/expenses?projectId=1')).body;
+  assert.equal(rows.filter(row => row.originType === 'operating_bill' && row.reference === billReference).length, 1);
+});
+
+test('invoice receipts cannot post twice and preserve the actual payment method', async () => {
+  const owner = await login();
+  const invoice = await call(owner, 'POST', '/receivables/invoices', {
+    projectId: 1, kind: 'Interim', title: 'Reconciliation test certificate',
+    invoiceDate: today(), dueDate: shift(14), taxTreatment: 'Exempt', retentionPercent: 0,
+    advanceRecovery: 0, otherDeductions: 0,
+    items: [{ description: 'Test work', unit: 'item', quantity: 1, rate: 6000 }]
+  });
+  assert.equal(invoice.status, 201);
+  assert.equal((await call(owner, 'POST', `/receivables/invoices/${invoice.body.id}/issue`)).status, 204);
+  const payment = { amount: 6000, receivedDate: today(), method: 'Cash', reference: `AUDIT-RCPT-${Date.now()}` };
+  assert.equal((await call(owner, 'POST', `/receivables/invoices/${invoice.body.id}/receipts`,
+    { ...payment, method: 'Cheque' })).status, 400);
+  const results = await Promise.all([1, 2].map(() => call(owner, 'POST',
+    `/receivables/invoices/${invoice.body.id}/receipts`, payment)));
+  assert.deepEqual(results.map(result => result.status).sort(), [201, 409]);
+  const income = (await call(owner, 'GET', '/finance/income?projectId=1')).body;
+  const posted = income.filter(row => row.reference === payment.reference);
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].method, 'Cash');
+});
+
+test('concurrent petty-cash spends cannot overdraw the float or duplicate project cost', async () => {
+  const owner = await login();
+  const opened = await call(owner, 'POST', '/receivables/petty-cash', {
+    name: `Audit float ${Date.now()}`, accountType: 'Fuel', holderName: 'Finance desk', projectId: 1,
+    ceiling: 2000, lowAt: 500
+  });
+  assert.equal(opened.status, 201);
+  const path = `/receivables/petty-cash/${opened.body.id}/entries`;
+  assert.equal((await call(owner, 'POST', path, { kind: 'Top up', amount: 2000, entryDate: today(),
+    description: 'Opening float' })).status, 201);
+  const spend = { kind: 'Spend', amount: 1500, entryDate: today(), description: `Audit fuel ${Date.now()}` };
+  const results = await Promise.all([1, 2].map(() => call(owner, 'POST', path, spend)));
+  assert.deepEqual(results.map(result => result.status).sort(), [201, 400]);
+  const entries = (await call(owner, 'GET', path)).body;
+  assert.equal(entries.filter(row => row.kind === 'Spend' && row.description === spend.description).length, 1);
+  const expense = (await call(owner, 'GET', '/finance/expenses?projectId=1')).body
+    .filter(row => row.description === `Petty cash — ${spend.description}`);
+  assert.equal(expense.length, 1);
+  assert.equal(expense[0].originType, 'petty_cash');
+});
+
 test('equipment cannot be assigned twice without a return', async () => {
   const owner = await login();
   assert.equal((await call(owner, 'POST', '/equipment/3/assign', { projectId: 1, assignedTo: 'Tharushi Wickrama', assignedAt: today() })).status, 201);
@@ -185,6 +418,268 @@ test('supplier payments cannot exceed the invoice', async () => {
   const paid = await call(finance, 'POST', `/purchasing/invoices/${invoice.body.id}/payments`, { amount: 100000, paidDate: today() });
   assert.equal(paid.status, 201);
   assert.equal(paid.body.status, 'Paid');
+});
+
+test('operating bills, VAT, credit cards and bond extensions reconcile end to end', async () => {
+  const finance = await login('finance@gkuc.lk');
+  const owner = await login();
+  const vatBefore = (await call(finance, 'GET', '/finance/vat?companyId=1')).body;
+
+  const projectBill = await call(finance, 'POST', '/finance/bills', {
+    companyId: 1, projectId: 1, billType: 'Electricity', provider: 'CEB Test Account',
+    reference: `CEB-${Date.now()}`, billDate: today(), dueDate: shift(5),
+    netAmount: 10000, taxTreatment: 'Standard', vatRate: 18, reminderDays: 5
+  });
+  assert.equal(projectBill.status, 201);
+  assert.equal(Number(projectBill.body.vatAmount), 1800);
+  assert.equal(Number(projectBill.body.totalAmount), 11800);
+  assert.equal((await call(finance, 'POST', `/finance/bills/${projectBill.body.id}/pay`, {
+    paidDate: today(), method: 'Bank transfer', reference: 'CEB-PAID-TEST'
+  })).status, 201);
+  assert.equal((await call(finance, 'POST', `/finance/bills/${projectBill.body.id}/pay`, {
+    paidDate: today(), method: 'Cash'
+  })).status, 409, 'a bill cannot be paid twice');
+  const expenses = (await call(finance, 'GET', '/finance/expenses?projectId=1')).body;
+  assert.ok(expenses.some(row => row.originType === 'operating_bill' && Number(row.amount) === 11800),
+    'paying a site bill posts its project expense once');
+
+  const reminderBill = await call(finance, 'POST', '/finance/bills', {
+    companyId: 1, billType: 'Water', provider: 'NWSDB Test Account',
+    reference: `WATER-${Date.now()}`, billDate: today(), dueDate: shift(3),
+    netAmount: 4500, taxTreatment: 'Exempt', vatRate: 18, reminderDays: 4
+  });
+  assert.equal(reminderBill.status, 201);
+
+  const supplierInvoice = await call(finance, 'POST', '/purchasing/invoices', {
+    companyId: 1, supplierId: 1, invoiceNo: `VAT-SUP-${Date.now()}`,
+    netAmount: 100000, taxTreatment: 'Standard', vatRate: 18,
+    invoiceDate: today(), dueDate: shift(10)
+  });
+  assert.equal(supplierInvoice.status, 201);
+  assert.equal(Number(supplierInvoice.body.amount), 118000);
+  assert.equal((await call(finance, 'POST', `/purchasing/invoices/${supplierInvoice.body.id}/payments`, {
+    amount: 118000, paidDate: today(), method: 'Bank transfer'
+  })).status, 201);
+  const vatAfter = (await call(finance, 'GET', '/finance/vat?companyId=1')).body;
+  assert.equal(Number(vatAfter.inputVat) - Number(vatBefore.inputVat), 19800,
+    'paid supplier invoices and paid operating bills feed input VAT automatically');
+  assert.ok(vatAfter.entries.some(row => row.reference === supplierInvoice.body.invoice_no && row.direction === 'Input'));
+
+  const card = await call(finance, 'POST', '/finance/credit-cards', {
+    companyId: 1, name: 'Operations Visa Test', bank: 'Test Bank', lastFour: '4242',
+    cardholder: 'Finance Manager', creditLimit: 500000, defaultReminderDays: 5
+  });
+  assert.equal(card.status, 201);
+  const statement = await call(finance, 'POST', '/finance/credit-card-statements', {
+    cardId: card.body.id, statementDate: today(), dueDate: shift(3), amount: 50000,
+    minimumDue: 5000, reminderDays: 4
+  });
+  assert.equal(statement.status, 201);
+  const partial = await call(finance, 'POST', `/finance/credit-card-statements/${statement.body.id}/payments`, {
+    amount: 20000, paidDate: today(), method: 'Bank transfer', reference: 'CARD-PARTIAL-TEST'
+  });
+  assert.equal(partial.status, 201);
+  assert.equal(partial.body.status, 'Partially paid');
+  assert.equal(Number(partial.body.paidAmount), 20000);
+  assert.equal((await call(finance, 'POST', `/finance/credit-card-statements/${statement.body.id}/payments`, {
+    amount: 40000, paidDate: today(), method: 'Bank transfer'
+  })).status, 409, 'card payments cannot exceed the statement balance');
+
+  const bond = await call(finance, 'POST', '/receivables/bonds', {
+    companyId: 1, projectId: 1, kind: 'Performance', beneficiary: 'Bond Extension Test Client',
+    bank: 'Test Bank', amount: 250000, issuedDate: today(), expiryDate: shift(10), reminderDays: 2
+  });
+  assert.equal(bond.status, 201);
+  assert.equal((await call(finance, 'POST', `/receivables/bonds/${bond.body.id}/extend`, {
+    newExpiryDate: shift(40), extendedOn: today(), reminderDays: 7,
+    additionalCommission: 2500, note: 'Extension test record'
+  })).status, 200);
+  const bonds = (await call(finance, 'GET', '/receivables/bonds?companyId=1')).body;
+  const extended = bonds.find(row => Number(row.id) === Number(bond.body.id));
+  assert.equal(Number(extended.extensions), 1);
+  assert.equal(Number(extended.reminderDays), 7);
+  assert.equal(Number(extended.commission), 2500);
+
+  assert.equal((await call(owner, 'POST', '/notifications/scan')).status, 200);
+  const alerts = (await call(finance, 'GET', '/notifications')).body;
+  assert.ok(alerts.some(row => row.referenceType === 'operating_bill' && Number(row.referenceId) === Number(reminderBill.body.id)));
+  assert.ok(alerts.some(row => row.referenceType === 'credit_card_statement' && Number(row.referenceId) === Number(statement.body.id)));
+});
+
+test('future-dated cheques are reminded and confirmed before settling invoices', async () => {
+  const finance = await login('finance@gkuc.lk');
+  const owner = await login();
+  const invoice = await call(finance, 'POST', '/purchasing/invoices', {
+    supplierId: 1, invoiceNo: `CHK-${Date.now()}`, amount: 75000,
+    invoiceDate: today(), dueDate: shift(7)
+  });
+  assert.equal(invoice.status, 201);
+  const cheque = await call(finance, 'POST', '/purchasing/cheques', {
+    supplierId: 1, invoiceId: invoice.body.id, chequeNumber: `000${Date.now()}`,
+    bank: 'Commercial Bank operating account', payee: 'Lanka Cement PLC',
+    purpose: 'Supplier invoice settlement', amount: 75000,
+    issueDate: today(), chequeDate: shift(3), reminderDays: 5
+  });
+  assert.equal(cheque.status, 201);
+  let invoices = (await call(finance, 'GET', '/purchasing/invoices')).body;
+  assert.equal(Number(invoices.find(row => row.id === invoice.body.id).paidAmount), 0, 'issuing a future cheque is not cleared cash');
+
+  await call(owner, 'POST', '/notifications/scan');
+  const alerts = (await call(finance, 'GET', '/notifications')).body;
+  assert.ok(alerts.some(row => row.referenceType === 'cheque' && Number(row.referenceId) === Number(cheque.body.id)));
+
+  const clearResults = await Promise.all([1, 2].map(() => call(finance, 'PATCH',
+    `/purchasing/cheques/${cheque.body.id}`, { status: 'Cleared', notes: 'Cleared on bank statement' })));
+  assert.deepEqual(clearResults.map(result => result.status), [200, 200]);
+  invoices = (await call(finance, 'GET', '/purchasing/invoices')).body;
+  assert.equal(Number(invoices.find(row => row.id === invoice.body.id).paidAmount), 75000);
+  assert.equal((await call(finance, 'PATCH', `/purchasing/cheques/${cheque.body.id}`, { status: 'Returned' })).status, 409);
+
+  const clientInvoice = await call(finance,'POST','/receivables/invoices',{
+    projectId:1,kind:'Interim',title:'Cheque receipt test',invoiceDate:today(),dueDate:shift(10),
+    taxTreatment:'Exempt',retentionPercent:0,advanceRecovery:0,otherDeductions:0,
+    items:[{description:'Certified work',unit:'item',quantity:1,rate:100000}]
+  });
+  assert.equal(clientInvoice.status,201);
+  assert.equal((await call(finance,'POST',`/receivables/invoices/${clientInvoice.body.id}/issue`)).status,204);
+  const received=await call(finance,'POST','/receivables/cheques',{
+    projectId:1,invoiceId:clientInvoice.body.id,chequeNumber:`RCV-${Date.now()}`,bank:'Bank of Ceylon',
+    payer:'Kaduwela Industrial Client',purpose:'Interim certificate settlement',amount:100000,
+    receivedDate:today(),chequeDate:shift(2),depositBy:shift(1),reminderDays:3
+  });
+  assert.equal(received.status,201);
+  let clientDetail=await call(finance,'GET',`/receivables/invoices/${clientInvoice.body.id}`);
+  assert.equal(Number(clientDetail.body.paid_amount),0,'a cheque in hand is not income yet');
+  await call(owner,'POST','/notifications/scan');
+  assert.ok((await call(finance,'GET','/notifications')).body.some(row=>row.referenceType==='received_cheque'&&Number(row.referenceId)===Number(received.body.id)));
+  assert.equal((await call(finance,'PATCH',`/receivables/cheques/${received.body.id}`,{status:'Deposited',notes:'Bank deposit slip recorded'})).status,200);
+  assert.equal((await call(finance,'PATCH',`/receivables/cheques/${received.body.id}`,{status:'Cleared',notes:'Cleared on statement'})).status,200);
+  clientDetail=await call(finance,'GET',`/receivables/invoices/${clientInvoice.body.id}`);
+  assert.equal(Number(clientDetail.body.paid_amount),100000);
+  assert.ok((await call(finance,'GET','/finance/income?projectId=1')).body.some(row=>row.reference===received.body.cheque_number));
+});
+
+test('finance reporting reconciles company and project scopes', async () => {
+  const owner = await login();
+  const company = await call(owner, 'GET', '/finance/reporting?projectId=all');
+  assert.equal(company.status, 200);
+  assert.equal(company.body.scope.projectId, 'all');
+  assert.ok(company.body.projects.length >= 3);
+  for (const ledger of ['expenses', 'incomes', 'clientInvoices', 'purchaseOrders', 'supplierInvoices',
+    'pettyCash', 'retentions', 'bonds', 'variations', 'payroll']) assert.ok(Array.isArray(company.body[ledger]), ledger);
+
+  const project = await call(owner, 'GET', `/finance/reporting?projectId=1&from=${shift(-3650)}&to=${shift(3650)}`);
+  assert.equal(project.status, 200);
+  assert.equal(project.body.projects.length, 1);
+  assert.equal(Number(project.body.projects[0].id), 1);
+  for (const ledger of ['expenses', 'incomes', 'clientInvoices', 'purchaseOrders', 'retentions', 'variations'])
+    assert.ok(project.body[ledger].every(row => Number(row.projectId) === 1), `${ledger} obeys project scope`);
+  assert.deepEqual(project.body.payroll, [], 'payroll is not falsely allocated to a project');
+  assert.equal((await call(owner, 'GET', '/finance/reporting?projectId=invalid')).status, 400);
+});
+
+test('two companies share resources while commercial records and totals stay separate', async () => {
+  const owner = await login();
+  const qs = await login('qs@gkuc.lk');
+  const finance = await login('finance@gkuc.lk');
+
+  const bootstrap = await call(owner, 'GET', '/bootstrap');
+  assert.deepEqual(bootstrap.body.data.companies.map(row => row.name), ['GKUC Construction', 'GKUC Readymix']);
+  const sharedCounts = {
+    employees: bootstrap.body.data.employees.length,
+    materials: bootstrap.body.data.materials.length,
+    fleet: bootstrap.body.data.fleet.length
+  };
+
+  const project = await call(owner, 'POST', '/projects', {
+    companyId: 2, name: 'Readymix Plant Upgrade', client: 'GKUC Readymix Operations',
+    manager: 'Kasun Perera', site: 'Homagama', stage: 'Mobilisation', budget: 900000,
+    progress: 5, health: 'On track'
+  });
+  assert.equal(project.status, 201);
+  assert.equal(Number(project.body.companyId), 2);
+
+  const boq = await call(qs, 'POST', '/boq', {
+    projectId: project.body.id, title: 'Readymix batching plant works',
+    items: [{ category: 'Equipment', description: 'Batching plant electrical upgrade', unit: 'item', quantity: 1, rate: 300000 }]
+  });
+  assert.equal(boq.status, 201);
+  const quotation = await call(qs, 'POST', '/qs/quotations', {
+    boqId: boq.body.id, markupPercent: 10, vatPercent: 18
+  });
+  assert.equal(quotation.status, 201);
+  assert.equal(Number(quotation.body.companyId), 2);
+
+  assert.equal((await call(finance, 'POST', '/finance/expenses', {
+    projectId: project.body.id, source: 'Equipment', description: 'Readymix plant deposit',
+    amount: 125000, expenseDate: today(), reference: 'GKRM-ONLY'
+  })).status, 201);
+  const invoice = await call(finance, 'POST', '/receivables/invoices', {
+    projectId: project.body.id, kind: 'Interim', title: 'Readymix upgrade certificate',
+    invoiceDate: today(), dueDate: shift(14), taxTreatment: 'Exempt', retentionPercent: 0,
+    advanceRecovery: 0, otherDeductions: 0,
+    items: [{ description: 'Upgrade work completed', unit: 'item', quantity: 1, rate: 250000 }]
+  });
+  assert.equal(invoice.status, 201);
+  assert.equal((await call(finance, 'POST', `/receivables/invoices/${invoice.body.id}/issue`)).status, 204);
+  const chequeNumber = `GKRM-${Date.now()}`;
+  const wrongCheque = await call(finance, 'POST', '/receivables/cheques', {
+    companyId: 1, projectId: project.body.id, invoiceId: invoice.body.id, chequeNumber,
+    bank: 'Bank of Ceylon', payer: 'Readymix Client', purpose: 'Cross-company rejection test',
+    amount: 10000, receivedDate: today(), chequeDate: shift(2), depositBy: shift(1)
+  });
+  assert.equal(wrongCheque.status, 400, 'a cheque cannot link to the other company invoice');
+  const receivedCheque = await call(finance, 'POST', '/receivables/cheques', {
+    companyId: 2, projectId: project.body.id, invoiceId: invoice.body.id, chequeNumber,
+    bank: 'Bank of Ceylon', payer: 'Readymix Client', purpose: 'Readymix receipt',
+    amount: 10000, receivedDate: today(), chequeDate: shift(2), depositBy: shift(1)
+  });
+  assert.equal(receivedCheque.status, 201);
+  const bond = await call(finance, 'POST', '/receivables/bonds', {
+    companyId: 2, projectId: project.body.id, kind: 'Performance', beneficiary: 'Readymix Client',
+    bank: 'People’s Bank', amount: 50000, issuedDate: today(), expiryDate: shift(90)
+  });
+  assert.equal(bond.status, 201);
+  const petty = await call(finance, 'POST', '/receivables/petty-cash', {
+    companyId: 2, name: 'Readymix fuel float', accountType: 'Fuel', holderName: 'Plant Supervisor',
+    projectId: project.body.id, ceiling: 30000, lowAt: 5000
+  });
+  assert.equal(petty.status, 201);
+  const supplierInvoice = await call(finance, 'POST', '/purchasing/invoices', {
+    companyId: 2, supplierId: 1, invoiceNo: `GKRM-SUP-${Date.now()}`, amount: 40000,
+    invoiceDate: today(), dueDate: shift(14)
+  });
+  assert.equal(supplierInvoice.status, 201);
+
+  const constructionProjects = await call(owner, 'GET', '/projects?companyId=1');
+  const readymixProjects = await call(owner, 'GET', '/projects?companyId=2');
+  assert.ok(!constructionProjects.body.some(row => row.id === project.body.id));
+  assert.ok(readymixProjects.body.some(row => row.id === project.body.id));
+  assert.ok(!(await call(qs, 'GET', '/boq?companyId=1')).body.some(row => row.id === boq.body.id));
+  assert.ok((await call(qs, 'GET', '/boq?companyId=2')).body.some(row => row.id === boq.body.id));
+  assert.ok(!(await call(qs, 'GET', '/qs/quotations?companyId=1')).body.some(row => row.id === quotation.body.id));
+  assert.ok((await call(qs, 'GET', '/qs/quotations?companyId=2')).body.some(row => row.id === quotation.body.id));
+  assert.ok(!(await call(finance, 'GET', '/receivables/invoices?companyId=1')).body.some(row => row.id === invoice.body.id));
+  assert.ok((await call(finance, 'GET', '/receivables/invoices?companyId=2')).body.some(row => row.id === invoice.body.id));
+  assert.ok(!(await call(finance, 'GET', '/receivables/cheques?companyId=1')).body.some(row => row.id === receivedCheque.body.id));
+  assert.ok((await call(finance, 'GET', '/receivables/cheques?companyId=2')).body.some(row => row.id === receivedCheque.body.id));
+  assert.ok(!(await call(finance, 'GET', '/receivables/bonds?companyId=1')).body.some(row => row.id === bond.body.id));
+  assert.ok((await call(finance, 'GET', '/receivables/bonds?companyId=2')).body.some(row => row.id === bond.body.id));
+  assert.ok(!(await call(finance, 'GET', '/receivables/petty-cash?companyId=1')).body.some(row => row.id === petty.body.id));
+  assert.ok((await call(finance, 'GET', '/receivables/petty-cash?companyId=2')).body.some(row => row.id === petty.body.id));
+  assert.ok(!(await call(finance, 'GET', '/purchasing/invoices?companyId=1')).body.some(row => row.id === supplierInvoice.body.id));
+  assert.ok((await call(finance, 'GET', '/purchasing/invoices?companyId=2')).body.some(row => row.id === supplierInvoice.body.id));
+
+  const construction = await call(finance, 'GET', '/finance/reporting?companyId=1&projectId=all');
+  const readymix = await call(finance, 'GET', '/finance/reporting?companyId=2&projectId=all');
+  assert.ok(!construction.body.expenses.some(row => row.reference === 'GKRM-ONLY'));
+  assert.ok(readymix.body.expenses.some(row => row.reference === 'GKRM-ONLY'));
+  assert.ok(readymix.body.projects.every(row => Number(row.companyId) === 2));
+
+  const refreshed = await call(owner, 'GET', '/bootstrap');
+  assert.equal(refreshed.body.data.employees.length, sharedCounts.employees);
+  assert.equal(refreshed.body.data.materials.length, sharedCounts.materials);
+  assert.equal(refreshed.body.data.fleet.length, sharedCounts.fleet);
 });
 
 test('the deadline scan raises alerts for expiries, low stock and overruns', async () => {
@@ -328,10 +823,71 @@ test('an inquiry converts into a registered project', async () => {
 test('payroll is calculated from recorded attendance and approved overtime', async () => {
   const hr = await login('hr@gkuc.lk');
   const supervisor = await login('supervisor@gkuc.lk');
+  const owner = await login();
 
-  const overtime = await call(supervisor, 'POST', '/employees/2/overtime', { workDate: today(), hours: 4 });
+  const settings = await call(hr, 'GET', '/payroll/settings');
+  assert.equal(settings.status, 200);
+  assert.equal(Number(settings.body.activePolicy.officeOtRate), 225);
+  assert.equal((await call(hr, 'POST', '/payroll/settings/policies', {
+    effectiveFrom: shift(-1), officeOtRate: 225, siteLabourSiteOtRate: 200,
+    siteLabourTravelOtRate: 100, driverOtRate: 225, supervisorSiteOtRate: 225,
+    supervisorTravelOtRate: 100, epfEmployeeRate: 8, epfEmployerRate: 12,
+    etfEmployerRate: 3, epfBasis: 'Basic earnings', etfBasis: 'Basic earnings'
+  })).status, 201);
+  assert.equal((await call(hr, 'PATCH', '/payroll/settings/employees/2', {
+    payBasis: 'Monthly salary', payFrequency: 'Monthly', payrollCategory: 'Site labourer',
+    basicSalary: 98000, weeklyRate: 0, dailyRate: 4400, compensationEffectiveFrom: shift(-1),
+    epfEligible: true, etfEligible: true, customOfficeOtRate: null, customSiteOtRate: null, customTravelOtRate: null
+  })).status, 200);
+  assert.equal((await call(hr, 'POST', '/payroll/settings/components', {
+    employeeId: 2, name: 'Transport allowance', kind: 'Allowance', amount: 3000,
+    payFrequency: 'Monthly', effectiveFrom: shift(-1)
+  })).status, 201);
+  assert.equal((await call(hr, 'POST', '/payroll/settings/components', {
+    employeeId: 2, name: 'Union deduction', kind: 'Deduction', amount: 500,
+    payFrequency: 'Monthly', effectiveFrom: shift(-1)
+  })).status, 201);
+  assert.equal((await call(hr, 'POST', '/payroll/settings/components', {
+    employeeId: 2, name: 'Travel reimbursement', kind: 'Reimbursement', amount: 1000,
+    payFrequency: 'Monthly', effectiveFrom: shift(-1)
+  })).status, 201);
+
+  const openFloat = async (name, accountType, ceiling) => {
+    const opened = await call(owner, 'POST', '/receivables/petty-cash', {
+      name, accountType, holderName: 'Finance desk', ceiling, lowAt: 5000
+    });
+    assert.equal(opened.status, 201);
+    assert.equal((await call(owner, 'POST', `/receivables/petty-cash/${opened.body.id}/entries`, {
+      kind: 'Top up', amount: ceiling, entryDate: today(), description: `Opening ${accountType}`
+    })).status, 201);
+    return opened.body.id;
+  };
+  const officeFloat = await openFloat('Office account', 'Office expenses', 30000);
+  const advanceFloat = await openFloat('Worker advances', 'Salary advance', 50000);
+  const fuelFloat = await openFloat('Fuel account', 'Fuel', 40000);
+  const floats = (await call(owner, 'GET', '/receivables/petty-cash')).body;
+  assert.equal(Number(floats.find(row => row.id === officeFloat).balance), 30000);
+  assert.equal(Number(floats.find(row => row.id === advanceFloat).balance), 50000);
+  assert.equal(Number(floats.find(row => row.id === fuelFloat).balance), 40000);
+  assert.equal((await call(owner, 'POST', `/receivables/petty-cash/${advanceFloat}/entries`, {
+    kind: 'Spend', amount: 12000, entryDate: today(), description: 'Worker salary advance'
+  })).status, 400, 'a salary advance cannot be anonymous');
+  assert.equal((await call(owner, 'POST', `/receivables/petty-cash/${advanceFloat}/entries`, {
+    kind: 'Spend', amount: 12000, entryDate: today(), description: 'Worker salary advance', employeeId: 2
+  })).status, 201);
+
+  const invalidOvertime = await call(supervisor, 'POST', '/employees/2/overtime', {
+    workDate: today(), hours: 1, overtimeType: 'Office'
+  });
+  assert.equal(invalidOvertime.status, 400, 'site labour cannot be entered against the office overtime policy');
+  const overtime = await call(supervisor, 'POST', '/employees/2/overtime', { workDate: today(), hours: 4, overtimeType: 'Site' });
   assert.equal(overtime.status, 201);
+  assert.equal(Number(overtime.body.rate), 200);
   await call(hr, 'PATCH', `/employees/overtime/${overtime.body.id}`, { status: 'Approved' });
+  const travelOvertime = await call(supervisor, 'POST', '/employees/2/overtime', { workDate: today(), hours: 2, overtimeType: 'Travel' });
+  assert.equal(travelOvertime.status, 201);
+  assert.equal(Number(travelOvertime.body.rate), 100);
+  await call(hr, 'PATCH', `/employees/overtime/${travelOvertime.body.id}`, { status: 'Approved' });
 
   const run = await call(hr, 'POST', '/payroll', { periodStart: shift(-30), periodEnd: today() });
   assert.equal(run.status, 201);
@@ -339,10 +895,36 @@ test('payroll is calculated from recorded attendance and approved overtime', asy
 
   const detail = await call(hr, 'GET', `/payroll/${run.body.id}`);
   const slip = detail.body.payslips.find(row => row.employeeCode === 'EMP-0002');
-  assert.equal(Number(slip.overtimeHours), 4, 'approved overtime reaches the payslip');
-  assert.equal(Number(slip.overtimePay), 4 * 620, 'paid at the employee overtime rate');
+  assert.equal(Number(slip.overtimeHours), 6, 'approved typed overtime reaches the payslip');
+  assert.equal(Number(slip.siteOtPay), 800);
+  assert.equal(Number(slip.travelOtPay), 200);
+  assert.equal(Number(slip.overtimePay), 1000, 'each overtime category keeps its approved rate');
+  assert.equal(Number(slip.allowanceTotal), 3000);
+  assert.equal(Number(slip.reimbursementTotal), 1000);
+  assert.equal(Number(slip.epfEmployeeDeduction), 7840);
+  assert.equal(Number(slip.epfEmployerContribution), 11760);
+  assert.equal(Number(slip.etfEmployerContribution), 2940);
+  assert.equal(Number(slip.otherDeduction), 500);
+  assert.equal(Number(slip.unpaidLeaveDeduction), 0);
+  assert.equal(Number(slip.salaryAdvanceDeduction), 12000, 'the named worker advance is recovered');
+  assert.equal(Number(slip.deductions), 20340, 'the salary sheet reconciles statutory, recurring and advance deductions');
+  assert.equal(Number(slip.netPay), 82660);
+  assert.equal(Number(slip.employerCost), 117700);
+  assert.equal(slip.components.length, 3, 'the payslip preserves the named component breakdown');
+  assert.equal(Number(slip.advanceRecoveries[0].amount), 12000);
+  const advances = (await call(owner, 'GET', `/receivables/petty-cash/${advanceFloat}/entries`)).body;
+  assert.equal(Number(advances.find(row => row.employeeId === 2).outstandingAdvance), 0);
 
   assert.equal((await call(hr, 'POST', '/payroll', { periodStart: shift(-30), periodEnd: today() })).status, 409);
+
+  assert.equal((await call(hr, 'PATCH', '/payroll/settings/employees/3', {
+    payBasis: 'Daily rate', payFrequency: 'Weekly', payrollCategory: 'Site labourer',
+    basicSalary: 0, weeklyRate: 0, dailyRate: 3300, compensationEffectiveFrom: shift(-1),
+    epfEligible: false, etfEligible: false, customOfficeOtRate: null, customSiteOtRate: null, customTravelOtRate: null
+  })).status, 200);
+  const weeklyRun = await call(hr, 'POST', '/payroll', { periodStart: shift(-6), periodEnd: today(), payFrequency: 'Weekly' });
+  assert.equal(weeklyRun.status, 201, 'a weekly payroll can coexist with a monthly run');
+  assert.equal(weeklyRun.body.payFrequency, 'Weekly');
 
   const store = await login('store@gkuc.lk');
   assert.equal((await call(store, 'GET', '/payroll')).status, 403, 'pay data is restricted to HR');
@@ -375,8 +957,67 @@ test('logging a service resets the vehicle service schedule', async () => {
   assert.equal(vehicle.service.kmRemaining, 5000);
 });
 
+test('fleet histories preserve driver handovers, odometer, repairs and renewals',async()=>{
+  const owner=await login();
+  const created=await call(owner,'POST','/fleet',{vehicle:'Test site tipper',registration:`TEST-FLEET-${Date.now()}`,
+    status:'Assigned',renewal:'Insurance',dueDate:today(),projectId:1,odometer:1000,
+    serviceIntervalKm:1000,driver:'Initial Driver'});
+  assert.equal(created.status,201);const id=created.body.id;
+  let detail=(await call(owner,'GET',`/fleet/${id}`)).body;
+  assert.equal(detail.drivers.length,1);
+  assert.equal(detail.renewals.length,1);
+  assert.equal(detail.readings.length,1);
+  assert.equal((await call(owner,'POST',`/fleet/${id}/fuel`,{fuelDate:today(),litres:40,cost:12000,
+    odometer:1100,projectId:1})).status,201);
+  assert.equal((await call(owner,'POST',`/fleet/${id}/odometer`,{readingDate:today(),odometer:1050})).status,409);
+  assert.equal((await call(owner,'POST',`/fleet/${id}/odometer`,{readingDate:today(),odometer:1150,
+    notes:'End of shift'})).status,201);
+  assert.equal((await call(owner,'POST',`/fleet/${id}/maintenance`,{kind:'Repair',serviceDate:today(),
+    description:'Replace damaged brake hose',cost:7500,garage:'Local garage',odometer:1200,
+    projectId:1,setStatus:'Repair'})).status,201);
+  detail=(await call(owner,'GET',`/fleet/${id}`)).body;
+  assert.equal(detail.lastServiceDate,null,'a repair does not reset scheduled service');
+  assert.equal(detail.status,'Repair');
+  assert.equal(detail.maintenance[0].kind,'Repair');
+  assert.ok(detail.maintenance[0].project);
+  const fleetExpenses=(await call(owner,'GET','/finance/expenses?projectId=1')).body;
+  assert.ok(fleetExpenses.some(row=>row.originType==='vehicle_maintenance'&&Number(row.amount)===7500));
+  assert.equal((await call(owner,'POST',`/fleet/${id}/maintenance`,{kind:'Service',serviceDate:today(),
+    description:'Full scheduled service',cost:15000,odometer:1300,setStatus:'Available'})).status,201);
+  const handover=await call(owner,'POST',`/fleet/${id}/drivers`,{driverName:'Relief Driver',
+    projectId:1,assignedOn:detail.drivers[0].assignedOn.slice(0,10),notes:'Night shift coverage'});
+  assert.equal(handover.status,201);
+  assert.equal((await call(owner,'POST',`/fleet/${id}/documents`,{docType:'Insurance',reference:'POL-2027',
+    renewedOn:today(),expiryDate:today(),cost:24000})).status,201);
+  assert.equal((await call(owner,'POST',`/fleet/${id}/documents`,{docType:'Revenue licence',reference:'RL-2027',
+    renewedOn:today(),expiryDate:today(),cost:4500})).status,201);
+  detail=(await call(owner,'GET',`/fleet/${id}`)).body;
+  assert.equal(detail.lastServiceOdometer,1300);
+  assert.equal(detail.service.kmRemaining,1000);
+  assert.equal(detail.drivers[0].driverName,'Relief Driver');
+  assert.ok(detail.drivers[1].endedOn,'the previous assignment has a closing date');
+  assert.equal(detail.renewals.length,3);
+  assert.equal(detail.documents.find(row=>row.docType==='Insurance').reference,'POL-2027');
+  assert.equal(detail.documents.find(row=>row.docType==='Revenue licence').reference,'RL-2027');
+  assert.equal(new Date(detail.due_date).toISOString().slice(0,10),
+    new Date(detail.documents.find(row=>row.docType==='Insurance').expiryDate).toISOString().slice(0,10));
+  assert.ok(detail.readings.some(row=>row.source==='Repair'));
+  assert.ok(detail.readings.some(row=>row.source==='Service'));
+  assert.equal((await call(owner,'PATCH',`/fleet/${id}`,{driver:'Untracked Driver'})).status,400);
+});
+
 test('the completion report is assembled from live project data', async () => {
   const owner = await login();
+  const workspace = await call(owner, 'GET', '/projects/1');
+  assert.equal(workspace.status, 200);
+  assert.ok(Array.isArray(workspace.body.reporting.expenseLedger));
+  assert.ok(Array.isArray(workspace.body.reporting.incomeLedger));
+  assert.ok(Array.isArray(workspace.body.reporting.attendanceLedger));
+  assert.ok(Array.isArray(workspace.body.reporting.materialUsage));
+  assert.ok(Array.isArray(workspace.body.reporting.equipmentUsage));
+  assert.ok(Array.isArray(workspace.body.reporting.supplierInvoices));
+  assert.ok(Array.isArray(workspace.body.reporting.costItems));
+  assert.ok(Array.isArray(workspace.body.reporting.variationLedger));
   const report = await call(owner, 'GET', '/projects/1/completion');
   assert.equal(report.status, 200);
   assert.equal(report.body.project.name, 'Riverside Residences');
@@ -396,6 +1037,80 @@ test('performance reviews average their four scores', async () => {
   });
   assert.equal(review.status, 201);
   assert.equal(Number(review.body.overall), 4);
+});
+
+test('HR reconciles a new scanner identity and records historical site attendance', async () => {
+  const token = await login();
+  const created = await call(token, 'POST', '/biometric/people', {
+    code: 'TEST-991', name: 'Scanner New Person', department: 'Roadworks', firstDate: shift(-45)
+  });
+  assert.equal(created.status, 201);
+  assert.match(created.body.code, /^BIO-TEST-991/);
+
+  const profile = await call(token, 'GET', `/employees/${created.body.id}`);
+  assert.equal(profile.status, 200);
+  assert.equal(profile.body.biometricId, 'TEST-991');
+
+  const recorded = await call(token, 'POST', '/attendance', {
+    name: profile.body.name,
+    role: profile.body.designation,
+    employeeId: profile.body.id,
+    projectId: 1,
+    date: shift(-45),
+    state: 'Checked out',
+    checkIn: '07:15',
+    checkOut: '17:20'
+  });
+  assert.equal(recorded.status, 201);
+  assert.match(recorded.body.in, /^07:15/);
+  assert.match(recorded.body.out, /^17:20/);
+
+  const corrected = await call(token, 'PATCH', `/attendance/${recorded.body.id}`, {
+    workDate: shift(-44),
+    checkIn: '08:00',
+    checkOut: null,
+    state: 'On site',
+    projectId: 2,
+    reason: 'Employee travelled directly to the site'
+  });
+  assert.equal(corrected.status, 200);
+  assert.equal(String(corrected.body.work_date).slice(0, 10), shift(-44));
+  assert.equal(corrected.body.check_out, null);
+
+  const analytics = await call(token, 'GET', '/attendance/analytics');
+  assert.equal(analytics.status, 200);
+  assert.equal(analytics.body.weekly.series.length, 7);
+  assert.equal(analytics.body.monthly.series.length, 30);
+  assert.ok(Array.isArray(analytics.body.lowAttendance));
+});
+
+test('workforce map distinguishes office presence, site allocation and free workers', async () => {
+  const token = await login();
+  const date = shift(40);
+  const departments = await call(token, 'GET', '/employees/departments');
+  const created = await call(token, 'POST', '/employees', {
+    code: 'EMP-FREE-01', name: 'Available Test Worker', departmentId: departments.body[0]?.id,
+    designation: 'General worker', workerType: 'Site', joinDate: today(),
+    basicSalary: 0, dailyRate: 0, overtimeRate: 0
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.workerType, 'Site');
+
+  const employee = (await call(token, 'GET', '/employees')).body.find(row => row.id !== created.body.id);
+  await call(token, 'PATCH', `/employees/${employee.id}`, { workerType: 'Office' });
+  const present = await call(token, 'POST', '/attendance', {
+    name: employee.name, role: employee.designation, employeeId: employee.id,
+    workLocation: 'Office', projectId: null, date, state: 'On site', checkIn: '07:45'
+  });
+  assert.equal(present.status, 201);
+  assert.equal(present.body.workLocation, 'Office');
+  assert.equal(present.body.site, 'Head office');
+
+  const map = await call(token, 'GET', `/employees/availability?date=${date}`);
+  assert.equal(map.status, 200);
+  assert.equal(map.body.people.find(row => row.id === employee.id).status, 'At office');
+  assert.equal(map.body.people.find(row => row.id === created.body.id).status, 'Free');
+  assert.ok(map.body.summary.free >= 1);
 });
 
 test('deactivating a user ends their session', async () => {

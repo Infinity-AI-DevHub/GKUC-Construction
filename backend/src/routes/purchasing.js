@@ -8,10 +8,15 @@ const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 /* Suppliers */
-router.get('/suppliers', auth, permit('store.view','store.manage','finance.pay'), wrap(async (_req, res) => res.json(await query(`SELECT s.id,s.name,s.contact_person contact,s.phone,s.email,s.address,
-  (SELECT COUNT(*) FROM purchase_orders o WHERE o.supplier_id=s.id) orders,
-  (SELECT COALESCE(SUM(i.amount-i.paid_amount),0) FROM supplier_invoices i WHERE i.supplier_id=s.id AND i.status<>'Paid') outstanding
-  FROM suppliers s WHERE s.active=1 ORDER BY s.name`))));
+router.get('/suppliers', auth, permit('store.view','store.manage','finance.pay'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId || 0);
+  res.json(await query(`SELECT s.id,s.name,s.contact_person contact,s.phone,s.email,s.address,
+    (SELECT COUNT(*) FROM purchase_orders o JOIN projects op ON op.id=o.project_id
+      WHERE o.supplier_id=s.id ${companyId ? 'AND op.company_id=?' : ''}) orders,
+    (SELECT COALESCE(SUM(i.amount-i.paid_amount),0) FROM supplier_invoices i
+      WHERE i.supplier_id=s.id AND i.status<>'Paid' ${companyId ? 'AND i.company_id=?' : ''}) outstanding
+    FROM suppliers s WHERE s.active=1 ORDER BY s.name`, companyId ? [companyId, companyId] : []));
+}));
 
 router.post('/suppliers', auth, permit('store.manage', 'finance.pay'), validate(z.object({
   name: z.string().min(2).max(180),
@@ -126,10 +131,13 @@ router.post('/requests/:id/quotations', auth, permit('store.manage', 'finance.pa
 
 /* Purchase orders */
 const orderList = `SELECT o.id,o.reference,o.status,o.order_date orderDate,o.total,o.project_id projectId,
-  p.name project,s.name supplier,s.id supplierId,u.name issuedBy,o.request_id requestId
+  p.company_id companyId,p.name project,s.name supplier,s.id supplierId,u.name issuedBy,o.request_id requestId
   FROM purchase_orders o JOIN projects p ON p.id=o.project_id JOIN suppliers s ON s.id=o.supplier_id JOIN users u ON u.id=o.issued_by`;
 
-router.get('/orders', auth, permit('store.view','store.manage','finance.pay'), wrap(async (_req, res) => res.json(await query(`${orderList} ORDER BY o.id DESC`))));
+router.get('/orders', auth, permit('store.view','store.manage','finance.pay'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId || 0);
+  res.json(await query(`${orderList} ${companyId ? 'WHERE p.company_id=?' : ''} ORDER BY o.id DESC`, companyId ? [companyId] : []));
+}));
 
 router.get('/orders/:id', auth, permit('store.view','store.manage','finance.pay'), wrap(async (req, res) => {
   const order = await getOne(`${orderList} WHERE o.id=?`, [req.params.id]);
@@ -229,22 +237,40 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
 }));
 
 /* Supplier invoices and payments */
-router.get('/invoices', auth, permit('finance.view','finance.pay'), wrap(async (_req, res) => res.json(await query(`SELECT i.id,i.invoice_no invoiceNo,i.amount,i.paid_amount paidAmount,
-  i.invoice_date invoiceDate,i.due_date dueDate,i.status,s.name supplier,o.reference orderReference
-  FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN purchase_orders o ON o.id=i.order_id ORDER BY i.id DESC`))));
+router.get('/invoices', auth, permit('finance.view','finance.pay'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId || 0);
+  res.json(await query(`SELECT i.id,i.company_id companyId,i.supplier_id supplierId,i.invoice_no invoiceNo,i.amount,i.paid_amount paidAmount,
+    i.net_amount netAmount,i.tax_treatment taxTreatment,i.vat_rate vatRate,i.vat_amount vatAmount,
+    i.invoice_date invoiceDate,i.due_date dueDate,i.status,s.name supplier,o.reference orderReference
+    FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN purchase_orders o ON o.id=i.order_id
+    ${companyId ? 'WHERE i.company_id=?' : ''} ORDER BY i.id DESC`, companyId ? [companyId] : []));
+}));
 
 router.post('/invoices', auth, permit('finance.pay'), validate(z.object({
+  companyId: z.number().int().positive().default(1),
   orderId: z.number().int().positive().optional(),
   supplierId: z.number().int().positive(),
   invoiceNo: z.string().min(1).max(80),
-  amount: z.number().positive(),
+  amount: z.number().positive().optional(),
+  netAmount: z.number().positive().optional(),
+  taxTreatment: z.enum(['Standard','Exempt']).default('Exempt'),
+  vatRate: z.number().min(0).max(100).default(0),
   invoiceDate: isoDate,
   dueDate: isoDate.optional()
-})), wrap(async (req, res) => {
+}).refine(value=>value.amount||value.netAmount,{message:'Enter the invoice amount',path:['amount']})), wrap(async (req, res) => {
   const body = req.body;
   try {
-    const result = await query('INSERT INTO supplier_invoices (order_id,supplier_id,invoice_no,amount,invoice_date,due_date,recorded_by) VALUES (?,?,?,?,?,?,?)',
-      [body.orderId || null, body.supplierId, body.invoiceNo, body.amount, body.invoiceDate, body.dueDate || null, req.user.id]);
+    const order = body.orderId ? await getOne(`SELECT o.id,p.company_id companyId FROM purchase_orders o
+      JOIN projects p ON p.id=o.project_id WHERE o.id=?`, [body.orderId]) : null;
+    if (body.orderId && !order) return res.status(404).json({ error: 'Purchase order not found' });
+    if (order && Number(order.companyId) !== body.companyId)
+      return res.status(400).json({ error: 'That purchase order belongs to a different company' });
+    const net=Number(body.netAmount??body.amount),vat=body.taxTreatment==='Standard'?Math.round(net*body.vatRate)/100:0,total=body.netAmount?Math.round((net+vat)*100)/100:Number(body.amount);
+    const result = await query(`INSERT INTO supplier_invoices
+      (company_id,order_id,supplier_id,invoice_no,amount,net_amount,tax_treatment,vat_rate,vat_amount,invoice_date,due_date,recorded_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [body.companyId,body.orderId||null,body.supplierId,body.invoiceNo,total,net,body.taxTreatment,
+        body.taxTreatment==='Standard'?body.vatRate:0,vat,body.invoiceDate,body.dueDate||null,req.user.id]);
     const row = await getOne('SELECT * FROM supplier_invoices WHERE id=?', [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'supplier_invoice', row.id, null, row, req.ip);
     res.status(201).json(row);
@@ -260,6 +286,7 @@ router.post('/invoices/:id/payments', auth, permit('finance.pay'), validate(z.ob
   method: z.string().trim().min(1).max(60).default('Bank transfer'),
   reference: z.string().max(120).optional()
 })), fromOptions({ method: 'income.method' }), wrap(async (req, res) => {
+  if (req.body.method === 'Cheque') return res.status(400).json({ error: 'Register this payment in Issued cheques; clearing it updates the supplier invoice once' });
   try {
     const invoice = await transaction(async connection => {
       const [rows] = await connection.execute('SELECT * FROM supplier_invoices WHERE id=? FOR UPDATE', [req.params.id]);
@@ -279,6 +306,84 @@ router.post('/invoices/:id/payments', auth, permit('finance.pay'), validate(z.ob
     if (error.status) return res.status(error.status).json({ error: error.message });
     throw error;
   }
+}));
+
+/* Future-dated cheques remain pending until Finance confirms what actually happened. */
+router.get('/cheques', auth, permit('finance.view','finance.pay'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId || 0);
+  res.json(await query(`
+  SELECT c.id,c.cheque_number chequeNumber,c.bank,c.payee,c.purpose,c.amount,c.issue_date issueDate,
+    c.cheque_date chequeDate,c.reminder_days reminderDays,c.status,c.notes,c.confirmed_at confirmedAt,
+    s.name supplier,i.invoice_no invoiceNo,DATEDIFF(c.cheque_date,CURDATE()) daysUntil,
+    u.name createdBy,cu.name confirmedBy
+  FROM issued_cheques c LEFT JOIN suppliers s ON s.id=c.supplier_id
+  LEFT JOIN supplier_invoices i ON i.id=c.invoice_id JOIN users u ON u.id=c.created_by
+  LEFT JOIN users cu ON cu.id=c.confirmed_by ${companyId ? 'WHERE c.company_id=?' : ''}
+  ORDER BY c.cheque_date,c.id`, companyId ? [companyId] : []));
+}));
+
+router.post('/cheques', auth, permit('finance.pay'), validate(z.object({
+  companyId: z.number().int().positive().default(1),
+  supplierId: z.number().int().positive().nullable().optional(),
+  invoiceId: z.number().int().positive().nullable().optional(),
+  chequeNumber: z.string().trim().min(1).max(80), bank: z.string().trim().min(2).max(180),
+  payee: z.string().trim().min(2).max(180), purpose: z.string().trim().min(2).max(400),
+  amount: z.number().positive(), issueDate: isoDate, chequeDate: isoDate,
+  reminderDays: z.number().int().min(0).max(30).default(3), notes: z.string().max(600).optional()
+})), wrap(async (req, res) => {
+  const body = req.body;
+  if (body.chequeDate < body.issueDate) return res.status(400).json({ error: 'Cheque date cannot be before its issue date' });
+  if (body.invoiceId) {
+    const invoice = await getOne('SELECT id,company_id,supplier_id,amount,paid_amount FROM supplier_invoices WHERE id=?', [body.invoiceId]);
+    if (!invoice) return res.status(404).json({ error: 'Supplier invoice not found' });
+    if (body.supplierId && Number(invoice.supplier_id) !== body.supplierId)
+      return res.status(400).json({ error: 'That invoice belongs to a different supplier' });
+    if (Number(invoice.company_id) !== body.companyId)
+      return res.status(400).json({ error: 'That invoice belongs to a different company' });
+    if (body.amount > Number(invoice.amount) - Number(invoice.paid_amount) + 0.001)
+      return res.status(409).json({ error: 'Cheque amount exceeds the invoice balance' });
+  }
+  try {
+    const result = await query(`INSERT INTO issued_cheques
+      (company_id,supplier_id,invoice_id,cheque_number,bank,payee,purpose,amount,issue_date,cheque_date,reminder_days,notes,created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [body.companyId,body.supplierId || null,body.invoiceId || null,body.chequeNumber,body.bank,
+      body.payee,body.purpose,body.amount,body.issueDate,body.chequeDate,body.reminderDays,body.notes || null,req.user.id]);
+    const row = await getOne('SELECT * FROM issued_cheques WHERE id=?', [result.insertId]);
+    await audit(pool, req.user.id, 'ISSUE', 'cheque', row.id, null, row, req.ip);
+    res.status(201).json(row);
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'That cheque number is already recorded for this bank' });
+    throw error;
+  }
+}));
+
+router.patch('/cheques/:id', auth, permit('finance.pay'), validate(z.object({
+  status: z.enum(['Prepared','Issued','Cleared','Returned','Cancelled','Replaced']),
+  notes: z.string().max(600).optional()
+})), wrap(async (req, res) => {
+  const result = await transaction(async connection => {
+    const [[cheque]] = await connection.execute('SELECT * FROM issued_cheques WHERE id=? FOR UPDATE', [req.params.id]);
+    if (!cheque) throw Object.assign(new Error('Cheque not found'), { status: 404 });
+    if (cheque.status === 'Cleared' && req.body.status !== 'Cleared')
+      throw Object.assign(new Error('A cleared cheque cannot be reversed from this screen'), { status: 409 });
+    if (cheque.status === 'Cleared') return cheque;
+    if (req.body.status === 'Cleared' && cheque.invoice_id) {
+      const [rows] = await connection.execute('SELECT * FROM supplier_invoices WHERE id=? FOR UPDATE', [cheque.invoice_id]);
+      const invoice = rows[0]; const paid = Number(invoice.paid_amount) + Number(cheque.amount);
+      if (paid > Number(invoice.amount) + 0.001) throw Object.assign(new Error('Cheque exceeds the remaining invoice balance'), { status: 409 });
+      await connection.execute('UPDATE supplier_invoices SET paid_amount=?,status=? WHERE id=?',
+        [paid, paid >= Number(invoice.amount) - 0.001 ? 'Paid' : 'Partially paid', invoice.id]);
+      await connection.execute(`INSERT INTO supplier_payments (invoice_id,amount,paid_date,method,reference,created_by)
+        VALUES (?,?,CURDATE(),'Cheque',?,?)`, [invoice.id,cheque.amount,cheque.cheque_number,req.user.id]);
+    }
+    await connection.execute(`UPDATE issued_cheques SET status=?,notes=COALESCE(?,notes),
+      confirmed_at=CASE WHEN ? IN ('Cleared','Returned','Cancelled','Replaced') THEN NOW() ELSE confirmed_at END,
+      confirmed_by=CASE WHEN ? IN ('Cleared','Returned','Cancelled','Replaced') THEN ? ELSE confirmed_by END WHERE id=?`,
+    [req.body.status,req.body.notes || null,req.body.status,req.body.status,req.user.id,cheque.id]);
+    await audit(connection,req.user.id,'CONFIRM','cheque',cheque.id,cheque,{ status:req.body.status,notes:req.body.notes },req.ip);
+    return cheque;
+  });
+  res.json(await getOne('SELECT * FROM issued_cheques WHERE id=?', [result.id]));
 }));
 
 export default router;

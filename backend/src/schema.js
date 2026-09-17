@@ -34,6 +34,11 @@ async function addIndex(table, name, definition) {
   await query(`ALTER TABLE ${table} ADD ${definition}`);
 }
 
+async function dropIndex(table, name) {
+  if (!await indexExists(table, name)) return;
+  await query(`ALTER TABLE ${table} DROP INDEX ${name}`);
+}
+
 /*
  * ALTER ... MODIFY rebuilds the table on most MySQL versions, and these run on every boot.
  * On attendance and stock_movements — the two tables that grow every working day — that
@@ -53,6 +58,14 @@ async function modifyColumn(table, column, definition) {
   const current = (await columnType(table, column)).toLowerCase();
   if (!current || wanted.startsWith(current)) return;
   await query(`ALTER TABLE ${table} MODIFY ${column} ${definition}`);
+}
+
+async function columnIsNullable(table, column) {
+  const rows = await query(
+    'SELECT IS_NULLABLE nullable FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name=?',
+    [table, column]
+  );
+  return rows[0]?.nullable === 'YES';
 }
 
 async function constraintExists(table, name) {
@@ -76,6 +89,27 @@ async function constraintExists(table, name) {
 async function addForeignKey(table, name, definition) {
   if (await constraintExists(table, name)) return;
   await query(`ALTER TABLE ${table} ADD ${definition}`);
+}
+
+/**
+ * The two legal entities share people and physical resources, but never a commercial
+ * ledger. A project's company becomes the authoritative owner for every document and
+ * financial posting beneath it.
+ */
+async function createCompaniesTable() {
+  await query(`CREATE TABLE IF NOT EXISTS companies (
+    id TINYINT UNSIGNED PRIMARY KEY,
+    code VARCHAR(20) NOT NULL UNIQUE,
+    name VARCHAR(180) NOT NULL UNIQUE,
+    address VARCHAR(400) NOT NULL DEFAULT '', telephone VARCHAR(120) NOT NULL DEFAULT '',
+    email VARCHAR(180) NOT NULL DEFAULT '', tin VARCHAR(40) NOT NULL DEFAULT '',
+    vat_number VARCHAR(40) NOT NULL DEFAULT '', svat_number VARCHAR(40) NOT NULL DEFAULT '',
+    bank_details VARCHAR(400) NOT NULL DEFAULT '', default_vat_rate DECIMAL(5,2) NOT NULL DEFAULT 18,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  await query(`INSERT IGNORE INTO companies (id,code,name) VALUES
+    (1,'GKUC','GKUC Construction'),(2,'GKRM','GKUC Readymix')`);
 }
 
 /** Core tables that existed before the module expansion. */
@@ -108,7 +142,7 @@ async function createCoreTables() {
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS attendance (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_name VARCHAR(120) NOT NULL, role VARCHAR(100) NOT NULL, project_id BIGINT UNSIGNED NOT NULL,
-    work_date DATE NOT NULL, check_in TIME NULL, check_out TIME NULL, state ENUM('On site','Late','Checked out','Absent','On leave') NOT NULL,
+    work_date DATE NOT NULL, check_in TIME NULL, check_out TIME NULL, state ENUM('On site','Late','Checked out','Absent','On leave','Business trip') NOT NULL,
     confirmed_by BIGINT UNSIGNED NULL, correction_reason VARCHAR(500) NULL,
     CONSTRAINT fk_attendance_project FOREIGN KEY(project_id) REFERENCES projects(id),
     CONSTRAINT fk_attendance_confirmer FOREIGN KEY(confirmed_by) REFERENCES users(id),
@@ -161,15 +195,76 @@ async function createHrTables() {
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, description VARCHAR(400) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS payroll_policies (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, effective_from DATE NOT NULL UNIQUE,
+    office_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 225,
+    site_labour_site_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 200,
+    site_labour_travel_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 100,
+    driver_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 225,
+    supervisor_site_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 225,
+    supervisor_travel_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 100,
+    epf_employee_rate DECIMAL(6,3) NOT NULL DEFAULT 0,
+    epf_employer_rate DECIMAL(6,3) NOT NULL DEFAULT 0,
+    etf_employer_rate DECIMAL(6,3) NOT NULL DEFAULT 0,
+    epf_basis ENUM('Basic earnings','Gross earnings') NOT NULL DEFAULT 'Basic earnings',
+    etf_basis ENUM('Basic earnings','Gross earnings') NOT NULL DEFAULT 'Basic earnings',
+    created_by BIGINT UNSIGNED NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_payroll_policy_user FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`INSERT INTO payroll_policies
+    (effective_from,office_ot_rate,site_labour_site_ot_rate,site_labour_travel_ot_rate,
+     driver_ot_rate,supervisor_site_ot_rate,supervisor_travel_ot_rate)
+    SELECT '2000-01-01',225,200,100,225,225,100
+    WHERE NOT EXISTS (SELECT 1 FROM payroll_policies)`);
   await query(`CREATE TABLE IF NOT EXISTS employees (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, code VARCHAR(40) NOT NULL UNIQUE, name VARCHAR(120) NOT NULL,
     department_id BIGINT UNSIGNED NULL, designation VARCHAR(120) NOT NULL, phone VARCHAR(40) NULL, email VARCHAR(190) NULL,
     user_id BIGINT UNSIGNED NULL, join_date DATE NOT NULL, basic_salary DECIMAL(12,2) NOT NULL DEFAULT 0,
-    daily_rate DECIMAL(10,2) NOT NULL DEFAULT 0, overtime_rate DECIMAL(10,2) NOT NULL DEFAULT 0,
+    daily_rate DECIMAL(10,2) NOT NULL DEFAULT 0, weekly_rate DECIMAL(12,2) NOT NULL DEFAULT 0,
+    overtime_rate DECIMAL(10,2) NOT NULL DEFAULT 0,
+    pay_basis ENUM('Monthly salary','Weekly rate','Daily rate') NOT NULL DEFAULT 'Monthly salary',
+    pay_frequency ENUM('Daily','Weekly','Monthly') NOT NULL DEFAULT 'Monthly',
+    payroll_category ENUM('Office employee','Site labourer','Driver','Supervisor','Custom') NOT NULL DEFAULT 'Site labourer',
+    compensation_effective_from DATE NULL,
+    epf_eligible BOOLEAN NOT NULL DEFAULT FALSE, etf_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+    custom_office_ot_rate DECIMAL(10,2) NULL, custom_site_ot_rate DECIMAL(10,2) NULL,
+    custom_travel_ot_rate DECIMAL(10,2) NULL,
     status ENUM('Active','On leave','Suspended','Left') NOT NULL DEFAULT 'Active', notes VARCHAR(600) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_employee_department FOREIGN KEY(department_id) REFERENCES departments(id),
     CONSTRAINT fk_employee_user FOREIGN KEY(user_id) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('employees', 'weekly_rate', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('employees', 'pay_basis', "ENUM('Monthly salary','Weekly rate','Daily rate') NOT NULL DEFAULT 'Monthly salary'");
+  await addColumn('employees', 'pay_frequency', "ENUM('Daily','Weekly','Monthly') NOT NULL DEFAULT 'Monthly'");
+  const hadPayrollCategory = await columnExists('employees', 'payroll_category');
+  await addColumn('employees', 'payroll_category', "ENUM('Office employee','Site labourer','Driver','Supervisor','Custom') NOT NULL DEFAULT 'Site labourer'");
+  await addColumn('employees', 'compensation_effective_from', 'DATE NULL');
+  await addColumn('employees', 'epf_eligible', 'BOOLEAN NOT NULL DEFAULT FALSE');
+  await addColumn('employees', 'etf_eligible', 'BOOLEAN NOT NULL DEFAULT FALSE');
+  await addColumn('employees', 'custom_office_ot_rate', 'DECIMAL(10,2) NULL');
+  await addColumn('employees', 'custom_site_ot_rate', 'DECIMAL(10,2) NULL');
+  await addColumn('employees', 'custom_travel_ot_rate', 'DECIMAL(10,2) NULL');
+  await query(`UPDATE employees SET
+    pay_basis=CASE WHEN basic_salary>0 THEN 'Monthly salary' ELSE 'Daily rate' END,
+    compensation_effective_from=COALESCE(compensation_effective_from,join_date)
+    WHERE compensation_effective_from IS NULL`);
+  if (!hadPayrollCategory) await query(`UPDATE employees e LEFT JOIN departments d ON d.id=e.department_id
+    SET e.payroll_category=CASE
+      WHEN LOWER(e.designation) LIKE '%driver%' THEN 'Driver'
+      WHEN LOWER(e.designation) LIKE '%supervisor%' THEN 'Supervisor'
+      WHEN LOWER(COALESCE(d.name,'')) REGEXP 'human resources|(^| )hr($| )|account|finance|administration|(^| )admin($| )|quantity survey|(^| )qs($| )'
+        THEN 'Office employee' ELSE 'Site labourer' END`);
+  await query(`CREATE TABLE IF NOT EXISTS employee_pay_components (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_id BIGINT UNSIGNED NOT NULL,
+    name VARCHAR(120) NOT NULL, kind ENUM('Allowance','Deduction','Reimbursement') NOT NULL,
+    amount DECIMAL(12,2) NOT NULL, pay_frequency ENUM('Daily','Weekly','Monthly') NOT NULL,
+    effective_from DATE NOT NULL, effective_to DATE NULL, active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_pay_component_employee FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+    CONSTRAINT fk_pay_component_user FOREIGN KEY(created_by) REFERENCES users(id),
+    CONSTRAINT chk_pay_component_amount CHECK(amount >= 0),
+    INDEX idx_pay_component_period(employee_id,pay_frequency,effective_from,effective_to,active)
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS leave_requests (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_id BIGINT UNSIGNED NOT NULL,
@@ -181,14 +276,19 @@ async function createHrTables() {
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS overtime_records (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_id BIGINT UNSIGNED NOT NULL, project_id BIGINT UNSIGNED NULL,
-    work_date DATE NOT NULL, hours DECIMAL(5,2) NOT NULL, rate DECIMAL(10,2) NOT NULL DEFAULT 0,
+    work_date DATE NOT NULL, overtime_type ENUM('Office','Site','Travel') NOT NULL DEFAULT 'Site',
+    hours DECIMAL(5,2) NOT NULL, rate DECIMAL(10,2) NOT NULL DEFAULT 0, policy_id BIGINT UNSIGNED NULL,
     status ENUM('Pending','Approved','Rejected') NOT NULL DEFAULT 'Pending', approved_by BIGINT UNSIGNED NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_overtime_employee FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE,
     CONSTRAINT fk_overtime_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_overtime_policy FOREIGN KEY(policy_id) REFERENCES payroll_policies(id),
     CONSTRAINT fk_overtime_approver FOREIGN KEY(approved_by) REFERENCES users(id),
     CONSTRAINT chk_overtime_hours CHECK(hours > 0)
   ) ENGINE=InnoDB`);
+  await addColumn('overtime_records', 'overtime_type', "ENUM('Office','Site','Travel') NOT NULL DEFAULT 'Site'");
+  await addColumn('overtime_records', 'policy_id', 'BIGINT UNSIGNED NULL');
+  await addForeignKey('overtime_records', 'fk_overtime_policy', 'CONSTRAINT fk_overtime_policy FOREIGN KEY(policy_id) REFERENCES payroll_policies(id)');
   await query(`CREATE TABLE IF NOT EXISTS employee_documents (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_id BIGINT UNSIGNED NOT NULL, title VARCHAR(180) NOT NULL,
     doc_type VARCHAR(80) NOT NULL, reference VARCHAR(180) NULL, expiry_date DATE NULL, file_ref VARCHAR(400) NULL,
@@ -266,6 +366,16 @@ async function createBoqTables() {
     CONSTRAINT fk_vo_raiser FOREIGN KEY(raised_by) REFERENCES users(id),
     CONSTRAINT fk_vo_approver FOREIGN KEY(approved_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS project_cost_forecasts (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL, boq_item_id BIGINT UNSIGNED NOT NULL,
+    forecast_quantity DECIMAL(14,3) NULL, forecast_rate DECIMAL(14,2) NULL, forecast_amount DECIMAL(15,2) NOT NULL,
+    reason VARCHAR(600) NOT NULL, updated_by BIGINT UNSIGNED NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_costforecast_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_costforecast_item FOREIGN KEY(boq_item_id) REFERENCES boq_items(id) ON DELETE CASCADE,
+    CONSTRAINT fk_costforecast_user FOREIGN KEY(updated_by) REFERENCES users(id),
+    UNIQUE KEY uq_costforecast_item(boq_item_id), INDEX idx_costforecast_project(project_id)
+  ) ENGINE=InnoDB`);
 }
 
 /** 2.7 Purchase Management. */
@@ -339,6 +449,22 @@ async function createPurchasingTables() {
     CONSTRAINT fk_payment_invoice FOREIGN KEY(invoice_id) REFERENCES supplier_invoices(id) ON DELETE CASCADE,
     CONSTRAINT fk_payment_user FOREIGN KEY(created_by) REFERENCES users(id), CONSTRAINT chk_payment_amount CHECK(amount > 0)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS issued_cheques (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    supplier_id BIGINT UNSIGNED NULL, invoice_id BIGINT UNSIGNED NULL,
+    cheque_number VARCHAR(80) NOT NULL, bank VARCHAR(180) NOT NULL, payee VARCHAR(180) NOT NULL,
+    purpose VARCHAR(400) NOT NULL, amount DECIMAL(15,2) NOT NULL,
+    issue_date DATE NOT NULL, cheque_date DATE NOT NULL, reminder_days SMALLINT UNSIGNED NOT NULL DEFAULT 3,
+    status ENUM('Prepared','Issued','Cleared','Returned','Cancelled','Replaced') NOT NULL DEFAULT 'Issued',
+    notes VARCHAR(600) NULL, confirmed_at DATETIME NULL, confirmed_by BIGINT UNSIGNED NULL,
+    created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_cheque_supplier FOREIGN KEY(supplier_id) REFERENCES suppliers(id),
+    CONSTRAINT fk_cheque_invoice FOREIGN KEY(invoice_id) REFERENCES supplier_invoices(id),
+    CONSTRAINT fk_cheque_confirmer FOREIGN KEY(confirmed_by) REFERENCES users(id),
+    CONSTRAINT fk_cheque_creator FOREIGN KEY(created_by) REFERENCES users(id),
+    CONSTRAINT chk_cheque_amount CHECK(amount > 0), UNIQUE KEY uq_cheque_bank_number(bank,cheque_number),
+    INDEX idx_cheque_followup(status,cheque_date)
+  ) ENGINE=InnoDB`);
 }
 
 /** 2.8 Fleet compliance + 2.9 Equipment. */
@@ -400,11 +526,14 @@ async function createFinanceTables() {
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL, category_id BIGINT UNSIGNED NULL,
     source ENUM('Material','Labour','Fuel','Equipment','Subcontractor','Overhead','Other') NOT NULL DEFAULT 'Other',
     description VARCHAR(400) NOT NULL, amount DECIMAL(15,2) NOT NULL, expense_date DATE NOT NULL, reference VARCHAR(120) NULL,
-    origin_type VARCHAR(60) NULL, origin_id VARCHAR(60) NULL,
+    origin_type VARCHAR(60) NULL, origin_id VARCHAR(60) NULL, boq_item_id BIGINT UNSIGNED NULL,
+    cost_type ENUM('Expected','Variation','Unexpected') NOT NULL DEFAULT 'Expected',
+    quantity DECIMAL(14,3) NULL, unit VARCHAR(30) NULL, unit_rate DECIMAL(14,2) NULL,
     created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_expense_project FOREIGN KEY(project_id) REFERENCES projects(id),
     CONSTRAINT fk_expense_category FOREIGN KEY(category_id) REFERENCES expense_categories(id),
     CONSTRAINT fk_expense_user FOREIGN KEY(created_by) REFERENCES users(id),
+    CONSTRAINT fk_expense_boq_item FOREIGN KEY(boq_item_id) REFERENCES boq_items(id),
     CONSTRAINT chk_expense_amount CHECK(amount > 0), INDEX idx_expense_project(project_id,expense_date)
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS incomes (
@@ -415,6 +544,50 @@ async function createFinanceTables() {
     CONSTRAINT fk_income_project FOREIGN KEY(project_id) REFERENCES projects(id),
     CONSTRAINT fk_income_user FOREIGN KEY(created_by) REFERENCES users(id),
     CONSTRAINT chk_income_amount CHECK(amount > 0), INDEX idx_income_project(project_id,received_date)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS operating_bills (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, company_id TINYINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NULL, bill_type VARCHAR(80) NOT NULL, provider VARCHAR(180) NOT NULL,
+    account_number VARCHAR(100) NULL, reference VARCHAR(100) NOT NULL, period_from DATE NULL, period_to DATE NULL,
+    bill_date DATE NOT NULL, due_date DATE NOT NULL, net_amount DECIMAL(15,2) NOT NULL,
+    tax_treatment ENUM('Standard','Exempt') NOT NULL DEFAULT 'Standard', vat_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+    vat_amount DECIMAL(15,2) NOT NULL DEFAULT 0, total_amount DECIMAL(15,2) NOT NULL,
+    reminder_days SMALLINT UNSIGNED NOT NULL DEFAULT 5,
+    status ENUM('Unpaid','Paid','Cancelled') NOT NULL DEFAULT 'Unpaid', paid_date DATE NULL,
+    payment_method VARCHAR(60) NULL, payment_reference VARCHAR(120) NULL, notes VARCHAR(600) NULL,
+    created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_operating_bill_company FOREIGN KEY(company_id) REFERENCES companies(id),
+    CONSTRAINT fk_operating_bill_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_operating_bill_user FOREIGN KEY(created_by) REFERENCES users(id),
+    UNIQUE KEY uq_operating_bill(company_id,provider,reference), INDEX idx_operating_bill_due(company_id,status,due_date)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS company_credit_cards (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, company_id TINYINT UNSIGNED NOT NULL,
+    name VARCHAR(120) NOT NULL, bank VARCHAR(180) NOT NULL, last_four CHAR(4) NOT NULL,
+    cardholder VARCHAR(180) NOT NULL, credit_limit DECIMAL(15,2) NOT NULL DEFAULT 0,
+    default_reminder_days SMALLINT UNSIGNED NOT NULL DEFAULT 5, active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_credit_card_company FOREIGN KEY(company_id) REFERENCES companies(id),
+    CONSTRAINT fk_credit_card_user FOREIGN KEY(created_by) REFERENCES users(id),
+    UNIQUE KEY uq_company_card(company_id,bank,last_four)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS credit_card_statements (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, card_id BIGINT UNSIGNED NOT NULL,
+    statement_date DATE NOT NULL, period_from DATE NULL, period_to DATE NULL, due_date DATE NOT NULL,
+    amount DECIMAL(15,2) NOT NULL, minimum_due DECIMAL(15,2) NOT NULL DEFAULT 0,
+    paid_amount DECIMAL(15,2) NOT NULL DEFAULT 0, reminder_days SMALLINT UNSIGNED NOT NULL DEFAULT 5,
+    status ENUM('Unpaid','Partially paid','Paid','Cancelled') NOT NULL DEFAULT 'Unpaid', notes VARCHAR(600) NULL,
+    created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_card_statement_card FOREIGN KEY(card_id) REFERENCES company_credit_cards(id) ON DELETE CASCADE,
+    CONSTRAINT fk_card_statement_user FOREIGN KEY(created_by) REFERENCES users(id),
+    UNIQUE KEY uq_card_statement(card_id,statement_date), INDEX idx_card_statement_due(status,due_date)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS credit_card_payments (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, statement_id BIGINT UNSIGNED NOT NULL,
+    amount DECIMAL(15,2) NOT NULL, paid_date DATE NOT NULL, method VARCHAR(60) NOT NULL,
+    reference VARCHAR(120) NULL, created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_card_payment_statement FOREIGN KEY(statement_id) REFERENCES credit_card_statements(id) ON DELETE CASCADE,
+    CONSTRAINT fk_card_payment_user FOREIGN KEY(created_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
 }
 
@@ -468,22 +641,73 @@ async function createLifecycleTables() {
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS payroll_runs (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, reference VARCHAR(60) NOT NULL UNIQUE,
-    period_start DATE NOT NULL, period_end DATE NOT NULL, status ENUM('Draft','Approved','Paid') NOT NULL DEFAULT 'Draft',
+    period_start DATE NOT NULL, period_end DATE NOT NULL, pay_frequency ENUM('Daily','Weekly','Monthly') NOT NULL DEFAULT 'Monthly',
+    policy_id BIGINT UNSIGNED NULL, status ENUM('Draft','Approved','Paid') NOT NULL DEFAULT 'Draft',
     total DECIMAL(15,2) NOT NULL DEFAULT 0, created_by BIGINT UNSIGNED NOT NULL, approved_by BIGINT UNSIGNED NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_payroll_user FOREIGN KEY(created_by) REFERENCES users(id),
     CONSTRAINT fk_payroll_approver FOREIGN KEY(approved_by) REFERENCES users(id),
-    UNIQUE KEY uq_payroll_period(period_start,period_end)
+    CONSTRAINT fk_payroll_policy FOREIGN KEY(policy_id) REFERENCES payroll_policies(id),
+    UNIQUE KEY uq_payroll_period_frequency(period_start,period_end,pay_frequency)
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS payslips (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, run_id BIGINT UNSIGNED NOT NULL, employee_id BIGINT UNSIGNED NOT NULL,
     days_present DECIMAL(5,1) NOT NULL DEFAULT 0, days_absent DECIMAL(5,1) NOT NULL DEFAULT 0,
     overtime_hours DECIMAL(7,2) NOT NULL DEFAULT 0, basic DECIMAL(12,2) NOT NULL DEFAULT 0,
-    overtime_pay DECIMAL(12,2) NOT NULL DEFAULT 0, deductions DECIMAL(12,2) NOT NULL DEFAULT 0,
-    net_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
+    overtime_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
+    office_ot_hours DECIMAL(7,2) NOT NULL DEFAULT 0, office_ot_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
+    site_ot_hours DECIMAL(7,2) NOT NULL DEFAULT 0, site_ot_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
+    travel_ot_hours DECIMAL(7,2) NOT NULL DEFAULT 0, travel_ot_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
+    allowance_total DECIMAL(12,2) NOT NULL DEFAULT 0, reimbursement_total DECIMAL(12,2) NOT NULL DEFAULT 0,
+    gross_earnings DECIMAL(12,2) NOT NULL DEFAULT 0,
+    epf_employee_deduction DECIMAL(12,2) NOT NULL DEFAULT 0,
+    epf_employer_contribution DECIMAL(12,2) NOT NULL DEFAULT 0,
+    etf_employer_contribution DECIMAL(12,2) NOT NULL DEFAULT 0,
+    other_deduction DECIMAL(12,2) NOT NULL DEFAULT 0,
+    unpaid_leave_deduction DECIMAL(12,2) NOT NULL DEFAULT 0,
+    salary_advance_deduction DECIMAL(12,2) NOT NULL DEFAULT 0,
+    deductions DECIMAL(12,2) NOT NULL DEFAULT 0,
+    net_pay DECIMAL(12,2) NOT NULL DEFAULT 0, employer_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
     CONSTRAINT fk_payslip_run FOREIGN KEY(run_id) REFERENCES payroll_runs(id) ON DELETE CASCADE,
     CONSTRAINT fk_payslip_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
     UNIQUE KEY uq_run_employee(run_id,employee_id)
+  ) ENGINE=InnoDB`);
+  await addColumn('payslips', 'unpaid_leave_deduction', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'salary_advance_deduction', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payroll_runs', 'pay_frequency', "ENUM('Daily','Weekly','Monthly') NOT NULL DEFAULT 'Monthly'");
+  await addColumn('payroll_runs', 'policy_id', 'BIGINT UNSIGNED NULL');
+  await addForeignKey('payroll_runs', 'fk_payroll_policy', 'CONSTRAINT fk_payroll_policy FOREIGN KEY(policy_id) REFERENCES payroll_policies(id)');
+  await dropIndex('payroll_runs', 'uq_payroll_period');
+  await addIndex('payroll_runs', 'uq_payroll_period_frequency', 'UNIQUE KEY uq_payroll_period_frequency(period_start,period_end,pay_frequency)');
+  await addColumn('payslips', 'office_ot_hours', 'DECIMAL(7,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'office_ot_pay', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'site_ot_hours', 'DECIMAL(7,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'site_ot_pay', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'travel_ot_hours', 'DECIMAL(7,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'travel_ot_pay', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'allowance_total', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'reimbursement_total', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'gross_earnings', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'epf_employee_deduction', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'epf_employer_contribution', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'etf_employer_contribution', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'other_deduction', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'employer_cost', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  /* Existing salary sheets predate typed overtime and employer-cost reporting. Preserve
+     their stored totals while presenting them through the expanded breakdown. */
+  await query(`UPDATE payslips SET site_ot_hours=overtime_hours,site_ot_pay=overtime_pay
+    WHERE office_ot_hours=0 AND site_ot_hours=0 AND travel_ot_hours=0 AND overtime_hours<>0`);
+  await query(`UPDATE payslips SET gross_earnings=basic+overtime_pay
+    WHERE gross_earnings=0 AND (basic<>0 OR overtime_pay<>0)`);
+  await query(`UPDATE payslips SET employer_cost=gross_earnings
+    WHERE employer_cost=0 AND gross_earnings<>0`);
+  await query(`CREATE TABLE IF NOT EXISTS payslip_components (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, payslip_id BIGINT UNSIGNED NOT NULL,
+    source_component_id BIGINT UNSIGNED NULL, name VARCHAR(120) NOT NULL,
+    kind ENUM('Allowance','Deduction','Reimbursement') NOT NULL, amount DECIMAL(12,2) NOT NULL,
+    CONSTRAINT fk_slip_component_payslip FOREIGN KEY(payslip_id) REFERENCES payslips(id) ON DELETE CASCADE,
+    CONSTRAINT fk_slip_component_source FOREIGN KEY(source_component_id) REFERENCES employee_pay_components(id),
+    INDEX idx_slip_components(payslip_id)
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS performance_reviews (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_id BIGINT UNSIGNED NOT NULL, review_date DATE NOT NULL,
@@ -1133,6 +1357,25 @@ async function createReceivableTables() {
     CONSTRAINT fk_receipt_recorder FOREIGN KEY(recorded_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
 
+  await query(`CREATE TABLE IF NOT EXISTS received_cheques (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    project_id BIGINT UNSIGNED NULL, invoice_id BIGINT UNSIGNED NULL,
+    cheque_number VARCHAR(80) NOT NULL, bank VARCHAR(180) NOT NULL, payer VARCHAR(180) NOT NULL,
+    purpose VARCHAR(400) NOT NULL, amount DECIMAL(15,2) NOT NULL,
+    received_date DATE NOT NULL, cheque_date DATE NOT NULL, deposit_by DATE NOT NULL,
+    reminder_days SMALLINT UNSIGNED NOT NULL DEFAULT 2,
+    status ENUM('On hand','Deposited','Cleared','Returned','Re-deposited','Cancelled') NOT NULL DEFAULT 'On hand',
+    notes VARCHAR(600) NULL, deposited_at DATE NULL, confirmed_at DATETIME NULL,
+    confirmed_by BIGINT UNSIGNED NULL, created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_received_cheque_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_received_cheque_invoice FOREIGN KEY(invoice_id) REFERENCES client_invoices(id),
+    CONSTRAINT fk_received_cheque_confirmer FOREIGN KEY(confirmed_by) REFERENCES users(id),
+    CONSTRAINT fk_received_cheque_creator FOREIGN KEY(created_by) REFERENCES users(id),
+    CONSTRAINT chk_received_cheque_amount CHECK(amount > 0),
+    UNIQUE KEY uq_received_cheque(bank,cheque_number,payer), INDEX idx_received_cheque_followup(status,deposit_by,cheque_date)
+  ) ENGINE=InnoDB`);
+
   /*
    * Bank guarantees.
    *
@@ -1164,6 +1407,14 @@ async function createReceivableTables() {
     CONSTRAINT fk_bond_user FOREIGN KEY(created_by) REFERENCES users(id),
     INDEX idx_bond_expiry (status, expiry_date)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS bank_bond_extensions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,bond_id BIGINT UNSIGNED NOT NULL,
+    previous_expiry DATE NOT NULL,new_expiry DATE NOT NULL,extended_on DATE NOT NULL,
+    additional_commission DECIMAL(15,2) NOT NULL DEFAULT 0,note VARCHAR(600) NULL,
+    created_by BIGINT UNSIGNED NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_bond_extension_bond FOREIGN KEY(bond_id) REFERENCES bank_bonds(id) ON DELETE CASCADE,
+    CONSTRAINT fk_bond_extension_user FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
 
   /*
    * Petty cash.
@@ -1176,6 +1427,7 @@ async function createReceivableTables() {
   await query(`CREATE TABLE IF NOT EXISTS petty_cash_floats (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(120) NOT NULL,
+    account_type ENUM('Office expenses','Salary advance','Fuel') NOT NULL DEFAULT 'Office expenses',
     project_id BIGINT UNSIGNED NULL,
     holder_id BIGINT UNSIGNED NULL,
     holder_name VARCHAR(120) NOT NULL,
@@ -1189,6 +1441,8 @@ async function createReceivableTables() {
     CONSTRAINT fk_float_holder FOREIGN KEY(holder_id) REFERENCES users(id),
     CONSTRAINT fk_float_creator FOREIGN KEY(created_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await addColumn('petty_cash_floats', 'account_type',
+    "ENUM('Office expenses','Salary advance','Fuel') NOT NULL DEFAULT 'Office expenses'");
 
   await query(`CREATE TABLE IF NOT EXISTS petty_cash_entries (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1199,14 +1453,33 @@ async function createReceivableTables() {
     entry_date DATE NOT NULL,
     description VARCHAR(300) NOT NULL,
     category VARCHAR(60) NULL,
+    employee_id BIGINT UNSIGNED NULL,
     project_id BIGINT UNSIGNED NULL,
     receipt_attachment_id BIGINT UNSIGNED NULL,
     recorded_by BIGINT UNSIGNED NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_petty_float FOREIGN KEY(float_id) REFERENCES petty_cash_floats(id) ON DELETE CASCADE,
     CONSTRAINT fk_petty_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_petty_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
     CONSTRAINT fk_petty_user FOREIGN KEY(recorded_by) REFERENCES users(id),
     INDEX idx_petty_float (float_id, entry_date)
+  ) ENGINE=InnoDB`);
+  await addColumn('petty_cash_entries', 'employee_id', 'BIGINT UNSIGNED NULL');
+  await addForeignKey('petty_cash_entries', 'fk_petty_employee',
+    'CONSTRAINT fk_petty_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');
+
+  /* A large advance can take more than one salary run to recover. Allocations preserve
+     every instalment instead of marking the whole advance as deducted too early. */
+  await query(`CREATE TABLE IF NOT EXISTS salary_advance_recoveries (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    entry_id BIGINT UNSIGNED NOT NULL,
+    payslip_id BIGINT UNSIGNED NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_advance_recovery_entry FOREIGN KEY(entry_id) REFERENCES petty_cash_entries(id),
+    CONSTRAINT fk_advance_recovery_payslip FOREIGN KEY(payslip_id) REFERENCES payslips(id) ON DELETE CASCADE,
+    CONSTRAINT chk_advance_recovery_amount CHECK(amount > 0),
+    UNIQUE KEY uq_advance_recovery_run(entry_id,payslip_id), INDEX idx_advance_recovery_payslip(payslip_id)
   ) ENGINE=InnoDB`);
 
   /*
@@ -1813,6 +2086,140 @@ async function createSubcontractQuotationTables() {
   await addColumn('quotations_client', 'main_contractor', 'VARCHAR(180) NULL');
 }
 
+async function createConstructionOperationsTables() {
+  await addColumn('quotation_items','material_id','BIGINT UNSIGNED NULL');
+  await addForeignKey('quotation_items','fk_quoteitem_material',
+    'CONSTRAINT fk_quoteitem_material FOREIGN KEY(material_id) REFERENCES materials(id)');
+  await addColumn('materials','stock_kind',"ENUM('Consumable','Returnable') NOT NULL DEFAULT 'Consumable'");
+  await addColumn('subcontractors','address','VARCHAR(400) NULL');
+  await addColumn('subcontractors','business_id','VARCHAR(100) NULL');
+  await addColumn('subcontractors','contact_type',"ENUM('Company','Individual') NOT NULL DEFAULT 'Company'");
+  await addColumn('boq_items','subcontract_rate_id','BIGINT UNSIGNED NULL');
+  await addColumn('client_invoice_items','quotation_item_id','BIGINT UNSIGNED NULL');
+  await query(`CREATE TABLE IF NOT EXISTS project_updates (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
+    kind ENUM('Update','Issue') NOT NULL DEFAULT 'Update', title VARCHAR(220) NOT NULL,
+    details TEXT NOT NULL, category VARCHAR(80) NOT NULL DEFAULT 'General',
+    status ENUM('Open','In progress','Resolved') NOT NULL DEFAULT 'Open',
+    priority ENUM('Low','Medium','High') NOT NULL DEFAULT 'Medium',
+    owner VARCHAR(120) NULL, due_date DATE NULL, created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_pupdate_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_pupdate_user FOREIGN KEY(created_by) REFERENCES users(id),
+    INDEX idx_pupdate_project(project_id,status,created_at)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS subcontractor_project_rates (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
+    subcontractor_id BIGINT UNSIGNED NOT NULL, work_item VARCHAR(220) NOT NULL,
+    unit VARCHAR(30) NOT NULL, rate DECIMAL(14,2) NOT NULL,
+    agreed_on DATE NULL, valid_until DATE NULL, notes VARCHAR(600) NULL,
+    created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_subrate_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_subrate_sub FOREIGN KEY(subcontractor_id) REFERENCES subcontractors(id),
+    CONSTRAINT fk_subrate_user FOREIGN KEY(created_by) REFERENCES users(id),
+    UNIQUE KEY uq_subrate_project_work(project_id,subcontractor_id,work_item),
+    INDEX idx_subrate_project(project_id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS stock_loans (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, material_id BIGINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NOT NULL, quantity DECIMAL(14,3) NOT NULL,
+    returned_quantity DECIMAL(14,3) NOT NULL DEFAULT 0,
+    taken_by VARCHAR(120) NOT NULL, handed_over_by VARCHAR(120) NOT NULL,
+    received_back_by VARCHAR(120) NULL, issued_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    returned_at DATETIME NULL, condition_out VARCHAR(300) NULL,
+    condition_in VARCHAR(300) NULL, reference VARCHAR(120) NULL,
+    created_by BIGINT UNSIGNED NOT NULL,
+    CONSTRAINT fk_stockloan_material FOREIGN KEY(material_id) REFERENCES materials(id),
+    CONSTRAINT fk_stockloan_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_stockloan_user FOREIGN KEY(created_by) REFERENCES users(id),
+    INDEX idx_stockloan_open(material_id,project_id,returned_at)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS site_material_consumption (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,material_id BIGINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NOT NULL,quantity DECIMAL(14,3) NOT NULL,
+    consumed_on DATE NOT NULL,notes VARCHAR(500) NULL,recorded_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_siteuse_material FOREIGN KEY(material_id) REFERENCES materials(id),
+    CONSTRAINT fk_siteuse_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_siteuse_user FOREIGN KEY(recorded_by) REFERENCES users(id),
+    INDEX idx_siteuse_project(project_id,material_id,consumed_on)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS site_material_counts (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,material_id BIGINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NOT NULL,counted_quantity DECIMAL(14,3) NOT NULL,
+    baseline_issued DECIMAL(14,3) NOT NULL,baseline_consumed DECIMAL(14,3) NOT NULL,
+    notes VARCHAR(500) NULL,counted_by BIGINT UNSIGNED NOT NULL,
+    counted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_sitecount_material FOREIGN KEY(material_id) REFERENCES materials(id),
+    CONSTRAINT fk_sitecount_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_sitecount_user FOREIGN KEY(counted_by) REFERENCES users(id),
+    INDEX idx_sitecount_latest(project_id,material_id,id)
+  ) ENGINE=InnoDB`);
+  await addForeignKey('boq_items','fk_boqitem_subrate',
+    'CONSTRAINT fk_boqitem_subrate FOREIGN KEY(subcontract_rate_id) REFERENCES subcontractor_project_rates(id)');
+  await addForeignKey('client_invoice_items','fk_invoiceitem_quoteline',
+    'CONSTRAINT fk_invoiceitem_quoteline FOREIGN KEY(quotation_item_id) REFERENCES quotation_items(id)');
+}
+
+async function createFleetHistoryTables() {
+  await addColumn('vehicle_maintenance','maintenance_kind',"ENUM('Service','Repair','Inspection') NOT NULL DEFAULT 'Service'");
+  await addColumn('vehicle_maintenance','project_id','BIGINT UNSIGNED NULL');
+  await addForeignKey('vehicle_maintenance','fk_vehmaint_project',
+    'CONSTRAINT fk_vehmaint_project FOREIGN KEY(project_id) REFERENCES projects(id)');
+  await query(`CREATE TABLE IF NOT EXISTS vehicle_driver_assignments (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,vehicle_id BIGINT UNSIGNED NOT NULL,
+    employee_id BIGINT UNSIGNED NULL,driver_name VARCHAR(120) NOT NULL,
+    project_id BIGINT UNSIGNED NULL,assigned_on DATE NOT NULL,ended_on DATE NULL,
+    notes VARCHAR(500) NULL,assigned_by BIGINT UNSIGNED NULL,
+    CONSTRAINT fk_vdriver_vehicle FOREIGN KEY(vehicle_id) REFERENCES fleet(id),
+    CONSTRAINT fk_vdriver_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
+    CONSTRAINT fk_vdriver_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_vdriver_user FOREIGN KEY(assigned_by) REFERENCES users(id),
+    INDEX idx_vdriver_vehicle(vehicle_id,ended_on,assigned_on)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS vehicle_odometer_readings (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,vehicle_id BIGINT UNSIGNED NOT NULL,
+    reading_date DATE NOT NULL,odometer INT UNSIGNED NOT NULL,
+    source ENUM('Manual','Fuel','Service','Repair','Inspection') NOT NULL,
+    source_id BIGINT UNSIGNED NULL,notes VARCHAR(300) NULL,recorded_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_vodo_vehicle FOREIGN KEY(vehicle_id) REFERENCES fleet(id),
+    CONSTRAINT fk_vodo_user FOREIGN KEY(recorded_by) REFERENCES users(id),
+    INDEX idx_vodo_vehicle(vehicle_id,reading_date,id),UNIQUE KEY uq_vodo_source(source,source_id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS vehicle_document_renewals (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,vehicle_id BIGINT UNSIGNED NOT NULL,
+    doc_type VARCHAR(60) NOT NULL,reference VARCHAR(120) NULL,
+    renewed_on DATE NOT NULL,expiry_date DATE NOT NULL,cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+    recorded_by BIGINT UNSIGNED NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_vrenew_vehicle FOREIGN KEY(vehicle_id) REFERENCES fleet(id),
+    CONSTRAINT fk_vrenew_user FOREIGN KEY(recorded_by) REFERENCES users(id),
+    INDEX idx_vrenew_vehicle(vehicle_id,doc_type,renewed_on)
+  ) ENGINE=InnoDB`);
+  await addIndex('vehicle_odometer_readings','uq_vodo_source',
+    'UNIQUE INDEX uq_vodo_source(source,source_id)');
+  await query(`INSERT INTO vehicle_driver_assignments
+    (vehicle_id,employee_id,driver_name,project_id,assigned_on,notes)
+    SELECT f.id,f.driver_employee_id,COALESCE(e.name,f.driver),f.project_id,CURDATE(),
+      'Current driver imported; original assignment date is unknown'
+    FROM fleet f LEFT JOIN employees e ON e.id=f.driver_employee_id
+    WHERE COALESCE(e.name,f.driver) IS NOT NULL AND NOT EXISTS
+      (SELECT 1 FROM vehicle_driver_assignments a WHERE a.vehicle_id=f.id)`);
+  await query(`INSERT INTO vehicle_odometer_readings
+    (vehicle_id,reading_date,odometer,source,source_id,notes,recorded_by)
+    SELECT f.vehicle_id,f.fuel_date,f.odometer,'Fuel',f.id,'Imported from existing fuel record',f.created_by
+    FROM fuel_records f WHERE f.odometer>0 AND NOT EXISTS
+      (SELECT 1 FROM vehicle_odometer_readings r WHERE r.source='Fuel' AND r.source_id=f.id)`);
+  await query(`INSERT INTO vehicle_odometer_readings
+    (vehicle_id,reading_date,odometer,source,source_id,notes,recorded_by)
+    SELECT m.vehicle_id,m.service_date,m.odometer,m.maintenance_kind,m.id,
+      'Imported from existing workshop record',m.created_by
+    FROM vehicle_maintenance m WHERE m.odometer>0 AND NOT EXISTS
+      (SELECT 1 FROM vehicle_odometer_readings r WHERE r.source_id=m.id
+        AND r.source IN ('Service','Repair','Inspection'))`);
+}
+
 /** Non-destructive upgrades for databases created by an earlier version. */
 async function migrateExistingInstalls() {
   /* The role column was an ENUM, which cannot hold roles the MD invents. It becomes a plain
@@ -1820,9 +2227,70 @@ async function migrateExistingInstalls() {
   await modifyColumn('users', 'role', 'VARCHAR(120) NOT NULL');
   await addColumn('users', 'role_id', 'BIGINT UNSIGNED NULL');
   await addForeignKey('users', 'fk_users_role', 'CONSTRAINT fk_users_role FOREIGN KEY(role_id) REFERENCES roles(id)');
-  await modifyColumn('attendance', 'state', "ENUM('On site','Late','Checked out','Absent','On leave') NOT NULL");
+  await modifyColumn('attendance', 'state', "ENUM('On site','Late','Checked out','Absent','On leave','Business trip') NOT NULL");
   await modifyColumn('stock_movements', 'movement_type', "ENUM('Receipt','Issue','Return','Adjustment','Transfer') NOT NULL");
   await addColumn('materials', 'unit_cost', 'DECIMAL(14,2) NOT NULL DEFAULT 0');
+
+  /* Shared registers deliberately have no company_id. Commercial ownership begins at a
+     project or, for a document raised before a project exists, on that document itself. */
+  await addColumn('projects', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('projects', 'fk_project_company', 'CONSTRAINT fk_project_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addIndex('projects', 'idx_project_company', 'INDEX idx_project_company(company_id,active)');
+  await addColumn('inquiries', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('inquiries', 'fk_inquiry_company', 'CONSTRAINT fk_inquiry_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addColumn('quotations_client', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('quotations_client', 'fk_quote_company', 'CONSTRAINT fk_quote_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addColumn('tenders', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('tenders', 'fk_tender_company', 'CONSTRAINT fk_tender_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addColumn('employees', 'payroll_company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('employees', 'fk_employee_payroll_company', 'CONSTRAINT fk_employee_payroll_company FOREIGN KEY(payroll_company_id) REFERENCES companies(id)');
+  await addColumn('payroll_runs', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('payroll_runs', 'fk_payroll_company', 'CONSTRAINT fk_payroll_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await dropIndex('payroll_runs', 'uq_payroll_period_frequency');
+  await addIndex('payroll_runs', 'uq_payroll_company_period_frequency',
+    'UNIQUE KEY uq_payroll_company_period_frequency(company_id,period_start,period_end,pay_frequency)');
+  await addColumn('payroll_policies', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('payroll_policies', 'fk_payroll_policy_company', 'CONSTRAINT fk_payroll_policy_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await dropIndex('payroll_policies', 'effective_from');
+  await addIndex('payroll_policies', 'uq_payroll_policy_company_date',
+    'UNIQUE KEY uq_payroll_policy_company_date(company_id,effective_from)');
+  await query(`INSERT INTO payroll_policies
+    (company_id,effective_from,office_ot_rate,site_labour_site_ot_rate,site_labour_travel_ot_rate,
+     driver_ot_rate,supervisor_site_ot_rate,supervisor_travel_ot_rate)
+    SELECT 2,'2000-01-01',225,200,100,225,225,100
+    WHERE NOT EXISTS (SELECT 1 FROM payroll_policies WHERE company_id=2)`);
+  await addColumn('supplier_invoices', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addColumn('supplier_invoices', 'net_amount', 'DECIMAL(15,2) NOT NULL DEFAULT 0');
+  await addColumn('supplier_invoices', 'tax_treatment', "ENUM('Standard','Exempt') NOT NULL DEFAULT 'Exempt'");
+  await addColumn('supplier_invoices', 'vat_rate', 'DECIMAL(5,2) NOT NULL DEFAULT 0');
+  await addColumn('supplier_invoices', 'vat_amount', 'DECIMAL(15,2) NOT NULL DEFAULT 0');
+  await query('UPDATE supplier_invoices SET net_amount=amount WHERE net_amount=0');
+  await addForeignKey('supplier_invoices', 'fk_supplier_invoice_company', 'CONSTRAINT fk_supplier_invoice_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addColumn('issued_cheques', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('issued_cheques', 'fk_issued_cheque_company', 'CONSTRAINT fk_issued_cheque_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addColumn('received_cheques', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('received_cheques', 'fk_received_cheque_company', 'CONSTRAINT fk_received_cheque_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addColumn('bank_bonds', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addColumn('bank_bonds', 'reminder_days', 'SMALLINT UNSIGNED NOT NULL DEFAULT 30');
+  await addForeignKey('bank_bonds', 'fk_bond_company', 'CONSTRAINT fk_bond_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addColumn('petty_cash_floats', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('petty_cash_floats', 'fk_float_company', 'CONSTRAINT fk_float_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addColumn('subcontractor_quotations', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addForeignKey('subcontractor_quotations', 'fk_subquote_company', 'CONSTRAINT fk_subquote_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+
+  /* Project ownership wins over legacy defaults. Pre-project tenders are recognised from
+     the entity name already stored in the old bidding-entity field. */
+  await query('UPDATE inquiries i JOIN projects p ON p.id=i.project_id SET i.company_id=p.company_id');
+  await query(`UPDATE quotations_client q LEFT JOIN projects p ON p.id=q.project_id
+    LEFT JOIN inquiries i ON i.id=q.inquiry_id SET q.company_id=COALESCE(p.company_id,i.company_id,q.company_id)`);
+  await query(`UPDATE tenders SET company_id=2 WHERE LOWER(COALESCE(bidding_entity,'')) REGEXP 'ready[ ]?mix|readymix'`);
+  await query('UPDATE tenders t JOIN projects p ON p.id=t.project_id SET t.company_id=p.company_id');
+  await query('UPDATE supplier_invoices si JOIN purchase_orders po ON po.id=si.order_id JOIN projects p ON p.id=po.project_id SET si.company_id=p.company_id');
+  await query('UPDATE issued_cheques c JOIN supplier_invoices si ON si.id=c.invoice_id SET c.company_id=si.company_id');
+  await query('UPDATE received_cheques c JOIN projects p ON p.id=c.project_id SET c.company_id=p.company_id');
+  await query('UPDATE bank_bonds b JOIN projects p ON p.id=b.project_id SET b.company_id=p.company_id');
+  await query('UPDATE petty_cash_floats f JOIN projects p ON p.id=f.project_id SET f.company_id=p.company_id');
+  await query('UPDATE subcontractor_quotations q JOIN projects p ON p.id=q.project_id SET q.company_id=p.company_id');
   await addColumn('stock_movements', 'project_id', 'BIGINT UNSIGNED NULL');
   await addColumn('stock_movements', 'destination', 'VARCHAR(180) NULL');
   await addColumn('fleet', 'project_id', 'BIGINT UNSIGNED NULL');
@@ -1859,10 +2327,30 @@ async function migrateExistingInstalls() {
   await addColumn('boqs', 'terms', 'TEXT NULL');
   await addColumn('employees', 'biometric_id', 'VARCHAR(40) NULL');
   await addIndex('employees', 'uq_employee_biometric', 'UNIQUE KEY uq_employee_biometric(biometric_id)');
+  /* Office employees may normally work at head office or be sent to a site. Site workers
+     are either allocated to a site or available. Nullable first lets legacy rows be
+     classified once without overwriting later HR decisions on every restart. */
+  await addColumn('employees', 'worker_type', "ENUM('Office','Site') NULL");
+  await query(`UPDATE employees e LEFT JOIN departments d ON d.id=e.department_id
+    SET e.worker_type=CASE
+      WHEN LOWER(COALESCE(d.name,'')) REGEXP 'human resources|(^| )hr($| )|account|finance|administration|(^| )admin($| )|quantity survey|(^| )qs($| )'
+        THEN 'Office' ELSE 'Site' END
+    WHERE e.worker_type IS NULL`);
+  if (await columnIsNullable('employees', 'worker_type'))
+    await query("ALTER TABLE employees MODIFY worker_type ENUM('Office','Site') NOT NULL DEFAULT 'Site'");
   /* A day with a single punch cannot say whether the person arrived or left; it is imported
      but flagged, so payroll is never quietly built on a guess. */
   await addColumn('attendance', 'needs_review', 'TINYINT(1) NOT NULL DEFAULT 0');
   await addColumn('attendance', 'source', "VARCHAR(20) NOT NULL DEFAULT 'Manual'");
+  await addColumn('attendance', 'work_location', "ENUM('Office','Site') NOT NULL DEFAULT 'Site'");
+  if (!(await columnIsNullable('attendance', 'project_id')))
+    await query('ALTER TABLE attendance MODIFY project_id BIGINT UNSIGNED NULL');
+  await addColumn('expenses', 'boq_item_id', 'BIGINT UNSIGNED NULL');
+  await addColumn('expenses', 'cost_type', "ENUM('Expected','Variation','Unexpected') NOT NULL DEFAULT 'Expected'");
+  await addColumn('expenses', 'quantity', 'DECIMAL(14,3) NULL');
+  await addColumn('expenses', 'unit', 'VARCHAR(30) NULL');
+  await addColumn('expenses', 'unit_rate', 'DECIMAL(14,2) NULL');
+  await addForeignKey('expenses', 'fk_expense_boq_item', 'CONSTRAINT fk_expense_boq_item FOREIGN KEY(boq_item_id) REFERENCES boq_items(id)');
   await addForeignKey('fleet', 'fk_fleet_driver', 'CONSTRAINT fk_fleet_driver FOREIGN KEY(driver_employee_id) REFERENCES employees(id)');
   await addIndex('notifications', 'uq_notification_dedupe', 'UNIQUE KEY uq_notification_dedupe(dedupe_key)');
   await addForeignKey('attendance', 'fk_attendance_employee', 'CONSTRAINT fk_attendance_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');
@@ -2012,6 +2500,7 @@ async function seedAccessControl() {
 }
 
 export async function migrate() {
+  await createCompaniesTable();
   await createCoreTables();
   await createHrTables();
   await createProjectDetailTables();
@@ -2044,6 +2533,8 @@ export async function migrate() {
   await createOptionTables();
   await createBoqImportTables();
   await migrateExistingInstalls();
+  await createConstructionOperationsTables();
+  await createFleetHistoryTables();
   await seedWorkMethods();
   await seedAccessControl();
 }
