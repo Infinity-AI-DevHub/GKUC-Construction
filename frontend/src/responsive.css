@@ -2704,4 +2704,6 @@ table.register thead .register-name { background: #f3f6f7 }
 @media(max-width:430px){.cost-control-summary{grid-template-columns:1fr}.cost-comparison-visual>div{grid-template-columns:85px 1fr}.cost-comparison-visual strong{grid-column:2;text-align:left}.cost-category-panel,.daily-cost-panel{padding:16px}}
 .identity-actions{flex-wrap:wrap}.identity-actions .form-error{flex-basis:100%;max-width:420px;line-height:1.45}
 .import-commit>.form-error{flex-basis:100%;line-height:1.45}
+.import-partial-confirm{display:grid;gap:8px;flex-basis:100%;padding:14px 16px;border:1px solid #e5b76a;border-radius:10px;background:#fff8ed;color:#553b16;line-height:1.5}
+.import-partial-confirm strong{font-size:14px}.import-partial-confirm span{font-size:13px}.import-partial-confirm>div{display:flex;gap:8px;flex-wrap:wrap}.import-partial-confirm button{min-height:38px}
 @media(max-width:760px){.identity-actions .form-error{grid-column:1/-1;max-width:none}}
