@@ -131,7 +131,7 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
   const found = await getOne(`${listQuery} WHERE e.id=?`, [req.params.id]);
   if (!found) return res.status(404).json({ error: 'Employee not found' });
   const employee = forViewer(req, found);
-  const [leave, overtime, documents, attendance, projects, tasks, reports, reviews] = await Promise.all([
+  const [leave, overtime, documents, attendance, projects, tasks, reports, reviews, biometricIds] = await Promise.all([
     query('SELECT id,leave_type leaveType,from_date fromDate,to_date toDate,days,reason,status FROM leave_requests WHERE employee_id=? ORDER BY id DESC', [employee.id]),
     query(`SELECT o.id,o.work_date workDate,o.overtime_type overtimeType,o.hours,o.rate,o.status,p.name project FROM overtime_records o
       LEFT JOIN projects p ON p.id=o.project_id WHERE o.employee_id=? ORDER BY o.id DESC`, [employee.id]),
@@ -149,7 +149,8 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
       ? query(`SELECT r.id,r.review_date reviewDate,r.period,r.quality,r.productivity,r.safety,r.reliability,r.overall,
           r.strengths,r.improvements,u.name reviewer FROM performance_reviews r JOIN users u ON u.id=r.reviewer_id
           WHERE r.employee_id=? ORDER BY r.review_date`, [employee.id])
-      : Promise.resolve([])
+      : Promise.resolve([]),
+    query('SELECT code FROM employee_biometric_ids WHERE employee_id=? ORDER BY code', [employee.id])
   ]);
   const presentStates = new Set(['On site', 'Late', 'Checked out', 'Business trip']);
   const monthMap = new Map();
@@ -179,7 +180,7 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
   const completedTasks = tasks.filter(task => ['Completed', 'Approved'].includes(task.status)).length;
   const averagePerformance = reviews.length
     ? Number((reviews.reduce((sum, review) => sum + Number(review.overall), 0) / reviews.length).toFixed(1)) : null;
-  res.json({ ...employee, leave, overtime, documents, attendance, projects, tasks, reports, reviews, monthlyTrend,
+  res.json({ ...employee, biometricIds: biometricIds.map(row => row.code), leave, overtime, documents, attendance, projects, tasks, reports, reviews, monthlyTrend,
     attendanceStats, workStats: { tasks: tasks.length, completedTasks, reports: reports.length, averagePerformance } });
 }));
 

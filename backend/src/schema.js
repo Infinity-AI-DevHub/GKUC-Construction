@@ -2332,6 +2332,17 @@ async function migrateExistingInstalls() {
   await addColumn('boqs', 'terms', 'TEXT NULL');
   await addColumn('employees', 'biometric_id', 'VARCHAR(40) NULL');
   await addIndex('employees', 'uq_employee_biometric', 'UNIQUE KEY uq_employee_biometric(biometric_id)');
+  /* A person may have been enrolled under several terminal numbers. Keep the legacy
+     display column, but match imports through this many-to-one identity register. */
+  await query(`CREATE TABLE IF NOT EXISTS employee_biometric_ids (
+    code VARCHAR(40) NOT NULL PRIMARY KEY,
+    employee_id BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_biometric_identity_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
+    INDEX idx_biometric_identity_employee(employee_id)
+  ) ENGINE=InnoDB`);
+  await query(`INSERT IGNORE INTO employee_biometric_ids (code,employee_id)
+    SELECT biometric_id,id FROM employees WHERE biometric_id IS NOT NULL AND biometric_id<>''`);
   /* Office employees may normally work at head office or be sent to a site. Site workers
      are either allocated to a site or available. Nullable first lets legacy rows be
      classified once without overwriting later HR decisions on every restart. */
