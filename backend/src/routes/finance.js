@@ -326,9 +326,12 @@ router.get('/reporting', auth, permit('finance.view','finance.manage'), wrap(asy
     query(`SELECT pce.id,COALESCE(pce.project_id,pcf.project_id) projectId,
       COALESCE(p.name,'Head office') project,pcf.name floatName,pce.kind,pce.entry_date date,
       pcf.account_type accountType,pce.description,pce.category,pce.amount,
-      pce.employee_id employeeId,emp.name employee FROM petty_cash_entries pce
+      pce.employee_id employeeId,emp.name employee,fr.vehicle_id vehicleId,
+      fv.vehicle vehicle,fv.registration registration FROM petty_cash_entries pce
       JOIN petty_cash_floats pcf ON pcf.id=pce.float_id
       LEFT JOIN employees emp ON emp.id=pce.employee_id
+      LEFT JOIN fuel_records fr ON fr.id=pce.fuel_record_id
+      LEFT JOIN fleet fv ON fv.id=fr.vehicle_id
       LEFT JOIN projects p ON p.id=COALESCE(pce.project_id,pcf.project_id)
       ${pc.where} ORDER BY pce.entry_date,pce.id`, pc.params),
     query(`SELECT r.id,r.project_id projectId,p.name project,r.description,r.amount,r.percent,

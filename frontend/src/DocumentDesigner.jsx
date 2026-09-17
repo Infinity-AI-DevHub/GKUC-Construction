@@ -116,6 +116,10 @@ export default function DocumentDesigner({ can }) {
           headers: { 'content-type': 'application/json', ...(stored ? { Authorization: `Bearer ${stored}` } : {}) },
           body: JSON.stringify({ design })
         });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || 'The document preview could not be updated. Check your connection and try again.');
+        }
         setPreview(await response.text());
       } catch (failure) { setError(failure.message); }
     }, 280);

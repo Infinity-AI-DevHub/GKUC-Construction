@@ -2702,3 +2702,6 @@ table.register thead .register-name { background: #f3f6f7 }
 @media(max-width:1050px){.cost-control-hero{grid-template-columns:1fr 1fr}.cost-control-hero>div{grid-column:1/-1}.cost-control-summary{grid-template-columns:1fr 1fr}.cost-intelligence-grid{grid-template-columns:1fr}}
 @media(max-width:720px){.cost-control-hero{grid-template-columns:1fr;padding:20px}.cost-control-hero>div{grid-column:auto}.cost-control-hero .primary{width:100%}.cost-health-panel{grid-template-columns:1fr}.cost-comparison-visual>div{grid-template-columns:100px 1fr 100px}.cost-category-panel>article{grid-template-columns:80px 1fr}.cost-category-panel>article>span{grid-column:1/-1;text-align:left}.cost-section-heading{align-items:flex-start}.cost-control-summary{gap:8px}.cost-control-summary article{padding:14px}.cost-control-summary strong{font-size:15px}}
 @media(max-width:430px){.cost-control-summary{grid-template-columns:1fr}.cost-comparison-visual>div{grid-template-columns:85px 1fr}.cost-comparison-visual strong{grid-column:2;text-align:left}.cost-category-panel,.daily-cost-panel{padding:16px}}
+.identity-actions{flex-wrap:wrap}.identity-actions .form-error{flex-basis:100%;max-width:420px;line-height:1.45}
+.import-commit>.form-error{flex-basis:100%;line-height:1.45}
+@media(max-width:760px){.identity-actions .form-error{grid-column:1/-1;max-width:none}}

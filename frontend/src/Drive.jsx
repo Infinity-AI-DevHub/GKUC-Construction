@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Folder, FolderPlus, Upload, File, FileText, FileSpreadsheet, Image, Video, Archive, PenTool, ChevronRight, Users, Globe, Lock, Share2, Download, Trash2, X, Check, Link2, Search, UserPlus } from 'lucide-react';
-import { api, post, del, fileSize, shortDate } from './api.js';
+import { api, post, del, fileSize, shortDate, fetchDownload } from './api.js';
 import { Avatar, useLiveList } from './ui.jsx';
 
 /*
@@ -54,15 +54,7 @@ export default function Drive({ user }) {
       form.append('file', file);
       if (folder) form.append('parentId', String(folder));
       try {
-        const response = await fetch('/api/drive/files', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${sessionStorage.getItem('gkuc-token')}` },
-          body: form
-        });
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          throw new Error(body.error || `${file.name} could not be uploaded`);
-        }
+        await api('/drive/files', { method: 'POST', body: form });
       } catch (failure) { setError(failure.message); }
     }
     setBusy('');
@@ -84,11 +76,8 @@ export default function Drive({ user }) {
   }, [rows, search]);
 
   const download = item => {
-    const url = `/api/drive/items/${item.id}/download`;
-    fetch(url, { headers: { Authorization: `Bearer ${sessionStorage.getItem('gkuc-token')}` } })
-      .then(response => (response.ok ? response.blob() : Promise.reject(new Error('Could not download that'))))
-      .then(blob => {
-        const href = URL.createObjectURL(blob);
+    fetchDownload(`/drive/items/${item.id}/download`)
+      .then(href => {
         const link = document.createElement('a');
         link.href = href;
         link.download = item.name;

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Upload, AlertTriangle, Info, Check, X, FileSpreadsheet, Loader2, PencilLine, Wand2, Paperclip } from 'lucide-react';
-import { api, post, del, rupees, token, announceDataChanged, fetchDownload } from './api.js';
+import { api, post, del, rupees, announceDataChanged, fetchDownload } from './api.js';
 
 /*
  * Bringing a bill of quantities in from a spreadsheet.
@@ -27,11 +27,7 @@ export default function BoqImport({ projects, onDone, onCreate }) {
   const downloadTemplate = async () => {
     setError('');
     try {
-      const response = await fetch(`/api/boq/template${projectId ? `?projectId=${projectId}` : ''}`, {
-        headers: { Authorization: `Bearer ${token.get()}` }
-      });
-      if (!response.ok) throw new Error('The template could not be prepared');
-      const url = URL.createObjectURL(await response.blob());
+      const url = await fetchDownload(`/boq/template${projectId ? `?projectId=${projectId}` : ''}`);
       const link = document.createElement('a');
       link.href = url;
       link.download = 'GKUC-BOQ-template.xlsx';
@@ -48,13 +44,7 @@ export default function BoqImport({ projects, onDone, onCreate }) {
       const form = new FormData();
       form.append('file', file);
       if (projectId) form.append('projectId', projectId);
-      const response = await fetch('/api/boq/import', {
-        method: 'POST', headers: { Authorization: `Bearer ${token.get()}` }, body: form
-      });
-      const text = await response.text();
-      let body = null;
-      try { body = JSON.parse(text); } catch { body = null; }
-      if (!response.ok) throw new Error(body?.error || `The file could not be read (${response.status}).`);
+      const body = await api('/boq/import', { method: 'POST', body: form });
       setStaged(body);
       if (body.projectId) setProjectId(String(body.projectId));
     } catch (failure) {

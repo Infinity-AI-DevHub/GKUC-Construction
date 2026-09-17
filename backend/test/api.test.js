@@ -383,7 +383,7 @@ test('invoice receipts cannot post twice and preserve the actual payment method'
 test('concurrent petty-cash spends cannot overdraw the float or duplicate project cost', async () => {
   const owner = await login();
   const opened = await call(owner, 'POST', '/receivables/petty-cash', {
-    name: `Audit float ${Date.now()}`, accountType: 'Fuel', holderName: 'Finance desk', projectId: 1,
+    name: `Audit float ${Date.now()}`, accountType: 'Office expenses', holderName: 'Finance desk', projectId: 1,
     ceiling: 2000, lowAt: 500
   });
   assert.equal(opened.status, 201);
@@ -957,8 +957,84 @@ test('logging a service resets the vehicle service schedule', async () => {
   assert.equal(vehicle.service.kmRemaining, 5000);
 });
 
+test('fleet fuel draws one funded float movement and one project expense without double entry', async () => {
+  const owner = await login();
+  const transport = await login('transport@gkuc.lk');
+  const opened = await call(owner, 'POST', '/receivables/petty-cash', {
+    name: `Fuel float ${Date.now()}`, accountType: 'Fuel', holderName: 'Transport desk',
+    projectId: 1, ceiling: 15000, lowAt: 2000
+  });
+  assert.equal(opened.status, 201);
+  const floatId = opened.body.id;
+  const entriesPath = `/receivables/petty-cash/${floatId}/entries`;
+  assert.equal((await call(owner, 'POST', entriesPath, {
+    kind: 'Top up', amount: 15000, entryDate: today(), description: 'Fuel funding'
+  })).status, 201);
+  assert.equal((await call(owner, 'POST', entriesPath, {
+    kind: 'Spend', amount: 1000, entryDate: today(), description: 'Should be entered in Fleet'
+  })).status, 400);
+  const available = await call(transport, 'GET', '/fleet/fuel-floats?companyId=1');
+  assert.equal(available.status, 200);
+  assert.equal(Number(available.body.find(row => row.id === floatId).balance), 15000);
+
+  const vehicle = await call(owner, 'POST', '/fleet', {
+    vehicle: 'Float-linked test truck', registration: `TEST-FLOAT-${Date.now()}`,
+    status: 'Available', renewal: 'Insurance', dueDate: today(), projectId: 1, odometer: 100
+  });
+  assert.equal(vehicle.status, 201);
+  const path = `/fleet/${vehicle.body.id}/fuel`;
+  const fuel = cost => ({ fuelFloatId: floatId, projectId: 1, fuelDate: today(), litres: 20,
+    cost, odometer: 120 });
+  const overdraw = await call(transport, 'POST', path, fuel(16000));
+  assert.equal(overdraw.status, 409);
+  assert.match(overdraw.body.error, /15,000/);
+  const saved = await call(transport, 'POST', path, fuel(12000));
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+
+  const ledger = await call(owner, 'GET', entriesPath);
+  const linked = ledger.body.filter(row => row.fuelRecordId === saved.body.id);
+  assert.equal(linked.length, 1);
+  assert.equal(linked[0].vehicleId, vehicle.body.id);
+  assert.equal(Number(linked[0].amount), -12000);
+  const floats = await call(owner, 'GET', '/receivables/petty-cash?companyId=1');
+  assert.equal(Number(floats.body.find(row => row.id === floatId).balance), 3000);
+  const expenses = (await call(owner, 'GET', '/finance/expenses?projectId=1')).body;
+  assert.equal(expenses.filter(row => row.originType === 'fuel_record' && row.description.includes('Float-linked test truck')).length, 1);
+  assert.equal(expenses.filter(row => row.originType === 'petty_cash' && row.description.includes('Float-linked test truck')).length, 0);
+  assert.equal((await call(transport, 'POST', path, fuel(4000))).status, 409);
+  const concurrent = await Promise.all([1, 2].map(() => call(transport, 'POST', path, {
+    ...fuel(2000), odometer: 130
+  })));
+  assert.deepEqual(concurrent.map(result => result.status).sort(), [201, 409]);
+  const balanceAfter = (await call(owner, 'GET', '/receivables/petty-cash?companyId=1')).body
+    .find(row => row.id === floatId).balance;
+  assert.equal(Number(balanceAfter), 1000);
+
+  const otherCompany = await call(owner, 'POST', '/receivables/petty-cash', {
+    companyId: 2, name: `Other company fuel ${Date.now()}`, accountType: 'Fuel',
+    holderName: 'Readymix desk', ceiling: 10000, lowAt: 1000
+  });
+  assert.equal(otherCompany.status, 201);
+  assert.equal((await call(owner, 'POST', `/receivables/petty-cash/${otherCompany.body.id}/entries`, {
+    kind: 'Top up', amount: 10000, entryDate: today(), description: 'Readymix funding'
+  })).status, 201);
+  const wrongCompany = await call(transport, 'POST', path, {
+    ...fuel(500), odometer: 140, fuelFloatId: otherCompany.body.id
+  });
+  assert.equal(wrongCompany.status, 400);
+  assert.match(wrongCompany.body.error, /different company/);
+});
+
 test('fleet histories preserve driver handovers, odometer, repairs and renewals',async()=>{
   const owner=await login();
+  const fuelFloat=await call(owner,'POST','/receivables/petty-cash',{
+    name:`Fleet history fuel ${Date.now()}`,accountType:'Fuel',holderName:'Transport desk',projectId:1,
+    ceiling:20000,lowAt:1000
+  });
+  assert.equal(fuelFloat.status,201);
+  assert.equal((await call(owner,'POST',`/receivables/petty-cash/${fuelFloat.body.id}/entries`,{
+    kind:'Top up',amount:20000,entryDate:today(),description:'Fleet history test funding'
+  })).status,201);
   const created=await call(owner,'POST','/fleet',{vehicle:'Test site tipper',registration:`TEST-FLEET-${Date.now()}`,
     status:'Assigned',renewal:'Insurance',dueDate:today(),projectId:1,odometer:1000,
     serviceIntervalKm:1000,driver:'Initial Driver'});
@@ -967,7 +1043,7 @@ test('fleet histories preserve driver handovers, odometer, repairs and renewals'
   assert.equal(detail.drivers.length,1);
   assert.equal(detail.renewals.length,1);
   assert.equal(detail.readings.length,1);
-  assert.equal((await call(owner,'POST',`/fleet/${id}/fuel`,{fuelDate:today(),litres:40,cost:12000,
+  assert.equal((await call(owner,'POST',`/fleet/${id}/fuel`,{fuelFloatId:fuelFloat.body.id,fuelDate:today(),litres:40,cost:12000,
     odometer:1100,projectId:1})).status,201);
   assert.equal((await call(owner,'POST',`/fleet/${id}/odometer`,{readingDate:today(),odometer:1050})).status,409);
   assert.equal((await call(owner,'POST',`/fleet/${id}/odometer`,{readingDate:today(),odometer:1150,
@@ -1082,6 +1158,39 @@ test('HR reconciles a new scanner identity and records historical site attendanc
   assert.equal(analytics.body.weekly.series.length, 7);
   assert.equal(analytics.body.monthly.series.length, 30);
   assert.ok(Array.isArray(analytics.body.lowAttendance));
+});
+
+test('HR links an existing person from a scanner preview and imports the matched day', async () => {
+  const authToken = await login();
+  const employee = (await call(authToken, 'GET', '/employees')).body.find(person => !person.biometricId);
+  assert.ok(employee, 'a seeded employee without a scanner number is available');
+  const scannerCode = 'TEST-LINK-205';
+  const date = shift(-70);
+  const file = new FormData();
+  file.append('file', new Blob([`ID,Name,Date,In,Out\n${scannerCode},${employee.name},${date},08:00,17:00\n`], { type: 'text/csv' }), 'scanner.csv');
+  const preview = async () => {
+    const response = await fetch(`${base}/biometric/preview`, {
+      method: 'POST', headers: { authorization: `Bearer ${authToken}` }, body: file
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const before = await preview();
+  assert.equal(before.status, 200);
+  assert.equal(before.body.summary.unmatched, 1);
+  assert.equal(before.body.unknownDevices[0].suggestedEmployeeId, employee.id);
+
+  const linked = await call(authToken, 'POST', '/biometric/mappings', { code: scannerCode, employeeId: employee.id });
+  assert.equal(linked.status, 200, JSON.stringify(linked.body));
+  const after = await preview();
+  assert.equal(after.status, 200);
+  assert.equal(after.body.summary.unmatched, 0);
+  assert.equal(after.body.rows[0].employeeId, employee.id);
+
+  const imported = await call(authToken, 'POST', '/biometric/commit', {
+    projectId: 1, workLocation: 'Site', filename: 'scanner.csv', rows: after.body.rows
+  });
+  assert.equal(imported.status, 201, JSON.stringify(imported.body));
+  assert.equal(imported.body.inserted, 1);
 });
 
 test('workforce map distinguishes office presence, site allocation and free workers', async () => {

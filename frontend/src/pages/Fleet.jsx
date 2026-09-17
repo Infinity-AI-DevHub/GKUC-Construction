@@ -24,13 +24,13 @@ function QrCodeImage({ value }) {
 }
 
 /** PID 2.8 and 2.9 — vehicles with their compliance dates, and equipment with its whereabouts. */
-export default function Fleet({ data, reload, can }) {
+export default function Fleet({ data, reload, can, companyId }) {
   const tabs = allowedTabs(TABS, can);
   const [tab, setTab] = useState(tabs[0]);
   const [open, setOpen] = useState('');
   const [vehicles,setVehicles]=useState(data.fleet);
   useLiveList(()=>api('/fleet').then(setVehicles).catch(()=>{}));
-  const fleetData={...data,fleet:vehicles};
+  const fleetData={...data,fleet:vehicles,companyId};
 
   const actions = {
     Vehicles: can.transport && 'Add asset',
@@ -132,7 +132,7 @@ function VehicleDetail({ vehicle, data, close, can, refresh }) {
           title="Fuel records" empty="No fuel recorded.">
           {vehicle.fuel.map(row => <Row template="130px 90px 120px 110px minmax(140px,1fr)" key={row.id}>
             <span>{shortDate(row.fuelDate)}</span><span>{row.litres}</span><span>{rupees(row.cost)}</span>
-            <span>{row.odometer}</span><span>{row.project || '—'}</span>
+            <span>{row.odometer}</span><span>{row.project || '—'}{row.fuelFloat ? <small>Paid from {row.fuelFloat}</small> : null}</span>
           </Row>)}
         </Table>
       </div>
@@ -248,7 +248,7 @@ function FuelAndService({ data }) {
       <span>{row.litres}</span>
       <span>{rupees(row.cost)}</span>
       <span>{row.odometer}</span>
-      <span>{row.project || '—'}</span>
+      <span>{row.project || '—'}{row.fuelFloat ? <small>Paid from {row.fuelFloat}</small> : null}</span>
     </Row>)}
   </Table>;
 }
@@ -431,8 +431,17 @@ function DocumentForm({ data, vehicle, close, reload }) {
 }
 
 function FuelForm({ data, vehicle, close, reload }) {
+  const [floats, setFloats] = useState([]);
+  const [fuelFloatId, setFuelFloatId] = useState('');
+  useEffect(() => {
+    setFuelFloatId('');
+    api(`/fleet/fuel-floats?companyId=${data.companyId}`).then(setFloats).catch(() => setFloats([]));
+  }, [data.companyId]);
+  const selectedFloat = floats.find(float => String(float.id) === fuelFloatId);
   return <FormModal title="Record fuel" close={close} label="Save fuel record" onSubmit={async values => {
+    if (!values.fuelFloatId) throw new Error('Choose a funded fuel float. Finance can open and top one up first.');
     await post(`/fleet/${vehicle?.id||values.vehicleId}/fuel`, {
+      fuelFloatId: Number(values.fuelFloatId),
       projectId: values.projectId ? Number(values.projectId) : null,
       fuelDate: values.fuelDate,
       litres: Number(values.litres),
@@ -442,10 +451,17 @@ function FuelForm({ data, vehicle, close, reload }) {
     await reload();
   }}>
     <SelectField name="vehicleId" label="Vehicle" options={(vehicle?[vehicle]:data.fleet).map(item => [item.id, `${item.vehicle} — ${item.reg}`])} />
+    <label>Fuel float <span aria-hidden="true">*</span><select name="fuelFloatId" value={fuelFloatId}
+      onChange={event => setFuelFloatId(event.target.value)} required>
+      <option value="">Choose a funded fuel float…</option>
+      {floats.map(float => <option key={float.id} value={float.id}>{float.name} — {rupees(float.balance)} available</option>)}
+    </select></label>
+    {!floats.length && <p className="form-note wide">There is no fuel float for this company. Open and top up one in Finance → Petty cash first.</p>}
+    {selectedFloat && <p className="form-note wide">Available in this float: {rupees(selectedFloat.balance)}. The amount entered below cannot exceed it.</p>}
     <SelectField name="projectId" label="Charge to project" options={[["",'Not project-specific'], ...data.projects.map(project => [project.id, project.name])]} defaultValue={vehicle?.projectId||''}/>
     <Field name="fuelDate" label="Date" type="date" defaultValue={todayInput()} />
     <Field name="litres" label="Litres" type="number" step="any" min="0" />
-    <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" />
+    <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" max={selectedFloat ? Number(selectedFloat.balance) : undefined} />
     <Field name="odometer" label="Odometer" type="number" min={vehicle?.odometer||1} defaultValue={vehicle?.odometer||''} />
   </FormModal>;
 }

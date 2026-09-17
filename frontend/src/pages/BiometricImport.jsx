@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Link2, UserPlus, Upload } from 'lucide-react';
-import { api, post, shortDate, slug, token } from '../api.js';
+import { api, post, shortDate, slug } from '../api.js';
+import { notice } from '../notices.js';
 import { Badge, Row, Summary, Table } from '../ui.jsx';
 
 /**
@@ -17,31 +18,28 @@ export default function BiometricImport({ data, can, reload }) {
   const [workLocation, setWorkLocation] = useState('Site');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [commitError, setCommitError] = useState('');
   const [result, setResult] = useState(null);
   const [choices, setChoices] = useState({});
+  const [identityErrors, setIdentityErrors] = useState({});
   const input = useRef(null);
   const lastFile = useRef(null);
 
-  const read = async file => {
-    setBusy(true); setError(''); setResult(null); setPreview(null);
+  const read = async (file, keepPreview = false) => {
+    setBusy(true); setError(''); setResult(null);
+    if (!keepPreview) { setPreview(null); setIdentityErrors({}); }
     try {
       const form = new FormData();
       form.append('file', file);
-      const stored = token.get();
-      const response = await fetch('/api/biometric/preview', {
-        method: 'POST',
-        headers: stored ? { Authorization: `Bearer ${stored}` } : {},
-        body: form
-      });
-      const body = await response.json();
-      if (!response.ok) {
-        setError(body.error || 'That file could not be read');
-        setPreview({ problems: body.problems || [], columns: body.columns || [], rows: [] });
-        return;
-      }
+      const body = await api('/biometric/preview', { method: 'POST', body: form });
       setPreview(body);
+      return true;
     } catch (failure) {
-      setError(failure.message);
+      setError(`Could not read ${file.name}. ${failure.message} Check that this is the attendance export, then try again.`);
+      if (!keepPreview && failure.details?.problems?.length) {
+        setPreview({ problems: failure.details.problems, columns: failure.details.columns || [], rows: [] });
+      }
+      return false;
     } finally {
       setBusy(false);
       if (input.current) input.current.value = '';
@@ -62,16 +60,21 @@ export default function BiometricImport({ data, can, reload }) {
   const identify = async (code, employeeId) => {
     if (!employeeId) return;
     setBusy(true); setError('');
+    setIdentityErrors(current => ({ ...current, [code]: '' }));
     try {
       await post('/biometric/mappings', { code, employeeId: Number(employeeId), replaceExisting: true });
-      if (lastFile.current) await read(lastFile.current);
+      const refreshed = lastFile.current ? await read(lastFile.current, true) : false;
+      if (refreshed) notice({ title: 'Scanner identity linked', message: `Device #${code} will now match this employee on future imports.`, severity: 'Info' });
+      else setIdentityErrors(current => ({ ...current, [code]: 'The link was saved, but the file preview could not refresh. Choose the export file again to check the match.' }));
     } catch (failure) {
-      setError(failure.message);
+      setIdentityErrors(current => ({ ...current, [code]: `Could not link device #${code}. ${failure.message} Check that you selected the correct employee, then try again.` }));
     } finally { setBusy(false); }
   };
 
   const createPerson = async device => {
     setBusy(true); setError('');
+    setIdentityErrors(current => ({ ...current, [device.code]: '' }));
+    let created = false;
     try {
       await post('/biometric/people', {
         code: device.code,
@@ -79,15 +82,20 @@ export default function BiometricImport({ data, can, reload }) {
         department: device.department || undefined,
         firstDate: device.firstDate
       });
+      created = true;
+      notice({ title: 'Employee profile created', message: `Device #${device.code} is now recognised.`, severity: 'Info' });
+      const refreshed = lastFile.current ? await read(lastFile.current, true) : false;
+      if (!refreshed) setIdentityErrors(current => ({ ...current, [device.code]: 'The profile was created, but the preview could not refresh. Choose the export file again to check the match.' }));
       await reload();
-      if (lastFile.current) await read(lastFile.current);
     } catch (failure) {
-      setError(failure.message);
+      setIdentityErrors(current => ({ ...current, [device.code]: created
+        ? `The profile was created, but staff details could not refresh. ${failure.message} Refresh the page; do not create it again.`
+        : `Could not create a profile for device #${device.code}. ${failure.message} Check the person's details before trying again.` }));
     } finally { setBusy(false); }
   };
 
   const commit = async () => {
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setCommitError('');
     try {
       const usable = preview.rows.filter(row => row.employeeId);
       const outcome = await post('/biometric/commit', {
@@ -104,7 +112,7 @@ export default function BiometricImport({ data, can, reload }) {
       setPreview(null);
       await reload();
     } catch (failure) {
-      setError(failure.message);
+      setCommitError(`Attendance could not be imported. ${failure.message} Your preview is still here; check the site and identities before trying again.`);
     } finally { setBusy(false); }
   };
 
@@ -190,6 +198,7 @@ export default function BiometricImport({ data, can, reload }) {
                 <button className="primary" disabled={busy} onClick={() => createPerson(device)}>
                   <UserPlus size={14} />Create new profile
                 </button>
+                {identityErrors[device.code] && <p className="form-error" role="alert">{identityErrors[device.code]}</p>}
               </div>
             </div>
           ))}
@@ -210,6 +219,7 @@ export default function BiometricImport({ data, can, reload }) {
           {preview.from === preview.to ? shortDate(preview.from) : `${shortDate(preview.from)} → ${shortDate(preview.to)}`}
           {preview.summary.unmatched > 0 && ` · resolve ${preview.unknownDevices.length} identity decision(s) before importing`}
         </small>
+        {commitError && <p className="form-error" role="alert">{commitError}</p>}
       </div>
 
       <Table columns={['Employee', 'Date', 'In', 'Out', 'Reads as', 'Match']} template={template}

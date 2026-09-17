@@ -1467,6 +1467,11 @@ async function createReceivableTables() {
   await addColumn('petty_cash_entries', 'employee_id', 'BIGINT UNSIGNED NULL');
   await addForeignKey('petty_cash_entries', 'fk_petty_employee',
     'CONSTRAINT fk_petty_employee FOREIGN KEY(employee_id) REFERENCES employees(id)');
+  /* Fleet owns fuel spending; its matching cash movement points back to the one fuel record. */
+  await addColumn('petty_cash_entries', 'fuel_record_id', 'BIGINT UNSIGNED NULL');
+  await addIndex('petty_cash_entries', 'uq_petty_fuel_record', 'UNIQUE KEY uq_petty_fuel_record(fuel_record_id)');
+  await addForeignKey('petty_cash_entries', 'fk_petty_fuel_record',
+    'CONSTRAINT fk_petty_fuel_record FOREIGN KEY(fuel_record_id) REFERENCES fuel_records(id)');
 
   /* A large advance can take more than one salary run to recover. Allocations preserve
      every instalment instead of marking the whole advance as deducted too early. */
