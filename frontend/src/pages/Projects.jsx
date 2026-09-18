@@ -3,14 +3,15 @@ import { BriefcaseBusiness, Building2, Check, FileText } from 'lucide-react';
 import { api, money, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Page, Progress, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import ProjectDetail from './ProjectDetail.jsx';
+import ClientDirectory from './ClientDirectory.jsx';
 import { useOptions } from '../options.js';
 
-const TABS = ['Projects', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquiries'];
+const TABS = ['Projects', 'Clients', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquiries'];
 const healthTone = health => (health === 'On track' ? 'on-track' : health === 'At risk' ? 'at-risk' : 'watch');
 
 /** PID 2.4 / 2.5 — projects, their milestones, and the estimates the budget comes from. */
-export default function Projects({ data, reload, can, companyId, company }) {
-  const [tab, setTab] = useState(TABS[0]);
+export default function Projects({ data, reload, can, companyId, company, companies, setCompanyId }) {
+  const [tab, setTab] = useState(window.location.pathname.startsWith('/projects/clients/') ? 'Clients' : TABS[0]);
   const [open, setOpen] = useState('');
 
   const projectFromPath = () => Number(window.location.pathname.match(/^\/projects\/(\d+)\/?$/)?.[1]) || null;
@@ -29,7 +30,7 @@ export default function Projects({ data, reload, can, companyId, company }) {
     setDetailId(null);
   };
   const actionFor = {
-    Projects: 'New project', Milestones: 'Add milestone', 'BOQ & estimates': 'Create BOQ',
+    Projects: 'New project', Clients: null, Milestones: 'Add milestone', 'BOQ & estimates': 'Create BOQ',
     Variations: null, Inquiries: 'Log inquiry'
   }[tab];
 
@@ -37,22 +38,30 @@ export default function Projects({ data, reload, can, companyId, company }) {
 
   return <Page title="Projects" subtitle={`Monitor progress, cost, and site health for ${company?.name || 'the selected company'}.`}
     action={can.projects ? actionFor : null} onAction={() => setOpen(tab)}>
-    <Tabs tabs={TABS} active={tab} onChange={setTab} />
+    <Tabs tabs={TABS} active={tab} onChange={next => {
+      if (next !== 'Clients' && window.location.pathname.startsWith('/projects/clients/'))
+        window.history.pushState({}, '', '/projects');
+      setTab(next);
+    }} />
 
-    {tab === 'Projects' && <ProjectCards data={data} onOpen={openProject} />}
+    {tab === 'Projects' && <ProjectCards data={data} onOpen={openProject} onOpenClient={id => {
+      window.history.pushState({}, '', `/projects/clients/${id}`); setTab('Clients');
+    }} />}
+    {tab === 'Clients' && <ClientDirectory canManage={can.projects} companyId={companyId} />}
     {tab === 'Milestones' && <Milestones data={data} reload={reload} can={can} />}
     {tab === 'BOQ & estimates' && <BoqList data={data} reload={reload} can={can} />}
     {tab === 'Variations' && <Variations can={can} reload={reload} />}
     {tab === 'Inquiries' && <Inquiries data={data} can={can} reload={reload} />}
 
-    {open === 'Projects' && <ProjectForm companyId={companyId} close={() => setOpen('')} reload={reload} />}
+    {open === 'Projects' && <ProjectForm companyId={companyId} companies={companies} setCompanyId={setCompanyId}
+      employees={data.employees} close={() => setOpen('')} reload={reload} />}
     {open === 'Milestones' && <MilestoneForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'BOQ & estimates' && <BoqForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Inquiries' && <InquiryForm companyId={companyId} close={() => setOpen('')} reload={reload} />}
   </Page>;
 }
 
-function ProjectCards({ data, onOpen }) {
+function ProjectCards({ data, onOpen, onOpenClient }) {
   const finance = Object.fromEntries(data.finance.map(row => [row.projectId, row]));
   return <div className="project-cards">
     {data.projects.map(project => {
@@ -63,7 +72,7 @@ function ProjectCards({ data, onOpen }) {
           <Badge tone={healthTone(project.health)}>{project.health}</Badge>
         </div>
         <h3>{project.name}</h3>
-        <p>{project.client} · {project.site}</p>
+        <p>{project.clientId ? <button className="client-project-link" onClick={event => { event.stopPropagation(); onOpenClient(project.clientId); }}>{project.client}</button> : project.client} · {project.site}</p>
         <div className="card-progress">
           <span>Overall progress</span><b>{project.progress}%</b>
           <Progress value={project.progress} />
@@ -282,16 +291,20 @@ function Inquiries({ data, can, reload }) {
             : <span>—</span>}
       </Row>)}
     </Table>
-    {converting && <ConvertForm inquiry={converting} close={() => setConverting(null)}
+    {converting && <ConvertForm inquiry={converting} employees={data.employees} close={() => setConverting(null)}
       reload={async () => { await load(); await reload(); }} />}
   </>;
 }
 
 function InquiryForm({ companyId, close, reload }) {
+  const [clients, setClients] = useState([]);
+  const [clientId, setClientId] = useState('');
+  useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
+  const client = clients.find(row => String(row.id) === String(clientId));
   return <FormModal title="Log customer inquiry" close={close} label="Log inquiry" onSubmit={async values => {
     await post('/inquiries', {
       companyId,
-      customer: values.customer,
+      clientId: Number(values.clientId),
       contact: values.contact || undefined,
       phone: values.phone || undefined,
       email: values.email || undefined,
@@ -303,11 +316,13 @@ function InquiryForm({ companyId, close, reload }) {
     });
     await reload();
   }}>
-    <Field name="customer" label="Customer" />
-    <Field name="contact" label="Contact person" required={false} />
-    <Field name="phone" label="Phone" required={false} />
-    <Field name="email" label="Email" type="email" required={false} />
-    <Field name="location" label="Location" />
+    <label>Client<select name="clientId" value={clientId} required onChange={event => setClientId(event.target.value)}>
+      <option value="">Choose saved client…</option>{clients.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}
+    </select></label>
+    <Field key={`contact-${clientId}`} name="contact" label="Contact person" required={false} defaultValue={client?.contactPerson || ''} />
+    <Field key={`phone-${clientId}`} name="phone" label="Phone" required={false} defaultValue={client?.phone || ''} />
+    <Field key={`email-${clientId}`} name="email" label="Email" type="email" required={false} defaultValue={client?.email || ''} />
+    <Field key={`location-${clientId}`} name="location" label="Location" defaultValue={client?.siteAddress || client?.billingAddress || ''} />
     <Field name="expectedValue" label="Expected value (LKR)" type="number" min="0" defaultValue="0" required={false} />
     <Field name="expectedStart" label="Expected start" type="date" required={false} />
     <Field name="source" label="How they found us" required={false} placeholder="Referral, website" />
@@ -315,11 +330,11 @@ function InquiryForm({ companyId, close, reload }) {
   </FormModal>;
 }
 
-function ConvertForm({ inquiry, close, reload }) {
+function ConvertForm({ inquiry, employees, close, reload }) {
   return <FormModal title={`Register project from ${inquiry.reference}`} close={close} label="Register project" onSubmit={async values => {
     await post(`/inquiries/${inquiry.id}/convert`, {
       name: values.name,
-      manager: values.manager,
+      managerEmployeeId: Number(values.managerEmployeeId),
       stage: values.stage,
       budget: Number(values.budget || 0),
       startDate: values.startDate || undefined,
@@ -328,7 +343,7 @@ function ConvertForm({ inquiry, close, reload }) {
     await reload();
   }}>
     <Field name="name" label="Project name" wide defaultValue={`${inquiry.customer} — ${inquiry.location}`} />
-    <Field name="manager" label="Project manager" />
+    <SelectField name="managerEmployeeId" label="Project manager" options={[["", 'Choose an employee…'], ...employees.filter(employee => ['Active', 'On leave'].includes(employee.status)).map(employee => [employee.id, `${employee.name} — ${employee.designation}`])]} />
     <Field name="stage" label="Starting stage" defaultValue="Pre-construction" />
     <Field name="budget" label="Opening budget (LKR)" type="number" min="0" defaultValue={inquiry.expectedValue} />
     <Field name="startDate" label="Start date" type="date" defaultValue={todayInput()} required={false} />
@@ -336,24 +351,31 @@ function ConvertForm({ inquiry, close, reload }) {
   </FormModal>;
 }
 
-function ProjectForm({ companyId, close, reload }) {
+function ProjectForm({ companyId, companies, setCompanyId, employees, close, reload }) {
+  const [clients, setClients] = useState([]);
+  useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
   return <FormModal title="Create project" close={close} label="Create project" onSubmit={async values => {
+    const selectedCompanyId = Number(values.companyId);
     await post('/projects', {
-      companyId,
+      companyId: selectedCompanyId,
       name: values.name,
-      client: values.client,
-      manager: values.manager,
+      clientId: Number(values.clientId),
+      managerEmployeeId: Number(values.managerEmployeeId),
       site: values.site,
       stage: values.stage,
       budget: Number(values.budget),
       startDate: values.startDate,
       endDate: values.endDate
     });
+    setCompanyId(selectedCompanyId);
     await reload();
   }}>
     <Field name="name" label="Project name" />
-    <Field name="client" label="Client" />
-    <Field name="manager" label="Project manager" />
+    <SelectField name="companyId" label="Operating company" defaultValue={companyId}
+      options={companies.map(company => [company.id, company.name])} />
+    <SelectField name="clientId" label="Client" options={[["", 'Choose saved client…'], ...clients.map(client => [client.id, `${client.name} · ${client.type}`])]} />
+    {!clients.length && <p className="form-note wide">Add a client in Projects → Clients first, then create this project.</p>}
+    <SelectField name="managerEmployeeId" label="Project manager" options={[["", 'Choose an employee…'], ...employees.filter(employee => ['Active', 'On leave'].includes(employee.status)).map(employee => [employee.id, `${employee.name} — ${employee.designation}`])]} />
     <Field name="site" label="Site location" />
     <Field name="stage" label="Current stage" />
     <Field name="budget" label="Opening budget (LKR)" type="number" min="0" />

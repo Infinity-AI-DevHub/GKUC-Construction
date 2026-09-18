@@ -45,7 +45,7 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
       <BoqList companyId={companyId} />
       <BoqChanges can={can} reload={reload} />
     </>}
-    {tab === 'Tenders' && <Tenders can={can} companyId={companyId} />}
+    {tab === 'Tenders' && <Tenders can={can} companyId={companyId} employees={data.employees} />}
     {tab === 'Retention' && <Retention can={can} companyId={companyId} />}
     {tab === 'Subcontractors' && <Subcontractors can={can} data={data} companyId={companyId} />}
 
@@ -200,7 +200,7 @@ function Countdown({ date, time, live, past = 'closed' }) {
   </div>;
 }
 
-function Tenders({ can, companyId }) {
+function Tenders({ can, companyId, employees }) {
   const [rows, setRows] = useState([]);
   const [detailId, setDetailId] = useState(null);
   const load = () => api(`/qs/tenders?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
@@ -255,14 +255,14 @@ function Tenders({ can, companyId }) {
       </Row>)}
     </Table>
 
-    {detailId && <TenderDetail tenderId={detailId} can={can} close={() => setDetailId(null)} reload={load} />}
+    {detailId && <TenderDetail tenderId={detailId} can={can} employees={employees} close={() => setDetailId(null)} reload={load} />}
   </>;
 }
 
 const DETAIL_TABS = ['Bid', 'Documents required', 'Outcome'];
 
 /** Everything one bid turns on, in the order the QS works through it. */
-function TenderDetail({ tenderId, can, close, reload }) {
+function TenderDetail({ tenderId, can, employees, close, reload }) {
   const [tab, setTab] = useState(DETAIL_TABS[0]);
   const [tender, setTender] = useState(null);
   const [error, setError] = useState('');
@@ -333,7 +333,7 @@ function TenderDetail({ tenderId, can, close, reload }) {
       </div>}
 
       {tab === 'Outcome' && <div className="wide">
-        <Outcome tender={tender} can={can} refresh={refresh} onDone={close} />
+        <Outcome tender={tender} can={can} employees={employees} refresh={refresh} onDone={close} />
       </div>}
 
       <div className="form-actions">
@@ -419,7 +419,7 @@ function Checklist({ tender, can, refresh }) {
 }
 
 /** Recording what the opening produced, and turning a win into a live project. */
-function Outcome({ tender, can, refresh, onDone }) {
+function Outcome({ tender, can, employees, refresh, onDone }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -445,7 +445,7 @@ function Outcome({ tender, can, refresh, onDone }) {
         openedDate: form.get('openedDate') || undefined,
         outcomeNote: form.get('outcomeNote') || undefined,
         registerProject: form.get('registerProject') === 'on',
-        manager: form.get('manager') || undefined
+        managerEmployeeId: form.get('managerEmployeeId') ? Number(form.get('managerEmployeeId')) : undefined
       });
       await refresh();
       onDone();
@@ -460,7 +460,8 @@ function Outcome({ tender, can, refresh, onDone }) {
     <Field name="awardedTo" label="Awarded to" required={false} placeholder="Leave blank if it was us" />
     <Field name="ourRank" label="Our position" type="number" min="1" required={false} placeholder="1 = lowest bid" />
     <Field name="biddersCount" label="Bidders" type="number" min="1" required={false} />
-    <Field name="manager" label="Project manager, if we won" required={false} />
+    <SelectField name="managerEmployeeId" label="Project manager, if we won" required={false}
+      options={[["", 'Assign later'], ...employees.filter(employee => ['Active', 'On leave'].includes(employee.status)).map(employee => [employee.id, `${employee.name} — ${employee.designation}`])]} />
     <label className="checkbox-line">
       <input type="checkbox" name="registerProject" defaultChecked />
       Register this as a live project if we won
@@ -711,11 +712,17 @@ function SubcontractQuotationForm({ data, subcontractors, companyId, close, relo
 
 function QuotationForm({ data, companyId, close, reload }) {
   const [boqs, setBoqs] = useState([]);
-  useEffect(() => { api(`/boq?companyId=${companyId}`).then(setBoqs).catch(() => setBoqs([])); }, [companyId]);
+  const [clients, setClients] = useState([]);
+  const [clientId, setClientId] = useState('');
+  const [boqId, setBoqId] = useState('');
+  useEffect(() => {
+    api(`/boq?companyId=${companyId}`).then(setBoqs).catch(() => setBoqs([]));
+    api('/clients').then(setClients).catch(() => setClients([]));
+  }, [companyId]);
+  const clientBoqs = boqs.filter(boq => String(boq.clientId) === String(clientId));
   return <FormModal title="Create quotation from a BOQ" close={close} label="Build quotation" onSubmit={async values => {
     await post('/qs/quotations', {
-      boqId: Number(values.boqId),
-      clientName: values.clientName || undefined,
+      boqId: Number(boqId), clientId: Number(clientId),
       title: values.title || undefined,
       quoteDate: values.quoteDate,
       validUntil: values.validUntil || undefined,
@@ -725,9 +732,12 @@ function QuotationForm({ data, companyId, close, reload }) {
     });
     await reload();
   }}>
-    <SelectField name="boqId" label="Bill of quantities" wide
-      options={boqs.map(boq => [boq.id, `${boq.reference} — ${boq.title} (${rupees(boq.total)})`])} />
-    <Field name="clientName" label="Client (leave blank to use the project's)" required={false} />
+    <label>Client<select name="clientId" value={clientId} required onChange={event => { setClientId(event.target.value); setBoqId(''); }}>
+      <option value="">Choose saved client…</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+    </select></label>
+    <label>Bill of quantities<select name="boqId" value={boqId} required onChange={event => setBoqId(event.target.value)}>
+      <option value="">Choose this client's BOQ…</option>{clientBoqs.map(boq => <option key={boq.id} value={boq.id}>{boq.reference} — {boq.title} ({rupees(boq.total)})</option>)}
+    </select></label>
     <Field name="title" label="Quotation title" required={false} />
     <Field name="quoteDate" label="Quotation date" type="date" defaultValue={todayInput()} />
     <Field name="validUntil" label="Valid until" type="date" required={false} />
@@ -746,10 +756,12 @@ function QuotationForm({ data, companyId, close, reload }) {
  * the BOQ, and not the standing terms every other document carries.
  */
 function QuotationWording({ quotation, close, reload }) {
+  const [clients, setClients] = useState([]);
+  useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
   return <FormModal title={`Edit ${quotation.reference}`} close={close} label="Save wording" onSubmit={async values => {
     await patch(`/qs/quotations/${quotation.id}`, {
       title: values.title,
-      clientName: values.clientName,
+      clientId: Number(values.clientId),
       validUntil: values.validUntil || null,
       notes: values.notes || null,
       terms: values.terms || null
@@ -757,7 +769,8 @@ function QuotationWording({ quotation, close, reload }) {
     await reload();
   }}>
     <Field name="title" label="Quotation title" wide defaultValue={quotation.title} />
-    <Field name="clientName" label="Client, as it should appear" defaultValue={quotation.client} />
+    <SelectField name="clientId" label="Client" options={clients.map(client => [client.id, client.name])}
+      defaultValue={quotation.clientId || ''} />
     <Field name="validUntil" label="Valid until" type="date" required={false}
       defaultValue={quotation.validUntil ? quotation.validUntil.slice(0, 10) : ''} />
     <TextArea name="notes" label="Note to the client" rows={3} required={false} defaultValue={quotation.notes || ''} />
@@ -771,12 +784,14 @@ function QuotationWording({ quotation, close, reload }) {
 }
 
 function TenderForm({ companyId, company, close, reload }) {
+  const [clients, setClients] = useState([]);
+  useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
   return <FormModal title="Track a tender" close={close} label="Track tender" wide onSubmit={async values => {
     await post('/qs/tenders', {
       companyId,
       contractNo: values.contractNo || undefined,
       title: values.title,
-      client: values.client,
+      clientId: Number(values.clientId),
       source: values.source || undefined,
       biddingEntity: values.biddingEntity || company?.name || undefined,
       procurementMethod: values.procurementMethod,
@@ -801,7 +816,7 @@ function TenderForm({ companyId, company, close, reload }) {
     await reload();
   }}>
     <Field name="title" label="Works as named in the bidding document" wide />
-    <Field name="client" label="Employer" placeholder="Department of Buildings" />
+    <SelectField name="clientId" label="Employer / client" options={[["", 'Choose saved client…'], ...clients.map(client => [client.id, client.name])]} />
     <Field name="contractNo" label="Employer's contract number" required={false} placeholder="04-03-10-CT008/2026" />
     <Field name="biddingEntity" label="We bid as" defaultValue={company?.name || ''} />
     <SelectField name="procurementMethod" label="Procurement method"

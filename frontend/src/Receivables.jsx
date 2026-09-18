@@ -138,6 +138,10 @@ const BLANK_LINE = { description: '', unit: '', quantity: '', rate: '',quotation
 function CertificateForm({ data, companyId, close, reload }) {
   const [lines, setLines] = useState([{ ...BLANK_LINE }]);
   const [projectId,setProjectId]=useState(data.projects[0]?.id||'');
+  const [clientId,setClientId]=useState(data.projects[0]?.clientId || data.projects[0]?.client_id || '');
+  const [clients,setClients]=useState([]);
+  useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
+  const clientProjects = data.projects.filter(project => String(project.clientId || project.client_id) === String(clientId));
   const [quoteLines,setQuoteLines]=useState([]);
   useEffect(()=>{if(projectId)api(`/receivables/quote-lines?projectId=${projectId}`).then(setQuoteLines).catch(()=>setQuoteLines([]));},[projectId]);
   const [terms, setTerms] = useState({
@@ -187,6 +191,7 @@ function CertificateForm({ data, companyId, close, reload }) {
       if (!items.length) throw new Error('Add at least one line with a description and a quantity');
       await post('/receivables/invoices', {
         projectId: Number(values.projectId),
+        clientId: Number(values.clientId),
         kind: values.kind,
         title: values.title,
         invoiceDate: values.invoiceDate,
@@ -197,7 +202,12 @@ function CertificateForm({ data, companyId, close, reload }) {
       });
       await reload();
     }}>
-    <label>Project *<select name="projectId" value={projectId} required onChange={event=>{setProjectId(event.target.value);setLines([{...BLANK_LINE}]);}}>{data.projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+    <label>Client *<select name="clientId" value={clientId} required onChange={event=>{const chosen=event.target.value;setClientId(chosen);setProjectId(data.projects.find(project=>String(project.clientId||project.client_id)===chosen)?.id||'');setLines([{...BLANK_LINE}]);}}>
+      <option value="">Choose saved client…</option>{clients.map(client=><option key={client.id} value={client.id}>{client.name}</option>)}
+    </select></label>
+    <label>Project *<select name="projectId" value={projectId} required onChange={event=>{setProjectId(event.target.value);setLines([{...BLANK_LINE}]);}}>
+      <option value="">Choose this client's project…</option>{clientProjects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}
+    </select></label>
     <SelectField name="kind" label="Kind" options={['Interim', 'Final', 'Advance', 'Variation', 'Other']} />
     <Field name="title" label="Title" wide placeholder="IPA No. 3 — works to 25 August" />
     <Field name="invoiceDate" label="Invoice date" type="date" defaultValue={todayInput()} />

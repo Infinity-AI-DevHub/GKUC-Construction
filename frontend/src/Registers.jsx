@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from './api.js';
 import { EmptyState, Row, Table } from './ui.jsx';
+import AttendanceCorrection from './pages/AttendanceCorrection.jsx';
 
 /*
  * The two registers an HR office is asked for by name: the muster roll for a month, and a
@@ -20,14 +21,16 @@ const MARK_TITLES = { P: 'On site', L: 'Late', V: 'On leave', B: 'Business trip'
  * scrolls sideways inside the panel with the name column pinned. That is the same shape a
  * paper roll has, and the reason it works.
  */
-export function AttendanceRegister() {
+export function AttendanceRegister({ projects = [], canCorrect = false }) {
   const [month, setMonth] = useState(monthValue());
   const [register, setRegister] = useState(null);
   const [error, setError] = useState('');
+  const [correcting, setCorrecting] = useState(null);
+  const load = async () => setRegister(await api(`/hr/attendance-register?month=${month}`));
 
   useEffect(() => {
     setError('');
-    api(`/hr/attendance-register?month=${month}`).then(setRegister)
+    load()
       .catch(failure => { setRegister(null); setError(failure.message); });
   }, [month]);
 
@@ -65,10 +68,15 @@ export function AttendanceRegister() {
                   const entry = person.days[day];
                   return <td key={day}>
                     {entry
-                      ? <b className={`mark mark-${entry.mark}`}
-                        title={`${MARK_TITLES[entry.mark]}${entry.project ? ` — ${entry.project}` : ''}`}>
-                        {entry.mark}
-                      </b>
+                      ? entry.id && canCorrect
+                        ? <button className={`mark mark-${entry.mark} register-edit-day`} type="button"
+                          title={`Edit ${person.name} on day ${day}`}
+                          aria-label={`Edit ${person.name} attendance on day ${day}`}
+                          onClick={() => setCorrecting({ ...entry, name: person.name })}>{entry.mark}</button>
+                        : <b className={`mark mark-${entry.mark}`}
+                          title={`${MARK_TITLES[entry.mark]}${entry.project ? ` — ${entry.project}` : ''}`}>
+                          {entry.mark}
+                        </b>
                       : <span className="mark mark-none" title="Nothing recorded">·</span>}
                   </td>;
                 })}
@@ -82,6 +90,8 @@ export function AttendanceRegister() {
         </div>
       </section>
       : <EmptyState>No attendance was recorded in that month.</EmptyState>)}
+    {correcting && <AttendanceCorrection record={correcting} projects={projects}
+      close={() => setCorrecting(null)} reload={load} />}
   </>;
 }
 

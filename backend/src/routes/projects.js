@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, getOne, pool, query, spendSql, today } from '../db.js';
+import { audit, getOne, pool, query, spendSql, today, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
+import { resolveProjectManager } from '../lib/project-manager.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -10,8 +11,10 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const projectShape = z.object({
   companyId: z.number().int().positive().default(1),
   name: z.string().min(3).max(180),
-  client: z.string().min(2).max(180),
-  manager: z.string().min(2).max(120),
+  client: z.string().min(2).max(180).optional(),
+  clientId: z.number().int().positive().optional(),
+  manager: z.string().min(2).max(120).optional(),
+  managerEmployeeId: z.number().int().positive().optional(),
   site: z.string().min(2).max(180),
   stage: z.string().min(2).max(150),
   budget: z.number().nonnegative(),
@@ -25,10 +28,24 @@ const projectShape = z.object({
 const runsForwards = value => !value.startDate || !value.endDate || value.endDate >= value.startDate;
 const backwards = { message: 'Target completion cannot be before the start date', path: ['endDate'] };
 
-const projectSchema = projectShape.refine(runsForwards, backwards);
+const projectSchema = projectShape.refine(runsForwards, backwards)
+  .refine(value => value.clientId || value.client, { message: 'Choose a client for this project', path: ['clientId'] })
+  .refine(value => value.managerEmployeeId || value.manager, { message: 'Choose an employee as project manager', path: ['managerEmployeeId'] });
 const projectPatch = projectShape.partial().refine(runsForwards, backwards);
 
-const columns = { companyId: 'company_id', startDate: 'start_date', endDate: 'end_date' };
+const columns = { companyId: 'company_id', clientId: 'client_id', managerEmployeeId: 'manager_employee_id', startDate: 'start_date', endDate: 'end_date' };
+const resolveClient = async body => {
+  if (body.clientId) {
+    const client = await getOne('SELECT id,name FROM clients WHERE id=? AND active=1', [body.clientId]);
+    if (!client) throw Object.assign(new Error('Choose an active client from the client directory.'), { status: 400 });
+    return client;
+  }
+  // Older integrations send a name. Link it to the shared directory rather than leave a new orphan.
+  const existing = await getOne('SELECT id,name FROM clients WHERE LOWER(name)=LOWER(?) ORDER BY id LIMIT 1', [body.client]);
+  if (existing) return existing;
+  const created = await query("INSERT INTO clients (type,name) VALUES ('Organisation',?)", [body.client]);
+  return { id: created.insertId, name: body.client };
+};
 const toRow = body => {
   const entries = Object.entries(body).map(([key, value]) => [columns[key] || key, value]);
   return { fields: entries.map(([key]) => key), values: entries.map(([, value]) => value) };
@@ -36,22 +53,28 @@ const toRow = body => {
 
 router.get('/', auth, permit('projects.view'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 0);
-  res.json(await query(`SELECT p.*,p.company_id companyId,c.name company,c.code companyCode FROM projects p JOIN companies c ON c.id=p.company_id
+  res.json(await query(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id
     WHERE p.active=1 ${companyId ? 'AND p.company_id=?' : ''} ORDER BY p.id`, companyId ? [companyId] : []));
 }));
 
 router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
-  const project = await getOne(`SELECT p.*,p.company_id companyId,c.name company,c.code companyCode
-    FROM projects p JOIN companies c ON c.id=p.company_id WHERE p.id=?`, [req.params.id]);
+  const project = await getOne(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode
+    FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.id=?`, [req.params.id]);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   const [milestones, documents, team, tasks, expenses, incomes, boqs, reports, quotations,
     invoices, purchaseOrders, costBreakdown, expenseLedger, incomeLedger, attendanceLedger,
     materialUsage, equipmentUsage, supplierInvoices, costItems, variationLedger, updates, subcontractRates] = await Promise.all([
     query('SELECT id,title,due_date dueDate,status,completed_at completedAt,notes FROM project_milestones WHERE project_id=? ORDER BY due_date', [project.id]),
     listAttachments('project', project.id),
-    query(`SELECT t.id,t.project_role projectRole,e.name,e.designation,e.code FROM project_team t
-      JOIN employees e ON e.id=t.employee_id WHERE t.project_id=? AND t.released_at IS NULL ORDER BY e.name`, [project.id]),
-    query('SELECT id,title,assignee,due,priority,status FROM tasks WHERE project_id=? ORDER BY id DESC', [project.id]),
+    query(`SELECT CONCAT('manager-',p.id) id,'Project manager' projectRole,e.name,e.designation,e.code
+      FROM projects p JOIN employees e ON e.id=p.manager_employee_id WHERE p.id=?
+      UNION ALL SELECT CAST(t.id AS CHAR) id,t.project_role projectRole,e.name,e.designation,e.code
+      FROM project_team t JOIN employees e ON e.id=t.employee_id JOIN projects p ON p.id=t.project_id
+      WHERE t.project_id=? AND t.released_at IS NULL AND (p.manager_employee_id IS NULL OR p.manager_employee_id<>t.employee_id)
+      ORDER BY name`, [project.id, project.id]),
+    query(`SELECT t.id,t.title,t.assignee_employee_id assigneeEmployeeId,COALESCE(e.name,t.assignee) assignee,
+      t.due,t.due_date dueDate,t.priority,t.status,t.notes FROM tasks t
+      LEFT JOIN employees e ON e.id=t.assignee_employee_id WHERE t.project_id=? ORDER BY t.id DESC`, [project.id]),
     query(`SELECT ${spendSql('p')} total FROM projects p WHERE p.id=?`, [project.id]),
     query('SELECT COALESCE(SUM(amount),0) total FROM incomes WHERE project_id=?', [project.id]),
     query('SELECT id,reference,title,status,total FROM boqs WHERE project_id=? ORDER BY id DESC', [project.id]),
@@ -145,10 +168,20 @@ router.patch('/updates/:id',auth,permit('projects.manage','site.tasks'),validate
 }));
 
 router.post('/', auth, permit('projects.manage'), validate(projectSchema), wrap(async (req, res) => {
-  const { fields, values } = toRow(req.body);
-  const result = await query(`INSERT INTO projects (${fields.join(',')}) VALUES (${fields.map(() => '?').join(',')})`, values);
-  const row = await getOne(`SELECT p.*,p.company_id companyId,c.name company,c.code companyCode
-    FROM projects p JOIN companies c ON c.id=p.company_id WHERE p.id=?`, [result.insertId]);
+  if (!await getOne('SELECT id FROM companies WHERE id=? AND active=1', [req.body.companyId]))
+    return res.status(400).json({ error: 'Choose GKUC Construction or GKUC Readymix as the operating company.' });
+  const client = await resolveClient(req.body);
+  const manager = await resolveProjectManager(req.body);
+  const { fields, values } = toRow({ ...req.body, clientId: client.id, client: client.name, ...manager });
+  const result = await transaction(async connection => {
+    const [created] = await connection.execute(`INSERT INTO projects (${fields.join(',')}) VALUES (${fields.map(() => '?').join(',')})`, values);
+    if (manager.managerEmployeeId) await connection.execute(
+      'INSERT INTO project_manager_assignments (project_id,employee_id) VALUES (?,?)',
+      [created.insertId, manager.managerEmployeeId]);
+    return created;
+  });
+  const row = await getOne(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode
+    FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.id=?`, [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'project', row.id, null, row, req.ip);
   res.status(201).json(row);
 }));
@@ -156,6 +189,8 @@ router.post('/', auth, permit('projects.manage'), validate(projectSchema), wrap(
 router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Project not found' });
+  if (req.body.companyId && Number(req.body.companyId) !== Number(before.company_id))
+    return res.status(409).json({ error: 'A project cannot be moved to another company after creation because its BOQs, quotations, invoices and costs belong to the original company.' });
 
   /* Only one end of the range may be in the request, so the other comes from the record. */
   const asDate = value => (value instanceof Date ? value.toISOString().slice(0, 10) : value);
@@ -165,9 +200,25 @@ router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wr
     return res.status(400).json({ error: 'Invalid data', issues: { formErrors: [], fieldErrors: { endDate: [backwards.message] } } });
   }
 
-  const { fields, values } = toRow(req.body);
+  const body = { ...req.body };
+  if (body.companyId && !await getOne('SELECT id FROM companies WHERE id=? AND active=1', [body.companyId]))
+    return res.status(400).json({ error: 'Choose an active operating company for this project.' });
+  if (body.clientId || body.client) {
+    const client = await resolveClient(body);
+    body.clientId = client.id; body.client = client.name;
+  }
+  if (body.managerEmployeeId || body.manager) Object.assign(body, await resolveProjectManager(body));
+  const { fields, values } = toRow(body);
   if (!fields.length) return res.json(before);
-  await query(`UPDATE projects SET ${fields.map(key => `${key}=?`).join(',')} WHERE id=?`, [...values, req.params.id]);
+  await transaction(async connection => {
+    await connection.execute(`UPDATE projects SET ${fields.map(key => `${key}=?`).join(',')} WHERE id=?`, [...values, req.params.id]);
+    if ((body.managerEmployeeId || body.manager)
+      && Number(body.managerEmployeeId || 0) !== Number(before.manager_employee_id || 0)) {
+      await connection.execute('UPDATE project_manager_assignments SET released_at=NOW() WHERE project_id=? AND released_at IS NULL', [before.id]);
+      if (body.managerEmployeeId) await connection.execute('INSERT INTO project_manager_assignments (project_id,employee_id) VALUES (?,?)',
+        [before.id, body.managerEmployeeId]);
+    }
+  });
   const after = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
   await audit(pool, req.user.id, 'UPDATE', 'project', after.id, before, after, req.ip);
   res.json(after);

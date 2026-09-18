@@ -82,11 +82,11 @@ const scenarios = [
   { employee: driver, name: 'one unpaid-leave day', input: { unpaid_days: 1 }, expected: { unpaidLeaveDeduction: 5000, epfEmployeeDeduction: 2000, deductions: 7000, netPay: 23000, employerCost: 28000 } },
   { employee: driver, name: 'allowance, deduction and advance', input: { salary_advance: 10000, components: [component('Allowance', 3000), component('Deduction', 1000)] }, expected: { allowanceTotal: 3000, otherDeduction: 1000, salaryAdvanceDeduction: 10000, deductions: 13400, netPay: 19600, employerCost: 36600 } },
 
-  { employee: supervisor, policy: grossPolicy, name: 'ordinary month on gross statutory basis', input: {}, expected: { basic: 120000, epfEmployeeDeduction: 9600, epfEmployerContribution: 14400, etfEmployerContribution: 3600, netPay: 110400, employerCost: 138000 } },
-  { employee: supervisor, policy: grossPolicy, name: 'site and travel overtime', input: { overtime: [['Site', 5], ['Travel', 3]] }, expected: { overtimePay: 1425, grossEarnings: 121425, epfEmployeeDeduction: 9714, netPay: 111711, employerCost: 139638.75 } },
+  { employee: supervisor, policy: grossPolicy, name: 'ordinary month under legacy gross policy still uses basic', input: {}, expected: { basic: 120000, epfEmployeeDeduction: 9600, epfEmployerContribution: 14400, etfEmployerContribution: 3600, netPay: 110400, employerCost: 138000 } },
+  { employee: supervisor, policy: grossPolicy, name: 'site and travel overtime', input: { overtime: [['Site', 5], ['Travel', 3]] }, expected: { overtimePay: 1425, grossEarnings: 121425, epfEmployeeDeduction: 9600, netPay: 111825, employerCost: 139425 } },
   { employee: supervisor, policy: grossPolicy, name: 'two unpaid-leave days', input: { unpaid_days: 2 }, expected: { unpaidLeaveDeduction: 12000, epfEmployeeDeduction: 8640, deductions: 20640, netPay: 99360, employerCost: 124200 } },
-  { employee: supervisor, policy: grossPolicy, name: 'full component mix', input: { components: [component('Allowance', 10000), component('Reimbursement', 5000), component('Deduction', 2000)] }, expected: { grossEarnings: 130000, reimbursementTotal: 5000, epfEmployeeDeduction: 10400, deductions: 12400, netPay: 122600, employerCost: 154500 } },
-  { employee: supervisor, policy: grossPolicy, name: 'overtime and salary advance', input: { overtime: [['Site', 10]], salary_advance: 50000 }, expected: { overtimePay: 2250, grossEarnings: 122250, epfEmployeeDeduction: 9780, salaryAdvanceDeduction: 50000, deductions: 59780, netPay: 62470, employerCost: 140587.5 } },
+  { employee: supervisor, policy: grossPolicy, name: 'full component mix', input: { components: [component('Allowance', 10000), component('Reimbursement', 5000), component('Deduction', 2000)] }, expected: { grossEarnings: 130000, reimbursementTotal: 5000, epfEmployeeDeduction: 9600, deductions: 11600, netPay: 123400, employerCost: 153000 } },
+  { employee: supervisor, policy: grossPolicy, name: 'overtime and salary advance', input: { overtime: [['Site', 10]], salary_advance: 50000 }, expected: { overtimePay: 2250, grossEarnings: 122250, epfEmployeeDeduction: 9600, salaryAdvanceDeduction: 50000, deductions: 59600, netPay: 62650, employerCost: 140250 } },
 
   { employee: specialist, name: 'one normal day', input: { days_present: 1 }, expected: { basic: 8000, grossEarnings: 8000, netPay: 8000, employerCost: 8000 } },
   { employee: specialist, name: 'custom site and travel overtime', input: { days_present: 1, overtime: [['Site', 2], ['Travel', 1]] }, expected: { overtimePay: 850, grossEarnings: 8850, netPay: 8850, employerCost: 8850 } },
@@ -115,4 +115,21 @@ test('pay-type and overtime guardrails reject invalid combinations', () => {
   assert.match(payProfileError({ payBasis: 'Weekly rate', payFrequency: 'Monthly' }), /weekly/i);
   assert.throws(() => resolveOvertimeRate(office, 'Site', basicPolicy), /cannot record site overtime/);
   assert.throws(() => resolveOvertimeRate(labourer, 'Office', basicPolicy), /cannot record office overtime/);
+});
+
+test('EPF and ETF eligibility are independent and never use gross additions', () => {
+  const earnings = { ...office, overtime_pay: 2250 };
+  const additions = [component('Allowance', 5000), component('Reimbursement', 1000)];
+  const epfOnly = calculatePayslip({ ...earnings, epf_eligible: true, etf_eligible: false }, grossPolicy, additions);
+  assert.equal(epfOnly.epfEmployeeDeduction, 8000);
+  assert.equal(epfOnly.epfEmployerContribution, 12000);
+  assert.equal(epfOnly.etfEmployerContribution, 0);
+  const etfOnly = calculatePayslip({ ...earnings, epf_eligible: false, etf_eligible: true }, grossPolicy, additions);
+  assert.equal(etfOnly.epfEmployeeDeduction, 0);
+  assert.equal(etfOnly.epfEmployerContribution, 0);
+  assert.equal(etfOnly.etfEmployerContribution, 3000);
+  const neither = calculatePayslip({ ...earnings, epf_eligible: false, etf_eligible: false }, grossPolicy, additions);
+  assert.equal(neither.epfEmployeeDeduction, 0);
+  assert.equal(neither.epfEmployerContribution, 0);
+  assert.equal(neither.etfEmployerContribution, 0);
 });

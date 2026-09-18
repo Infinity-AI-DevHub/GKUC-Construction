@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { audit, clock, getOne, nextReference, pool, query, today, transaction } from '../db.js';
 import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { notify } from '../alerts.js';
+import { resolveProjectManager } from '../lib/project-manager.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -85,7 +86,8 @@ router.get('/', auth, permit('enquiries.manage','projects.view'), wrap(async (re
 
 router.post('/', auth, permit('enquiries.manage'), validate(z.object({
   companyId: z.number().int().positive().default(1),
-  customer: z.string().min(2).max(180),
+  customer: z.string().min(2).max(180).optional(),
+  clientId: z.number().int().positive().optional(),
   contact: z.string().max(120).optional(),
   phone: z.string().max(40).optional(),
   email: z.string().email().optional().or(z.literal('')),
@@ -94,13 +96,21 @@ router.post('/', auth, permit('enquiries.manage'), validate(z.object({
   expectedValue: z.number().nonnegative().default(0),
   expectedStart: isoDate.optional(),
   source: z.string().max(80).optional()
-})), wrap(async (req, res) => {
+}).refine(value => value.clientId || value.customer, { message: 'Choose a client', path: ['clientId'] })), wrap(async (req, res) => {
   const body = req.body;
+  let client = body.clientId
+    ? await getOne('SELECT * FROM clients WHERE id=? AND active=1', [body.clientId])
+    : await getOne('SELECT * FROM clients WHERE LOWER(name)=LOWER(?) ORDER BY id LIMIT 1', [body.customer]);
+  if (!client && body.customer && !body.clientId) {
+    const created = await query("INSERT INTO clients (type,name) VALUES ('Organisation',?)", [body.customer]);
+    client = { id: created.insertId, name: body.customer };
+  }
+  if (!client) return res.status(400).json({ error: 'Choose an active client from the client directory.' });
   const reference = await nextReference('INQ', 'inquiries');
   const result = await query(`INSERT INTO inquiries
-    (reference,company_id,customer_name,contact_person,phone,email,location,description,expected_value,expected_start,source,created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-  [reference, body.companyId, body.customer, body.contact || null, body.phone || null, body.email || null, body.location,
+    (reference,company_id,client_id,customer_name,contact_person,phone,email,location,description,expected_value,expected_start,source,created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  [reference, body.companyId, client.id, client.name, body.contact || client.contact_person || null, body.phone || client.phone || null, body.email || client.email || null, body.location || client.site_address || client.billing_address || 'Location to confirm',
     body.description, body.expectedValue, body.expectedStart || null, body.source || null, req.user.id]);
   const row = await getOne(`${select} WHERE i.id=?`, [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'inquiry', row.id, null, row, req.ip);
@@ -134,7 +144,8 @@ router.patch('/:id', auth, permit('enquiries.manage'), validate(z.object({
  */
 router.post('/:id/convert', auth, permit('enquiries.manage'), validate(z.object({
   name: z.string().min(3).max(180),
-  manager: z.string().min(2).max(120),
+  manager: z.string().min(2).max(120).optional(),
+  managerEmployeeId: z.number().int().positive().optional(),
   stage: z.string().min(2).max(150).default('Pre-construction'),
   budget: z.number().nonnegative().default(0),
   startDate: isoDate.optional(),
@@ -145,10 +156,14 @@ router.post('/:id/convert', auth, permit('enquiries.manage'), validate(z.object(
   if (inquiry.project_id) return res.status(409).json({ error: 'This inquiry has already been converted' });
 
   const body = req.body;
+  const manager = await resolveProjectManager(body);
   const projectId = await transaction(async connection => {
-    const [result] = await connection.execute(`INSERT INTO projects (company_id,name,client,manager,site,stage,budget,start_date,end_date)
-      VALUES (?,?,?,?,?,?,?,?,?)`, [inquiry.company_id, body.name, inquiry.customer_name, body.manager, inquiry.location, body.stage,
+    const [result] = await connection.execute(`INSERT INTO projects (company_id,name,client_id,client,manager,manager_employee_id,site,stage,budget,start_date,end_date)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [inquiry.company_id, body.name, inquiry.client_id, inquiry.customer_name, manager.manager, manager.managerEmployeeId, inquiry.location, body.stage,
       body.budget || inquiry.expected_value, body.startDate || null, body.endDate || null]);
+    if (manager.managerEmployeeId) await connection.execute(
+      'INSERT INTO project_manager_assignments (project_id,employee_id) VALUES (?,?)',
+      [result.insertId, manager.managerEmployeeId]);
     await connection.execute("UPDATE inquiries SET status='Won', project_id=? WHERE id=?", [result.insertId, inquiry.id]);
     /* The conversations that won the work belong to the project from here on. */
     await connection.execute(

@@ -76,6 +76,7 @@ router.get('/receivables/ageing', auth, permit('finance.view', 'finance.invoice'
 const invoiceSchema = z.object({
   companyId: z.coerce.number().int().positive().optional(),
   projectId: z.coerce.number().int().positive(),
+  clientId: z.coerce.number().int().positive().optional(),
   kind: z.enum(['Interim', 'Final', 'Advance', 'Variation', 'Other']).default('Interim'),
   title: z.string().trim().min(3).max(200),
   invoiceDate: z.string().min(10).max(10),
@@ -118,9 +119,12 @@ router.get('/receivables/quote-lines',auth,permit('finance.view','finance.invoic
 router.post('/receivables/invoices', auth, permit('finance.invoice'), validate(invoiceSchema),
   async (req, res, next) => {
     try {
-      const project = await getOne('SELECT id,name,client,company_id FROM projects WHERE id=? AND active=1',
+      const project = await getOne(`SELECT p.id,p.name,COALESCE(c.name,p.client) client,p.client_id clientId,p.company_id
+        FROM projects p LEFT JOIN clients c ON c.id=p.client_id WHERE p.id=? AND p.active=1`,
         [req.body.projectId]);
       if (!project) throw fail(404, 'That project does not exist');
+      if (req.body.clientId && Number(req.body.clientId) !== Number(project.clientId))
+        throw fail(400, 'The selected client does not match the project client. Choose a project for that client.');
 
       const company = await getOne(`SELECT COALESCE(NULLIF(default_vat_rate,0),18) defaultVatRate
         FROM companies WHERE id=? AND active=1`, [project.company_id])
@@ -144,11 +148,11 @@ router.post('/receivables/invoices', auth, permit('finance.invoice'), validate(i
       const id = await transaction(async connection => {
         const [created] = await connection.execute(
           `INSERT INTO client_invoices
-             (reference,project_id,client,kind,title,invoice_date,due_date,period_from,period_to,
+             (reference,project_id,client_id,client,kind,title,invoice_date,due_date,period_from,period_to,
               gross,tax_treatment,vat_rate,vat_amount,svat_voucher,retention_percent,retention_amount,
               advance_recovery,other_deductions,deduction_note,net_payable,notes,created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [reference, project.id, project.client, req.body.kind, req.body.title,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [reference, project.id, project.clientId, project.client, req.body.kind, req.body.title,
             req.body.invoiceDate, req.body.dueDate || null,
             req.body.periodFrom || null, req.body.periodTo || null,
             sums.gross, req.body.taxTreatment, sums.vatRate, sums.vatAmount,

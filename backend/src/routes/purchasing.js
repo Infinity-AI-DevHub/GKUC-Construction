@@ -40,7 +40,10 @@ const requestList = `SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.not
   (SELECT COALESCE(SUM(i.quantity*i.estimated_rate),0) FROM purchase_request_items i WHERE i.request_id=r.id) estimate
   FROM purchase_requests r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.requested_by`;
 
-router.get('/requests', auth, permit('store.view','store.manage'), wrap(async (_req, res) => res.json(await query(`${requestList} ORDER BY r.id DESC`))));
+router.get('/requests', auth, permit('store.view','store.manage'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId || 0);
+  res.json(await query(`${requestList} ${companyId ? 'WHERE p.company_id=?' : ''} ORDER BY r.id DESC`, companyId ? [companyId] : []));
+}));
 
 router.get('/requests/:id', auth, permit('store.view','store.manage'), wrap(async (req, res) => {
   const request = await getOne(`${requestList} WHERE r.id=?`, [req.params.id]);

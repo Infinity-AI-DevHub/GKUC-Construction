@@ -21,8 +21,8 @@ const policySchema = z.object({
   epfEmployeeRate: percent,
   epfEmployerRate: percent,
   etfEmployerRate: percent,
-  epfBasis: z.enum(['Basic earnings', 'Gross earnings']),
-  etfBasis: z.enum(['Basic earnings', 'Gross earnings'])
+  epfBasis: z.literal('Basic earnings').default('Basic earnings'),
+  etfBasis: z.literal('Basic earnings').default('Basic earnings')
 });
 
 const policySelect = `SELECT p.id,p.company_id companyId,c.name company,p.effective_from effectiveFrom,p.office_ot_rate officeOtRate,

@@ -68,12 +68,16 @@ router.post('/preview', auth, permit('hr.attendance'), wrap(async (req, res) => 
     'SELECT employee_id employeeId,employee_name name,work_date workDate FROM attendance WHERE work_date BETWEEN ? AND ?',
     [dates[0], dates[dates.length - 1]]);
   const alreadyHave = new Set(existing.map(row => `${row.employeeId || row.name}|${String(row.workDate).slice(0, 10)}`));
+  const planned = await query(`SELECT employee_id employeeId,work_date workDate,work_location workLocation,project_id projectId
+    FROM employee_work_locations WHERE work_date BETWEEN ? AND ?`, [dates[0], dates[dates.length - 1]]);
+  const plannedByDay = new Map(planned.map(row => [`${row.employeeId}|${String(row.workDate).slice(0, 10)}`, row]));
 
-  const rows = resolved.map(row => ({
-    ...row,
-    state: stateFor(row),
-    duplicate: alreadyHave.has(`${row.employeeId || row.name}|${row.date}`)
-  }));
+  const rows = resolved.map(row => {
+    const plan = plannedByDay.get(`${row.employeeId}|${row.date}`);
+    return { ...row, state: stateFor(row),
+      plannedWorkLocation: plan?.workLocation || null, plannedProjectId: plan?.projectId || null,
+      duplicate: alreadyHave.has(`${row.employeeId || row.name}|${row.date}`) };
+  });
 
   /* One line per unrecognised device number, so the mapping is offered once rather than
      once per day that person worked. */
@@ -120,8 +124,6 @@ router.post('/preview', auth, permit('hr.attendance'), wrap(async (req, res) => 
  * an overlapping export is safe — a pendrive is usually copied in full each time.
  */
 router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
-  projectId: z.number().int().positive().nullable().optional(),
-  workLocation: z.enum(['Office', 'Site']).default('Site'),
   filename: z.string().max(200).optional(),
   rows: z.array(z.object({
     employeeId: z.number().int().positive().nullable().optional(),
@@ -131,20 +133,30 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
     checkIn: z.string().regex(/^\d{2}:\d{2}:\d{2}$/).nullable().optional(),
     checkOut: z.string().regex(/^\d{2}:\d{2}:\d{2}$/).nullable().optional(),
     needsReview: z.boolean().optional(),
-    declaredState: z.enum(['Absent', 'On leave', 'Business trip']).nullable().optional()
+    declaredState: z.enum(['Absent', 'On leave', 'Business trip']).nullable().optional(),
+    correctionReason: z.string().trim().min(3).max(500).nullable().optional()
+  }).extend({
+    workLocation: z.enum(['Office', 'Site', 'Not working']),
+    projectId: z.number().int().positive().nullable()
   })).min(1).max(5000)
-}).refine(value => value.workLocation !== 'Site' || Boolean(value.projectId), {
-  message: 'Choose the site for this import', path: ['projectId']
 })), wrap(async (req, res) => {
-  const project = req.body.workLocation === 'Site'
-    ? await getOne('SELECT id,name FROM projects WHERE id=?', [req.body.projectId])
-    : { id: null, name: 'Head office' };
-  if (!project) return res.status(404).json({ error: 'Site not found' });
 
   const resolved = await resolveEmployees(req.body.rows);
   const unresolved = resolved.filter(row => !row.employeeId);
   if (unresolved.length) {
     return res.status(409).json({ error: `${unresolved.length} attendance row(s) still need an identity decision` });
+  }
+  const projectIds = [...new Set(resolved.filter(row => row.workLocation === 'Site').map(row => row.projectId))];
+  const projects = projectIds.length ? await query(
+    `SELECT id,name FROM projects WHERE id IN (${projectIds.map(() => '?').join(',')})`, projectIds) : [];
+  const projectById = new Map(projects.map(project => [Number(project.id), project]));
+  for (const row of resolved) {
+    const notWorking = ['Absent', 'On leave'].includes(stateFor(row));
+    const valid = notWorking
+      ? row.workLocation === 'Not working' && row.projectId === null
+      : row.workLocation === 'Office' ? row.projectId === null
+        : row.workLocation === 'Site' && projectById.has(row.projectId);
+    if (!valid) return res.status(400).json({ error: `Check the work location for ${row.employee || row.name || row.code} on ${row.date}. Choose Office or an existing project site; absent and leave days must be Not working.` });
   }
   const skipped = [];
   let inserted = 0;
@@ -157,33 +169,45 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
       if (!name) { skipped.push({ ...row, why: 'No employee could be identified' }); continue; }
 
       const state = stateFor(row);
+      const checkIn = ['Absent', 'On leave', 'Business trip'].includes(state) ? null : row.checkIn || null;
+      const checkOut = ['Absent', 'On leave', 'Business trip'].includes(state) ? null : row.checkOut || null;
       const [employee] = await connection.execute('SELECT designation FROM employees WHERE id=?', [employeeId]);
       const [existing] = await connection.execute(
-        'SELECT id FROM attendance WHERE (employee_id=? OR employee_name=?) AND work_date=? LIMIT 1',
+        'SELECT * FROM attendance WHERE (employee_id=? OR (employee_id IS NULL AND employee_name=?)) AND work_date=? LIMIT 1',
         [employeeId, name, row.date]);
 
       if (existing[0]) {
+        /* Re-uploading a file must not silently erase an HR correction already used by payroll. */
+        if (existing[0].correction_reason && !row.correctionReason) {
+          skipped.push({ code: row.code, date: row.date, why: 'A manual correction was kept' });
+          continue;
+        }
         await connection.execute(
           `UPDATE attendance SET employee_name=?,role=?,project_id=?,work_location=?,check_in=?,check_out=?,state=?,employee_id=COALESCE(?,employee_id),
-             needs_review=?,source='Biometric',confirmed_by=? WHERE id=?`,
-          [name, employee[0]?.designation || 'Worker', project.id, req.body.workLocation, row.checkIn || null, row.checkOut || null, state, employeeId,
-            row.needsReview ? 1 : 0, req.user.id, existing[0].id]);
+             needs_review=?,source='Biometric',correction_reason=COALESCE(?,correction_reason),confirmed_by=? WHERE id=?`,
+          [name, employee[0]?.designation || 'Worker', row.projectId, row.workLocation, checkIn, checkOut, state, employeeId,
+            row.needsReview ? 1 : 0, row.correctionReason || null, req.user.id, existing[0].id]);
+        if (row.correctionReason) await audit(connection, req.user.id, 'IMPORT_CORRECTION', 'attendance', existing[0].id,
+          existing[0], { ...row, state, correctionReason: row.correctionReason }, req.ip);
         updated += 1;
       } else {
-        await connection.execute(
+        const [created] = await connection.execute(
           `INSERT INTO attendance (employee_name,role,project_id,work_location,employee_id,work_date,check_in,check_out,state,
-             needs_review,source,confirmed_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,'Biometric',?)`,
-          [name, employee[0]?.designation || 'Worker', project.id, req.body.workLocation, employeeId, row.date,
-            row.checkIn || null, row.checkOut || null, state, row.needsReview ? 1 : 0, req.user.id]);
+             needs_review,source,correction_reason,confirmed_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,'Biometric',?,?)`,
+          [name, employee[0]?.designation || 'Worker', row.projectId, row.workLocation, employeeId, row.date,
+            checkIn, checkOut, state, row.needsReview ? 1 : 0, row.correctionReason || null, req.user.id]);
+        if (row.correctionReason) await audit(connection, req.user.id, 'IMPORT_CORRECTION', 'attendance', created.insertId,
+          null, { ...row, state, correctionReason: row.correctionReason }, req.ip);
         inserted += 1;
       }
     }
-    await audit(connection, req.user.id, 'IMPORT', 'attendance', project.id || null, null,
-      { filename: req.body.filename || null, inserted, updated, skipped: skipped.length }, req.ip);
+    await audit(connection, req.user.id, 'IMPORT', 'attendance', null, null,
+      { filename: req.body.filename || null, inserted, updated, skipped: skipped.length,
+        locations: [...new Set(resolved.map(row => row.workLocation === 'Site' ? `Site:${row.projectId}` : row.workLocation))] }, req.ip);
   });
 
-  res.status(201).json({ site: project.name, inserted, updated, skipped });
+  res.status(201).json({ site: 'assigned work locations', inserted, updated, skipped });
 }));
 
 /**

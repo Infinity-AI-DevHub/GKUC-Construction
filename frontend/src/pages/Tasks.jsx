@@ -50,7 +50,7 @@ function TaskForm({ data, close, reload }) {
     await post('/tasks', {
       title: values.title,
       projectId: Number(values.projectId),
-      assignee: values.assignee,
+      assigneeEmployeeId: Number(values.assigneeEmployeeId),
       due: values.due,
       dueDate: values.dueDate,
       priority: values.priority,
@@ -60,7 +60,7 @@ function TaskForm({ data, close, reload }) {
   }}>
     <Field name="title" label="Task title" wide />
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
-    <SelectField name="assignee" label="Assignee" options={data.employees.map(employee => [employee.name, `${employee.name} — ${employee.designation}`])} />
+    <SelectField name="assigneeEmployeeId" label="Assignee" options={[["", 'Choose an employee…'], ...data.employees.filter(employee => ['Active', 'On leave'].includes(employee.status)).map(employee => [employee.id, `${employee.name} — ${employee.designation}`])]} />
     <Field name="due" label="Due (as shown to the team)" defaultValue="Today, 4:00 PM" />
     <Field name="dueDate" label="Deadline date" type="date" defaultValue={todayInput()} />
     <SelectField name="priority" label="Priority" options={['Low', 'Medium', 'High']} defaultValue="Medium" />

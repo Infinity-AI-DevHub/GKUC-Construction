@@ -4,13 +4,14 @@ import { audit, getOne, nextReference, pool, query, spendSql, today, transaction
 import { auth, permit, validate, wrap } from '../lib/http.js';
 import { commitmentsDocument, documentContext, quotationDocument } from '../lib/documents.js';
 import { notify } from '../alerts.js';
+import { resolveProjectManager } from '../lib/project-manager.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 /* ------------------------------------------------------------------ Quotations */
 
-const quoteSelect = `SELECT q.id,q.reference,q.title,q.client_name client,q.engagement,q.main_contractor mainContractor,q.quote_date quoteDate,q.valid_until validUntil,
+const quoteSelect = `SELECT q.id,q.reference,q.title,q.client_name client,q.client_id clientId,q.location,q.contact,q.engagement,q.main_contractor mainContractor,q.quote_date quoteDate,q.valid_until validUntil,
   q.subtotal,q.markup_percent markupPercent,q.vat_percent vatPercent,q.total,q.status,q.notes,q.terms,
   q.company_id companyId,c.name company,q.boq_id boqId,b.reference boqReference,q.project_id projectId,p.name project,q.inquiry_id inquiryId,u.name preparedBy
   FROM quotations_client q LEFT JOIN boqs b ON b.id=q.boq_id LEFT JOIN projects p ON p.id=q.project_id
@@ -137,7 +138,8 @@ router.patch('/methods/:id', auth, permit('qs.quotation'), validate(z.object({
  */
 router.post('/quotations/from-methods', auth, permit('qs.quotation'), validate(z.object({
   companyId: z.number().int().positive().default(1),
-  clientName: z.string().min(2).max(180),
+  clientName: z.string().min(2).max(180).optional(),
+  clientId: z.number().int().positive().optional(),
   projectId: z.number().int().positive().optional(),
   inquiryId: z.number().int().positive().optional(),
   location: z.string().max(180).optional(),
@@ -153,11 +155,20 @@ router.post('/quotations/from-methods', auth, permit('qs.quotation'), validate(z
     quantity: z.number().positive(),
     rate: z.number().nonnegative().optional()
   })).min(1).max(60)
-})), wrap(async (req, res) => {
+}).refine(value => value.clientId || value.clientName, { message: 'Choose a client', path: ['clientId'] })), wrap(async (req, res) => {
   const body = req.body;
+  let client = body.clientId
+    ? await getOne('SELECT id,name,contact_person contactPerson,site_address siteAddress,billing_address billingAddress FROM clients WHERE id=? AND active=1', [body.clientId])
+    : await getOne('SELECT id,name,contact_person contactPerson,site_address siteAddress,billing_address billingAddress FROM clients WHERE LOWER(name)=LOWER(?) ORDER BY id LIMIT 1', [body.clientName]);
+  if (!client && body.clientName && !body.clientId) {
+    const created = await query("INSERT INTO clients (type,name) VALUES ('Organisation',?)", [body.clientName]);
+    client = { id: created.insertId, name: body.clientName };
+  }
+  if (!client) return res.status(400).json({ error: 'Choose an active client from the client directory.' });
   if (body.projectId) {
-    const project = await getOne('SELECT id FROM projects WHERE id=? AND company_id=?', [body.projectId, body.companyId]);
+    const project = await getOne('SELECT id,client_id clientId FROM projects WHERE id=? AND company_id=?', [body.projectId, body.companyId]);
     if (!project) return res.status(400).json({ error: 'That project belongs to the other company' });
+    if (project.clientId && Number(project.clientId) !== Number(client.id)) return res.status(400).json({ error: 'The quotation client must match the selected project client.' });
   }
   if (body.inquiryId) {
     const inquiry = await getOne('SELECT id FROM inquiries WHERE id=? AND company_id=?', [body.inquiryId, body.companyId]);
@@ -199,13 +210,13 @@ router.post('/quotations/from-methods', auth, permit('qs.quotation'), validate(z
 
   const id = await transaction(async connection => {
     const [result] = await connection.execute(`INSERT INTO quotations_client
-      (company_id,reference,project_id,inquiry_id,client_name,title,quote_date,valid_until,subtotal,
+      (company_id,reference,project_id,inquiry_id,client_id,client_name,title,quote_date,valid_until,subtotal,
        markup_percent,vat_percent,total,notes,method_codes,location,contact,payment_terms,prepared_by)
-      VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?)`,
-    [body.companyId, reference, body.projectId || null, body.inquiryId || null, body.clientName,
+      VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?)`,
+    [body.companyId, reference, body.projectId || null, body.inquiryId || null, client.id, client.name,
       names.join(' / '), body.quoteDate || today(), body.validUntil || null, subtotal,
       body.vatPercent, total, body.notes || null, codes.join(','),
-      body.location || null, body.contact || null, terms, req.user.id]);
+      body.location || client.siteAddress || client.billingAddress || null, body.contact || client.contactPerson || null, terms, req.user.id]);
 
     for (const line of priced) {
       await connection.execute(`INSERT INTO quotation_items
@@ -223,6 +234,7 @@ router.post('/quotations/from-methods', auth, permit('qs.quotation'), validate(z
 
 router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
   boqId: z.number().int().positive(),
+  clientId: z.number().int().positive().optional(),
   clientName: z.string().min(2).max(180).optional(),
   title: z.string().min(3).max(200).optional(),
   quoteDate: isoDate.optional(),
@@ -237,9 +249,13 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
   mainContractor: z.string().max(180).optional(),
   notes: z.string().max(1000).optional()
 })), wrap(async (req, res) => {
-  const boq = await getOne(`SELECT b.*,p.name project,p.client,p.company_id FROM boqs b JOIN projects p ON p.id=b.project_id WHERE b.id=?`,
+  const boq = await getOne(`SELECT b.*,p.name project,COALESCE(c.name,p.client) client,p.client_id clientId,p.company_id,
+    c.contact_person clientContact,COALESCE(c.site_address,c.billing_address) clientLocation
+    FROM boqs b JOIN projects p ON p.id=b.project_id LEFT JOIN clients c ON c.id=p.client_id WHERE b.id=?`,
     [req.body.boqId]);
   if (!boq) return res.status(404).json({ error: 'BOQ not found' });
+  if (req.body.clientId && Number(req.body.clientId) !== Number(boq.clientId))
+    return res.status(400).json({ error: 'The selected client does not match this BOQ’s project.' });
   const items = await query('SELECT category,description,unit,quantity,rate,amount,material_id materialId FROM boq_items WHERE boq_id=? ORDER BY id', [boq.id]);
   if (!items.length) return res.status(409).json({ error: 'That BOQ has no priced lines to quote from' });
 
@@ -250,14 +266,14 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
 
   const id = await transaction(async connection => {
     const [result] = await connection.execute(`INSERT INTO quotations_client
-      (company_id,reference,boq_id,project_id,inquiry_id,client_name,title,quote_date,valid_until,subtotal,
-       markup_percent,vat_percent,total,notes,engagement,main_contractor,prepared_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [boq.company_id, reference, boq.id, boq.project_id, req.body.inquiryId || null,
-      req.body.clientName || boq.client, req.body.title || describe(boq),
+      (company_id,reference,boq_id,project_id,inquiry_id,client_id,client_name,title,quote_date,valid_until,subtotal,
+       markup_percent,vat_percent,total,notes,engagement,main_contractor,location,contact,prepared_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [boq.company_id, reference, boq.id, boq.project_id, req.body.inquiryId || null, boq.clientId,
+      boq.client, req.body.title || describe(boq),
       req.body.quoteDate || today(), req.body.validUntil || null, subtotal,
       req.body.markupPercent, req.body.vatPercent, total, req.body.notes || null,
-      req.body.engagement, req.body.mainContractor || null, req.user.id]);
+      req.body.engagement, req.body.mainContractor || null, boq.clientLocation || null, boq.clientContact || null, req.user.id]);
     /* The lines are copied, not referenced: a later BOQ edit must not silently restate a
        quotation the client has already been given. */
     for (const item of items) {
@@ -285,6 +301,7 @@ router.patch('/quotations/:id', auth, permit('qs.quotation'), validate(z.object(
   status: z.enum(['Draft', 'Sent', 'Accepted', 'Declined', 'Expired']).optional(),
   title: z.string().min(3).max(200).optional(),
   clientName: z.string().min(2).max(180).optional(),
+  clientId: z.number().int().positive().optional(),
   quoteDate: isoDate.optional(),
   validUntil: isoDate.nullable().optional(),
   notes: z.string().max(1000).nullable().optional(),
@@ -296,17 +313,30 @@ wrap(async (req, res) => {
 
   /* An accepted quotation is what the client agreed to; its wording stops being ours to
      rewrite, though its status can still move on. */
-  const rewording = ['title', 'clientName', 'quoteDate', 'validUntil', 'notes', 'terms']
+  const rewording = ['title', 'clientName', 'clientId', 'quoteDate', 'validUntil', 'notes', 'terms']
     .some(field => req.body[field] !== undefined);
   if (rewording && quotation.status === 'Accepted') {
     return res.status(409).json({ error: 'An accepted quotation cannot be reworded. Raise a new one instead.' });
   }
 
   const columns = {
-    title: 'title', clientName: 'client_name', quoteDate: 'quote_date',
+    title: 'title', quoteDate: 'quote_date',
     validUntil: 'valid_until', notes: 'notes', terms: 'terms'
   };
   const edits = Object.entries(columns).filter(([key]) => req.body[key] !== undefined);
+  if (req.body.clientId || req.body.clientName) {
+    const client = req.body.clientId
+      ? await getOne('SELECT id,name FROM clients WHERE id=? AND active=1', [req.body.clientId])
+      : await getOne('SELECT id,name FROM clients WHERE LOWER(name)=LOWER(?) ORDER BY id LIMIT 1', [req.body.clientName]);
+    if (!client) return res.status(400).json({ error: 'Choose an active client from the client directory.' });
+    if (quotation.project_id) {
+      const project = await getOne('SELECT client_id clientId FROM projects WHERE id=?', [quotation.project_id]);
+      if (project?.clientId && Number(project.clientId) !== Number(client.id))
+        return res.status(400).json({ error: 'The quotation client must match the project client.' });
+    }
+    edits.push(['clientId', 'client_id'], ['clientName', 'client_name']);
+    req.body.clientId = client.id; req.body.clientName = client.name;
+  }
 
   await transaction(async connection => {
     if (edits.length) {
@@ -374,7 +404,7 @@ const STANDARD_CHECKLIST = [
   'VAT and business registration certificates'
 ];
 
-const tenderSelect = `SELECT t.id,t.reference,t.contract_no contractNo,t.title,t.client,t.source,
+const tenderSelect = `SELECT t.id,t.reference,t.contract_no contractNo,t.title,t.client,t.client_id clientId,t.source,
   t.company_id companyId,c.name company,
   t.bidding_entity biddingEntity,t.procurement_method procurementMethod,t.specialty,t.cida_grade cidaGrade,
   t.employer_office employerOffice,t.employer_contact employerContact,t.max_contract_value maxContractValue,
@@ -444,7 +474,8 @@ const tenderShape = z.object({
   companyId: z.number().int().positive().default(1),
   contractNo: z.string().max(120).optional(),
   title: z.string().min(3).max(220),
-  client: z.string().min(2).max(180),
+  client: z.string().min(2).max(180).optional(),
+  clientId: z.number().int().positive().optional(),
   source: z.string().max(120).optional(),
   biddingEntity: z.string().max(120).optional(),
   procurementMethod: z.enum(['National Competitive Bidding', 'International Competitive Bidding', 'Shopping', 'Direct']).default('National Competitive Bidding'),
@@ -477,6 +508,7 @@ const dateOrder = { message: 'The dates run backwards: documents go on sale, the
 
 const columns = {
   companyId: 'company_id',
+  clientId: 'client_id',
   contractNo: 'contract_no', biddingEntity: 'bidding_entity', procurementMethod: 'procurement_method',
   cidaGrade: 'cida_grade', employerOffice: 'employer_office', employerContact: 'employer_contact',
   maxContractValue: 'max_contract_value', documentFee: 'document_fee', docsFrom: 'docs_from',
@@ -491,9 +523,19 @@ const columns = {
   submittedDate: 'submitted_date', documentsNote: 'documents_note', outcomeNote: 'outcome_note'
 };
 
-router.post('/tenders', auth, permit('qs.tender'), validate(tenderShape.refine(datesRunForwards, dateOrder)),
+router.post('/tenders', auth, permit('qs.tender'), validate(tenderShape.refine(datesRunForwards, dateOrder)
+  .refine(value => value.clientId || value.client, { message: 'Choose a client', path: ['clientId'] })),
   wrap(async (req, res) => {
-    const body = req.body;
+    const body = { ...req.body };
+    let client = body.clientId
+      ? await getOne('SELECT id,name FROM clients WHERE id=? AND active=1', [body.clientId])
+      : await getOne('SELECT id,name FROM clients WHERE LOWER(name)=LOWER(?) ORDER BY id LIMIT 1', [body.client]);
+    if (!client && body.client && !body.clientId) {
+      const created = await query("INSERT INTO clients (type,name) VALUES ('Organisation',?)", [body.client]);
+      client = { id: created.insertId, name: body.client };
+    }
+    if (!client) return res.status(400).json({ error: 'Choose an active client from the client directory.' });
+    body.clientId = client.id; body.client = client.name;
     const reference = await nextReference('TEN', 'tenders');
     const id = await transaction(async connection => {
       const fields = Object.entries(body).filter(([, value]) => value !== undefined);
@@ -540,7 +582,15 @@ router.patch('/tenders/:id', auth, permit('qs.tender'), validate(tenderShape.par
     }
   }
 
-  const entries = Object.entries(req.body).filter(([, value]) => value !== undefined);
+  const body = { ...req.body };
+  if (body.clientId || body.client) {
+    const client = body.clientId
+      ? await getOne('SELECT id,name FROM clients WHERE id=? AND active=1', [body.clientId])
+      : await getOne('SELECT id,name FROM clients WHERE LOWER(name)=LOWER(?) ORDER BY id LIMIT 1', [body.client]);
+    if (!client) return res.status(400).json({ error: 'Choose an active client from the client directory.' });
+    body.clientId = client.id; body.client = client.name;
+  }
+  const entries = Object.entries(body).filter(([, value]) => value !== undefined);
   if (entries.length) {
     await query(`UPDATE tenders SET ${entries.map(([key]) => `${columns[key] || key}=?`).join(',')} WHERE id=?`,
       [...entries.map(([, value]) => value), tender.id]);
@@ -608,6 +658,7 @@ router.post('/tenders/:id/outcome', auth, permit('qs.tender'), validate(z.object
   outcomeNote: z.string().max(600).optional(),
   registerProject: z.boolean().default(false),
   manager: z.string().max(120).optional(),
+  managerEmployeeId: z.number().int().positive().optional(),
   startDate: isoDate.optional(),
   endDate: isoDate.optional()
 })), wrap(async (req, res) => {
@@ -615,17 +666,22 @@ router.post('/tenders/:id/outcome', auth, permit('qs.tender'), validate(z.object
   if (!tender) return res.status(404).json({ error: 'Tender not found' });
   if (tender.project_id) return res.status(409).json({ error: 'This tender has already been registered as a project' });
   const body = req.body;
+  const manager = body.status === 'Won' && body.registerProject
+    ? await resolveProjectManager(body, { optional: true }) : null;
 
   const outcome = await transaction(async connection => {
     let projectId = null;
     if (body.status === 'Won' && body.registerProject) {
       const budget = body.awardValue || Number(tender.bid_value) || Number(tender.estimated_value);
       const [project] = await connection.execute(
-        `INSERT INTO projects (company_id,name,client,manager,site,stage,budget,progress,health,start_date,end_date)
-         VALUES (?,?,?,?,?, 'Mobilisation', ?, 0, 'On track', ?, ?)`,
-        [tender.company_id,tender.title.slice(0, 180), tender.client, body.manager || 'To be assigned',
+        `INSERT INTO projects (company_id,name,client_id,client,manager,manager_employee_id,site,stage,budget,progress,health,start_date,end_date)
+         VALUES (?,?,?,?,?,?,?, 'Mobilisation', ?, 0, 'On track', ?, ?)`,
+        [tender.company_id,tender.title.slice(0, 180), tender.client_id, tender.client, manager.manager, manager.managerEmployeeId,
           tender.employer_office || tender.client, budget, body.startDate || today(), body.endDate || null]);
       projectId = project.insertId;
+      if (manager.managerEmployeeId) await connection.execute(
+        'INSERT INTO project_manager_assignments (project_id,employee_id) VALUES (?,?)',
+        [projectId, manager.managerEmployeeId]);
     }
 
     await connection.execute(

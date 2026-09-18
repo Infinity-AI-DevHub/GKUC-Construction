@@ -1,16 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Building2, CalendarDays, Coffee, MapPin, Search, UsersRound } from 'lucide-react';
-import { api, patch, shortDate, slug, todayInput } from '../api.js';
-import { Avatar, Badge, Summary } from '../ui.jsx';
+import { api, patch, post, shortDate, slug, todayInput } from '../api.js';
+import { Avatar, Badge, Field, FormModal, SelectField, Summary, TextArea } from '../ui.jsx';
 
 const FILTERS = [['all', 'Everyone'], ['free', 'Free'], ['site', 'At sites'], ['office', 'At office'], ['leave', 'On leave'], ['not-working', 'Not working']];
 
-export default function WorkforceMap({ canManage }) {
+export default function WorkforceMap({ canManage, canPlan, projects = [] }) {
   const [date, setDate] = useState(todayInput());
   const [data, setData] = useState(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
+  const [planning, setPlanning] = useState(null);
+  const [planLocation, setPlanLocation] = useState('Site');
   const load = () => { setError(''); api(`/employees/availability?date=${date}`).then(setData).catch(failure => setError(failure.message)); };
   useEffect(load, [date]);
 
@@ -29,7 +31,7 @@ export default function WorkforceMap({ canManage }) {
   return <div className="workforce-map">
     <section className="workforce-command">
       <div><span>Daily deployment</span><h2>Where is everyone?</h2>
-        <p>Attendance, approved leave and active project assignments combined for one reliable workforce picture.</p></div>
+        <p>Attendance, approved leave and dated work-location plans combined for one reliable workforce picture.</p></div>
       <label><CalendarDays size={16} />View date<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label>
     </section>
 
@@ -52,6 +54,9 @@ export default function WorkforceMap({ canManage }) {
             <div className="workforce-person-name"><strong>{person.name}</strong><span>{person.designation} · {person.department || 'No department'}</span></div>
             <div className="workforce-location"><MapPin size={15} /><div><strong>{person.location}</strong><span>{person.status}</span></div></div>
             <Badge tone={slug(person.status)}>{person.status}</Badge>
+            {canPlan && <button className="status-button" type="button" onClick={() => {
+              setPlanning(person); setPlanLocation(person.workerType === 'Office' && person.group === 'office' ? 'Office' : 'Site');
+            }}>Set work dates</button>}
             {canManage ? <select aria-label={`Employee type for ${person.name}`} value={person.workerType} onChange={event => changeType(person, event.target.value)}>
               <option value="Office">Office employee</option><option value="Site">Site worker</option>
             </select> : <span className="worker-type">{person.workerType} employee</span>}
@@ -70,5 +75,28 @@ export default function WorkforceMap({ canManage }) {
         <div className="availability-callout"><Coffee size={20} /><div><strong>{data?.summary.free || 0} site workers available</strong><span>Not assigned to a site and not recorded on leave.</span></div></div>
       </aside>
     </div>
+    {planning && <FormModal title={`Plan work location — ${planning.name}`} close={() => setPlanning(null)}
+      label="Save dated location" onSubmit={async values => {
+        await post('/employees/work-locations', {
+          employeeId: planning.id, from: values.from, to: values.to,
+          workLocation: planLocation,
+          projectId: planLocation === 'Site' ? Number(values.projectId) : null,
+          reason: values.reason.trim()
+        });
+        await load();
+      }}>
+      <Field name="from" label="From date" type="date" defaultValue={date} />
+      <Field name="to" label="Through date" type="date" defaultValue={date} />
+      <label>Work location<select name="workLocation" value={planLocation} onChange={event => setPlanLocation(event.target.value)}>
+        <option value="Site">Project site</option>
+        {planning.workerType === 'Office' && <option value="Office">Head office</option>}
+        <option value="Unassigned">Clear dated assignment</option>
+      </select></label>
+      {planLocation === 'Site' && <SelectField name="projectId" label="Project / site"
+        options={[["", 'Choose a site…'], ...projects.map(project => [project.id, project.name])]}
+        defaultValue={planning.projectId || ''} />}
+      <TextArea name="reason" label="Reason for this schedule" placeholder="For example: transferred to Kaduwela site this week." />
+      <p className="form-note wide">This plan guides the workforce map and future biometric imports for these dates. It does not silently change attendance already imported; correct existing records in Attendance or Attendance register.</p>
+    </FormModal>}
   </div>;
 }

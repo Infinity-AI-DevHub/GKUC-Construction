@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Download, Upload, AlertTriangle, Info, Check, X, FileSpreadsheet, Loader2, PencilLine, Wand2, Paperclip } from 'lucide-react';
+import { Download, Upload, AlertTriangle, Info, Check, X, FileSpreadsheet, FileText, Loader2, PencilLine, Wand2, Paperclip } from 'lucide-react';
 import { api, post, del, rupees, announceDataChanged, fetchDownload } from './api.js';
 
 /*
@@ -23,6 +23,7 @@ export default function BoqImport({ projects, onDone, onCreate }) {
   const [error, setError] = useState('');
   const [projectId, setProjectId] = useState('');
   const fileInput = useRef(null);
+  const pdfInput = useRef(null);
 
   const downloadTemplate = async () => {
     setError('');
@@ -52,6 +53,7 @@ export default function BoqImport({ projects, onDone, onCreate }) {
     } finally {
       setBusy(false);
       if (fileInput.current) fileInput.current.value = '';
+      if (pdfInput.current) pdfInput.current.value = '';
     }
   };
 
@@ -121,13 +123,54 @@ export default function BoqImport({ projects, onDone, onCreate }) {
       {error && <p className="form-error">{error}</p>}
     </div>
     </section>
+
+    <section className="panel boq-import boq-pdf-import">
+      <div className="panel-title"><h2>Read a BOQ PDF</h2><span className="badge">Review before saving</span></div>
+      <div className="boq-import-body">
+        <div className="boq-pdf-copy">
+          <FileText size={22} />
+          <p><strong>Have a BOQ as a PDF?</strong><br />Upload it here and the system will read the project details, client/reference information, sections, quantities, rates and amounts. It will open a review screen so you can correct anything before it becomes a BOQ.</p>
+        </div>
+        <div className="boq-import-actions">
+          <button type="button" className="primary" onClick={() => pdfInput.current?.click()} disabled={busy}>
+            {busy ? <Loader2 size={16} className="docsearch-spin" /> : <FileText size={16} />}
+            {busy ? 'Reading the PDF…' : 'Read uploaded PDF'}
+          </button>
+          <input ref={pdfInput} type="file" hidden accept=".pdf,application/pdf"
+            onChange={event => upload(event.target.files?.[0])} />
+        </div>
+        <p className="boq-help">Nothing is committed when you upload. Scanned/image-only PDFs may need an administrator to enable OCR.</p>
+      </div>
+    </section>
   </>;
 }
 
 function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCancel, onCommitted }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [documentDraft, setDocumentDraft] = useState({});
+  const [documentSaving, setDocumentSaving] = useState(false);
   const problems = staged.items.filter(item => item.include && item.problems).length;
+
+  useEffect(() => {
+    setDocumentDraft({
+      title: staged.title || '', client: staged.client || '',
+      documentReference: staged.documentReference || staged.layout?.reference || '',
+      location: staged.location || staged.layout?.location || '',
+      documentDate: staged.documentDate || staged.layout?.documentDate || '',
+      notes: staged.notes || ''
+    });
+  }, [staged.id]);
+
+  const saveDocument = async () => {
+    setDocumentSaving(true);
+    setError('');
+    try {
+      const updated = await api(`/boq/imports/${staged.id}`, { method: 'PATCH', body: JSON.stringify(documentDraft) });
+      onChange(updated);
+    } catch (failure) { setError(failure.message); }
+    finally { setDocumentSaving(false); }
+  };
 
   const patch = async (itemId, change) => {
     try {
@@ -140,6 +183,18 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
 
   const commit = async () => {
     setError('');
+    if (!projectId) {
+      setError('Choose the project this BOQ belongs to before approving it.');
+      return;
+    }
+    if (problems > 0) {
+      setError(`Correct the ${problems} row${problems === 1 ? '' : 's'} marked in amber, or untick them, before approving.`);
+      return;
+    }
+    if (!included.length) {
+      setError('Select at least one BOQ line to include before approving.');
+      return;
+    }
     setSaving(true);
     try {
       const result = await post(`/boq/imports/${staged.id}/commit`, { projectId: Number(projectId) });
@@ -190,7 +245,7 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
 
     <div className="boq-review-head">
       <div>
-        <FileSpreadsheet size={17} />
+        {staged.layout?.format === 'PDF' ? <FileText size={17} /> : <FileSpreadsheet size={17} />}
         <div>
           <strong>{staged.title || staged.filename}</strong>
           <small>{staged.client ? `${staged.client} · ` : ''}{included.length} of {staged.items.length} lines included</small>
@@ -205,6 +260,24 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
       </label>
     </div>
 
+    <div className="boq-document-details">
+      <div className="boq-document-details-head">
+        <div><strong>Document details</strong><small>Check and correct what was read from the file.</small></div>
+        <button type="button" className="secondary" onClick={saveDocument} disabled={documentSaving}>
+          {documentSaving ? 'Saving…' : 'Save document details'}
+        </button>
+      </div>
+      <div className="boq-document-grid">
+        {[
+          ['title', 'BOQ title'], ['client', 'Client'], ['documentReference', 'Reference'],
+          ['location', 'Location'], ['documentDate', 'Document date']
+        ].map(([key, label]) => <label key={key}>{label}<input value={documentDraft[key] || ''}
+          onChange={event => setDocumentDraft(current => ({ ...current, [key]: event.target.value }))} /></label>)}
+        <label className="boq-document-notes">Notes<textarea rows="2" value={documentDraft.notes || ''}
+          onChange={event => setDocumentDraft(current => ({ ...current, notes: event.target.value }))} /></label>
+      </div>
+    </div>
+
     {/*
       * A bill written on somebody else's template was read by working out what the columns
       * meant. Showing that working is the difference between the reviewer checking the
@@ -215,15 +288,14 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
         <Info size={17} />
         <div>
           <strong>This is not our template, so the system worked out the layout</strong>
-          <p>
-            Headings were found on row {staged.layout.headerRow} of sheet
-            <b> {staged.layout.sheet || 'the first sheet'}</b>. Check the columns were read the right way round:
-          </p>
-          <ul className="boq-mapping">
+          <p>{staged.layout.format === 'PDF'
+            ? 'The PDF text layout was read and wrapped descriptions were joined to their item rows. Check each line against the original.'
+            : <>Headings were found on row {staged.layout.headerRow} of sheet <b>{staged.layout.sheet || 'the first sheet'}</b>. Check the columns were read the right way round:</>}</p>
+          {staged.layout.format !== 'PDF' && <ul className="boq-mapping">
             {Object.entries(staged.layout.headings || {}).map(([key, heading]) => (
               <li key={key}><span>{LABELS[key] || key}</span><b>{heading || '—'}</b></li>
             ))}
-          </ul>
+          </ul>}
           {staged.layout.notes?.length ? (
             <p className="boq-mapping-notes">{staged.layout.notes.join('. ')}.</p>
           ) : null}
@@ -308,13 +380,15 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
     <div className="boq-review-actions">
       <button type="button" className="secondary" onClick={onCancel}><X size={16} /> Discard this file</button>
       <button type="button" className="primary" onClick={commit}
-        disabled={saving || !projectId || problems > 0 || !included.length}>
+        disabled={saving}>
         <Check size={16} /> {saving ? 'Saving…' : 'Approve and create the BOQ'}
       </button>
     </div>
-    {problems > 0 && (
+    {(problems > 0 || !projectId || !included.length) && (
       <p className="boq-review-note">
-        Correct the rows marked above, or untick them, before this can be saved.
+        {!projectId ? 'Choose a project before approving. ' : ''}
+        {problems > 0 ? 'Correct the rows marked above, or untick them, before this can be saved. ' : ''}
+        {!included.length ? 'Select at least one line to include.' : ''}
       </p>
     )}
   </section>;
