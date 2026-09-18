@@ -44,7 +44,7 @@ export default function ProjectDetail({ projectId, data, close, reload, can }) {
     {adding === 'task' && <ProjectTaskForm projectId={project.id} employees={data.employees} close={()=>setAdding('')} reload={refresh} />}
     {editingTask && <ProjectTaskForm projectId={project.id} employees={data.employees} task={editingTask} close={()=>setEditingTask(null)} reload={refresh} />}
     {adding === 'rate' && <ProjectRateForm projectId={project.id} close={()=>setAdding('')} reload={refresh} />}
-    {adding === 'team' && <TeamForm projectId={project.id} employees={data.employees} close={() => setAdding('')} reload={refresh} />}
+    {adding === 'team' && <TeamForm project={project} employees={data.employees} close={() => setAdding('')} reload={refresh} />}
     {adding === 'manager' && <ManagerForm project={project} employees={data.employees} close={() => setAdding('')} reload={refresh} />}
   </div>;
 }
@@ -138,7 +138,7 @@ function Commercial({ project }) {
     <Table columns={['Purchase order', 'Supplier', 'Date', 'Value', 'Status']} template="minmax(170px,1.3fr) minmax(180px,1.5fr) 140px 150px 130px" title="Project procurement" empty="No purchase orders linked to this project.">{project.purchaseOrders.map(row => <Row template="minmax(170px,1.3fr) minmax(180px,1.5fr) 140px 150px 130px" key={row.id}><strong>{row.reference}</strong><span>{row.supplier}</span><span>{shortDate(row.orderDate)}</span><strong>{rupees(row.total)}</strong><Badge tone={slug(row.status)}>{row.status}</Badge></Row>)}</Table></div>;
 }
 
-function Team({ project, can, onAdd, onManage }) { return <section className="workspace-surface"><div className="workspace-section-heading"><div><span className="section-kicker">People on the project</span><h2>Delivery team</h2></div>{can.projects && <div className="row-actions"><button className="secondary" onClick={onManage}>Change manager</button><button className="secondary" onClick={onAdd}>Assign member</button></div>}</div><div className="team-card-grid">{project.team.map(member => <article key={member.id}><Avatar name={member.name} /><div><strong>{member.name}</strong><span>{member.projectRole}</span><small>{member.designation} · {member.code}</small></div></article>)}</div>{!project.team.length && <EmptyVisual icon={Users} title="No team assigned" text="Assign project members to make ownership visible here." />}</section>; }
+function Team({ project, can, onAdd, onManage }) { return <section className="workspace-surface"><div className="workspace-section-heading"><div><span className="section-kicker">People on the project</span><h2>Delivery team</h2></div>{can.projects && <div className="row-actions"><button className="secondary" onClick={onManage}>Change manager</button><button className="secondary" onClick={onAdd}>Assign members</button></div>}</div><div className="team-card-grid">{project.team.map(member => <article key={member.id}><Avatar name={member.name} /><div><strong>{member.name}</strong><span>{member.projectRole}</span><small>{member.designation} · {member.code}</small></div></article>)}</div>{!project.team.length && <EmptyVisual icon={Users} title="No team assigned" text="Assign project members to make ownership visible here." />}</section>; }
 function ManagerForm({ project, employees, close, reload }) { return <FormModal title="Change project manager" close={close} label="Save manager" onSubmit={async values => {
   await patch(`/projects/${project.id}`, { managerEmployeeId: Number(values.managerEmployeeId) }); await reload();
 }}><SelectField name="managerEmployeeId" label="Project manager" defaultValue={project.managerEmployeeId || ''}
@@ -155,4 +155,51 @@ function CompletionReport({ projectId }) {
 function SectionHeading({ kicker, title, icon: Icon }) { return <div className="workspace-section-heading"><div><span className="section-kicker">{kicker}</span><h2>{title}</h2></div>{Icon && <Icon size={22} />}</div>; }
 function EmptyVisual({ icon: Icon, title, text }) { return <div className="empty-visual"><span><Icon size={22} /></span><strong>{title}</strong><p>{text}</p></div>; }
 function MilestoneForm({ projectId, close, reload }) { return <FormModal title="Add milestone" close={close} label="Add milestone" onSubmit={async values => { await post(`/projects/${projectId}/milestones`, { title: values.title, dueDate: values.dueDate, status: values.status }); await reload(); }}><Field name="title" label="Milestone" wide /><Field name="dueDate" label="Due date" type="date" defaultValue={todayInput()} /><SelectField name="status" label="Status" options={['Pending', 'In progress', 'Completed', 'Delayed']} /></FormModal>; }
-function TeamForm({ projectId, employees, close, reload }) { return <FormModal title="Assign team member" close={close} label="Assign member" onSubmit={async values => { await post(`/projects/${projectId}/team`, { employeeId: Number(values.employeeId), projectRole: values.projectRole }); await reload(); }}><SelectField name="employeeId" label="Employee" options={employees.map(employee => [employee.id, `${employee.name} — ${employee.designation}`])} /><Field name="projectRole" label="Role on this project" placeholder="Site engineer, foreman" /></FormModal>; }
+function TeamForm({ project, employees, close, reload }) {
+  const assigned = new Set(project.team.map(member => Number(member.employeeId)));
+  const available = employees.filter(employee => ['Active', 'On leave'].includes(employee.status) && !assigned.has(Number(employee.id)));
+  const [selected, setSelected] = useState([]);
+  const [roles, setRoles] = useState({});
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const matches = available.filter(employee => `${employee.name} ${employee.designation} ${employee.code || ''}`.toLowerCase().includes(search.toLowerCase()));
+  return <FormModal title="Assign team members" close={close} label={`Assign ${selected.length || ''} member${selected.length === 1 ? '' : 's'}`} wide
+    onSubmit={async () => {
+      if (!selected.length) throw new Error('Select at least one employee.');
+      const members = selected.map(employeeId => ({ employeeId, projectRole: (roles[employeeId] || '').trim() }));
+      if (members.some(member => member.projectRole.length < 2)) throw new Error('Give each selected employee a project role.');
+      await post(`/projects/${project.id}/team/bulk`, { members });
+      await reload();
+    }}>
+    <div className="project-team-picker">
+      <label>Employees <span>*</span></label>
+      <button type="button" className="project-team-trigger" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+        {selected.length ? `${selected.length} employee${selected.length === 1 ? '' : 's'} selected` : 'Choose employees…'}
+      </button>
+      {open && <div className="project-team-options">
+        <input aria-label="Search employees" placeholder="Search by name or role" value={search} onChange={event => setSearch(event.target.value)} />
+        <div className="project-team-option-list">
+          {matches.map(employee => <label key={employee.id}>
+            <input type="checkbox" checked={selected.includes(Number(employee.id))}
+              onChange={event => {
+                setSelected(current => event.target.checked
+                  ? [...current, Number(employee.id)] : current.filter(id => id !== Number(employee.id)));
+                if (event.target.checked) setRoles(current => ({ ...current, [employee.id]: current[employee.id] || employee.designation || '' }));
+              }} />
+            <span><strong>{employee.name}</strong><small>{employee.designation}</small></span>
+          </label>)}
+          {!matches.length && <p>No available employees match this search.</p>}
+        </div>
+      </div>}
+      {selected.length > 0 && <div className="project-team-selected">
+        <strong>Roles for selected members</strong>
+        {available.filter(employee => selected.includes(Number(employee.id))).map(employee => <label key={employee.id}>
+          <span>{employee.name}</span>
+          <input aria-label={`Role for ${employee.name}`} value={roles[employee.id] || ''} placeholder="Role on this project"
+            onChange={event => setRoles(current => ({ ...current, [employee.id]: event.target.value }))} />
+        </label>)}
+      </div>}
+      {!available.length && <p>All active employees are already on this project.</p>}
+    </div>
+  </FormModal>;
+}
