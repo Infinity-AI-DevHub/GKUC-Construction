@@ -66,9 +66,9 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
     materialUsage, equipmentUsage, supplierInvoices, costItems, variationLedger, updates, subcontractRates] = await Promise.all([
     query('SELECT id,title,due_date dueDate,status,completed_at completedAt,notes FROM project_milestones WHERE project_id=? ORDER BY due_date', [project.id]),
     listAttachments('project', project.id),
-    query(`SELECT CONCAT('manager-',p.id) id,'Project manager' projectRole,e.name,e.designation,e.code
+    query(`SELECT CONCAT('manager-',p.id) id,e.id employeeId,'Project manager' projectRole,e.name,e.designation,e.code
       FROM projects p JOIN employees e ON e.id=p.manager_employee_id WHERE p.id=?
-      UNION ALL SELECT CAST(t.id AS CHAR) id,t.project_role projectRole,e.name,e.designation,e.code
+      UNION ALL SELECT CAST(t.id AS CHAR) id,e.id employeeId,t.project_role projectRole,e.name,e.designation,e.code
       FROM project_team t JOIN employees e ON e.id=t.employee_id JOIN projects p ON p.id=t.project_id
       WHERE t.project_id=? AND t.released_at IS NULL AND (p.manager_employee_id IS NULL OR p.manager_employee_id<>t.employee_id)
       ORDER BY name`, [project.id, project.id]),
@@ -309,6 +309,51 @@ router.get('/:id/completion', auth, permit('projects.view'), wrap(async (req, re
 }));
 
 /* Project team (PID 2.4) */
+router.post('/:id/team/bulk', auth, permit('projects.manage'), validate(z.object({
+  members: z.array(z.object({
+    employeeId: z.number().int().positive(),
+    projectRole: z.string().trim().min(2).max(120)
+  })).min(1).max(100)
+})), wrap(async (req, res) => {
+  const employeeIds = req.body.members.map(member => member.employeeId);
+  if (new Set(employeeIds).size !== employeeIds.length) {
+    return res.status(400).json({ error: 'An employee was selected more than once. Remove the duplicate and try again.' });
+  }
+  const project = await getOne('SELECT id,manager_employee_id managerEmployeeId FROM projects WHERE id=? AND active=1', [req.params.id]);
+  if (!project) return res.status(404).json({ error: 'This project is no longer available.' });
+  if (employeeIds.includes(Number(project.managerEmployeeId))) {
+    return res.status(400).json({ error: 'The project manager is already assigned. Remove them from the selection.' });
+  }
+  const employees = await query(`SELECT id,name,status FROM employees WHERE id IN (${employeeIds.map(() => '?').join(',')})`, employeeIds);
+  const available = new Set(employees.filter(row => ['Active', 'On leave'].includes(row.status)).map(row => Number(row.id)));
+  if (employeeIds.some(id => !available.has(id))) {
+    return res.status(400).json({ error: 'One or more selected employees are no longer active or available. Refresh the page and choose again.' });
+  }
+  const existing = await query(`SELECT employee_id employeeId FROM project_team WHERE project_id=? AND employee_id IN (${employeeIds.map(() => '?').join(',')})`,
+    [project.id, ...employeeIds]);
+  if (existing.length) {
+    const names = employees.filter(row => existing.some(member => Number(member.employeeId) === Number(row.id))).map(row => row.name);
+    return res.status(409).json({ error: `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} already on this project. Refresh the page and select other employees.` });
+  }
+  let created;
+  try {
+    created = await transaction(async connection => {
+      const rows = [];
+      for (const { employeeId, projectRole } of req.body.members) {
+        const [result] = await connection.execute('INSERT INTO project_team (project_id,employee_id,project_role) VALUES (?,?,?)',
+          [project.id, employeeId, projectRole]);
+        rows.push({ id: result.insertId, projectId: project.id, employeeId, projectRole });
+      }
+      return rows;
+    });
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'A selected employee was assigned to this project at the same time. Refresh the page and choose again.' });
+    throw error;
+  }
+  for (const row of created) await audit(pool, req.user.id, 'CREATE', 'project_team', row.id, null, row, req.ip);
+  res.status(201).json({ assigned: created.length, members: created });
+}));
+
 router.post('/:id/team', auth, permit('projects.manage'), validate(z.object({
   employeeId: z.number().int().positive(),
   projectRole: z.string().min(2).max(120)

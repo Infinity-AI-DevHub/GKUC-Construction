@@ -331,6 +331,31 @@ test('project managers and task assignees remain linked to employee work histori
   assert.ok(former.releasedAt, 'the former manager keeps a dated history');
 });
 
+test('several project members are assigned together and appear on the project', async () => {
+  const owner = await login();
+  const employees = (await call(owner, 'GET', '/bootstrap')).body.data.employees.filter(employee => employee.status === 'Active');
+  const clientId = (await call(owner, 'GET', '/clients')).body[0].id;
+  const project = await call(owner, 'POST', '/projects', { companyId: 1,
+    name: `Team assignment ${Date.now()}`, clientId, managerEmployeeId: employees[0].id,
+    site: 'Test site', stage: 'Planning', budget: 10000 });
+  assert.equal(project.status, 201, JSON.stringify(project.body));
+  const ids = employees.slice(1, 4).map(employee => employee.id);
+  const assigned = await call(owner, 'POST', `/projects/${project.body.id}/team/bulk`,
+    { members: ids.map((employeeId, index) => ({ employeeId, projectRole: index === 0 ? 'Foreman' : 'Site team' })) });
+  assert.equal(assigned.status, 201, JSON.stringify(assigned.body));
+  assert.equal(assigned.body.assigned, 3);
+  const detail = await call(owner, 'GET', `/projects/${project.body.id}`);
+  assert.deepEqual(ids.sort(), detail.body.team.filter(member => ['Site team', 'Foreman'].includes(member.projectRole))
+    .map(member => member.employeeId).sort());
+  assert.equal(detail.body.team.some(member => Number(member.employeeId) === Number(ids[0]) && member.projectRole === 'Foreman'), true);
+  const repeated = await call(owner, 'POST', `/projects/${project.body.id}/team/bulk`,
+    { members: [ids[0], employees[4].id].map(employeeId => ({ employeeId, projectRole: 'Site team' })) });
+  assert.equal(repeated.status, 409);
+  const after = await call(owner, 'GET', `/projects/${project.body.id}`);
+  assert.equal(after.body.team.some(member => Number(member.employeeId) === Number(employees[4].id)), false,
+    'a failed group request does not partly assign members');
+});
+
 test('a new project belongs to the selected operating company', async () => {
   const owner = await login();
   const data = (await call(owner, 'GET', '/bootstrap')).body.data;
