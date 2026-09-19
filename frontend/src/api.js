@@ -206,7 +206,7 @@ export const upload = async (ownerType, ownerId, file, meta = {}) => {
  * a bill priced by another company is a commercial document. The bytes come back through
  * the API and become an object URL scoped to this page.
  */
-export const fetchDownload = async path => {
+export const fetchDownload = async (path, { expectedType } = {}) => {
   const stored = token.get();
   let response;
   try {
@@ -224,7 +224,16 @@ export const fetchDownload = async path => {
     reportFailure(path, message);
     throw new Error(message);
   }
-  return URL.createObjectURL(await response.blob());
+  const blob = await response.blob();
+  if (expectedType === 'application/pdf') {
+    const signature = await blob.slice(0, 5).text();
+    if (signature !== '%PDF-') {
+      const message = 'The server returned a web page instead of a PDF. The download was stopped so you do not get a damaged file. Please refresh the app and try again; if it continues, ask an administrator to restart the server.';
+      reportFailure(path, message);
+      throw new Error(message);
+    }
+  }
+  return URL.createObjectURL(blob);
 };
 
 export const del = path => api(path, { method: 'DELETE' });
@@ -335,6 +344,30 @@ export const openDocument = async path => {
     tab.document.open();
     tab.document.write(html);
     tab.document.close();
+    const downloadButton = tab.document.querySelector('.bar button');
+    if (downloadButton) {
+      downloadButton.textContent = 'Download PDF';
+      downloadButton.onclick = async () => {
+        downloadButton.disabled = true;
+        downloadButton.textContent = 'Preparing PDF…';
+        try {
+          const separator = path.includes('?') ? '&' : '?';
+          const url = await fetchDownload(`${path}${separator}download=pdf`, { expectedType: 'application/pdf' });
+          const link = tab.document.createElement('a');
+          link.href = url;
+          link.download = `${tab.document.title.replace(/[^\w.-]+/g, '-')}.pdf`;
+          tab.document.body.appendChild(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
+        } catch (failure) {
+          notice({ title: 'PDF could not be downloaded', message: failure.message });
+        } finally {
+          downloadButton.disabled = false;
+          downloadButton.textContent = 'Download PDF';
+        }
+      };
+    }
     return true;
   } catch (failure) {
     tab.close();

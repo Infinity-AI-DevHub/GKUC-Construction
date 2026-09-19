@@ -314,6 +314,10 @@ export function quotationDocument({ company, quotation, items, settings: given, 
       <div class="party">
         <h3>Quotation for</h3>
         <strong>${escape(quotation.clientName || '—')}</strong>
+        ${quotation.clientTin ? `<p><strong>Purchaser TIN:</strong> ${escape(quotation.clientTin)}</p>` : ''}
+        ${quotation.clientVatNumber ? `<p><strong>VAT registration:</strong> ${escape(quotation.clientVatNumber)}</p>` : ''}
+        ${quotation.clientAddress ? `<p>${lines(quotation.clientAddress).join('<br>')}</p>` : ''}
+        ${quotation.clientPhone ? `<p>Telephone: ${escape(quotation.clientPhone)}</p>` : ''}
         ${quotation.project ? `<p>Project: ${escape(quotation.project)}</p>` : ''}
       </div>
       <div class="party">
@@ -362,6 +366,61 @@ export function quotationDocument({ company, quotation, items, settings: given, 
     design, company, blocks, settings,
     title: `${quotation.reference} — ${quotation.clientName || 'Quotation'}`
   });
+}
+
+export function invoiceDocument({ company, invoice, items, settings: given, design: givenDesign }) {
+  const settings = settingsFor(given);
+  const design = normaliseDesign(givenDesign);
+  const vat = Number(invoice.vatAmount || 0);
+  const gross = Number(invoice.gross || 0);
+  const net = Number(invoice.netPayable || 0);
+  const rows = items.map((item, index) => `<tr>
+    <td class="ref">${index + 1}</td><td>${escape(item.description)}</td>
+    <td class="unit">${escape(item.unit || '')}</td><td class="qty num">${quantity(item.quantity)}</td>
+    <td class="rate num">${money(item.rate)}</td><td class="amount num">${money(item.amount)}</td>
+  </tr>`).join('');
+  const totals = `<tfoot>
+    <tr><td colspan="5" class="num">Total value of supply excluding VAT</td><td class="num">${money(gross)}</td></tr>
+    ${invoice.taxTreatment !== 'Exempt' ? `<tr><td colspan="5" class="num">VAT @ ${money(invoice.vatRate)}%${invoice.taxTreatment === 'SVAT' ? ' (suspended)' : ''}</td><td class="num">${money(vat)}</td></tr>` : ''}
+    <tr><td colspan="5" class="num">Total amount including VAT</td><td class="num">${money(gross + vat)}</td></tr>
+    ${Number(invoice.retentionAmount) ? `<tr><td colspan="5" class="num">Retention withheld</td><td class="num">-${money(invoice.retentionAmount)}</td></tr>` : ''}
+    ${Number(invoice.advanceRecovery) ? `<tr><td colspan="5" class="num">Advance recovered</td><td class="num">-${money(invoice.advanceRecovery)}</td></tr>` : ''}
+    ${Number(invoice.otherDeductions) ? `<tr><td colspan="5" class="num">Other deductions</td><td class="num">-${money(invoice.otherDeductions)}</td></tr>` : ''}
+    <tr class="grand"><td colspan="5" class="num">Net payable${invoice.taxTreatment === 'SVAT' ? ' (VAT suspended)' : ''}</td><td class="num">${money(net)}</td></tr>
+  </tfoot>`;
+  const terms = lines(settings.invoiceTerms || '');
+  const blocks = {
+    letterhead: letterhead(company, invoice.documentType || (invoice.taxTreatment === 'Exempt' ? 'Invoice' : 'Tax Invoice'), invoice.reference, invoice.invoiceDate, design),
+    parties: `<div class="parties" data-block="parties">
+      <div class="party"><h3>Supplier</h3><strong>${escape(company.name)}</strong>
+        ${company.tin ? `<p><strong>TIN:</strong> ${escape(company.tin)}</p>` : ''}
+        ${company.address ? `<p>${lines(company.address).join('<br>')}</p>` : ''}
+        ${company.telephone ? `<p>Telephone: ${escape(company.telephone)}</p>` : ''}</div>
+      <div class="party"><h3>Purchaser</h3><strong>${escape(invoice.client)}</strong>
+        ${invoice.buyerTin ? `<p><strong>TIN:</strong> ${escape(invoice.buyerTin)}</p>` : ''}
+        ${invoice.buyerVatNumber ? `<p><strong>VAT registration:</strong> ${escape(invoice.buyerVatNumber)}</p>` : ''}
+        ${invoice.buyerAddress ? `<p>${lines(invoice.buyerAddress).join('<br>')}</p>` : ''}
+        ${invoice.buyerPhone ? `<p>Telephone: ${escape(invoice.buyerPhone)}</p>` : ''}</div>
+    </div>`,
+    subject: `<div class="subject" data-block="subject"><strong>${escape(invoice.title)}</strong>
+      ${invoice.project ? `<p>Project: ${escape(invoice.project)}</p>` : ''}
+      ${invoice.deliveryDate ? `<p>Date of delivery: ${escape(longDate(invoice.deliveryDate))}</p>` : ''}
+      ${invoice.placeOfSupply ? `<p>Place of supply: ${escape(invoice.placeOfSupply)}</p>` : ''}
+      ${invoice.dueDate ? `<p>Payment due: ${escape(longDate(invoice.dueDate))}</p>` : ''}
+      ${invoice.paymentMode ? `<p>Mode of payment: ${escape(invoice.paymentMode)}</p>` : ''}
+      ${invoice.notes ? `<p>Additional information: ${escape(invoice.notes)}</p>` : ''}</div>`,
+    table: `<table data-block="table"><thead><tr><th class="ref">Item</th><th>Description of goods or services</th>
+      <th class="unit">Unit</th><th class="qty num">Quantity</th><th class="rate num">Rate (Rs.)</th>
+      <th class="amount num">Amount excluding VAT (Rs.)</th></tr></thead><tbody>${rows}</tbody>
+      ${shows(design, 'totals') ? totals : ''}</table>`,
+    words: `<p class="words" data-block="words"><strong>Total amount in words:</strong> ${escape(amountInWords(net))}</p>`,
+    notes: '',
+    terms: terms.length ? `<div class="terms" data-block="terms"><h4>Terms &amp; conditions</h4><ul>${terms.map(line => `<li>${line}</li>`).join('')}</ul></div>` : '',
+    bank: company.bankDetails ? `<div class="terms" data-block="bank"><h4>Bank details</h4><p>${lines(company.bankDetails).join('<br>')}</p></div>` : '',
+    signatures: `<div class="sign" data-block="signatures"><div>For and on behalf of ${escape(company.name)}<br><br>Name &amp; signature</div></div>`,
+    footer: footer(company, invoice.reference, settings)
+  };
+  return page({ design, company, blocks, settings, title: `${invoice.reference} — ${invoice.client}` });
 }
 
 export function boqDocument({ company, boq, items, variations = [], settings: given, design: givenDesign }) {

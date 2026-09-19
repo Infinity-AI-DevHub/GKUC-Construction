@@ -57,15 +57,15 @@ export default function ClientDirectory({ canManage, companyId }) {
         <div><span><UserRound size={15} /> Contact: {empty(detail.contactPerson)}</span><span><Phone size={15} /> {empty(detail.phone)}{detail.alternatePhone ? ` / ${detail.alternatePhone}` : ''}</span>
           <span><Mail size={15} /> {empty(detail.email)}</span><span><MapPin size={15} /> Billing: {empty(detail.billingAddress)}</span>
           <span><MapPin size={15} /> Site: {empty(detail.siteAddress)}</span><span>City / district / province: {[detail.city, detail.district, detail.province].filter(Boolean).join(', ') || '—'}</span>
-          <span>Registration: {empty(detail.registrationNumber)}</span><span>Tax number: {empty(detail.taxNumber)}</span></div>
+          <span>Registration: {empty(detail.registrationNumber)}</span><span>TIN: {empty(detail.tin || detail.taxNumber)}</span><span>VAT registration: {empty(detail.vatNumber)}</span></div>
         {detail.notes && <p>{detail.notes}</p>}
       </section>
       <ClientHistory title="Projects" columns={['Project', 'Company', 'Site', 'Stage', 'Budget']} rows={detail.projects.map(row => [row.name, row.company, row.site, row.stage, rupees(row.budget)])} />
       {detail.activityVisible && <ClientHistory title="Inquiries" columns={['Reference', 'Need', 'Status', 'Expected value']} rows={detail.inquiries.map(row => [row.reference, row.description, row.status, rupees(row.expectedValue)])} />}
       {detail.quotationsVisible && <ClientHistory title="Quotations" columns={['Reference', 'Title', 'Company', 'Status', 'Total']} rows={detail.quotations.map(row => [row.reference, row.title, row.company, row.status, rupees(row.total)])} />}
       {detail.quotationsVisible && <ClientHistory title="Tenders" columns={['Reference', 'Title', 'Company', 'Status', 'Expected value']} rows={detail.tenders.map(row => [row.reference, row.title, row.company, row.status, rupees(row.estimatedValue)])} />}
-      {detail.financialVisible && <ClientHistory title="Invoices" columns={['Reference', 'Project', 'Company', 'Status', 'Payable']} rows={detail.invoices.map(row => [row.reference, row.project, row.company, row.status, rupees(row.netPayable)])} />}
-      {detail.financialVisible && <ClientHistory title="Payments" columns={['Date', 'Invoice', 'Project', 'Method', 'Amount']} rows={detail.payments.map(row => [shortDate(row.receivedDate), row.invoiceReference, row.project, row.method, rupees(row.amount)])} />}
+      {detail.financialVisible && <ClientHistory title="Invoices" columns={['Reference', 'Project', 'Company', 'Status', 'Payable']} rows={detail.invoices.map(row => [row.reference, row.project || 'Company-level', row.company, row.status, rupees(row.netPayable)])} />}
+      {detail.financialVisible && <ClientHistory title="Payments" columns={['Date', 'Invoice', 'Project', 'Method', 'Amount']} rows={detail.payments.map(row => [shortDate(row.receivedDate), row.invoiceReference, row.project || 'Company-level', row.method, rupees(row.amount)])} />}
       {detail.activityVisible && <ClientHistory title="Contact activity" columns={['Date', 'Direction', 'Channel', 'Contact', 'Summary']} rows={detail.communications.map(row => [shortDate(row.happenedAt), row.direction, row.channel, row.contactPerson || '—', row.summary])} />}
     </> : <>
       <div className="client-directory-head"><div><h2>Clients</h2><p>One profile for contact details and the complete project and payment history.</p></div>
@@ -112,7 +112,8 @@ function ClientForm({ client, close, saved }) {
     <Field name="province" label="Province" required={false} defaultValue={client.province || ''} />
     <Field name="country" label="Country" required={false} defaultValue={client.country || ''} />
     <Field name="registrationNumber" label="Business/registration number" required={false} defaultValue={client.registrationNumber || ''} />
-    <Field name="taxNumber" label="Tax/VAT number" required={false} defaultValue={client.taxNumber || ''} />
+    <Field name="tin" label="Taxpayer identification number (TIN)" required={false} defaultValue={client.tin || client.taxNumber || ''} />
+    <Field name="vatNumber" label="VAT registration number" required={false} defaultValue={client.vatNumber || ''} />
     <TextArea name="notes" label="Other client details" required={false} defaultValue={client.notes || ''} />
   </FormModal>;
 }

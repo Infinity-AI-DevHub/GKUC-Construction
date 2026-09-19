@@ -10,16 +10,19 @@ const shape = z.object({
   name: z.string().trim().min(2).max(180),
   contactPerson: optional(120), phone: optional(40), alternatePhone: optional(40), email: z.string().trim().email().max(190).nullable().optional().or(z.literal('')),
   billingAddress: optional(500), siteAddress: optional(500), city: optional(120), district: optional(120),
-  province: optional(120), country: optional(100), registrationNumber: optional(100), taxNumber: optional(100), notes: optional(5000)
+  province: optional(120), country: optional(100), registrationNumber: optional(100), taxNumber: optional(100),
+  tin: optional(100), vatNumber: optional(100), notes: optional(5000)
 });
 const columns = {
   type: 'type', name: 'name', contactPerson: 'contact_person', phone: 'phone', alternatePhone: 'alternate_phone',
   email: 'email', billingAddress: 'billing_address', siteAddress: 'site_address', city: 'city', district: 'district',
-  province: 'province', country: 'country', registrationNumber: 'registration_number', taxNumber: 'tax_number', notes: 'notes'
+  province: 'province', country: 'country', registrationNumber: 'registration_number', taxNumber: 'tax_number',
+  tin: 'tin', vatNumber: 'vat_number', notes: 'notes'
 };
 const select = `SELECT id,type,name,contact_person contactPerson,phone,alternate_phone alternatePhone,email,
   billing_address billingAddress,site_address siteAddress,city,district,province,country,
-  registration_number registrationNumber,tax_number taxNumber,notes,active,created_at createdAt,updated_at updatedAt FROM clients`;
+  registration_number registrationNumber,tax_number taxNumber,tin,vat_number vatNumber,
+  notes,active,created_at createdAt,updated_at updatedAt FROM clients`;
 
 router.get('/', auth, permit('projects.view'), wrap(async (req, res) => {
   const archived = req.query.archived === '1';
@@ -49,13 +52,13 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
       WHERE t.client_id=? ${companyId ? 'AND t.company_id=?' : ''} ORDER BY t.id DESC`, scoped) : [],
     financialVisible ? query(`SELECT i.id,i.reference,i.title,i.kind,i.status,i.net_payable netPayable,i.paid_amount paidAmount,
       i.invoice_date invoiceDate,i.due_date dueDate,p.name project,c.name company
-      FROM client_invoices i JOIN projects p ON p.id=i.project_id JOIN companies c ON c.id=p.company_id
-      WHERE i.client_id=? ${companyId ? 'AND p.company_id=?' : ''} ORDER BY i.id DESC`, scoped) : [],
+      FROM client_invoices i LEFT JOIN projects p ON p.id=i.project_id JOIN companies c ON c.id=i.company_id
+      WHERE i.client_id=? ${companyId ? 'AND i.company_id=?' : ''} ORDER BY i.id DESC`, scoped) : [],
     financialVisible ? query(`SELECT r.id,r.amount,r.received_date receivedDate,r.method,r.reference,
       i.reference invoiceReference,i.id invoiceId,p.name project,c.name company
       FROM client_receipts r JOIN client_invoices i ON i.id=r.invoice_id
-      JOIN projects p ON p.id=i.project_id JOIN companies c ON c.id=p.company_id
-      WHERE i.client_id=? ${companyId ? 'AND p.company_id=?' : ''} ORDER BY r.received_date DESC,r.id DESC`, scoped) : [],
+      LEFT JOIN projects p ON p.id=i.project_id JOIN companies c ON c.id=i.company_id
+      WHERE i.client_id=? ${companyId ? 'AND i.company_id=?' : ''} ORDER BY r.received_date DESC,r.id DESC`, scoped) : [],
     activityVisible ? query(`SELECT cm.id,cm.direction,cm.channel,cm.contact_person contactPerson,cm.summary,
       cm.happened_at happenedAt,cm.follow_up_date followUpDate,u.name loggedBy
       FROM client_communications cm JOIN users u ON u.id=cm.logged_by

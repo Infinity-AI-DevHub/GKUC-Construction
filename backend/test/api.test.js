@@ -1,6 +1,9 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import 'dotenv/config';
 import mysql from 'mysql2/promise';
 
@@ -8,7 +11,9 @@ const port = 43971;
 const base = `http://127.0.0.1:${port}/api`;
 const testDatabase = 'gkuc_siteops_test';
 let server;
+let serverOutput = '';
 let admin;
+let testUploadDir;
 
 const today = () => new Date().toISOString().slice(0, 10);
 const shift = days => {
@@ -18,23 +23,26 @@ const shift = days => {
 };
 
 before(async () => {
+  testUploadDir = await mkdtemp(path.join(os.tmpdir(), 'gkuc-api-uploads-'));
   admin = await mysql.createConnection({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: process.env.DB_USER, password: process.env.DB_PASSWORD });
   await admin.query(`DROP DATABASE IF EXISTS \`${testDatabase}\``);
   await admin.query(`CREATE DATABASE \`${testDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-  server = spawn(process.execPath, ['src/index.js'], { cwd: new URL('..', import.meta.url), env: { ...process.env, PORT: String(port), DB_NAME: testDatabase }, stdio: 'ignore' });
+  server = spawn(process.execPath, ['src/index.js'], { cwd: new URL('..', import.meta.url), env: { ...process.env, PORT: String(port), DB_NAME: testDatabase, UPLOAD_DIR: testUploadDir }, stdio: ['ignore','pipe','pipe'] });
+  for (const stream of [server.stdout, server.stderr]) stream.on('data', chunk => { serverOutput += chunk.toString(); });
   /* A cold schema build can take more than nine seconds on the bundled MySQL runtime.
      Give it enough room without weakening the health check itself. */
   for (let attempt = 0; attempt < 120; attempt++) {
     try { if ((await fetch(`${base}/health`)).ok) return; } catch {}
     await new Promise(resolve => setTimeout(resolve, 150));
   }
-  throw new Error('Test server did not start');
+  throw new Error(`Test server did not start: ${serverOutput.slice(-2000)}`);
 });
 
 after(async () => {
   server?.kill('SIGTERM');
   await admin.query(`DROP DATABASE IF EXISTS \`${testDatabase}\``);
   await admin.end();
+  if (testUploadDir) await rm(testUploadDir, { recursive: true, force: true });
 });
 
 async function login(email = 'owner@gkuc.lk') {
@@ -51,6 +59,115 @@ const call = async (token, method, path, body) => {
   });
   return { status: response.status, body: response.status === 204 ? null : await response.json() };
 };
+
+function testPdf(lines) {
+  const stream = `BT /F1 12 Tf 45 750 Td ${lines.map((line, index) => `${index ? '0 -18 Td ' : ''}(${line.replace(/[\\()]/g, '\\$&')}) Tj`).join('\n')} ET`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`
+  ];
+  let pdf = '%PDF-1.4\n'; const offsets = [0];
+  for (const [index, object] of objects.entries()) { offsets.push(Buffer.byteLength(pdf)); pdf += `${index + 1} 0 obj\n${object}\nendobj\n`; }
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets.slice(1)) pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return Buffer.from(pdf);
+}
+
+test('reviews and saves a PDF subcontractor quotation against a selected project', async () => {
+  const token = await login();
+  const pdf = testPdf(['From: PDF Test Electrical', 'Quotation No: Q-123', 'Date: 2026-09-18',
+    'Scope of work: Lighting', '1 Cable installation      m  12  450.00  5400.00', 'Total 5,400.00']);
+  const previewForm = new FormData();
+  previewForm.append('file', new Blob([pdf], { type: 'application/pdf' }), 'quote.pdf');
+  const previewResponse = await fetch(`${base}/qs/subcontract-quotations/pdf/preview`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: previewForm
+  });
+  assert.equal(previewResponse.status, 200);
+  const preview = await previewResponse.json();
+  assert.equal(preview.items.length, 1);
+  assert.equal(preview.subcontractor.name, 'PDF Test Electrical');
+
+  const commitForm = new FormData();
+  commitForm.append('file', new Blob([pdf], { type: 'application/pdf' }), 'quote.pdf');
+  commitForm.append('review', JSON.stringify({ companyId: 1, projectId: 1,
+    subcontractor: { mode: 'new', name: preview.subcontractor.name, trade: 'Electrical', contactType: 'Company' },
+    quotation: { ...preview.quotation, package: 'Lighting' },
+    items: preview.items.map(({ description, unit, quantity, rate, discount }) => ({ description, unit, quantity, rate, discount }))
+  }));
+  const createdResponse = await fetch(`${base}/qs/subcontract-quotations/pdf/commit`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: commitForm
+  });
+  const created = await createdResponse.json();
+  assert.equal(createdResponse.status, 201, JSON.stringify(created));
+  assert.equal(created.projectId, 1);
+  assert.equal(created.sourceFilename, 'quote.pdf');
+  assert.equal((await call(token, 'GET', `/qs/subcontract-quotations/${created.id}`)).body.items.length, 1);
+  assert.equal((await fetch(`${base}/qs/subcontract-quotations/${created.id}/pdf`, {
+    headers: { authorization: `Bearer ${token}` }
+  })).status, 200);
+});
+
+test('reviews and saves a PDF tender while linking an existing client', async () => {
+  const token = await login();
+  const clientResponse = await call(token, 'POST', '/clients', { type: 'Organisation', name: 'Road Development Authority Test' });
+  assert.equal(clientResponse.status, 201);
+  const client = clientResponse.body;
+  assert.ok(client);
+  const pdf = testPdf([`Employer: ${client.name}`, 'Name of Work: Improvement of a test road',
+    'Contract No: PDF-TEST-2026-01', 'Closing date: 18/09/2026 10:30', 'Bid validity: 91 days']);
+  const previewForm = new FormData();
+  previewForm.append('file', new Blob([pdf], { type: 'application/pdf' }), 'tender.pdf');
+  const previewResponse = await fetch(`${base}/qs/tenders/pdf/preview`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: previewForm
+  });
+  const preview = await previewResponse.json();
+  assert.equal(previewResponse.status, 200, JSON.stringify(preview));
+  assert.equal(preview.fields.contractNo, 'PDF-TEST-2026-01');
+  assert.ok(preview.matches.some(match => match.id === client.id));
+  const commitForm = new FormData();
+  commitForm.append('file', new Blob([pdf], { type: 'application/pdf' }), 'tender.pdf');
+  commitForm.append('review', JSON.stringify({ companyId: 1,
+    clientSelection: { mode: 'existing', id: client.id },
+    ...preview.fields, biddingEntity: 'GKUC Construction'
+  }));
+  const createdResponse = await fetch(`${base}/qs/tenders/pdf/commit`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: commitForm
+  });
+  const created = await createdResponse.json();
+  assert.equal(createdResponse.status, 201, JSON.stringify(created));
+  assert.equal(created.clientId, client.id);
+  assert.equal(created.sourceFilename, 'tender.pdf');
+  assert.equal((await fetch(`${base}/qs/tenders/${created.id}/pdf`, {
+    headers: { authorization: `Bearer ${token}` }
+  })).status, 200);
+  const duplicate = new FormData();
+  duplicate.append('file', new Blob([pdf], { type: 'application/pdf' }), 'tender.pdf');
+  duplicate.append('review', JSON.stringify({ companyId: 1,
+    clientSelection: { mode: 'existing', id: client.id },
+    ...preview.fields, biddingEntity: 'GKUC Construction'
+  }));
+  assert.equal((await fetch(`${base}/qs/tenders/pdf/commit`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: duplicate
+  })).status, 409);
+
+  const newClientForm = new FormData();
+  newClientForm.append('file', new Blob([pdf], { type: 'application/pdf' }), 'tender.pdf');
+  newClientForm.append('review', JSON.stringify({ companyId: 1,
+    clientSelection: { mode: 'new', name: 'PDF Import New Employer', type: 'Organisation' },
+    ...preview.fields, contractNo: 'PDF-TEST-2026-02', biddingEntity: 'GKUC Construction'
+  }));
+  const newClientResponse = await fetch(`${base}/qs/tenders/pdf/commit`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: newClientForm
+  });
+  const newClientTender = await newClientResponse.json();
+  assert.equal(newClientResponse.status, 201, JSON.stringify(newClientTender));
+  assert.equal(newClientTender.client, 'PDF Import New Employer');
+});
 
 test('requires authentication for operational data', async () => {
   assert.equal((await fetch(`${base}/bootstrap`)).status, 401);
@@ -258,7 +375,8 @@ test('client directory links projects, quotations, invoices and payments without
   const name = `Client Profile ${Date.now()}`;
   const created = await call(owner, 'POST', '/clients', { type: 'Private', name,
     contactPerson: 'Client contact', phone: '0771234567', email: 'client@example.com',
-    billingAddress: '1 Main Street', siteAddress: 'Site Road', city: 'Kandy', notes: 'Prefers email updates' });
+    billingAddress: '1 Main Street', siteAddress: 'Site Road', city: 'Kandy', notes: 'Prefers email updates',
+    tin: 'TIN-12345', vatNumber: 'VAT-98765' });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   const clientId = created.body.id;
   assert.equal((await call(owner, 'POST', '/clients', { type: 'Private', name })).status, 409);
@@ -273,13 +391,37 @@ test('client directory links projects, quotations, invoices and payments without
     markupPercent: 0, vatPercent: 0 });
   assert.equal(quote.status, 201, JSON.stringify(quote.body));
   assert.equal(quote.body.clientId, clientId);
+  const quotationPage = await fetch(`${base}/qs/quotations/${quote.body.id}/document`, { headers: { authorization: `Bearer ${owner}` } });
+  assert.equal(quotationPage.status, 200);
+  assert.match(await quotationPage.text(), /TIN-12345/);
+  const quotationPdfResponse = await fetch(`${base}/qs/quotations/${quote.body.id}/document?download=pdf`, {
+    headers: { authorization: `Bearer ${owner}` }
+  });
+  assert.equal(quotationPdfResponse.status, 200);
+  assert.match(quotationPdfResponse.headers.get('content-type'), /^application\/pdf/);
+  const quotationPdf = Buffer.from(await quotationPdfResponse.arrayBuffer());
+  assert.equal(quotationPdf.subarray(0, 5).toString(), '%PDF-');
+  assert.ok(quotationPdf.subarray(-1024).toString().includes('%%EOF'));
   const invoiceBody = { projectId: project.body.id, clientId, kind: 'Interim', title: 'Client-linked invoice',
-    invoiceDate: today(), taxTreatment: 'Exempt', retentionPercent: 0, advanceRecovery: 0,
+    invoiceDate: today(), deliveryDate: today(), placeOfSupply: 'Project Site Road', paymentMode: 'Cheque',
+    taxTreatment: 'Exempt', retentionPercent: 0, advanceRecovery: 0,
     otherDeductions: 0, items: [{ description: 'Construction labour', quantity: 2, rate: 1000 }] };
   const wrong = await call(owner, 'POST', '/receivables/invoices', { ...invoiceBody, clientId: clientId + 99999 });
   assert.equal(wrong.status, 400);
   const invoice = await call(owner, 'POST', '/receivables/invoices', invoiceBody);
   assert.equal(invoice.status, 201, JSON.stringify(invoice.body));
+  const invoicePage = await fetch(`${base}/receivables/invoices/${invoice.body.id}/document`, { headers: { authorization: `Bearer ${owner}` } });
+  assert.equal(invoicePage.status, 200);
+  const invoiceHtml = await invoicePage.text();
+  for (const detail of ['TIN-12345', 'VAT-98765', 'Project Site Road', 'Mode of payment: Cheque', 'Total amount in words']) {
+    assert.ok(invoiceHtml.includes(detail), `${detail} should appear on the invoice`);
+  }
+  const pdfResponse = await fetch(`${base}/receivables/invoices/${invoice.body.id}/document?download=pdf`, {
+    headers: { authorization: `Bearer ${owner}` }
+  });
+  assert.equal(pdfResponse.status, 200);
+  const invoicePdf = Buffer.from(await pdfResponse.arrayBuffer());
+  assert.equal(invoicePdf.subarray(0, 5).toString(), '%PDF-');
   assert.equal((await call(owner, 'POST', `/receivables/invoices/${invoice.body.id}/issue`)).status, 204);
   assert.equal((await call(owner, 'POST', `/receivables/invoices/${invoice.body.id}/receipts`, {
     amount: 500, receivedDate: today(), method: 'Bank transfer', reference: `CLI-${Date.now()}`
@@ -299,6 +441,79 @@ test('client directory links projects, quotations, invoices and payments without
   assert.equal((await call(owner, 'GET', '/clients?archived=1')).body.some(row => row.id === clientId), true);
   profile = await call(owner, 'GET', `/clients/${clientId}`);
   assert.equal(profile.body.invoices.length, 1, 'archiving keeps commercial history');
+});
+
+test('Finance invoices support approved BOQ lines, standalone work and several capped payments', async () => {
+  const owner = await login();
+  const client = await call(owner, 'POST', '/clients', { type: 'Organisation', name: `Invoice Client ${Date.now()}`,
+    tin: 'TIN-900', vatNumber: 'VAT-900', billingAddress: 'Kandy' });
+  assert.equal(client.status, 201, JSON.stringify(client.body));
+  const project = await call(owner, 'POST', '/projects', { companyId: 1,
+    name: `Invoice Project ${Date.now()}`, clientId: client.body.id,
+    manager: 'Project Manager', site: 'Kandy', stage: 'Planning', budget: 10000 });
+  assert.equal(project.status, 201, JSON.stringify(project.body));
+  const boq = await call(owner, 'POST', '/boq', { projectId: project.body.id, title: 'Measured work',
+    items: [{ category: 'Labour', description: 'Measured labour', unit: 'day', quantity: 4, rate: 1000 }] });
+  assert.equal(boq.status, 201, JSON.stringify(boq.body));
+  assert.equal((await call(owner, 'PATCH', `/boq/${boq.body.id}`, { status: 'Approved' })).status, 200);
+  const source = await call(owner, 'GET', `/receivables/boq-lines?projectId=${project.body.id}`);
+  assert.equal(source.status, 200);
+  const item = source.body.find(row => row.description === 'Measured labour');
+  assert.ok(item);
+  const taxInvoice = await call(owner, 'POST', '/receivables/invoices', {
+    companyId: 1, projectId: project.body.id, clientId: client.body.id, kind: 'Interim',
+    documentType: 'Tax Invoice', taxTreatment: 'Standard', vatRate: 18,
+    title: 'Measured work to date', invoiceDate: today(), retentionPercent: 0,
+    items: [{ boqItemId: item.id, description: item.description, unit: item.unit, quantity: 2, rate: 1 }]
+  });
+  assert.equal(taxInvoice.status, 201, JSON.stringify(taxInvoice.body));
+  assert.equal(Number(taxInvoice.body.gross), 2000, 'BOQ rate comes from the approved record, not the browser');
+  assert.equal(Number(taxInvoice.body.netPayable), 2360);
+  const tooManyBoqUnits = await call(owner, 'POST', '/receivables/invoices', {
+    companyId: 1, projectId: project.body.id, clientId: client.body.id, kind: 'Interim',
+    documentType: 'Tax Invoice', taxTreatment: 'Standard', title: 'More work', invoiceDate: today(),
+    items: [{ boqItemId: item.id, description: item.description, quantity: 3, rate: 1000 }]
+  });
+  assert.equal(tooManyBoqUnits.status, 409);
+  const standard = await call(owner, 'POST', '/receivables/invoices', {
+    companyId: 1, projectId: null, clientId: client.body.id, kind: 'Other',
+    documentType: 'Invoice', taxTreatment: 'Exempt', title: 'Separate supply', invoiceDate: today(),
+    items: [{ description: 'Non-project supply', quantity: 1, rate: 1000 }]
+  });
+  assert.equal(standard.status, 201, JSON.stringify(standard.body));
+  assert.equal(Number(standard.body.netPayable), 1000);
+  const noVatOnStandard = await call(owner, 'POST', '/receivables/invoices', {
+    companyId: 1, projectId: null, clientId: client.body.id, kind: 'Other',
+    documentType: 'Invoice', taxTreatment: 'Standard', title: 'Invalid tax choice', invoiceDate: today(),
+    items: [{ description: 'Item', quantity: 1, rate: 100 }]
+  });
+  assert.equal(noVatOnStandard.status, 400);
+  const standalonePage = await fetch(`${base}/receivables/invoices/${standard.body.id}/document`,
+    { headers: { authorization: `Bearer ${owner}` } });
+  assert.match(await standalonePage.text(), /Separate supply/);
+  assert.equal((await call(owner, 'POST', `/receivables/invoices/${standard.body.id}/issue`)).status, 204);
+  const first = await call(owner, 'POST', `/receivables/invoices/${standard.body.id}/receipts`,
+    { amount: 400, receivedDate: today(), method: 'Cash', reference: `PART-A-${Date.now()}` });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  const overpay = await call(owner, 'POST', `/receivables/invoices/${standard.body.id}/receipts`,
+    { amount: 601, receivedDate: today(), method: 'Cash', reference: `OVER-${Date.now()}` });
+  assert.equal(overpay.status, 409);
+  const second = await call(owner, 'POST', `/receivables/invoices/${standard.body.id}/receipts`,
+    { amount: 600, receivedDate: today(), method: 'Bank transfer', reference: `PART-B-${Date.now()}` });
+  assert.equal(second.status, 201, JSON.stringify(second.body));
+  const detail = await call(owner, 'GET', `/receivables/invoices/${standard.body.id}`);
+  assert.equal(detail.body.status, 'Paid');
+  assert.equal(detail.body.receipts.length, 2);
+  const listing = await call(owner, 'GET', '/receivables/invoices?companyId=1');
+  assert.equal(listing.body.find(row => row.id === standard.body.id).project, 'No project');
+  const profile = await call(owner, 'GET', `/clients/${client.body.id}`);
+  assert.equal(profile.body.invoices.length, 2);
+  assert.equal(profile.body.payments.length, 2);
+  const reporting = await call(owner, 'GET', '/finance/reporting?companyId=1');
+  assert.equal(reporting.status, 200);
+  assert.equal(reporting.body.clientInvoices.find(row => row.id === standard.body.id).project, null);
+  assert.equal(reporting.body.clientReceipts.filter(row => row.invoiceReference === standard.body.reference).length, 2);
+  assert.equal(reporting.body.incomes.filter(row => row.description.includes(standard.body.reference)).length, 2);
 });
 
 test('project managers and task assignees remain linked to employee work histories', async () => {

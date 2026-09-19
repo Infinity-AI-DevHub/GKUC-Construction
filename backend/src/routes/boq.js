@@ -5,6 +5,7 @@ import { optionsFor } from '../lib/options.js';
 import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { assertUniqueManualEntry } from '../lib/ledger-duplicates.js';
 import { boqDocument, documentContext } from '../lib/documents.js';
+import { sendDocument } from '../lib/document-pdf.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
@@ -212,7 +213,7 @@ router.get('/:id/document', auth, permit('qs.view', 'qs.boq'), wrap(async (req, 
     documentContext(getOne, boq.companyId)
   ]);
 
-  res.type('html').send(boqDocument({ ...context, boq, items, variations }));
+  await sendDocument(req, res, boqDocument({ ...context, boq, items, variations }), `${boq.reference}.pdf`);
 }));
 
 router.get('/:id', auth, permit('qs.view','qs.boq'), wrap(async (req, res) => {

@@ -7,7 +7,7 @@ import { Bonds, ClientInvoices, PettyCash } from '../Receivables.jsx';
 import FinanceReports from './FinanceReports.jsx';
 import Cheques from './Cheques.jsx';
 
-const TABS = ['Financial reports','Budget monitoring','Bills','Credit cards','VAT ledger','Client invoices','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Categories'];
+const TABS = ['Financial reports','Invoices','Budget monitoring','Bills','Credit cards','VAT ledger','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Categories'];
 
 /** PID 2.10 — costs, payments and profitability in one view, watched continuously. */
 export default function Finance({ data, reload, can, companyId, company }) {
@@ -25,7 +25,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     Bills: can.finance&&'Record bill',
     'Credit cards': null,
     'VAT ledger': null,
-    'Client invoices': null,
+    Invoices: null,
     Cheques: null,
     Bonds: null,
     'Petty cash': null,
@@ -46,7 +46,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {tab === 'Bills' && <Bills data={data} can={can} companyId={companyId} open={open==='Bills'} close={()=>setOpen('')} />}
     {tab === 'Credit cards' && <CreditCards can={can} companyId={companyId} />}
     {tab === 'VAT ledger' && <VatLedger companyId={companyId} />}
-    {tab === 'Client invoices' && <ClientInvoices data={data} can={can} companyId={companyId} />}
+    {tab === 'Invoices' && <ClientInvoices data={data} can={can} companyId={companyId} />}
     {tab === 'Cheques' && <Cheques can={can} data={data} companyId={companyId} />}
     {tab === 'Bonds' && <Bonds data={data} can={can} companyId={companyId} />}
     {tab === 'Petty cash' && <PettyCash data={data} can={can} companyId={companyId} />}
@@ -282,7 +282,7 @@ function IncomeForm({ data, close, reload }) {
     <SelectField name="method" label="Method" options={payMethods.filter(method => method !== 'Cheque')} />
     <Field name="reference" label="Reference" required={false} />
     <Field name="description" label="Description" wide />
-    <p className="invoice-note">Use Received cheques for cheques and Client invoices for invoice payments. Those workflows post income automatically.</p>
+    <p className="invoice-note">Use Received cheques for cheques and Invoices for client payments. Those workflows post income automatically.</p>
   </FormModal>;
 }
 

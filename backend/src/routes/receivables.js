@@ -6,6 +6,8 @@ import { certificate } from '../lib/invoice-maths.js';
 import { publishChange } from '../lib/realtime.js';
 import { notify } from '../alerts.js';
 import { sendDailySummary } from '../lib/daily-summary.js';
+import { documentContext, invoiceDocument } from '../lib/documents.js';
+import { sendDocument } from '../lib/document-pdf.js';
 
 const router = Router();
 
@@ -22,7 +24,8 @@ router.get('/receivables/invoices', auth, permit('finance.view', 'finance.invoic
     try {
       const companyId = companyParam(req);
       res.json(await query(`
-        SELECT i.id,i.reference,i.project_id projectId,p.name project,i.client,i.kind,i.title,
+        SELECT i.id,i.reference,i.project_id projectId,COALESCE(p.name,'No project') project,
+               i.company_id companyId,i.client,i.kind,i.document_type documentType,i.title,
                i.invoice_date invoiceDate,i.due_date dueDate,i.gross,i.tax_treatment taxTreatment,
                i.vat_rate vatRate,i.vat_amount vatAmount,i.svat_voucher svatVoucher,
                i.retention_percent retentionPercent,i.retention_amount retentionAmount,
@@ -32,9 +35,9 @@ router.get('/receivables/invoices', auth, permit('finance.view', 'finance.invoic
                i.status,i.created_at createdAt,u.name createdBy,
                DATEDIFF(CURDATE(), i.due_date) daysOverdue
           FROM client_invoices i
-          JOIN projects p ON p.id=i.project_id
+          LEFT JOIN projects p ON p.id=i.project_id
           JOIN users u ON u.id=i.created_by
-         ${companyId ? 'WHERE p.company_id=?' : ''}
+         ${companyId ? 'WHERE i.company_id=?' : ''}
          ORDER BY i.id DESC LIMIT 300`, companyId ? [companyId] : []));
     } catch (error) { next(error); }
   });
@@ -45,7 +48,7 @@ router.get('/receivables/ageing', auth, permit('finance.view', 'finance.invoice'
     try {
       const companyId = companyParam(req);
       const rows = await query(`
-        SELECT i.client, p.name project,
+        SELECT i.client, COALESCE(p.name,'No project') project,
                SUM(i.net_payable - i.paid_amount) outstanding,
                SUM(CASE WHEN DATEDIFF(CURDATE(), i.due_date) <= 0
                         THEN i.net_payable - i.paid_amount ELSE 0 END) current,
@@ -56,18 +59,18 @@ router.get('/receivables/ageing', auth, permit('finance.view', 'finance.invoice'
                SUM(CASE WHEN DATEDIFF(CURDATE(), i.due_date) > 60
                         THEN i.net_payable - i.paid_amount ELSE 0 END) over60,
                COUNT(*) invoices
-          FROM client_invoices i JOIN projects p ON p.id=i.project_id
+          FROM client_invoices i LEFT JOIN projects p ON p.id=i.project_id
          WHERE i.status IN ('Issued','Part paid') AND i.net_payable > i.paid_amount
-           ${companyId ? 'AND p.company_id=?' : ''}
-         GROUP BY i.client, p.name
+           ${companyId ? 'AND i.company_id=?' : ''}
+         GROUP BY i.client, COALESCE(p.name,'No project')
          ORDER BY outstanding DESC`, companyId ? [companyId] : []);
       const [totals] = await query(`
         SELECT COALESCE(SUM(i.net_payable - i.paid_amount),0) outstanding,
                COALESCE(SUM(CASE WHEN DATEDIFF(CURDATE(), i.due_date) > 0
                                  THEN i.net_payable - i.paid_amount ELSE 0 END),0) overdue,
                COALESCE(SUM(i.retention_amount),0) retentionHeld
-          FROM client_invoices i JOIN projects p ON p.id=i.project_id
-         WHERE i.status IN ('Issued','Part paid') ${companyId ? 'AND p.company_id=?' : ''}`,
+          FROM client_invoices i
+         WHERE i.status IN ('Issued','Part paid') ${companyId ? 'AND i.company_id=?' : ''}`,
         companyId ? [companyId] : []);
       res.json({ rows, totals });
     } catch (error) { next(error); }
@@ -75,11 +78,15 @@ router.get('/receivables/ageing', auth, permit('finance.view', 'finance.invoice'
 
 const invoiceSchema = z.object({
   companyId: z.coerce.number().int().positive().optional(),
-  projectId: z.coerce.number().int().positive(),
+  projectId: z.coerce.number().int().positive().nullable().optional(),
   clientId: z.coerce.number().int().positive().optional(),
+  documentType: z.enum(['Tax Invoice','Invoice']).optional(),
   kind: z.enum(['Interim', 'Final', 'Advance', 'Variation', 'Other']).default('Interim'),
   title: z.string().trim().min(3).max(200),
   invoiceDate: z.string().min(10).max(10),
+  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  placeOfSupply: z.string().trim().max(300).optional(),
+  paymentMode: z.enum(['Cheque', 'Cash', 'Bank transfer', 'Card', 'Other']).optional(),
   dueDate: z.string().min(10).max(10).optional(),
   periodFrom: z.string().min(10).max(10).optional(),
   periodTo: z.string().min(10).max(10).optional(),
@@ -96,7 +103,8 @@ const invoiceSchema = z.object({
     unit: z.string().trim().max(30).optional(),
     quantity: z.coerce.number().min(0).default(0),
     rate: z.coerce.number().min(0).default(0),
-    quotationItemId:z.coerce.number().int().positive().optional()
+    quotationItemId:z.coerce.number().int().positive().optional(),
+    boqItemId:z.coerce.number().int().positive().optional()
   })).min(1, 'An invoice needs at least one line')
 });
 
@@ -109,6 +117,17 @@ router.get('/receivables/quote-lines',auth,permit('finance.view','finance.invoic
     WHERE q.project_id=? AND q.status='Accepted' ORDER BY q.id DESC,qi.id`,[projectId]));
 }catch(error){next(error);}});
 
+router.get('/receivables/boq-lines',auth,permit('finance.view','finance.invoice'),async(req,res,next)=>{try{
+  const projectId=Number(req.query.projectId);
+  if(!Number.isInteger(projectId)||projectId<1)throw fail(400,'Choose a project to see its approved BOQ items');
+  res.json(await query(`SELECT bi.id,b.reference,bi.category,bi.description,bi.unit,bi.quantity,bi.rate,
+    GREATEST(0,bi.quantity-COALESCE((SELECT SUM(ii.quantity) FROM client_invoice_items ii
+      JOIN client_invoices ci ON ci.id=ii.invoice_id
+      WHERE ii.boq_item_id=bi.id AND ci.status<>'Cancelled'),0)) remainingQuantity
+    FROM boq_items bi JOIN boqs b ON b.id=bi.boq_id
+    WHERE b.project_id=? AND b.status='Approved' ORDER BY b.id DESC,bi.id`,[projectId]));
+}catch(error){next(error);}});
+
 /**
  * Raises a certificate.
  *
@@ -119,41 +138,81 @@ router.get('/receivables/quote-lines',auth,permit('finance.view','finance.invoic
 router.post('/receivables/invoices', auth, permit('finance.invoice'), validate(invoiceSchema),
   async (req, res, next) => {
     try {
-      const project = await getOne(`SELECT p.id,p.name,COALESCE(c.name,p.client) client,p.client_id clientId,p.company_id
-        FROM projects p LEFT JOIN clients c ON c.id=p.client_id WHERE p.id=? AND p.active=1`,
-        [req.body.projectId]);
-      if (!project) throw fail(404, 'That project does not exist');
-      if (req.body.clientId && Number(req.body.clientId) !== Number(project.clientId))
+      const project = req.body.projectId ? await getOne(`SELECT p.id,p.name,p.site,COALESCE(c.name,p.client) client,
+        p.client_id clientId,p.company_id companyId FROM projects p LEFT JOIN clients c ON c.id=p.client_id
+        WHERE p.id=? AND p.active=1`, [req.body.projectId]) : null;
+      if (req.body.projectId && !project) throw fail(404, 'That project does not exist');
+      if (!project && !req.body.clientId) throw fail(400, 'Choose a saved client for an invoice without a project');
+      if (project?.clientId && req.body.clientId && Number(req.body.clientId) !== Number(project.clientId))
         throw fail(400, 'The selected client does not match the project client. Choose a project for that client.');
-
+      const clientId = req.body.clientId || project?.clientId || null;
+      const client = clientId ? await getOne(`SELECT id,name,COALESCE(NULLIF(tin,''),tax_number) buyerTin,
+        vat_number buyerVatNumber,billing_address buyerAddress,phone buyerPhone,site_address clientSite
+        FROM clients WHERE id=? AND active=1`, [clientId]) : null;
+      if (clientId && !client) throw fail(400, 'That client is not in the active client directory');
+      const companyId = Number(project?.companyId || req.body.companyId);
+      if (!Number.isInteger(companyId) || companyId < 1) throw fail(400, 'Choose GKUC Construction or GKUC Readymix');
+      if (req.body.companyId && Number(req.body.companyId) !== companyId)
+        throw fail(400, 'The project belongs to the other operating company');
+      const documentType = req.body.documentType || (req.body.taxTreatment === 'Exempt' ? 'Invoice' : 'Tax Invoice');
+      if (documentType === 'Invoice' && req.body.taxTreatment !== 'Exempt')
+        throw fail(400, 'A standard invoice must not charge VAT. Choose a tax invoice to charge or suspend VAT.');
+      if (documentType === 'Tax Invoice' && req.body.taxTreatment === 'Exempt')
+        throw fail(400, 'A tax invoice needs VAT treatment. Choose a standard invoice for no VAT.');
       const company = await getOne(`SELECT COALESCE(NULLIF(default_vat_rate,0),18) defaultVatRate
-        FROM companies WHERE id=? AND active=1`, [project.company_id])
-        .catch(() => null);
+        FROM companies WHERE id=? AND active=1`, [companyId]);
+      if (!company) throw fail(400, 'That operating company is not active');
       const vatRate = req.body.vatRate ?? Number(company?.defaultVatRate ?? 18);
 
       const priced=[];
       for(const item of req.body.items){
+        if(item.quotationItemId && item.boqItemId) throw fail(400, 'Choose either a BOQ item or a quotation line for each invoice row');
         if(item.quotationItemId){
+          if (!project) throw fail(400, 'Quotation lines require a project');
           const line=await getOne(`SELECT qi.id,qi.rate,q.markup_percent markupPercent
             FROM quotation_items qi JOIN quotations_client q ON q.id=qi.quotation_id
             WHERE qi.id=? AND q.project_id=? AND q.status='Accepted'`,[item.quotationItemId,project.id]);
           if(!line)throw fail(400,'That accepted quotation line does not belong to this project');
           priced.push({...item,rate:Math.round(Number(line.rate)*(1+Number(line.markupPercent)/100)*100)/100});
+        }else if(item.boqItemId){
+          if (!project) throw fail(400, 'BOQ lines require a project');
+          const line = await getOne(`SELECT bi.id,bi.rate,bi.quantity FROM boq_items bi
+            JOIN boqs b ON b.id=bi.boq_id WHERE bi.id=? AND b.project_id=? AND b.status='Approved'`,
+          [item.boqItemId, project.id]);
+          if (!line) throw fail(400, 'That BOQ item is not in an approved BOQ for this project');
+          priced.push({...item,rate:Number(line.rate)});
         }else priced.push(item);
       }
       const gross = priced.reduce((sum, item) => sum + item.quantity * item.rate, 0);
       const sums = certificate({ ...req.body, gross, vatRate });
+      if (sums.netPayable <= 0) throw fail(400, 'Invoice deductions cannot be equal to or greater than the amount payable');
       const reference = await nextReference('INV', 'client_invoices');
 
       const id = await transaction(async connection => {
+        const requestedBoqQuantities = new Map();
+        for (const item of priced) if (item.boqItemId)
+          requestedBoqQuantities.set(item.boqItemId, (requestedBoqQuantities.get(item.boqItemId) || 0) + Number(item.quantity));
+        for (const [boqItemId, requested] of requestedBoqQuantities) {
+          const [[boqItem]] = await connection.execute('SELECT quantity FROM boq_items WHERE id=? FOR UPDATE', [boqItemId]);
+          const [[billed]] = await connection.execute(`SELECT COALESCE(SUM(ii.quantity),0) quantity
+            FROM client_invoice_items ii JOIN client_invoices ci ON ci.id=ii.invoice_id
+            WHERE ii.boq_item_id=? AND ci.status<>'Cancelled'`, [boqItemId]);
+          const remaining = Number(boqItem.quantity) - Number(billed.quantity);
+          if (requested > remaining + 0.0001) throw fail(409,
+            `The BOQ item has only ${remaining.toFixed(3)} unit(s) left to invoice. Reduce this quantity or add an approved variation.`);
+        }
         const [created] = await connection.execute(
           `INSERT INTO client_invoices
-             (reference,project_id,client_id,client,kind,title,invoice_date,due_date,period_from,period_to,
+             (reference,project_id,company_id,client_id,client,kind,document_type,title,invoice_date,delivery_date,place_of_supply,payment_mode,
+              buyer_tin,buyer_vat_number,buyer_address,buyer_phone,due_date,period_from,period_to,
               gross,tax_treatment,vat_rate,vat_amount,svat_voucher,retention_percent,retention_amount,
               advance_recovery,other_deductions,deduction_note,net_payable,notes,created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [reference, project.id, project.clientId, project.client, req.body.kind, req.body.title,
-            req.body.invoiceDate, req.body.dueDate || null,
+           VALUES (${Array(32).fill('?').join(',')})`,
+          [reference, project?.id || null, companyId, clientId, client?.name || project?.client,
+            req.body.kind, documentType, req.body.title,
+            req.body.invoiceDate, req.body.deliveryDate || null, req.body.placeOfSupply || client?.clientSite || project?.site || null,
+            req.body.paymentMode || null, client?.buyerTin || null, client?.buyerVatNumber || null,
+            client?.buyerAddress || null, client?.buyerPhone || null, req.body.dueDate || null,
             req.body.periodFrom || null, req.body.periodTo || null,
             sums.gross, req.body.taxTreatment, sums.vatRate, sums.vatAmount,
             req.body.svatVoucher || null, req.body.retentionPercent, sums.retentionAmount,
@@ -162,10 +221,10 @@ router.post('/receivables/invoices', auth, permit('finance.invoice'), validate(i
 
         for (const item of priced) {
           await connection.execute(
-            `INSERT INTO client_invoice_items (invoice_id,description,unit,quantity,rate,amount,quotation_item_id)
-             VALUES (?,?,?,?,?,?,?)`,
+            `INSERT INTO client_invoice_items (invoice_id,description,unit,quantity,rate,amount,quotation_item_id,boq_item_id)
+             VALUES (?,?,?,?,?,?,?,?)`,
             [created.insertId, item.description, item.unit || null, item.quantity, item.rate,
-              Math.round(item.quantity * item.rate * 100) / 100,item.quotationItemId||null]);
+              Math.round(item.quantity * item.rate * 100) / 100,item.quotationItemId||null,item.boqItemId||null]);
         }
         return created.insertId;
       });
@@ -198,20 +257,40 @@ router.post('/receivables/preview', auth, permit('finance.invoice'),
     } catch (error) { next(error); }
   });
 
+router.get('/receivables/invoices/:id/document', auth, permit('finance.view', 'finance.invoice'),
+  async (req, res, next) => {
+    try {
+      const invoice = await getOne(`SELECT i.reference,i.client,i.kind,i.document_type documentType,i.title,i.invoice_date invoiceDate,
+        i.delivery_date deliveryDate,i.place_of_supply placeOfSupply,i.payment_mode paymentMode,
+        i.buyer_tin buyerTin,i.buyer_vat_number buyerVatNumber,i.buyer_address buyerAddress,
+        i.buyer_phone buyerPhone,i.due_date dueDate,i.gross,i.tax_treatment taxTreatment,
+        i.vat_rate vatRate,i.vat_amount vatAmount,i.retention_amount retentionAmount,
+        i.advance_recovery advanceRecovery,i.other_deductions otherDeductions,i.net_payable netPayable,
+        i.notes,p.name project,i.company_id companyId FROM client_invoices i
+        LEFT JOIN projects p ON p.id=i.project_id WHERE i.id=?`, [req.params.id]);
+      if (!invoice) throw fail(404, 'That invoice was not found');
+      const [items, context] = await Promise.all([
+        query('SELECT description,unit,quantity,rate,amount FROM client_invoice_items WHERE invoice_id=? ORDER BY id', [req.params.id]),
+        documentContext(getOne, invoice.companyId)
+      ]);
+      await sendDocument(req, res, invoiceDocument({ ...context, invoice, items }), `${invoice.reference}.pdf`);
+    } catch (error) { next(error); }
+  });
+
 router.get('/receivables/invoices/:id', auth, permit('finance.view', 'finance.invoice'),
   async (req, res, next) => {
     try {
       const invoice = await getOne(`
         SELECT i.*, p.name project FROM client_invoices i
-          JOIN projects p ON p.id=i.project_id WHERE i.id=?`, [req.params.id]);
+          LEFT JOIN projects p ON p.id=i.project_id WHERE i.id=?`, [req.params.id]);
       if (!invoice) throw fail(404, 'That invoice was not found');
       invoice.items = await query(
         'SELECT description,unit,quantity,rate,amount FROM client_invoice_items WHERE invoice_id=?',
         [req.params.id]);
       invoice.receipts = await query(`
-        SELECT r.amount,r.received_date receivedDate,r.method,r.reference,u.name recordedBy
+        SELECT r.id,r.amount,r.received_date receivedDate,r.method,r.reference,u.name recordedBy
           FROM client_receipts r JOIN users u ON u.id=r.recorded_by
-         WHERE r.invoice_id=? ORDER BY r.received_date`, [req.params.id]);
+         WHERE r.invoice_id=? ORDER BY r.received_date,r.id`, [req.params.id]);
       res.json(invoice);
     } catch (error) { next(error); }
   });
@@ -262,9 +341,9 @@ router.post('/receivables/invoices/:id/receipts', auth, permit('finance.invoice'
           [paid, paid >= Number(invoice.net_payable) - 0.001 ? 'Paid' : 'Part paid', invoice.id]);
         /* Money received is income against the project, recorded once and in one place. */
         await connection.execute(
-          `INSERT INTO incomes (project_id,description,amount,received_date,method,reference,created_by)
-           VALUES (?,?,?,?,?,?,?)`,
-          [invoice.project_id, `${invoice.reference} — ${invoice.title}`, req.body.amount,
+          `INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,created_by)
+           VALUES (?,?,?,?,?,?,?,?)`,
+          [invoice.project_id, invoice.company_id, `${invoice.reference} — ${invoice.title}`, req.body.amount,
             req.body.receivedDate, req.body.method, req.body.reference || invoice.reference, req.user.id]);
       });
 
@@ -301,8 +380,7 @@ router.post('/receivables/cheques', auth, permit('finance.invoice'), validate(z.
   if(req.body.chequeDate<req.body.receivedDate) throw fail(400,'Cheque date cannot be before it was received');
   if(req.body.depositBy<req.body.receivedDate) throw fail(400,'Deposit reminder date cannot be before receipt');
   if(req.body.invoiceId){
-    const invoice=await getOne(`SELECT i.*,p.company_id FROM client_invoices i
-      JOIN projects p ON p.id=i.project_id WHERE i.id=?`,[req.body.invoiceId]);
+    const invoice=await getOne('SELECT * FROM client_invoices WHERE id=?',[req.body.invoiceId]);
     if(!invoice) throw fail(404,'Client invoice not found');
     if(['Draft','Cancelled'].includes(invoice.status)) throw fail(409,'The linked client invoice must be issued');
     if(Number(invoice.company_id)!==req.body.companyId) throw fail(400,'That invoice belongs to the other company');
@@ -310,9 +388,11 @@ router.post('/receivables/cheques', auth, permit('finance.invoice'), validate(z.
     projectId=invoice.project_id;
     if(req.body.amount>Number(invoice.net_payable)-Number(invoice.paid_amount)+0.001) throw fail(409,'Cheque amount exceeds the client invoice balance');
   }
-  if(!projectId) throw fail(400,'Choose a project or link a client invoice');
-  const project=await getOne('SELECT id FROM projects WHERE id=? AND company_id=?',[projectId,req.body.companyId]);
-  if(!project) throw fail(400,'That project belongs to the other company');
+  if(!projectId && !req.body.invoiceId) throw fail(400,'Choose a project or link a client invoice');
+  if(projectId){
+    const project=await getOne('SELECT id FROM projects WHERE id=? AND company_id=?',[projectId,req.body.companyId]);
+    if(!project) throw fail(400,'That project belongs to the other company');
+  }
   const result=await query(`INSERT INTO received_cheques
     (company_id,project_id,invoice_id,cheque_number,bank,payer,purpose,amount,received_date,cheque_date,deposit_by,reminder_days,notes,created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[req.body.companyId,projectId,req.body.invoiceId||null,req.body.chequeNumber,req.body.bank,req.body.payer,
@@ -338,8 +418,9 @@ router.patch('/receivables/cheques/:id',auth,permit('finance.invoice'),validate(
         await connection.execute(`INSERT INTO client_receipts (invoice_id,amount,received_date,method,reference,recorded_by)
           VALUES (?,?,CURDATE(),'Cheque',?,?)`,[invoice.id,cheque.amount,cheque.cheque_number,req.user.id]);
       }
-      await connection.execute(`INSERT INTO incomes (project_id,description,amount,received_date,method,reference,created_by)
-        VALUES (?,?,?,CURDATE(),'Cheque',?,?)`,[cheque.project_id,`Cheque cleared — ${cheque.purpose}`,cheque.amount,cheque.cheque_number,req.user.id]);
+      await connection.execute(`INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,created_by)
+        VALUES (?,?,?,?,CURDATE(),'Cheque',?,?)`,[cheque.project_id,cheque.company_id,
+          `Cheque cleared — ${cheque.purpose}`,cheque.amount,cheque.cheque_number,req.user.id]);
     }
     await connection.execute(`UPDATE received_cheques SET status=?,notes=COALESCE(?,notes),
       deposited_at=CASE WHEN ? IN ('Deposited','Re-deposited') THEN CURDATE() ELSE deposited_at END,

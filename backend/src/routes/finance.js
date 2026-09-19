@@ -98,7 +98,7 @@ router.post('/credit-card-statements/:id/payments',auth,permit('finance.manage')
 router.get('/vat',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{const companyId=companyParam(req)||1;
   const [output,inputSupplier,inputBills]=await Promise.all([
     query(`SELECT i.reference,i.client counterparty,i.invoice_date date,i.gross netAmount,i.vat_amount vatAmount,i.net_payable totalAmount,'Output' direction
-      FROM client_invoices i JOIN projects p ON p.id=i.project_id WHERE p.company_id=? AND i.status='Paid' AND i.tax_treatment='Standard' ORDER BY i.invoice_date`,[companyId]),
+      FROM client_invoices i WHERE i.company_id=? AND i.status='Paid' AND i.tax_treatment='Standard' ORDER BY i.invoice_date`,[companyId]),
     query(`SELECT i.invoice_no reference,s.name counterparty,i.invoice_date date,i.net_amount netAmount,i.vat_amount vatAmount,i.amount totalAmount,'Input' direction
       FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id WHERE i.company_id=? AND i.status='Paid' AND i.tax_treatment='Standard' ORDER BY i.invoice_date`,[companyId]),
     query(`SELECT b.reference,b.provider counterparty,b.bill_date date,b.net_amount netAmount,b.vat_amount vatAmount,b.total_amount totalAmount,'Input' direction
@@ -119,7 +119,7 @@ router.get('/expenses', auth, permit('finance.view','finance.manage'), wrap(asyn
   const filters = [];
   const params = [];
   const companyId = companyParam(req);
-  if (companyId) { filters.push('p.company_id=?'); params.push(companyId); }
+  if (companyId) { filters.push('COALESCE(i.company_id,p.company_id)=?'); params.push(companyId); }
   if (req.query.projectId) { filters.push('e.project_id=?'); params.push(req.query.projectId); }
   if (req.query.from) { filters.push('e.expense_date>=?'); params.push(req.query.from); }
   if (req.query.to) { filters.push('e.expense_date<=?'); params.push(req.query.to); }
@@ -160,7 +160,7 @@ router.get('/income', auth, permit('finance.view','finance.manage'), wrap(async 
   if (req.query.projectId) { filters.push('i.project_id=?'); params.push(req.query.projectId); }
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   res.json(await query(`SELECT i.id,i.description,i.amount,i.received_date receivedDate,i.method,i.reference,p.name project,i.project_id projectId,u.name recordedBy
-    FROM incomes i JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=i.created_by ${where}
+    FROM incomes i LEFT JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=i.created_by ${where}
     ORDER BY i.received_date DESC,i.id DESC LIMIT 300`, params));
 }));
 
@@ -177,8 +177,10 @@ router.post('/income', auth, permit('finance.manage'), validate(z.object({
   const result = await transaction(async connection => {
     await assertUniqueManualEntry(connection, 'incomes', { projectId: body.projectId, reference: body.reference,
       amount: body.amount, date: body.receivedDate, description: body.description });
-    const [inserted] = await connection.execute('INSERT INTO incomes (project_id,description,amount,received_date,method,reference,created_by) VALUES (?,?,?,?,?,?,?)',
-      [body.projectId, body.description, body.amount, body.receivedDate, body.method, body.reference?.trim() || null, req.user.id]);
+    const [[project]] = await connection.execute('SELECT company_id FROM projects WHERE id=?', [body.projectId]);
+    if (!project) throw Object.assign(new Error('Choose an existing project'), { status: 400 });
+    const [inserted] = await connection.execute('INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,created_by) VALUES (?,?,?,?,?,?,?,?)',
+      [body.projectId, project.company_id, body.description, body.amount, body.receivedDate, body.method, body.reference?.trim() || null, req.user.id]);
     return inserted;
   });
   const row = await getOne('SELECT * FROM incomes WHERE id=?', [result.insertId]);
@@ -206,7 +208,7 @@ router.get('/summary', auth, permit('finance.view','finance.manage'), wrap(async
         JOIN projects ep ON ep.id=e.project_id ${companyId ? 'WHERE ep.company_id=?' : ''}
       UNION ALL
       SELECT DATE_FORMAT(i.received_date,'%Y-%m-01') month_start, 0 expense, i.amount income FROM incomes i
-        JOIN projects ip ON ip.id=i.project_id ${companyId ? 'WHERE ip.company_id=?' : ''}
+        LEFT JOIN projects ip ON ip.id=i.project_id ${companyId ? 'WHERE COALESCE(i.company_id,ip.company_id)=?' : ''}
     ) ledger WHERE month_start >= DATE_SUB(DATE_FORMAT(CURDATE(),'%Y-%m-01'), INTERVAL 5 MONTH)
     GROUP BY month_start ORDER BY month_start`, companyId ? [companyId, companyId] : []);
   const payable = await getOne(`SELECT COALESCE(SUM(amount-paid_amount),0) outstanding,
@@ -224,6 +226,9 @@ router.get('/summary', auth, permit('finance.view','finance.manage'), wrap(async
   }), { budget: 0, expenses: 0, income: 0 });
   const officeBills = await getOne(`SELECT COALESCE(SUM(total_amount),0) paid FROM operating_bills WHERE project_id IS NULL AND status='Paid' ${companyId?'AND company_id=?':''}`, companyParams);
   totals.expenses+=Number(officeBills.paid);
+  const companyIncome = await getOne(`SELECT COALESCE(SUM(amount),0) total FROM incomes
+    WHERE project_id IS NULL ${companyId ? 'AND company_id=?' : ''}`, companyParams);
+  totals.income += Number(companyIncome.total);
   payable.outstanding=Number(payable.outstanding)+Number(operating.outstanding);
   payable.overdue=Number(payable.overdue)+Number(operating.overdue);
   if(Number(officeBills.paid)>0)bySource.push({source:'Office and utility bills',total:officeBills.paid});
@@ -272,9 +277,9 @@ router.get('/reporting', auth, permit('finance.view','finance.manage'), wrap(asy
     return { where: filters.length ? `WHERE ${filters.join(' AND ')}` : '', params };
   };
   const e = scoped('e.project_id', 'e.expense_date');
-  const i = scoped('i.project_id', 'i.received_date');
-  const ci = scoped('ci.project_id', 'ci.invoice_date');
-  const cr = scoped('ci.project_id', 'cr.received_date');
+  const i = scoped('i.project_id', 'i.received_date', 'COALESCE(i.company_id,p.company_id)');
+  const ci = scoped('ci.project_id', 'ci.invoice_date', 'ci.company_id');
+  const cr = scoped('ci.project_id', 'cr.received_date', 'ci.company_id');
   const po = scoped('po.project_id', 'po.order_date');
   const si = scoped('po.project_id', 'si.invoice_date', 'si.company_id');
   const sp = scoped('po.project_id', 'sp.paid_date', 'si.company_id');
@@ -296,17 +301,17 @@ router.get('/reporting', auth, permit('finance.view','finance.manage'), wrap(asy
       FROM expenses e JOIN projects p ON p.id=e.project_id LEFT JOIN expense_categories ec ON ec.id=e.category_id
       ${e.where} ORDER BY e.expense_date,e.id`, e.params),
     query(`SELECT i.id,i.project_id projectId,p.name project,i.received_date date,i.description,
-      i.amount,i.method,i.reference FROM incomes i JOIN projects p ON p.id=i.project_id
+      i.amount,i.method,i.reference FROM incomes i LEFT JOIN projects p ON p.id=i.project_id
       ${i.where} ORDER BY i.received_date,i.id`, i.params),
     query(`SELECT ci.id,ci.project_id projectId,p.name project,ci.reference,ci.client,ci.kind,
       ci.invoice_date invoiceDate,ci.due_date dueDate,ci.gross,ci.vat_amount vatAmount,
       ci.retention_amount retentionAmount,ci.advance_recovery advanceRecovery,
       ci.other_deductions otherDeductions,ci.net_payable netPayable,ci.paid_amount paidAmount,ci.status
-      FROM client_invoices ci JOIN projects p ON p.id=ci.project_id ${ci.where}
+      FROM client_invoices ci LEFT JOIN projects p ON p.id=ci.project_id ${ci.where}
       ORDER BY ci.invoice_date,ci.id`, ci.params),
     query(`SELECT cr.id,ci.project_id projectId,p.name project,ci.reference invoiceReference,
       cr.received_date date,cr.amount,cr.method,cr.reference
-      FROM client_receipts cr JOIN client_invoices ci ON ci.id=cr.invoice_id JOIN projects p ON p.id=ci.project_id
+      FROM client_receipts cr JOIN client_invoices ci ON ci.id=cr.invoice_id LEFT JOIN projects p ON p.id=ci.project_id
       ${cr.where} ORDER BY cr.received_date,cr.id`, cr.params),
     query(`SELECT po.id,po.project_id projectId,p.name project,po.reference,s.name supplier,
       po.order_date orderDate,po.total,po.status FROM purchase_orders po
