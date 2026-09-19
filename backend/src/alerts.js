@@ -515,8 +515,8 @@ async function receivableAlerts(stamp, alerts) {
   const rows = await query(`
     SELECT i.id,i.reference,i.client,i.title,i.due_date dueDate,
            (i.net_payable - i.paid_amount) outstanding,
-           DATEDIFF(CURDATE(), i.due_date) overdue, p.name project
-      FROM client_invoices i JOIN projects p ON p.id=i.project_id
+           DATEDIFF(CURDATE(), i.due_date) overdue, COALESCE(p.name,'a company-level invoice') project
+      FROM client_invoices i LEFT JOIN projects p ON p.id=i.project_id
      WHERE i.status IN ('Issued','Part paid')
        AND i.net_payable > i.paid_amount
        AND i.due_date IS NOT NULL AND i.due_date <= CURDATE()`);

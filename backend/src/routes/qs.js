@@ -2,7 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, spendSql, today, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
+import { checksumFile, contentMatchesType, isLocalStore, localPathFor, readUpload, remove, signedDownloadUrl, store } from '../lib/storage.js';
+import { parseSubcontractQuotePdf, suggestSubcontractors } from '../lib/subcontract-quote-pdf.js';
+import { parseTenderPdf } from '../lib/tender-pdf.js';
 import { commitmentsDocument, documentContext, quotationDocument } from '../lib/documents.js';
+import { sendDocument } from '../lib/document-pdf.js';
 import { notify } from '../alerts.js';
 import { resolveProjectManager } from '../lib/project-manager.js';
 
@@ -45,20 +49,22 @@ router.get('/quotations/:id/document', auth, permit('qs.view'), wrap(async (req,
   const quotation = await getOne(`${quoteSelect} WHERE q.id=?`, [req.params.id]);
   if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
 
-  const [items, context] = await Promise.all([
+  const [items, context, client] = await Promise.all([
     query(`SELECT category,description,unit,quantity,rate,amount
       FROM quotation_items WHERE quotation_id=? ORDER BY id`, [quotation.id]),
-    documentContext(getOne, quotation.companyId)
+    documentContext(getOne, quotation.companyId),
+    quotation.clientId ? getOne(`SELECT COALESCE(NULLIF(tin,''),tax_number) clientTin,vat_number clientVatNumber,
+      billing_address clientAddress,phone clientPhone FROM clients WHERE id=?`, [quotation.clientId]) : null
   ]);
 
   const page = quotationDocument({
     ...context,
     /* The select names the client column `client`; the document speaks in client names. */
-    quotation: { ...quotation, clientName: quotation.client },
+    quotation: { ...quotation, clientName: quotation.client, ...client },
     items: items.map((item, index) => ({ ...item, reference: index + 1 }))
   });
 
-  res.type('html').send(page);
+  await sendDocument(req, res, page, `${quotation.reference}.pdf`);
 }));
 
 /*
@@ -416,7 +422,7 @@ const tenderSelect = `SELECT t.id,t.reference,t.contract_no contractNo,t.title,t
   t.submitted_date submittedDate,t.estimated_value estimatedValue,t.bid_value bidValue,t.vat_amount vatAmount,
   t.award_value awardValue,t.awarded_to awardedTo,t.our_rank ourRank,t.bidders_count biddersCount,
   t.opened_date openedDate,t.status,t.documents_note documentsNote,t.outcome_note outcomeNote,
-  t.project_id projectId,p.name project,u.name owner,
+  t.project_id projectId,p.name project,u.name owner,t.source_filename sourceFilename,
   (SELECT COUNT(*) FROM tender_checklist c WHERE c.tender_id=t.id) checklistTotal,
   (SELECT COUNT(*) FROM tender_checklist c WHERE c.tender_id=t.id AND c.done=1) checklistDone,
   (SELECT COUNT(*) FROM tender_checklist c WHERE c.tender_id=t.id AND c.done=0 AND c.mandatory=1) checklistOutstanding
@@ -522,6 +528,93 @@ const columns = {
   biddersCount: 'bidders_count', openedDate: 'opened_date',
   submittedDate: 'submitted_date', documentsNote: 'documents_note', outcomeNote: 'outcome_note'
 };
+
+router.post('/tenders/pdf/preview', auth, permit('qs.tender'), wrap(async (req, res) => {
+  const upload = await pdfUpload(req);
+  try {
+    const parsed = await parseTenderPdf(upload.file.path);
+    const clients = await query('SELECT id,name,type FROM clients WHERE active=1');
+    const name = parsed.clientName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const matches = name ? clients.filter(client => {
+      const candidate = client.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return candidate === name || (candidate.length > 5 && name.includes(candidate)) || (name.length > 5 && candidate.includes(name));
+    }).slice(0, 5) : [];
+    res.json({ ...parsed, matches, filename: upload.file.filename });
+  } finally { await upload.discard(); }
+}));
+
+router.post('/tenders/pdf/commit', auth, permit('qs.tender'), wrap(async (req, res) => {
+  const upload = await pdfUpload(req);
+  let stored;
+  let committed = false;
+  try {
+    let review;
+    try { review = JSON.parse(upload.fields.review || ''); }
+    catch { return res.status(400).json({ error: 'The reviewed tender details were missing. Read the PDF again and retry.' }); }
+    for (const field of ['docsFrom', 'docsUntil', 'openingDate', 'securityValidUntil']) {
+      if (review[field] === '') delete review[field];
+    }
+    const parsed = tenderShape.extend({
+      clientSelection: z.discriminatedUnion('mode', [
+        z.object({ mode: z.literal('existing'), id: z.number().int().positive() }),
+        z.object({ mode: z.literal('new'), name: z.string().trim().min(2).max(180), type: z.enum(['Private', 'Organisation']) })
+      ])
+    }).refine(datesRunForwards, dateOrder).safeParse(review);
+    if (!parsed.success) return res.status(400).json({ error: 'Check the tender details, client and closing date.', issues: parsed.error.flatten() });
+    const { clientSelection, ...body } = parsed.data;
+    if (clientSelection.mode === 'existing' && !await getOne('SELECT id FROM clients WHERE id=? AND active=1', [clientSelection.id]))
+      return res.status(400).json({ error: 'The selected client is no longer active. Choose another client.' });
+    if (clientSelection.mode === 'new' && await getOne('SELECT id FROM clients WHERE LOWER(name)=LOWER(?) AND active=1', [clientSelection.name]))
+      return res.status(409).json({ error: 'A client with this name already exists. Choose the saved client instead.' });
+    if (body.contractNo && await getOne('SELECT id FROM tenders WHERE company_id=? AND contract_no=?', [body.companyId, body.contractNo]))
+      return res.status(409).json({ error: 'This company already has a tender with that contract number. Open the existing tender instead.' });
+    const company = await getOne('SELECT id FROM companies WHERE id=?', [body.companyId]);
+    if (!company) return res.status(400).json({ error: 'Choose a valid operating company.' });
+    const checksum = await checksumFile(upload.file.path);
+    stored = await store({ folder: 'tender', filename: upload.file.filename,
+      mime: upload.file.mime, path: upload.file.path, head: upload.file.head, size: upload.file.size });
+    const reference = await nextReference('TEN', 'tenders');
+    const id = await transaction(async connection => {
+      let client;
+      if (clientSelection.mode === 'existing') {
+        const [rows] = await connection.execute('SELECT id,name FROM clients WHERE id=? AND active=1', [clientSelection.id]);
+        client = rows[0];
+        if (!client) throw Object.assign(new Error('The client was archived while you were reviewing. Choose another.'), { status: 409 });
+      } else {
+        const [created] = await connection.execute('INSERT INTO clients (type,name) VALUES (?,?)', [clientSelection.type, clientSelection.name]);
+        client = { id: created.insertId, name: clientSelection.name };
+        await audit(connection, req.user.id, 'CREATE', 'client', client.id, null, client, req.ip);
+      }
+      const fields = Object.entries(body).filter(([, value]) => value !== undefined);
+      const names = ['reference', 'owner_id', 'client_id', 'client', 'source_file_key', 'source_filename', 'source_checksum',
+        ...fields.map(([key]) => columns[key] || key)];
+      const values = [reference, req.user.id, client.id, client.name, stored.key, stored.filename, checksum,
+        ...fields.map(([, value]) => value)];
+      const [created] = await connection.execute(`INSERT INTO tenders (${names.join(',')}) VALUES (${names.map(() => '?').join(',')})`, values);
+      for (const [position, item] of STANDARD_CHECKLIST.entries()) {
+        await connection.execute('INSERT INTO tender_checklist (tender_id,item,position) VALUES (?,?,?)', [created.insertId, item, position]);
+      }
+      await audit(connection, req.user.id, 'CREATE', 'tender', created.insertId, null,
+        { reference, clientId: client.id, sourceFilename: stored.filename }, req.ip);
+      return created.insertId;
+    });
+    committed = true;
+    res.status(201).json(await getOne(`${tenderSelect} WHERE t.id=?`, [id]));
+  } catch (error) {
+    if (stored && !committed) await remove(stored.key).catch(() => {});
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This tender or client already exists. Refresh and check the saved records.' });
+    throw error;
+  } finally { await upload.discard(); }
+}));
+
+router.get('/tenders/:id/pdf', auth, permit('qs.view'), wrap(async (req, res) => {
+  const file = await getOne('SELECT source_file_key storageKey,source_filename filename FROM tenders WHERE id=?', [req.params.id]);
+  if (!file?.storageKey) return res.status(404).json({ error: 'No original PDF is attached to this tender.' });
+  res.type('application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${file.filename.replace(/[^\w.\- ]+/g, '')}"`);
+  if (isLocalStore()) return res.sendFile(localPathFor(file.storageKey));
+  return res.redirect(await signedDownloadUrl(file.storageKey));
+}));
 
 router.post('/tenders', auth, permit('qs.tender'), validate(tenderShape.refine(datesRunForwards, dateOrder)
   .refine(value => value.clientId || value.client, { message: 'Choose a client', path: ['clientId'] })),
@@ -749,7 +842,8 @@ router.get('/tenders/:id/commitments/document', auth, permit('qs.view'), wrap(as
     outstanding: commitments.reduce((sum, row) => sum + row.outstanding, 0)
   };
   const context = await documentContext(getOne, companyId);
-  res.type('html').send(commitmentsDocument({ ...context, tender, commitments, totals, asAt: today() }));
+  await sendDocument(req, res, commitmentsDocument({ ...context, tender, commitments, totals, asAt: today() }),
+    `${tender?.reference || 'Contract-commitments'}.pdf`);
 }));
 
 /* -------------------------------------------------- Subcontract quotations (inbound) */
@@ -766,7 +860,7 @@ router.get('/tenders/:id/commitments/document', auth, permit('qs.view'), wrap(as
 const subQuoteSelect = `SELECT q.id,q.reference,q.their_reference theirReference,q.package,
   q.quote_date quoteDate,q.validity_days validityDays,q.valid_until validUntil,
   q.site_address siteAddress,q.contact_person contactPerson,q.contact_phone contactPhone,
-  q.subtotal,q.discount_total discountTotal,q.total,q.notes,q.status,
+  q.subtotal,q.discount_total discountTotal,q.total,q.notes,q.status,q.source_filename sourceFilename,
   q.decision_note decisionNote,q.decided_at decidedAt,
   q.company_id companyId,q.project_id projectId,p.name project,q.boq_id boqId,
   s.id subcontractorId,s.name subcontractor,s.trade,
@@ -780,6 +874,122 @@ const subQuoteSelect = `SELECT q.id,q.reference,q.their_reference theirReference
 
 const lineTotal = item =>
   Math.max(0, Number(item.quantity) * Number(item.rate) - Number(item.discount || 0));
+
+const importedSubquote = z.object({
+  companyId: z.number().int().positive(),
+  projectId: z.number().int().positive(),
+  subcontractor: z.discriminatedUnion('mode', [
+    z.object({ mode: z.literal('existing'), id: z.number().int().positive() }),
+    z.object({ mode: z.literal('new'), name: z.string().trim().min(2).max(180),
+      trade: z.string().trim().min(2).max(120), contactType: z.enum(['Company', 'Individual']),
+      contact: z.string().max(120).optional(), phone: z.string().max(40).optional(),
+      email: z.string().email().or(z.literal('')).optional(), address: z.string().max(400).optional(),
+      businessId: z.string().max(100).optional() })
+  ]),
+  quotation: z.object({
+    theirReference: z.string().max(80).optional(), package: z.string().trim().min(2).max(200),
+    quoteDate: isoDate, validityDays: z.number().int().min(1).max(365),
+    siteAddress: z.string().max(300).optional(), contactPerson: z.string().max(120).optional(),
+    contactPhone: z.string().max(40).optional(), notes: z.string().max(1000).optional()
+  }),
+  items: z.array(z.object({ description: z.string().trim().min(2).max(300), unit: z.string().max(30).optional(),
+    quantity: z.number().positive(), rate: z.number().nonnegative(), discount: z.number().nonnegative() })).min(1)
+});
+
+const pdfUpload = async req => {
+  const upload = await readUpload(req);
+  if (upload.file.mime !== 'application/pdf' || !contentMatchesType(upload.file.head, 'application/pdf')) {
+    await upload.discard();
+    throw Object.assign(new Error('Choose a valid PDF quotation file.'), { status: 415 });
+  }
+  return upload;
+};
+
+router.post('/subcontract-quotations/pdf/preview', auth, permit('subcontractors.manage'), wrap(async (req, res) => {
+  const upload = await pdfUpload(req);
+  try {
+    const parsed = await parseSubcontractQuotePdf(upload.file.path);
+    const existing = await query(`SELECT id,name,trade,phone,business_id businessId FROM subcontractors WHERE active=1`);
+    res.json({ ...parsed, filename: upload.file.filename, matches: suggestSubcontractors(parsed, existing) });
+  } finally { await upload.discard(); }
+}));
+
+router.post('/subcontract-quotations/pdf/commit', auth, permit('subcontractors.manage'), wrap(async (req, res) => {
+  const upload = await pdfUpload(req);
+  let stored;
+  let committed = false;
+  try {
+    let review;
+    try { review = JSON.parse(upload.fields.review || ''); }
+    catch { return res.status(400).json({ error: 'The reviewed quotation details were missing. Read the PDF again and retry.' }); }
+    const validated = importedSubquote.safeParse(review);
+    if (!validated.success) return res.status(400).json({ error: 'Check the highlighted quotation details and priced items.', issues: validated.error.flatten() });
+    const body = validated.data;
+    const project = await getOne('SELECT id FROM projects WHERE id=? AND active=1 AND company_id=?', [body.projectId, body.companyId]);
+    if (!project) return res.status(400).json({ error: 'Choose an active project from the selected company.' });
+    if (body.subcontractor.mode === 'existing') {
+      const existing = await getOne('SELECT id FROM subcontractors WHERE id=? AND active=1', [body.subcontractor.id]);
+      if (!existing) return res.status(400).json({ error: 'The selected subcontractor is no longer available. Choose another or create a new one.' });
+    } else {
+      const existing = await getOne('SELECT id FROM subcontractors WHERE LOWER(name)=LOWER(?) AND active=1', [body.subcontractor.name]);
+      if (existing) return res.status(409).json({ error: 'A subcontractor with this name already exists. Choose their existing profile instead of creating a duplicate.' });
+    }
+
+    const checksum = await checksumFile(upload.file.path);
+    stored = await store({ folder: 'subcontract-quotation', filename: upload.file.filename,
+      mime: upload.file.mime, path: upload.file.path, head: upload.file.head, size: upload.file.size });
+    const reference = await nextReference('SQ', 'subcontractor_quotations');
+    const quote = body.quotation;
+    const subtotal = body.items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
+    const discountTotal = body.items.reduce((sum, item) => sum + item.discount, 0);
+    const total = body.items.reduce((sum, item) => sum + lineTotal(item), 0);
+    const id = await transaction(async connection => {
+      let subcontractorId = body.subcontractor.id;
+      if (body.subcontractor.mode === 'new') {
+        const sub = body.subcontractor;
+        const [created] = await connection.execute(`INSERT INTO subcontractors
+          (name,trade,contact_person,phone,email,address,business_id,contact_type) VALUES (?,?,?,?,?,?,?,?)`,
+          [sub.name, sub.trade, sub.contact || null, sub.phone || null, sub.email || null,
+            sub.address || null, sub.businessId || null, sub.contactType]);
+        subcontractorId = created.insertId;
+        await audit(connection, req.user.id, 'CREATE', 'subcontractor', subcontractorId, null, sub, req.ip);
+      }
+      const [created] = await connection.execute(`INSERT INTO subcontractor_quotations
+        (company_id,reference,subcontractor_id,project_id,their_reference,package,quote_date,validity_days,
+         valid_until,site_address,contact_person,contact_phone,subtotal,discount_total,total,notes,
+         source_file_key,source_filename,source_checksum,created_by)
+        VALUES (?,?,?,?,?,?,?,?,DATE_ADD(?, INTERVAL ? DAY),?,?,?,?,?,?,?,?,?,?,?)`,
+        [body.companyId, reference, subcontractorId, body.projectId, quote.theirReference || null,
+          quote.package, quote.quoteDate, quote.validityDays, quote.quoteDate, quote.validityDays,
+          quote.siteAddress || null, quote.contactPerson || null, quote.contactPhone || null,
+          subtotal, discountTotal, total, quote.notes || null, stored.key, stored.filename, checksum, req.user.id]);
+      for (const [position, item] of body.items.entries()) {
+        await connection.execute(`INSERT INTO subcontractor_quotation_items
+          (quotation_id,description,unit,quantity,rate,discount,amount,position) VALUES (?,?,?,?,?,?,?,?)`,
+          [created.insertId, item.description, item.unit || null, item.quantity, item.rate,
+            item.discount, lineTotal(item), position]);
+      }
+      await audit(connection, req.user.id, 'CREATE', 'subcontract_quotation', created.insertId, null,
+        { reference, subcontractorId, total, sourceFilename: stored.filename }, req.ip);
+      return created.insertId;
+    });
+    committed = true;
+    res.status(201).json(await getOne(`${subQuoteSelect} WHERE q.id=?`, [id]));
+  } catch (error) {
+    if (stored && !committed) await remove(stored.key).catch(() => {});
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This subcontractor or quotation already exists. Refresh and check the existing records.' });
+    throw error;
+  } finally { await upload.discard(); }
+}));
+
+router.get('/subcontract-quotations/:id/pdf', auth, permit('qs.view', 'projects.view'), wrap(async (req, res) => {
+  const file = await getOne('SELECT source_file_key storageKey,source_filename filename FROM subcontractor_quotations WHERE id=?', [req.params.id]);
+  if (!file?.storageKey) return res.status(404).json({ error: 'No original PDF is attached to this quotation.' });
+  res.type('application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${file.filename.replace(/[^\w.\- ]+/g, '')}"`);
+  if (isLocalStore()) return res.sendFile(localPathFor(file.storageKey));
+  return res.redirect(await signedDownloadUrl(file.storageKey));
+}));
 
 router.get('/subcontract-quotations', auth, permit('qs.view', 'projects.view'), wrap(async (req, res) => {
   const filters = [];

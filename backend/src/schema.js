@@ -1069,6 +1069,9 @@ async function createQsTables() {
    * Ready Mix), and which one bid matters when the award lands.
    */
   await addColumn('tenders', 'contract_no', 'VARCHAR(120) NULL AFTER reference');
+  await addColumn('tenders', 'source_file_key', 'VARCHAR(400) NULL');
+  await addColumn('tenders', 'source_filename', 'VARCHAR(190) NULL');
+  await addColumn('tenders', 'source_checksum', 'CHAR(64) NULL');
   await addColumn('tenders', 'bidding_entity', "VARCHAR(120) NULL");
   await addColumn('tenders', 'procurement_method', "ENUM('National Competitive Bidding','International Competitive Bidding','Shopping','Direct') NOT NULL DEFAULT 'National Competitive Bidding'");
   await addColumn('tenders', 'specialty', "ENUM('Highways','Bridges','Buildings','Irrigation','Water Supply','Other') NOT NULL DEFAULT 'Highways'");
@@ -1279,6 +1282,7 @@ async function createQsTables() {
  * Getting those three wrong is how a contractor invoices confidently for the wrong figure.
  */
 async function createReceivableTables() {
+  await addColumn('projects', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
   await addColumn('company_settings', 'vat_number', 'VARCHAR(40) NULL');
   await addColumn('company_settings', 'svat_number', 'VARCHAR(40) NULL');
   await addColumn('company_settings', 'default_vat_rate', 'DECIMAL(5,2) NOT NULL DEFAULT 18.00');
@@ -1286,8 +1290,10 @@ async function createReceivableTables() {
   await query(`CREATE TABLE IF NOT EXISTS client_invoices (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     reference VARCHAR(60) NOT NULL UNIQUE,
-    project_id BIGINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NULL,
+    company_id TINYINT UNSIGNED NULL,
     client VARCHAR(180) NOT NULL,
+    document_type ENUM('Tax Invoice','Invoice') NOT NULL DEFAULT 'Tax Invoice',
     /* An interim certificate bills the work done to date; a final one closes the account. */
     kind ENUM('Interim','Final','Advance','Variation','Other') NOT NULL DEFAULT 'Interim',
     title VARCHAR(200) NOT NULL,
@@ -1343,6 +1349,27 @@ async function createReceivableTables() {
     CONSTRAINT fk_cinvoice_item FOREIGN KEY(invoice_id) REFERENCES client_invoices(id) ON DELETE CASCADE,
     INDEX idx_cinvoice_item (invoice_id)
   ) ENGINE=InnoDB`);
+  await addColumn('client_invoices', 'delivery_date', 'DATE NULL');
+  await addColumn('client_invoices', 'place_of_supply', 'VARCHAR(300) NULL');
+  await addColumn('client_invoices', 'payment_mode', 'VARCHAR(80) NULL');
+  await addColumn('client_invoices', 'buyer_tin', 'VARCHAR(100) NULL');
+  await addColumn('client_invoices', 'buyer_vat_number', 'VARCHAR(100) NULL');
+  await addColumn('client_invoices', 'buyer_address', 'VARCHAR(500) NULL');
+  await addColumn('client_invoices', 'buyer_phone', 'VARCHAR(40) NULL');
+  await addColumn('client_invoices', 'company_id', 'TINYINT UNSIGNED NULL');
+  await addColumn('client_invoices', 'document_type', "ENUM('Tax Invoice','Invoice') NOT NULL DEFAULT 'Tax Invoice'");
+  if (!(await columnIsNullable('client_invoices', 'project_id')))
+    await query('ALTER TABLE client_invoices MODIFY project_id BIGINT UNSIGNED NULL');
+  await query(`UPDATE client_invoices i JOIN projects p ON p.id=i.project_id
+    SET i.company_id=p.company_id WHERE i.company_id IS NULL`);
+  await query(`UPDATE client_invoices SET document_type='Invoice'
+    WHERE tax_treatment='Exempt' AND document_type='Tax Invoice'`);
+  await addColumn('incomes', 'company_id', 'TINYINT UNSIGNED NULL');
+  if (!(await columnIsNullable('incomes', 'project_id')))
+    await query('ALTER TABLE incomes MODIFY project_id BIGINT UNSIGNED NULL');
+  await query(`UPDATE incomes i JOIN projects p ON p.id=i.project_id
+    SET i.company_id=p.company_id WHERE i.company_id IS NULL`);
+  await addIndex('client_invoices', 'idx_cinvoice_company', 'INDEX idx_cinvoice_company(company_id,status)');
 
   await query(`CREATE TABLE IF NOT EXISTS client_receipts (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -2051,6 +2078,9 @@ async function createSubcontractQuotationTables() {
     discount_total DECIMAL(15,2) NOT NULL DEFAULT 0,
     total DECIMAL(15,2) NOT NULL DEFAULT 0,
     notes VARCHAR(1000) NULL,
+    source_file_key VARCHAR(400) NULL,
+    source_filename VARCHAR(190) NULL,
+    source_checksum CHAR(64) NULL,
     status ENUM('Received','Accepted','Rejected','Expired','Superseded') NOT NULL DEFAULT 'Received',
     decided_at DATETIME NULL, decided_by BIGINT UNSIGNED NULL, decision_note VARCHAR(400) NULL,
     created_by BIGINT UNSIGNED NOT NULL,
@@ -2063,6 +2093,10 @@ async function createSubcontractQuotationTables() {
     INDEX idx_subquote_project (project_id, status),
     INDEX idx_subquote_valid (valid_until)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+  await addColumn('subcontractor_quotations', 'source_file_key', 'VARCHAR(400) NULL');
+  await addColumn('subcontractor_quotations', 'source_filename', 'VARCHAR(190) NULL');
+  await addColumn('subcontractor_quotations', 'source_checksum', 'CHAR(64) NULL');
 
   await query(`CREATE TABLE IF NOT EXISTS subcontractor_quotation_items (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -2553,12 +2587,16 @@ async function createClientDirectory() {
     country VARCHAR(100) NULL,
     registration_number VARCHAR(100) NULL,
     tax_number VARCHAR(100) NULL,
+    tin VARCHAR(100) NULL,
+    vat_number VARCHAR(100) NULL,
     notes TEXT NULL,
     active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_clients_name(name)
   ) ENGINE=InnoDB`);
+  await addColumn('clients', 'tin', 'VARCHAR(100) NULL');
+  await addColumn('clients', 'vat_number', 'VARCHAR(100) NULL');
   for (const table of ['projects', 'inquiries', 'quotations_client', 'client_invoices', 'tenders']) {
     await addColumn(table, 'client_id', 'BIGINT UNSIGNED NULL');
     await addForeignKey(table, `fk_${table}_client_directory`,

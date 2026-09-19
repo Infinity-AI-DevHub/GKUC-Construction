@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Download, FileText } from 'lucide-react';
-import { api, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { Download, FileText, Upload } from 'lucide-react';
+import { api, fetchDownload, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import BoqImport from '../BoqImport.jsx';
 import BoqChanges from '../BoqChanges.jsx';
@@ -45,7 +45,7 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
       <BoqList companyId={companyId} />
       <BoqChanges can={can} reload={reload} />
     </>}
-    {tab === 'Tenders' && <Tenders can={can} companyId={companyId} employees={data.employees} />}
+    {tab === 'Tenders' && <Tenders can={can} companyId={companyId} company={company} employees={data.employees} />}
     {tab === 'Retention' && <Retention can={can} companyId={companyId} />}
     {tab === 'Subcontractors' && <Subcontractors can={can} data={data} companyId={companyId} />}
 
@@ -200,9 +200,11 @@ function Countdown({ date, time, live, past = 'closed' }) {
   </div>;
 }
 
-function Tenders({ can, companyId, employees }) {
+function Tenders({ can, companyId, company, employees }) {
   const [rows, setRows] = useState([]);
   const [detailId, setDetailId] = useState(null);
+  const [readingPdf, setReadingPdf] = useState(false);
+  const [error, setError] = useState('');
   const load = () => api(`/qs/tenders?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
   useEffect(()=>{setDetailId(null);load();},[companyId]);
@@ -222,10 +224,12 @@ function Tenders({ can, companyId, employees }) {
     </div>
 
     <div className="toolbar" style={{ marginBottom: '14px' }}>
+      {can.tender && <button className="secondary" onClick={() => setReadingPdf(true)}><Upload size={15} /> Read tender PDF</button>}
       <button className="secondary" onClick={() => openDocument(`/qs/tenders/blank/commitments/document?companyId=${companyId}`)}>
         <FileText size={15} />Contract commitments declaration
       </button>
     </div>
+    {error && <p className="form-error" role="alert">{error}</p>}
 
     <Table columns={['Reference', 'Tender', 'Employer', 'Closes', 'Our bid', 'Papers']} template={TENDER_TEMPLATE}
       title="Tenders" empty="No tenders being tracked.">
@@ -233,6 +237,14 @@ function Tenders({ can, companyId, employees }) {
         <div>
           <strong>{row.reference}</strong>
           <small>{row.contractNo || row.procurementMethod}</small>
+          {row.sourceFilename && <button className="status-button" onClick={async event => {
+            event.stopPropagation();
+            try {
+              const url = await fetchDownload(`/qs/tenders/${row.id}/pdf`);
+              const link = document.createElement('a'); link.href = url; link.download = row.sourceFilename; link.click();
+              setTimeout(() => URL.revokeObjectURL(url), 30000);
+            } catch (failure) { setError(failure.message); }
+          }}>Original PDF</button>}
         </div>
         <div>
           <strong>{row.title}</strong>
@@ -256,7 +268,102 @@ function Tenders({ can, companyId, employees }) {
     </Table>
 
     {detailId && <TenderDetail tenderId={detailId} can={can} employees={employees} close={() => setDetailId(null)} reload={load} />}
+    {readingPdf && <TenderPdfForm companyId={companyId} company={company} close={() => setReadingPdf(false)} reload={load} />}
   </>;
+}
+
+function TenderPdfForm({ companyId, company, close, reload }) {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [fields, setFields] = useState({});
+  const [clients, setClients] = useState([]);
+  const [clientMode, setClientMode] = useState('new');
+  const [clientId, setClientId] = useState('');
+  const [clientName, setClientName] = useState('');
+  const [clientType, setClientType] = useState('Organisation');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { api('/clients').then(setClients).catch(failure => setError(failure.message)); }, []);
+  const field = (key, label, { required = false, type = 'text' } = {}) => <label key={key}>{label}<input type={type}
+    value={fields[key] ?? ''} required={required} onChange={event => setFields(current => ({ ...current, [key]: event.target.value }))} /></label>;
+  const select = (key, label, options) => <label key={key}>{label}<select value={fields[key] || options[0]}
+    onChange={event => setFields(current => ({ ...current, [key]: event.target.value }))}>
+    {options.map(option => <option key={option}>{option}</option>)}
+  </select></label>;
+  const read = async selectedFile => {
+    if (!selectedFile) return;
+    setFile(selectedFile); setPreview(null); setError(''); setBusy(true);
+    try {
+      const form = new FormData(); form.append('file', selectedFile);
+      const result = await api('/qs/tenders/pdf/preview', { method: 'POST', body: form });
+      setPreview(result); setFields({ ...result.fields, biddingEntity: company?.name || '' });
+      setClientName(result.clientName);
+      if (result.matches.length) { setClientMode('existing'); setClientId(String(result.matches[0].id)); }
+      else { setClientMode('new'); setClientId(''); }
+    } catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  };
+  const save = async event => {
+    event.preventDefault(); setError('');
+    if (!file || !preview) return setError('Choose and read a tender PDF first.');
+    if (clientMode === 'existing' && !clientId) return setError('Choose the correct saved client.');
+    if (clientMode === 'new' && clientName.trim().length < 2) return setError('Enter the new client’s name.');
+    setBusy(true);
+    try {
+      const form = new FormData(); form.append('file', file);
+      form.append('review', JSON.stringify({ companyId: Number(companyId),
+        clientSelection: clientMode === 'existing' ? { mode: 'existing', id: Number(clientId) }
+          : { mode: 'new', name: clientName.trim(), type: clientType },
+        ...fields,
+        maxContractValue: Number(fields.maxContractValue || 0), documentFee: Number(fields.documentFee || 0),
+        validityDays: Number(fields.validityDays || 91), securityAmount: Number(fields.securityAmount || 0),
+        estimatedValue: Number(fields.estimatedValue || 0),
+        docsFrom: fields.docsFrom || undefined, docsUntil: fields.docsUntil || undefined,
+        securityValidUntil: fields.securityValidUntil || undefined
+      }));
+      await api('/qs/tenders/pdf/commit', { method: 'POST', body: form });
+      await reload(); close();
+    } catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  };
+  return <Modal title="Read a tender PDF" close={close} wide>
+    <form className="subquote-pdf-form" onSubmit={save}>
+      <label>Tender PDF<input type="file" accept=".pdf,application/pdf" onChange={event => read(event.target.files?.[0])} /></label>
+      {busy && <p>Reading or saving the tender…</p>}
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {preview && <>
+        <p className="subquote-pdf-review-intro">Check every detail against <strong>{preview.filename}</strong>. The saved tender will retain the original PDF.</p>
+        {preview.warnings.length > 0 && <div className="subquote-pdf-warnings"><strong>Needs your check</strong><ul>{preview.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
+        <h3>Employer / client</h3>
+        {preview.matches.length > 0 && <div className="subquote-pdf-matches"><strong>Possible saved client</strong>{preview.matches.map(match => <label key={match.id}><input type="radio" name="clientMatch" checked={clientMode === 'existing' && clientId === String(match.id)} onChange={() => { setClientMode('existing'); setClientId(String(match.id)); }} />{match.name}</label>)}</div>}
+        <div className="subquote-pdf-choice"><label><input type="radio" name="clientMode" checked={clientMode === 'existing'} onChange={() => setClientMode('existing')} /> Use saved client</label><label><input type="radio" name="clientMode" checked={clientMode === 'new'} onChange={() => setClientMode('new')} /> Add a new client</label></div>
+        {clientMode === 'existing' ? <label>Confirmed client<select required value={clientId} onChange={event => setClientId(event.target.value)}><option value="">Choose…</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
+          : <div className="subquote-pdf-grid"><label>Client name<input required value={clientName} onChange={event => setClientName(event.target.value)} /></label><label>Client type<select value={clientType} onChange={event => setClientType(event.target.value)}><option>Organisation</option><option>Private</option></select></label></div>}
+        <h3>Tender details</h3>
+        <div className="subquote-pdf-grid">
+          {field('title', 'Works as named in the bidding document', { required: true })}
+          {field('contractNo', 'Employer’s contract number')}
+          {field('biddingEntity', 'We bid as', { required: true })}
+          {select('procurementMethod', 'Procurement method', ['National Competitive Bidding', 'International Competitive Bidding', 'Shopping', 'Direct'])}
+          {select('specialty', 'Specialty', ['Highways', 'Bridges', 'Buildings', 'Irrigation', 'Water Supply', 'Other'])}
+          {field('cidaGrade', 'CIDA grade')}{field('employerOffice', 'Issuing office')}{field('employerContact', 'Contact')}
+          {field('docsFrom', 'Documents on sale from', { type: 'date' })}{field('docsUntil', 'Until', { type: 'date' })}
+          {field('documentFee', 'Document fee (LKR)', { type: 'number' })}
+          {field('closingDate', 'Bids close on', { required: true, type: 'date' })}
+          {field('closingTime', 'At', { required: true, type: 'time' })}
+          {field('validityDays', 'Bid valid for (days)', { required: true, type: 'number' })}
+          {field('securityAmount', 'Bid security (LKR)', { type: 'number' })}
+          {select('securityForm', 'Security form', ['Bank guarantee', 'Insurance bond', 'Cash deposit', 'Not required'])}
+          {field('securityInFavourOf', 'Security in favour of')}{field('securityValidUntil', 'Security valid until', { type: 'date' })}
+          {field('maxContractValue', 'Employer’s ceiling (LKR)', { type: 'number' })}
+          {field('estimatedValue', 'Our estimate (LKR)', { type: 'number' })}
+          {field('source', 'Where it was advertised')}
+        </div>
+        <label>Documents / notes<textarea value={fields.documentsNote || ''} onChange={event => setFields(current => ({ ...current, documentsNote: event.target.value }))} /></label>
+        <div className="modal-actions"><button type="button" className="secondary" onClick={close}>Cancel</button><button className="primary" disabled={busy}>Save verified tender</button></div>
+      </>}
+    </form>
+  </Modal>;
 }
 
 const DETAIL_TABS = ['Bid', 'Documents required', 'Outcome'];
@@ -575,6 +682,7 @@ const SUBQUOTE_TEMPLATE = 'minmax(130px,.9fr) minmax(180px,1.3fr) minmax(170px,1
 function SubcontractQuotations({ can, data, subcontractors, companyId }) {
   const [rows, setRows] = useState([]);
   const [recording, setRecording] = useState(false);
+  const [readingPdf, setReadingPdf] = useState(false);
   const [error, setError] = useState('');
   const load = () => api(`/qs/subcontract-quotations?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
@@ -596,7 +704,7 @@ function SubcontractQuotations({ can, data, subcontractors, companyId }) {
     <Table columns={['Reference', 'Subcontractor', 'Package', 'Quoted', 'Stands until', 'Status']}
       template={SUBQUOTE_TEMPLATE} title="Prices from subcontractors"
       tools={can.subcontractors
-        ? <button className="secondary" onClick={() => setRecording(true)}>Record a quotation</button>
+        ? <span className="row-actions"><button className="secondary" onClick={() => setReadingPdf(true)}><Upload size={15} /> Read a PDF</button><button className="secondary" onClick={() => setRecording(true)}>Record manually</button></span>
         : null}
       empty="No subcontract prices recorded.">
       {rows.map(row => {
@@ -606,6 +714,13 @@ function SubcontractQuotations({ can, data, subcontractors, companyId }) {
           <div>
             <strong>{row.reference}</strong>
             <small>{row.theirReference ? `their ref ${row.theirReference}` : '—'}</small>
+            {row.sourceFilename && <button className="status-button" onClick={async () => {
+              try {
+                const url = await fetchDownload(`/qs/subcontract-quotations/${row.id}/pdf`);
+                const link = document.createElement('a'); link.href = url; link.download = row.sourceFilename; link.click();
+                setTimeout(() => URL.revokeObjectURL(url), 30000);
+              } catch (failure) { setError(failure.message); }
+            }}>Original PDF</button>}
           </div>
           <div>
             <strong>{row.subcontractor}</strong>
@@ -632,7 +747,104 @@ function SubcontractQuotations({ can, data, subcontractors, companyId }) {
     </Table>
     {recording && <SubcontractQuotationForm data={data} subcontractors={subcontractors} companyId={companyId}
       close={() => setRecording(false)} reload={load} />}
+    {readingPdf && <SubcontractQuotationPdf data={data} subcontractors={subcontractors} companyId={companyId}
+      close={() => setReadingPdf(false)} reload={load} />}
   </>;
+}
+
+function SubcontractQuotationPdf({ data, subcontractors, companyId, close, reload }) {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [sub, setSub] = useState({});
+  const [quote, setQuote] = useState({});
+  const [lines, setLines] = useState([]);
+  const [mode, setMode] = useState('new');
+  const [subcontractorId, setSubcontractorId] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const editLine = (index, field, value) => setLines(current => current.map((line, position) =>
+    position === index ? { ...line, [field]: value } : line));
+  const read = async selectedFile => {
+    if (!selectedFile) return;
+    setFile(selectedFile); setError(''); setBusy(true); setPreview(null);
+    try {
+      const form = new FormData(); form.append('file', selectedFile);
+      const result = await api('/qs/subcontract-quotations/pdf/preview', { method: 'POST', body: form });
+      setPreview(result);
+      setSub({ ...result.subcontractor, contactType: 'Company' });
+      setQuote({ ...result.quotation, quoteDate: result.quotation.quoteDate || todayInput() });
+      setLines(result.items.map(item => ({ ...item, discount: item.discount || 0 })));
+      if (result.matches.length) { setMode('existing'); setSubcontractorId(String(result.matches[0].id)); }
+      else { setMode('new'); setSubcontractorId(''); }
+    } catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  };
+  const save = async event => {
+    event.preventDefault(); setError('');
+    if (!file || !preview) return setError('Choose and read a PDF first.');
+    if (!projectId) return setError('Choose the project this quotation is for.');
+    if (mode === 'existing' && !subcontractorId) return setError('Choose the existing subcontractor, or create a new one.');
+    if (!lines.length || lines.some(line => !line.description?.trim() || !(Number(line.quantity) > 0) || Number(line.rate) < 0 || line.rate === '')) {
+      return setError('Check every quoted line. Each needs a description, quantity above zero, and rate.');
+    }
+    setBusy(true);
+    try {
+      const form = new FormData(); form.append('file', file);
+      form.append('review', JSON.stringify({ companyId: Number(companyId), projectId: Number(projectId),
+        subcontractor: mode === 'existing' ? { mode, id: Number(subcontractorId) } : {
+          mode, name: sub.name?.trim(), trade: sub.trade?.trim(), contactType: sub.contactType || 'Company',
+          contact: sub.contact || '', phone: sub.phone || '', email: sub.email || '', address: sub.address || '',
+          businessId: sub.businessId || ''
+        },
+        quotation: { theirReference: quote.theirReference || '', package: quote.package || '',
+          quoteDate: quote.quoteDate, validityDays: Number(quote.validityDays || 7),
+          siteAddress: quote.siteAddress || '', contactPerson: quote.contactPerson || '',
+          contactPhone: quote.contactPhone || '', notes: quote.notes || '' },
+        items: lines.map(line => ({ description: line.description.trim(), unit: line.unit || '',
+          quantity: Number(line.quantity), rate: Number(line.rate), discount: Number(line.discount || 0) }))
+      }));
+      await api('/qs/subcontract-quotations/pdf/commit', { method: 'POST', body: form });
+      await reload(); close();
+    } catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  };
+  const subField = (key, label, required = false) => <label>{label}<input value={sub[key] || ''} required={required}
+    onChange={event => setSub(current => ({ ...current, [key]: event.target.value }))} /></label>;
+  const quoteField = (key, label, required = false, type = 'text') => <label>{label}<input type={type} value={quote[key] || ''} required={required}
+    onChange={event => setQuote(current => ({ ...current, [key]: event.target.value }))} /></label>;
+  const calculatedTotal = lines.reduce((sum, line) => sum + Math.max(0, Number(line.quantity || 0) * Number(line.rate || 0) - Number(line.discount || 0)), 0);
+  return <Modal title="Read a subcontractor quotation PDF" close={close} wide>
+    <form className="subquote-pdf-form" onSubmit={save}>
+      <label className="subquote-pdf-upload">Quotation PDF<input type="file" accept=".pdf,application/pdf"
+        onChange={event => read(event.target.files?.[0])} /></label>
+      {busy && <p>Reading or saving the quotation…</p>}
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {preview && <>
+        <p className="subquote-pdf-review-intro">Check every extracted detail against <strong>{preview.filename}</strong>. Saving creates one quotation and keeps the original PDF with it.</p>
+        {preview.warnings.length > 0 && <div className="subquote-pdf-warnings"><strong>Needs your check</strong><ul>{preview.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
+        <h3>Subcontractor identity</h3>
+        {preview.matches.length > 0 && <div className="subquote-pdf-matches"><strong>Possible existing subcontractor</strong>{preview.matches.map(match => <label key={match.id}><input type="radio" name="subcontractorMatch" checked={mode === 'existing' && subcontractorId === String(match.id)} onChange={() => { setMode('existing'); setSubcontractorId(String(match.id)); }} />{match.name} · {match.trade} — {match.reason}</label>)}</div>}
+        <div className="subquote-pdf-choice"><label><input type="radio" name="subcontractorMode" checked={mode === 'existing'} onChange={() => setMode('existing')} /> Use existing subcontractor</label><label><input type="radio" name="subcontractorMode" checked={mode === 'new'} onChange={() => setMode('new')} /> Add a new subcontractor</label></div>
+        {mode === 'existing' ? <label>Confirmed subcontractor<select value={subcontractorId} required onChange={event => setSubcontractorId(event.target.value)}><option value="">Choose…</option>{subcontractors.map(row => <option key={row.id} value={row.id}>{row.name} — {row.trade}</option>)}</select></label>
+          : <div className="subquote-pdf-grid">{subField('name', 'Name', true)}{subField('trade', 'Trade', true)}<label>Type<select value={sub.contactType || 'Company'} onChange={event => setSub(current => ({ ...current, contactType: event.target.value }))}><option>Company</option><option>Individual</option></select></label>{subField('businessId', 'Registration / NIC')}{subField('contact', 'Contact person')}{subField('phone', 'Telephone')}{subField('email', 'Email')}{subField('address', 'Address')}</div>}
+        <h3>Quotation details</h3>
+        <div className="subquote-pdf-grid"><label>Project *<select value={projectId} required onChange={event => setProjectId(event.target.value)}><option value="">Choose project…</option>{data.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>{quoteField('theirReference', 'Their quotation number')}{quoteField('package', 'What it covers', true)}{quoteField('quoteDate', 'Dated', true, 'date')}{quoteField('validityDays', 'Valid for (days)', true, 'number')}{quoteField('siteAddress', 'Site / delivery address')}{quoteField('contactPerson', 'Their contact')}{quoteField('contactPhone', 'Telephone')}</div>
+        <h3>Quoted items</h3>
+        <div className="subquote-pdf-items">{lines.map((line, index) => <div className="subquote-pdf-line" key={index}>
+          <input aria-label={`Item ${index + 1} description`} placeholder="Description" value={line.description || ''} onChange={event => editLine(index, 'description', event.target.value)} />
+          <input aria-label={`Item ${index + 1} unit`} placeholder="Unit" value={line.unit || ''} onChange={event => editLine(index, 'unit', event.target.value)} />
+          <input aria-label={`Item ${index + 1} quantity`} placeholder="Qty" type="number" step="any" value={line.quantity ?? ''} onChange={event => editLine(index, 'quantity', event.target.value)} />
+          <input aria-label={`Item ${index + 1} rate`} placeholder="Rate" type="number" step="any" value={line.rate ?? ''} onChange={event => editLine(index, 'rate', event.target.value)} />
+          <input aria-label={`Item ${index + 1} discount`} placeholder="Discount" type="number" step="any" value={line.discount ?? 0} onChange={event => editLine(index, 'discount', event.target.value)} />
+          <button type="button" className="secondary" aria-label={`Remove item ${index + 1}`} onClick={() => setLines(current => current.filter((_, position) => position !== index))}>Remove</button>
+        </div>)}</div>
+        <div className="subquote-foot"><button type="button" className="secondary" onClick={() => setLines(current => [...current, { description: '', unit: '', quantity: 1, rate: '', discount: 0 }])}>Add item</button><strong>Extracted PDF total {preview.statedTotal == null ? 'not found' : rupees(preview.statedTotal)} · Reviewed total {rupees(calculatedTotal)}</strong></div>
+        <label>Notes<textarea value={quote.notes || ''} onChange={event => setQuote(current => ({ ...current, notes: event.target.value }))} /></label>
+        <div className="modal-actions"><button type="button" className="secondary" onClick={close}>Cancel</button><button className="primary" disabled={busy}>Save verified quotation</button></div>
+      </>}
+    </form>
+  </Modal>;
 }
 
 /** Follows the shape of the quotations subcontractors actually send: their reference, a

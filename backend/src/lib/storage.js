@@ -60,7 +60,7 @@ const ALLOWED = new Map([
  * to, and treating one list as both made /api/uploads/gallery/:id fall over with a 500.
  */
 /* 'boq' holds the spreadsheets bills were read from, kept as the evidence behind them. */
-export const FOLDERS = ['task', 'project', 'employee', 'report', 'vehicle', 'equipment', 'gallery', 'boq', 'drive'];
+export const FOLDERS = ['task', 'project', 'employee', 'report', 'vehicle', 'equipment', 'gallery', 'boq', 'subcontract-quotation', 'tender', 'drive'];
 
 export const isAllowedType = mime => ALLOWED.has(mime);
 
@@ -394,4 +394,3 @@ export async function readUpload(req) {
      grid does not have to pull full-size site photos to draw a thumbnail. */
   return { file: shape(file), thumbnail: shape(named('thumbnail')), fields, discard };
 }
-
