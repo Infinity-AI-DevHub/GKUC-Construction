@@ -8,6 +8,7 @@ import { Avatar, Badge, Progress, Row, SelectField, Table, Tabs, Field, FormModa
 import Attachments from '../Attachments.jsx';
 import ProjectGallery from '../ProjectGallery.jsx';
 import ProjectReports from './ProjectReports.jsx';
+import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
 
 const TABS = ['Command centre', 'Activity & issues', 'Reports', 'Programme', 'Commercial', 'Subcontractors', 'Team', 'Gallery', 'Documents', 'Close-out'];
 
@@ -65,7 +66,24 @@ function ProjectActivity({project,can,refresh,onAdd,onEditTask}){
   </div>;
 }
 function ProjectUpdateForm({projectId,close,reload}){return <FormModal title="Project update or issue" close={close} label="Post to project" onSubmit={async v=>{await post(`/projects/${projectId}/updates`,{kind:v.kind,title:v.title,details:v.details,category:v.category,status:v.status,priority:v.priority,owner:v.owner||undefined,dueDate:v.dueDate||undefined});await reload();}}><SelectField name="kind" label="Type" options={['Update','Issue']}/><Field name="title" label="Headline" wide/><TextArea name="details" label="Details" rows={4}/><SelectField name="category" label="Category" options={['General','Materials delay','Programme','Safety','Quality','Commercial','Other']}/><SelectField name="status" label="Status" options={['Open','In progress','Resolved']}/><SelectField name="priority" label="Priority" options={['Low','Medium','High']}/><Field name="owner" label="Responsible person" required={false}/><Field name="dueDate" label="Follow-up date" type="date" required={false}/></FormModal>}
-function ProjectTaskForm({projectId,employees,task,close,reload}){return <FormModal title={task?'Update project task':'Add project task'} close={close} label={task?'Save task':'Assign task'} onSubmit={async v=>{const values={title:v.title,assigneeEmployeeId:Number(v.assigneeEmployeeId),due:v.dueDate,dueDate:v.dueDate,priority:v.priority,notes:v.notes||''};if(task)await patch(`/tasks/${task.id}`,values);else await post('/tasks',{projectId,...values,status:'Not started'});await reload();}}><Field name="title" label="Task" wide defaultValue={task?.title}/><SelectField name="assigneeEmployeeId" label="Assigned to" defaultValue={task?.assigneeEmployeeId || ''} options={[["", 'Choose an employee…'],...employees.filter(employee=>['Active','On leave'].includes(employee.status)||employee.id===task?.assigneeEmployeeId).map(employee=>[employee.id,`${employee.name} — ${employee.designation}`])]} /><Field name="dueDate" label="Due date" type="date" defaultValue={task?.dueDate?.slice(0,10)}/><SelectField name="priority" label="Priority" options={['Medium','High','Low']} defaultValue={task?.priority}/><TextArea name="notes" label="Instructions" required={false} defaultValue={task?.notes}/></FormModal>}
+function ProjectTaskForm({ projectId, employees, task, close, reload }) {
+  const [selected, setSelected] = useState(task?.assigneeEmployeeIds || (task?.assigneeEmployeeId ? [Number(task.assigneeEmployeeId)] : []));
+  return <FormModal title={task ? 'Update project task' : 'Add project task'} close={close}
+    label={task ? 'Save task' : 'Assign task'} onSubmit={async values => {
+      if (!selected.length) throw new Error('Select at least one employee for this task.');
+      const payload = { title: values.title, assigneeEmployeeIds: selected, due: values.dueDate,
+        dueDate: values.dueDate, priority: values.priority, notes: values.notes || '' };
+      if (task) await patch(`/tasks/${task.id}`, payload);
+      else await post('/tasks', { projectId, ...payload, status: 'Not started' });
+      await reload();
+    }}>
+    <Field name="title" label="Task" wide defaultValue={task?.title} />
+    <EmployeeMultiSelect employees={employees} selected={selected} onChange={setSelected} />
+    <Field name="dueDate" label="Due date" type="date" defaultValue={task?.dueDate?.slice(0,10)} />
+    <SelectField name="priority" label="Priority" options={['Medium','High','Low']} defaultValue={task?.priority} />
+    <TextArea name="notes" label="Instructions" required={false} defaultValue={task?.notes} />
+  </FormModal>;
+}
 function ProjectSubcontractors({project,can,onAdd}){const rates=project.subcontractRates||[];const t='minmax(190px,1.3fr) minmax(170px,1.2fr) 110px 120px minmax(160px,1fr)';return <div className="project-section-stack"><section className="workspace-surface"><div className="workspace-section-heading"><div><span className="section-kicker">Project supply chain</span><h2>Subcontractors and agreed rates</h2></div>{can.subcontractors&&<button className="secondary" onClick={onAdd}>Add agreed rate</button>}</div><div className="attendance-summary"><article><strong>{new Set(rates.map(r=>r.subcontractorId)).size}</strong><span>Subcontractors</span></article><article><strong>{rates.length}</strong><span>Agreed work rates</span></article></div><Table columns={['Subcontractor','Work package','Unit','Rate','Contact / validity']} template={t} empty="No subcontractor rates assigned to this project.">{rates.map(r=><Row template={t} key={r.id}><div><strong>{r.subcontractor}</strong><small>{r.trade} · {r.contactType}</small></div><strong>{r.workItem}</strong><span>{r.unit}</span><strong>{rupees(r.rate)}</strong><div><span>{r.phone||r.email||'—'}</span><small>{r.validUntil?`Valid until ${shortDate(r.validUntil)}`:r.address||'No expiry set'}</small></div></Row>)}</Table></section></div>}
 function ProjectRateForm({projectId,close,reload}){const [subs,setSubs]=useState([]);useEffect(()=>{api('/qs/subcontractors').then(setSubs).catch(()=>setSubs([]));},[]);return <FormModal title="Agree subcontractor rate" close={close} label="Save project rate" onSubmit={async v=>{await post('/qs/subcontractor-rates',{projectId,subcontractorId:Number(v.subcontractorId),workItem:v.workItem,unit:v.unit,rate:Number(v.rate),agreedOn:v.agreedOn||undefined,validUntil:v.validUntil||undefined,notes:v.notes||undefined});await reload();}}><SelectField name="subcontractorId" label="Subcontractor" options={subs.map(s=>[s.id,`${s.name} · ${s.trade}`])}/><Field name="workItem" label="Work item / package"/><Field name="unit" label="Unit" placeholder="m², m³, day, item"/><Field name="rate" label="Agreed rate (LKR)" type="number" min="0" step="0.01"/><Field name="agreedOn" label="Agreed on" type="date" required={false}/><Field name="validUntil" label="Valid until" type="date" required={false}/><TextArea name="notes" label="Terms / notes" required={false}/></FormModal>}
 

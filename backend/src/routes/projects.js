@@ -4,6 +4,7 @@ import { audit, getOne, pool, query, spendSql, today, transaction } from '../db.
 import { auth, permit, validate, wrap } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
 import { resolveProjectManager } from '../lib/project-manager.js';
+import { withTaskAssignees } from '../lib/task-assignees.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -74,7 +75,7 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
       ORDER BY name`, [project.id, project.id]),
     query(`SELECT t.id,t.title,t.assignee_employee_id assigneeEmployeeId,COALESCE(e.name,t.assignee) assignee,
       t.due,t.due_date dueDate,t.priority,t.status,t.notes FROM tasks t
-      LEFT JOIN employees e ON e.id=t.assignee_employee_id WHERE t.project_id=? ORDER BY t.id DESC`, [project.id]),
+      LEFT JOIN employees e ON e.id=t.assignee_employee_id WHERE t.project_id=? ORDER BY t.id DESC`, [project.id]).then(withTaskAssignees),
     query(`SELECT ${spendSql('p')} total FROM projects p WHERE p.id=?`, [project.id]),
     query('SELECT COALESCE(SUM(amount),0) total FROM incomes WHERE project_id=?', [project.id]),
     query('SELECT id,reference,title,status,total FROM boqs WHERE project_id=? ORDER BY id DESC', [project.id]),

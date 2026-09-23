@@ -6,7 +6,7 @@ import { certificate } from '../lib/invoice-maths.js';
 import { publishChange } from '../lib/realtime.js';
 import { notify } from '../alerts.js';
 import { sendDailySummary } from '../lib/daily-summary.js';
-import { documentContext, invoiceDocument } from '../lib/documents.js';
+import { documentContext, invoiceDocument, receiptDocument } from '../lib/documents.js';
 import { sendDocument } from '../lib/document-pdf.js';
 
 const router = Router();
@@ -16,6 +16,87 @@ const companyParam = req => {
   const value = Number(req.query.companyId);
   return Number.isInteger(value) && value > 0 ? value : null;
 };
+
+const billingPlanSchema = z.object({
+  quotationId: z.coerce.number().int().positive(),
+  documentType: z.enum(['Tax Invoice', 'Invoice']),
+  taxTreatment: z.enum(['Standard', 'SVAT', 'Exempt']),
+  vatRate: z.coerce.number().min(0).max(100).default(18),
+  terms: z.array(z.object({
+    label: z.string().trim().min(2).max(160),
+    percentage: z.coerce.number().positive().max(100),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional()
+  })).min(1).max(20)
+});
+
+router.get('/receivables/accepted-quotations', auth, permit('finance.view', 'finance.invoice'), async (req, res, next) => {
+  try {
+    const companyId = companyParam(req);
+    res.json(await query(`SELECT q.id,q.reference,q.title,q.project_id projectId,p.name project,
+      q.client_id clientId,q.client_name client,q.company_id companyId,q.subtotal,q.markup_percent markupPercent,
+      q.vat_percent vatPercent,q.total,b.id billingPlanId
+      FROM quotations_client q LEFT JOIN projects p ON p.id=q.project_id
+      LEFT JOIN quotation_billing_plans b ON b.quotation_id=q.id
+      WHERE q.status='Accepted' ${companyId ? 'AND q.company_id=?' : ''} ORDER BY q.id DESC`, companyId ? [companyId] : []));
+  } catch (error) { next(error); }
+});
+
+router.get('/receivables/quotation-plans', auth, permit('finance.view', 'finance.invoice'), async (req, res, next) => {
+  try {
+    const companyId = companyParam(req);
+    const plans = await query(`SELECT b.id,b.quotation_id quotationId,q.reference quotationReference,q.title,
+      q.client_name client,q.total quotationTotal,b.company_id companyId,b.project_id projectId,
+      b.document_type documentType,b.tax_treatment taxTreatment,b.vat_rate vatRate
+      FROM quotation_billing_plans b JOIN quotations_client q ON q.id=b.quotation_id
+      WHERE 1=1 ${companyId ? 'AND b.company_id=?' : ''} ORDER BY b.id DESC`, companyId ? [companyId] : []);
+    if (!plans.length) return res.json([]);
+    const terms = await query(`SELECT t.id,t.plan_id planId,t.sequence_no sequenceNo,t.label,t.percentage,t.amount,
+      t.due_date dueDate,t.invoice_id invoiceId,i.reference invoiceReference,i.status invoiceStatus,
+      i.paid_amount paidAmount,i.net_payable netPayable
+      FROM quotation_billing_terms t LEFT JOIN client_invoices i ON i.id=t.invoice_id
+      WHERE t.plan_id IN (${plans.map(() => '?').join(',')}) ORDER BY t.plan_id,t.sequence_no`, plans.map(plan => plan.id));
+    res.json(plans.map(plan => ({ ...plan, terms: terms.filter(term => Number(term.planId) === Number(plan.id)) })));
+  } catch (error) { next(error); }
+});
+
+router.post('/receivables/quotation-plans', auth, permit('finance.invoice'), validate(billingPlanSchema), async (req, res, next) => {
+  try {
+    const { quotationId, documentType, taxTreatment, vatRate, terms } = req.body;
+    if ((documentType === 'Invoice') !== (taxTreatment === 'Exempt'))
+      throw fail(400, 'Choose Exempt for a normal invoice, or Standard/SVAT for a tax invoice.');
+    const basisPoints = terms.map(term => Math.round(term.percentage * 10000));
+    if (basisPoints.reduce((sum, points) => sum + points, 0) !== 1000000)
+      throw fail(400, 'The invoice terms must add up to exactly 100%.');
+    const quotation = await getOne(`SELECT id,reference,status,project_id projectId,client_id clientId,company_id companyId,
+      subtotal,markup_percent markupPercent,total FROM quotations_client WHERE id=?`, [quotationId]);
+    if (!quotation || quotation.status !== 'Accepted') throw fail(409, 'Choose a quotation that QS has marked Accepted.');
+    if (!quotation.clientId) throw fail(400, 'Link the accepted quotation to a saved client before making an invoice plan.');
+    if (await getOne('SELECT id FROM quotation_billing_plans WHERE quotation_id=?', [quotationId]))
+      throw fail(409, 'This quotation already has a billing plan. Open that plan instead.');
+    const agreedTotal = taxTreatment === 'SVAT'
+      ? Math.round(Number(quotation.subtotal) * (1 + Number(quotation.markupPercent) / 100) * 100) / 100
+      : Number(quotation.total);
+    let allocated = 0;
+    const id = await transaction(async connection => {
+      const [created] = await connection.execute(`INSERT INTO quotation_billing_plans
+        (quotation_id,company_id,project_id,client_id,document_type,tax_treatment,vat_rate,created_by)
+        VALUES (?,?,?,?,?,?,?,?)`, [quotation.id, quotation.companyId, quotation.projectId,
+        quotation.clientId, documentType, taxTreatment, documentType === 'Invoice' ? 0 : vatRate, req.user.id]);
+      for (const [index, term] of terms.entries()) {
+        const amount = index === terms.length - 1 ? Math.round((agreedTotal - allocated) * 100) / 100
+          : Math.round(agreedTotal * term.percentage) / 100;
+        allocated += amount;
+        await connection.execute(`INSERT INTO quotation_billing_terms
+          (plan_id,sequence_no,label,percentage,amount,due_date) VALUES (?,?,?,?,?,?)`,
+        [created.insertId, index + 1, term.label, term.percentage, amount, term.dueDate || null]);
+      }
+      return created.insertId;
+    });
+    await audit(pool, req.user.id, 'CREATE', 'quotation_billing_plan', id, null, { quotationId, terms }, req.ip);
+    publishChange('receivables', {});
+    res.status(201).json({ id, quotationId });
+  } catch (error) { next(error); }
+});
 
 /* ---- what the client owes ------------------------------------------------ */
 
@@ -98,6 +179,7 @@ const invoiceSchema = z.object({
   otherDeductions: z.coerce.number().min(0).default(0),
   deductionNote: z.string().trim().max(300).optional(),
   notes: z.string().trim().max(1000).optional(),
+  billingTermId: z.coerce.number().int().positive().optional(),
   items: z.array(z.object({
     description: z.string().trim().min(1).max(300),
     unit: z.string().trim().max(30).optional(),
@@ -135,9 +217,33 @@ router.get('/receivables/boq-lines',auth,permit('finance.view','finance.invoice'
  * the figure the company stands behind; taking the arithmetic from the browser would mean
  * standing behind whatever it sent.
  */
-router.post('/receivables/invoices', auth, permit('finance.invoice'), validate(invoiceSchema),
-  async (req, res, next) => {
+const createInvoice = async (req, res, next) => {
     try {
+      let billingTerm = null;
+      if (req.body.billingTermId) {
+        billingTerm = await getOne(`SELECT t.id,t.label,t.amount,t.due_date dueDate,t.invoice_id invoiceId,
+          b.quotation_id quotationId,b.company_id companyId,b.project_id projectId,b.client_id clientId,
+          b.document_type documentType,b.tax_treatment taxTreatment,b.vat_rate vatRate,
+          q.reference quotationReference,q.status quotationStatus
+          FROM quotation_billing_terms t JOIN quotation_billing_plans b ON b.id=t.plan_id
+          JOIN quotations_client q ON q.id=b.quotation_id WHERE t.id=?`, [req.body.billingTermId]);
+        if (!billingTerm) throw fail(404, 'That quotation billing term was not found.');
+        if (billingTerm.quotationStatus !== 'Accepted') throw fail(409, 'The quotation is no longer accepted. Ask QS to review it.');
+        if (billingTerm.invoiceId) throw fail(409, 'This billing term already has an invoice. Open that invoice instead.');
+        const amount = Number(billingTerm.amount);
+        const rate = Number(billingTerm.vatRate);
+        const base = billingTerm.taxTreatment === 'Standard'
+          ? Math.round(amount / (1 + rate / 100) * 100) / 100 : amount;
+        req.body = { ...req.body, companyId: Number(billingTerm.companyId),
+          projectId: billingTerm.projectId ? Number(billingTerm.projectId) : null,
+          clientId: Number(billingTerm.clientId), documentType: billingTerm.documentType,
+          taxTreatment: billingTerm.taxTreatment, vatRate: rate,
+          kind: 'Interim', title: `${billingTerm.label} — ${billingTerm.quotationReference}`,
+          dueDate: billingTerm.dueDate ? new Date(billingTerm.dueDate).toISOString().slice(0, 10) : req.body.dueDate,
+          retentionPercent: 0, advanceRecovery: 0, otherDeductions: 0,
+          items: [{ description: `${billingTerm.label} — accepted quotation ${billingTerm.quotationReference}`,
+            unit: 'term', quantity: 1, rate: base }] };
+      }
       const project = req.body.projectId ? await getOne(`SELECT p.id,p.name,p.site,COALESCE(c.name,p.client) client,
         p.client_id clientId,p.company_id companyId FROM projects p LEFT JOIN clients c ON c.id=p.client_id
         WHERE p.id=? AND p.active=1`, [req.body.projectId]) : null;
@@ -206,8 +312,8 @@ router.post('/receivables/invoices', auth, permit('finance.invoice'), validate(i
              (reference,project_id,company_id,client_id,client,kind,document_type,title,invoice_date,delivery_date,place_of_supply,payment_mode,
               buyer_tin,buyer_vat_number,buyer_address,buyer_phone,due_date,period_from,period_to,
               gross,tax_treatment,vat_rate,vat_amount,svat_voucher,retention_percent,retention_amount,
-              advance_recovery,other_deductions,deduction_note,net_payable,notes,created_by)
-           VALUES (${Array(32).fill('?').join(',')})`,
+              advance_recovery,other_deductions,deduction_note,net_payable,notes,created_by,quotation_id,billing_term_id)
+           VALUES (${Array(34).fill('?').join(',')})`,
           [reference, project?.id || null, companyId, clientId, client?.name || project?.client,
             req.body.kind, documentType, req.body.title,
             req.body.invoiceDate, req.body.deliveryDate || null, req.body.placeOfSupply || client?.clientSite || project?.site || null,
@@ -217,7 +323,8 @@ router.post('/receivables/invoices', auth, permit('finance.invoice'), validate(i
             sums.gross, req.body.taxTreatment, sums.vatRate, sums.vatAmount,
             req.body.svatVoucher || null, req.body.retentionPercent, sums.retentionAmount,
             sums.advanceRecovery, sums.otherDeductions, req.body.deductionNote || null,
-            sums.netPayable, req.body.notes || null, req.user.id]);
+            sums.netPayable, req.body.notes || null, req.user.id,
+            billingTerm?.quotationId || null, billingTerm?.id || null]);
 
         for (const item of priced) {
           await connection.execute(
@@ -226,14 +333,29 @@ router.post('/receivables/invoices', auth, permit('finance.invoice'), validate(i
             [created.insertId, item.description, item.unit || null, item.quantity, item.rate,
               Math.round(item.quantity * item.rate * 100) / 100,item.quotationItemId||null,item.boqItemId||null]);
         }
+        if (billingTerm) await connection.execute('UPDATE quotation_billing_terms SET invoice_id=? WHERE id=? AND invoice_id IS NULL',
+          [created.insertId, billingTerm.id]);
         return created.insertId;
       });
 
       await audit(pool, req.user.id, 'CREATE', 'client_invoice', id, null,
         { reference, gross: sums.gross, net: sums.netPayable, treatment: req.body.taxTreatment }, req.ip);
       publishChange('receivables', {});
-      res.status(201).json({ id, reference, ...sums });
+      res.status(201).json({ id, reference, billingTermId: billingTerm?.id || null, ...sums });
     } catch (error) { next(error); }
+};
+
+router.post('/receivables/invoices', auth, permit('finance.invoice'), validate(invoiceSchema), createInvoice);
+
+router.post('/receivables/quotation-terms/:id/invoice', auth, permit('finance.invoice'),
+  validate(z.object({ invoiceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    placeOfSupply: z.string().trim().max(300).optional(),
+    paymentMode: z.enum(['Cheque','Cash','Bank transfer','Card','Other']).optional(),
+    notes: z.string().trim().max(1000).optional() })),
+  async (req, res, next) => {
+    req.body.billingTermId = Number(req.params.id);
+    await createInvoice(req, res, next);
   });
 
 /** A preview of the working, so the figures can be checked before anything is raised. */
@@ -295,6 +417,31 @@ router.get('/receivables/invoices/:id', auth, permit('finance.view', 'finance.in
     } catch (error) { next(error); }
   });
 
+router.get('/receivables/receipts/:id/document', auth, permit('finance.view', 'finance.invoice'),
+  async (req, res, next) => {
+    try {
+      const receipt = await getOne(`SELECT r.id,r.amount,r.received_date receivedDate,r.method,r.reference,
+        i.reference invoiceReference,i.title invoiceTitle,i.client,i.buyer_address buyerAddress,
+        i.net_payable netPayable,i.paid_amount paidAmount,i.company_id companyId,p.name project
+        FROM client_receipts r JOIN client_invoices i ON i.id=r.invoice_id
+        LEFT JOIN projects p ON p.id=i.project_id WHERE r.id=?`, [req.params.id]);
+      if (!receipt) throw fail(404, 'That payment receipt was not found.');
+      const context = await documentContext(getOne, receipt.companyId);
+      const name = `RCPT-${new Date(receipt.receivedDate).getFullYear()}-${String(receipt.id).padStart(5, '0')}.pdf`;
+      await sendDocument(req, res, receiptDocument({ ...context, receipt }), name);
+    } catch (error) { next(error); }
+  });
+
+async function announceProjectPayment(receipt) {
+  if (!receipt.projectId) return;
+  for (const audience of ['qs.view', 'projects.view']) await notify({
+    key: `client-payment:${receipt.id}:${audience}`, audience, severity: 'Info',
+    title: `Client payment received — ${receipt.invoiceReference}`,
+    message: `${money(receipt.amount)} was recorded for ${receipt.project}. The receipt is ready in Finance.`,
+    referenceType: 'project', referenceId: receipt.projectId
+  });
+}
+
 router.post('/receivables/invoices/:id/issue', auth, permit('finance.invoice'),
   async (req, res, next) => {
     try {
@@ -320,7 +467,7 @@ router.post('/receivables/invoices/:id/receipts', auth, permit('finance.invoice'
   async (req, res, next) => {
     try {
       if(req.body.method==='Cheque')throw fail(400,'Record the cheque in Received cheques and clear it there; that posts the invoice receipt and income once.');
-      await transaction(async connection => {
+      const recorded = await transaction(async connection => {
         const [[invoice]]=await connection.execute('SELECT * FROM client_invoices WHERE id=? FOR UPDATE',[req.params.id]);
         if(!invoice)throw fail(404,'That invoice was not found');
         if(['Draft','Cancelled'].includes(invoice.status))throw fail(409,'Issue the invoice before recording money against it');
@@ -331,7 +478,7 @@ router.post('/receivables/invoices/:id/receipts', auth, permit('finance.invoice'
             WHERE invoice_id=? AND reference=? AND amount=? LIMIT 1`,[invoice.id,req.body.reference,req.body.amount]);
           if(existing)throw fail(409,'That payment reference and amount are already recorded against this invoice');
         }
-        await connection.execute(
+        const [created] = await connection.execute(
           `INSERT INTO client_receipts (invoice_id,amount,received_date,method,reference,recorded_by)
            VALUES (?,?,?,?,?,?)`,
           [invoice.id, req.body.amount, req.body.receivedDate, req.body.method,
@@ -345,12 +492,18 @@ router.post('/receivables/invoices/:id/receipts', auth, permit('finance.invoice'
            VALUES (?,?,?,?,?,?,?,?)`,
           [invoice.project_id, invoice.company_id, `${invoice.reference} — ${invoice.title}`, req.body.amount,
             req.body.receivedDate, req.body.method, req.body.reference || invoice.reference, req.user.id]);
+        return { id: created.insertId, projectId: invoice.project_id, invoiceReference: invoice.reference,
+          amount: req.body.amount };
       });
 
       await audit(pool, req.user.id, 'RECEIPT', 'client_invoice', req.params.id, null,
         { amount: req.body.amount, reference: req.body.reference }, req.ip);
       publishChange('receivables', {});
-      res.status(201).json({ recorded: true });
+      if (recorded.projectId) {
+        const project = await getOne('SELECT name FROM projects WHERE id=?', [recorded.projectId]);
+        await announceProjectPayment({ ...recorded, project: project?.name || 'the project' });
+      }
+      res.status(201).json({ recorded: true, receiptId: recorded.id });
     } catch (error) { next(error); }
   });
 

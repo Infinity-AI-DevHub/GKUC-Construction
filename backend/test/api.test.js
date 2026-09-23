@@ -516,6 +516,64 @@ test('Finance invoices support approved BOQ lines, standalone work and several c
   assert.equal(reporting.body.incomes.filter(row => row.description.includes(standard.body.reference)).length, 2);
 });
 
+test('accepted Readymix quotation becomes term invoices, payment receipts and a project payment signal', async () => {
+  const owner = await login();
+  const client = await call(owner, 'POST', '/clients', { type: 'Organisation',
+    name: `Term client ${Date.now()}`, tin: 'CLIENT-TIN-42', billingAddress: 'Client billing office', phone: '0770000042' });
+  assert.equal(client.status, 201, JSON.stringify(client.body));
+  const project = await call(owner, 'POST', '/projects', { companyId: 2,
+    name: `Readymix term project ${Date.now()}`, clientId: client.body.id,
+    manager: 'Project Manager', site: 'Gampaha', stage: 'Planning', budget: 0 });
+  assert.equal(project.status, 201, JSON.stringify(project.body));
+  const boq = await call(owner, 'POST', '/boq', { projectId: project.body.id, title: 'Readymix supply',
+    items: [{ category: 'Material', description: 'Ready mix concrete', unit: 'm3', quantity: 10, rate: 10000 }] });
+  assert.equal(boq.status, 201, JSON.stringify(boq.body));
+  const quote = await call(owner, 'POST', '/qs/quotations', { boqId: boq.body.id, clientId: client.body.id,
+    markupPercent: 0, vatPercent: 18 });
+  assert.equal(quote.status, 201, JSON.stringify(quote.body));
+  assert.equal((await call(owner, 'PATCH', `/qs/quotations/${quote.body.id}`, { status: 'Accepted' })).status, 200);
+  const invalid = await call(owner, 'POST', '/receivables/quotation-plans', { quotationId: quote.body.id,
+    documentType: 'Tax Invoice', taxTreatment: 'Standard', vatRate: 18,
+    terms: [{ label: 'Deposit', percentage: 20 }] });
+  assert.equal(invalid.status, 400);
+  const plan = await call(owner, 'POST', '/receivables/quotation-plans', { quotationId: quote.body.id,
+    documentType: 'Tax Invoice', taxTreatment: 'Standard', vatRate: 18,
+    terms: [20, 30, 25, 25].map((percentage, index) => ({ label: `Term ${index + 1}`, percentage })) });
+  assert.equal(plan.status, 201, JSON.stringify(plan.body));
+  assert.equal((await call(owner, 'POST', '/receivables/quotation-plans', { quotationId: quote.body.id,
+    documentType: 'Tax Invoice', taxTreatment: 'Standard', vatRate: 18,
+    terms: [{ label: 'Again', percentage: 100 }] })).status, 409);
+  const plans = (await call(owner, 'GET', '/receivables/quotation-plans?companyId=2')).body;
+  const saved = plans.find(row => row.id === plan.body.id);
+  assert.deepEqual(saved.terms.map(term => Number(term.amount)), [23600, 35400, 29500, 29500]);
+  const first = await call(owner, 'POST', `/receivables/quotation-terms/${saved.terms[0].id}/invoice`,
+    { invoiceDate: today(), deliveryDate: today(), paymentMode: 'Bank transfer' });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal(Number(first.body.netPayable), 23600);
+  assert.equal((await call(owner, 'POST', `/receivables/quotation-terms/${saved.terms[0].id}/invoice`,
+    { invoiceDate: today() })).status, 409);
+  const invoice = (await call(owner, 'GET', `/receivables/invoices/${first.body.id}`)).body;
+  assert.equal(Number(invoice.company_id), 2);
+  assert.equal(invoice.document_type, 'Tax Invoice');
+  assert.equal(invoice.buyer_tin, 'CLIENT-TIN-42');
+  const rendered = await fetch(`${base}/receivables/invoices/${first.body.id}/document`,
+    { headers: { authorization: `Bearer ${owner}` } });
+  const html = await rendered.text();
+  assert.match(html, /GKUC Readymix/);
+  assert.match(html, /CLIENT-TIN-42/);
+  assert.equal((await call(owner, 'POST', `/receivables/invoices/${first.body.id}/issue`)).status, 204);
+  const payment = await call(owner, 'POST', `/receivables/invoices/${first.body.id}/receipts`,
+    { amount: 10000, receivedDate: today(), method: 'Bank transfer', reference: `TEST-${Date.now()}` });
+  assert.equal(payment.status, 201, JSON.stringify(payment.body));
+  assert.ok(payment.body.receiptId);
+  const receipt = await fetch(`${base}/receivables/receipts/${payment.body.receiptId}/document`,
+    { headers: { authorization: `Bearer ${owner}` } });
+  assert.match(await receipt.text(), /Payment Receipt/);
+  assert.equal((await call(owner, 'GET', `/receivables/invoices/${first.body.id}`)).body.status, 'Part paid');
+  const alerts = (await call(owner, 'GET', '/bootstrap')).body.data.notifications;
+  assert.ok(alerts.some(row => String(row.title).includes('Client payment received')));
+});
+
 test('project managers and task assignees remain linked to employee work histories', async () => {
   const owner = await login();
   const bootstrap = (await call(owner, 'GET', '/bootstrap')).body.data;
@@ -569,6 +627,34 @@ test('several project members are assigned together and appear on the project', 
   const after = await call(owner, 'GET', `/projects/${project.body.id}`);
   assert.equal(after.body.team.some(member => Number(member.employeeId) === Number(employees[4].id)), false,
     'a failed group request does not partly assign members');
+});
+
+test('one task can be assigned to several employees and reassigned without duplication', async () => {
+  const owner = await login();
+  const data = (await call(owner, 'GET', '/bootstrap')).body.data;
+  const people = data.employees.filter(employee => employee.status === 'Active').slice(0, 3);
+  assert.equal(people.length, 3);
+  const projectId = data.projects[0].id;
+  const body = { projectId, title: `Joint site inspection ${Date.now()}`, assigneeEmployeeIds: people.slice(0, 2).map(person => person.id),
+    due: 'Tomorrow', dueDate: shift(1), priority: 'Medium', notes: '' };
+  const created = await call(owner, 'POST', '/tasks', body);
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const id = created.body.id;
+  assert.deepEqual(created.body.assigneeEmployeeIds, body.assigneeEmployeeIds);
+  assert.equal((await call(owner, 'GET', `/projects/${projectId}`)).body.tasks.find(task => task.id === id).assignees.length, 2);
+  assert.equal((await call(owner, 'GET', '/bootstrap')).body.data.tasks.find(task => task.id === id).assignees.length, 2);
+  for (const person of people.slice(0, 2)) {
+    assert.equal((await call(owner, 'GET', `/employees/${person.id}`)).body.tasks.some(task => task.id === id), true);
+  }
+  const changed = await call(owner, 'PATCH', `/tasks/${id}`, { assigneeEmployeeIds: [people[1].id, people[2].id] });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.deepEqual(changed.body.assigneeEmployeeIds, [people[1].id, people[2].id]);
+  assert.equal((await call(owner, 'GET', `/employees/${people[0].id}`)).body.tasks.some(task => task.id === id), false);
+  assert.equal((await call(owner, 'GET', `/employees/${people[2].id}`)).body.tasks.some(task => task.id === id), true);
+  assert.equal((await call(owner, 'GET', '/tasks')).body.filter(task => task.id === id).length, 1);
+  assert.equal((await call(owner, 'POST', '/tasks', { ...body, assigneeEmployeeIds: [people[0].id, people[0].id] })).status, 400);
+  assert.equal((await call(owner, 'PATCH', `/tasks/${id}`, { assigneeEmployeeIds: [people[1].id, 999999999] })).status, 400);
+  assert.deepEqual((await call(owner, 'GET', `/tasks/${id}`)).body.assigneeEmployeeIds, [people[1].id, people[2].id]);
 });
 
 test('a new project belongs to the selected operating company', async () => {

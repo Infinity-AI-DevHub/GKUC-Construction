@@ -3,6 +3,7 @@ import { Check, ChevronDown } from 'lucide-react';
 import { api, openRecord, patch, post, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
+import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
 
 const FILTERS = ['All', 'Not started', 'In progress', 'Blocked', 'Completed', 'Approved'];
 const COLUMNS = ['Task', 'Assignee', 'Due', 'Priority', 'Status'];
@@ -46,11 +47,13 @@ export default function Tasks({ data, reload, can }) {
 }
 
 function TaskForm({ data, close, reload }) {
+  const [selected, setSelected] = useState([]);
   return <FormModal title="Create task" close={close} label="Create task" onSubmit={async values => {
+    if (!selected.length) throw new Error('Select at least one employee for this task.');
     await post('/tasks', {
       title: values.title,
       projectId: Number(values.projectId),
-      assigneeEmployeeId: Number(values.assigneeEmployeeId),
+      assigneeEmployeeIds: selected,
       due: values.due,
       dueDate: values.dueDate,
       priority: values.priority,
@@ -60,7 +63,7 @@ function TaskForm({ data, close, reload }) {
   }}>
     <Field name="title" label="Task title" wide />
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
-    <SelectField name="assigneeEmployeeId" label="Assignee" options={[["", 'Choose an employee…'], ...data.employees.filter(employee => ['Active', 'On leave'].includes(employee.status)).map(employee => [employee.id, `${employee.name} — ${employee.designation}`])]} />
+    <EmployeeMultiSelect employees={data.employees} selected={selected} onChange={setSelected} />
     <Field name="due" label="Due (as shown to the team)" defaultValue="Today, 4:00 PM" />
     <Field name="dueDate" label="Deadline date" type="date" defaultValue={todayInput()} />
     <SelectField name="priority" label="Priority" options={['Low', 'Medium', 'High']} defaultValue="Medium" />

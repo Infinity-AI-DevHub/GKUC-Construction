@@ -1384,6 +1384,37 @@ async function createReceivableTables() {
     CONSTRAINT fk_receipt_recorder FOREIGN KEY(recorded_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
 
+  await query(`CREATE TABLE IF NOT EXISTS quotation_billing_plans (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    quotation_id BIGINT UNSIGNED NOT NULL UNIQUE,
+    company_id TINYINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NULL,
+    client_id BIGINT UNSIGNED NOT NULL,
+    document_type ENUM('Tax Invoice','Invoice') NOT NULL,
+    tax_treatment ENUM('Standard','SVAT','Exempt') NOT NULL,
+    vat_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+    created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_qbilling_quote FOREIGN KEY(quotation_id) REFERENCES quotations_client(id),
+    CONSTRAINT fk_qbilling_creator FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS quotation_billing_terms (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    plan_id BIGINT UNSIGNED NOT NULL,
+    sequence_no SMALLINT UNSIGNED NOT NULL,
+    label VARCHAR(160) NOT NULL,
+    percentage DECIMAL(7,4) NOT NULL,
+    amount DECIMAL(15,2) NOT NULL,
+    due_date DATE NULL,
+    invoice_id BIGINT UNSIGNED NULL UNIQUE,
+    CONSTRAINT fk_qbilling_term_plan FOREIGN KEY(plan_id) REFERENCES quotation_billing_plans(id) ON DELETE CASCADE,
+    CONSTRAINT fk_qbilling_term_invoice FOREIGN KEY(invoice_id) REFERENCES client_invoices(id),
+    UNIQUE KEY uq_qbilling_term_order(plan_id,sequence_no)
+  ) ENGINE=InnoDB`);
+  await addColumn('client_invoices', 'quotation_id', 'BIGINT UNSIGNED NULL');
+  await addColumn('client_invoices', 'billing_term_id', 'BIGINT UNSIGNED NULL');
+  await addIndex('client_invoices', 'uq_invoice_billing_term', 'UNIQUE KEY uq_invoice_billing_term(billing_term_id)');
+
   await query(`CREATE TABLE IF NOT EXISTS received_cheques (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     project_id BIGINT UNSIGNED NULL, invoice_id BIGINT UNSIGNED NULL,
@@ -2656,6 +2687,16 @@ async function createProjectManagerLinks() {
     GROUP BY LOWER(TRIM(name)) HAVING COUNT(*)=1
   ) e ON LOWER(TRIM(t.assignee))=e.matched_name
     SET t.assignee_employee_id=e.employee_id WHERE t.assignee_employee_id IS NULL`);
+  await query(`CREATE TABLE IF NOT EXISTS task_assignees (
+    task_id BIGINT UNSIGNED NOT NULL, employee_id BIGINT UNSIGNED NOT NULL,
+    assigned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(task_id,employee_id),
+    CONSTRAINT fk_task_assignee_task FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    CONSTRAINT fk_task_assignee_person FOREIGN KEY(employee_id) REFERENCES employees(id),
+    INDEX idx_task_assignee_person(employee_id,task_id)
+  ) ENGINE=InnoDB`);
+  await query(`INSERT IGNORE INTO task_assignees (task_id,employee_id)
+    SELECT id,assignee_employee_id FROM tasks WHERE assignee_employee_id IS NOT NULL`);
 }
 
 export async function migrate() {

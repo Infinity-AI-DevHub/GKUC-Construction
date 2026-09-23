@@ -423,6 +423,31 @@ export function invoiceDocument({ company, invoice, items, settings: given, desi
   return page({ design, company, blocks, settings, title: `${invoice.reference} — ${invoice.client}` });
 }
 
+export function receiptDocument({ company, receipt, settings: given, design: givenDesign }) {
+  const settings = settingsFor(given);
+  const design = normaliseDesign(givenDesign);
+  const receiptReference = `RCPT-${new Date(receipt.receivedDate).getFullYear()}-${String(receipt.id).padStart(5, '0')}`;
+  const blocks = {
+    letterhead: letterhead(company, 'Payment Receipt', receiptReference, receipt.receivedDate, design),
+    parties: `<div class="parties" data-block="parties"><div class="party"><h3>Received by</h3><strong>${escape(company.name)}</strong>
+      ${company.address ? `<p>${lines(company.address).join('<br>')}</p>` : ''}</div>
+      <div class="party"><h3>Received from</h3><strong>${escape(receipt.client)}</strong>
+      ${receipt.buyerAddress ? `<p>${lines(receipt.buyerAddress).join('<br>')}</p>` : ''}</div></div>`,
+    subject: `<div class="subject" data-block="subject"><strong>Payment received for ${escape(receipt.invoiceReference)}</strong>
+      <p>Project: ${escape(receipt.project || 'Company account')}</p><p>Invoice: ${escape(receipt.invoiceTitle)}</p>
+      <p>Date received: ${escape(longDate(receipt.receivedDate))}</p><p>Method: ${escape(receipt.method)}</p>
+      ${receipt.reference ? `<p>Payment reference: ${escape(receipt.reference)}</p>` : ''}</div>`,
+    table: `<table data-block="table"><thead><tr><th>Description</th><th class="amount num">Amount (Rs.)</th></tr></thead>
+      <tbody><tr><td>Payment toward ${escape(receipt.invoiceReference)}</td><td class="num">${money(receipt.amount)}</td></tr></tbody>
+      <tfoot><tr class="grand"><td>Amount received</td><td class="num">${money(receipt.amount)}</td></tr></tfoot></table>`,
+    words: `<p class="words" data-block="words"><strong>Amount in words:</strong> ${escape(amountInWords(receipt.amount))}</p>`,
+    notes: `<p data-block="notes">Invoice total: Rs. ${money(receipt.netPayable)} &nbsp;·&nbsp; Total received: Rs. ${money(receipt.paidAmount)} &nbsp;·&nbsp; Balance: Rs. ${money(Math.max(0, Number(receipt.netPayable) - Number(receipt.paidAmount)))}</p>`,
+    terms: '', bank: '', signatures: `<div class="sign" data-block="signatures"><div>For and on behalf of ${escape(company.name)}<br><br>Authorized signature</div></div>`,
+    footer: footer(company, receiptReference, settings)
+  };
+  return page({ design, company, blocks, settings, title: `${receiptReference} — ${receipt.client}` });
+}
+
 export function boqDocument({ company, boq, items, variations = [], settings: given, design: givenDesign }) {
   const settings = settingsFor(given);
   const design = normaliseDesign(givenDesign);
