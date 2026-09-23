@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { BellRing, Send } from 'lucide-react';
+import { BellRing, Eye, EyeOff, Send } from 'lucide-react';
 import { api, patch, post, slug } from '../api.js';
-import { Avatar, Badge, Field, FormModal, Page, Row, SelectField, Table, Tabs, useLiveList } from '../ui.jsx';
+import { Avatar, Badge, Field, FormModal, Page, Required, Row, SelectField, Table, Tabs, useLiveList } from '../ui.jsx';
 import AccessControl from './AccessControl.jsx';
 import AccountPanel from '../AccountPanel.jsx';
 import CompanySettings from '../CompanySettings.jsx';
@@ -190,7 +190,23 @@ function UserForm({ close, reload }) {
   }}>
     <Field name="name" label="Full name" />
     <Field name="email" label="Email" type="email" />
-    <Field name="password" label="Temporary password (10+ characters)" type="password" />
+    <TemporaryPasswordField />
     <SelectField name="roleId" label="Role" options={roles.map(role => [role.id, role.name])} />
   </FormModal>;
+}
+
+function TemporaryPasswordField() {
+  const [visible, setVisible] = useState(false);
+  return <label>Temporary password (12+ characters)<Required />
+    <span className="password-field">
+      <input name="password" type={visible ? 'text' : 'password'} required minLength={12}
+        autoComplete="new-password" />
+      <button type="button" onClick={() => setVisible(value => !value)}
+        title={visible ? 'Hide temporary password' : 'Show temporary password'}
+        aria-label={visible ? 'Hide temporary password' : 'Show temporary password'}
+        aria-pressed={visible}>
+        {visible ? <EyeOff size={17} /> : <Eye size={17} />}
+      </button>
+    </span>
+  </label>;
 }

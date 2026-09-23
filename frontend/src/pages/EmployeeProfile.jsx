@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, BriefcaseBusiness, CalendarDays, CheckCircle2, ClipboardCheck,
   Clock3, Mail, MapPin, PencilLine, Phone, ShieldCheck, Star, TrendingUp, UserRound } from 'lucide-react';
-import { api, rupees, shortDate, slug } from '../api.js';
-import { Avatar, Badge, Row, Table } from '../ui.jsx';
+import { api, inputDate, patch, rupees, shortDate, slug } from '../api.js';
+import { Avatar, Badge, Field, FormModal, Row, SelectField, Table, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import AttendanceCorrection from './AttendanceCorrection.jsx';
 
@@ -45,10 +45,11 @@ function ReviewRadar({ review }) {
   </div>;
 }
 
-export default function EmployeeProfile({ employeeId, close, canManage, canCorrect, projects = [] }) {
+export default function EmployeeProfile({ employeeId, close, canManage, canCorrect, projects = [], departments = [], companies = [], reloadPeople }) {
   const [employee, setEmployee] = useState(null);
   const [error, setError] = useState('');
   const [correcting, setCorrecting] = useState(null);
+  const [editing, setEditing] = useState(false);
   const reloadEmployee = async () => setEmployee(await api(`/employees/${employeeId}`));
   useEffect(() => {
     setEmployee(null); setError('');
@@ -105,7 +106,10 @@ export default function EmployeeProfile({ employeeId, close, canManage, canCorre
       </section>
 
       <section className="employee-panel personal-panel">
-        <div className="employee-section-title"><div><span>Employee record</span><h2>Personal details</h2></div><UserRound size={20} /></div>
+        <div className="employee-section-title"><div><span>Employee record</span><h2>Personal details</h2></div>
+          {canManage ? <button className="icon-btn" type="button" title="Edit personal details" aria-label="Edit personal details"
+            onClick={() => setEditing(true)}><PencilLine size={16} /></button> : <UserRound size={20} />}
+        </div>
         <dl className="employee-details">
           <div><dt><CalendarDays size={14} />Joined</dt><dd>{shortDate(employee.joinDate)}</dd></div>
           <div><dt><Phone size={14} />Phone</dt><dd>{employee.phone || 'Not recorded'}</dd></div>
@@ -120,6 +124,8 @@ export default function EmployeeProfile({ employeeId, close, canManage, canCorre
           {employee.epfEligible !== undefined && <div><dt>Statutory eligibility</dt><dd>EPF {employee.epfEligible ? 'eligible' : 'not eligible'} · ETF {employee.etfEligible ? 'eligible' : 'not eligible'}</dd></div>}
         </dl>
         {employee.notes && <p className="employee-notes">{employee.notes}</p>}
+        {editing && <PersonalDetailsForm employee={employee} departments={departments} companies={companies}
+          close={() => setEditing(false)} reload={async () => { await reloadEmployee(); await reloadPeople?.(); }} />}
       </section>
 
       <section className="employee-panel performance-panel">
@@ -182,4 +188,76 @@ export default function EmployeeProfile({ employeeId, close, canManage, canCorre
         canUpload={canManage} canDelete={canManage} withCategory withExpiry />
     </section>
   </div>;
+}
+
+function PersonalDetailsForm({ employee, departments, companies, close, reload }) {
+  const number = value => Number(value || 0);
+  const optionalNumber = value => value === '' ? null : Number(value);
+  return <FormModal title={`Edit ${employee.name}`} close={close} label="Save employee details" wide onSubmit={async values => {
+    await patch(`/employees/${employee.id}`, {
+      code: values.code.trim(),
+      name: values.name.trim(),
+      departmentId: Number(values.departmentId),
+      designation: values.designation.trim(),
+      workerType: values.workerType,
+      phone: values.phone.trim(),
+      email: values.email.trim(),
+      joinDate: values.joinDate,
+      status: values.status,
+      notes: values.notes.trim(),
+      payrollCompanyId: Number(values.payrollCompanyId),
+      payBasis: values.payBasis,
+      payFrequency: values.payFrequency,
+      payrollCategory: values.payrollCategory,
+      compensationEffectiveFrom: values.compensationEffectiveFrom || values.joinDate,
+      basicSalary: number(values.basicSalary),
+      weeklyRate: number(values.weeklyRate),
+      dailyRate: number(values.dailyRate),
+      overtimeRate: number(values.overtimeRate),
+      customOfficeOtRate: optionalNumber(values.customOfficeOtRate),
+      customSiteOtRate: optionalNumber(values.customSiteOtRate),
+      customTravelOtRate: optionalNumber(values.customTravelOtRate),
+      epfEligible: values.epfEligible === 'true',
+      etfEligible: values.etfEligible === 'true'
+    });
+    await reload();
+  }}>
+    <Field name="code" label="Employee code" defaultValue={employee.code} />
+    <Field name="name" label="Full name" defaultValue={employee.name} />
+    <SelectField name="departmentId" label="Department" defaultValue={employee.departmentId}
+      options={departments.map(department => [department.id, department.name])} />
+    <Field name="designation" label="Designation / trade" defaultValue={employee.designation} />
+    <SelectField name="workerType" label="Employee type" defaultValue={employee.workerType}
+      options={[["Office", "Office employee"], ["Site", "Site worker"]]} />
+    <SelectField name="status" label="Employment status" defaultValue={employee.status}
+      options={['Active', 'On leave', 'Suspended', 'Left']} />
+    <Field name="phone" label="Phone" defaultValue={employee.phone || ''} required={false} />
+    <Field name="email" label="Email" type="email" defaultValue={employee.email || ''} required={false} />
+    <Field name="joinDate" label="Join date" type="date" defaultValue={inputDate(employee.joinDate)} />
+    <SelectField name="payrollCompanyId" label="Salary paid by" defaultValue={employee.payrollCompanyId || 1}
+      options={companies.map(company => [company.id, company.name])} />
+    <SelectField name="payBasis" label="Pay basis" defaultValue={employee.payBasis}
+      options={['Monthly salary', 'Weekly rate', 'Daily rate']} />
+    <SelectField name="payFrequency" label="Payment frequency" defaultValue={employee.payFrequency}
+      options={['Daily', 'Weekly', 'Monthly']} />
+    <SelectField name="payrollCategory" label="Payroll category" defaultValue={employee.payrollCategory}
+      options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} />
+    <Field name="compensationEffectiveFrom" label="Compensation effective from" type="date"
+      defaultValue={inputDate(employee.compensationEffectiveFrom || employee.joinDate)} />
+    <Field name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue={employee.basicSalary || 0} />
+    <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" defaultValue={employee.weeklyRate || 0} />
+    <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" defaultValue={employee.dailyRate || 0} />
+    <Field name="overtimeRate" label="Legacy/custom OT rate (LKR/h)" type="number" min="0" defaultValue={employee.overtimeRate || 0} required={false} />
+    <Field name="customOfficeOtRate" label="Office OT override (LKR/h)" type="number" min="0"
+      defaultValue={employee.customOfficeOtRate ?? ''} required={false} />
+    <Field name="customSiteOtRate" label="Site OT override (LKR/h)" type="number" min="0"
+      defaultValue={employee.customSiteOtRate ?? ''} required={false} />
+    <Field name="customTravelOtRate" label="Travel OT override (LKR/h)" type="number" min="0"
+      defaultValue={employee.customTravelOtRate ?? ''} required={false} />
+    <SelectField name="epfEligible" label="EPF eligible" defaultValue={String(Boolean(employee.epfEligible))}
+      options={[[false, 'No'], [true, 'Yes']]} />
+    <SelectField name="etfEligible" label="ETF eligible" defaultValue={String(Boolean(employee.etfEligible))}
+      options={[[false, 'No'], [true, 'Yes']]} />
+    <TextArea name="notes" label="HR notes" defaultValue={employee.notes || ''} required={false} rows={3} />
+  </FormModal>;
 }

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { ArrowDownToLine, Check, Clock3, PencilLine, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowDownToLine, Check, Clock3, PencilLine, Search, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
 import { api, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { allowedTabs, Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
@@ -27,7 +27,7 @@ const TABS = [
 ];
 
 /** PID 2.2 — one record per employee covering profile, attendance, leave and overtime. */
-export default function People({ data, allData, reload, can, companies, companyId, company }) {
+export default function People({ data, allData, reload, can, companies, companyId, company, employeeSearchRequest }) {
   /* Offering a tab the server will refuse only sends somebody into an error they can do
      nothing about, so each is shown against the permissions it actually needs. */
   const tabs = allowedTabs(TABS, can);
@@ -43,6 +43,11 @@ export default function People({ data, allData, reload, can, companies, companyI
   }, []);
   const openEmployee = id => { window.history.pushState({}, '', `/people/${id}`); setEmployeeId(id); };
   const closeEmployee = () => { window.history.pushState({}, '', '/people'); setEmployeeId(null); };
+  useEffect(() => {
+    if (!employeeSearchRequest) return;
+    setTab('Employees');
+    if (employeeId) closeEmployee();
+  }, [employeeSearchRequest]);
 
   const actions = {
     Employees: can.hr && 'Add employee',
@@ -60,13 +65,14 @@ export default function People({ data, allData, reload, can, companies, companyI
   };
 
   if (employeeId) return <EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr}
-    canCorrect={can.attendance || can.hrImport} projects={allProjects} />;
+    canCorrect={can.attendance || can.hrImport} projects={allProjects} departments={data.departments}
+    companies={companies} reloadPeople={reload} />;
 
   return <Page title="People" subtitle="Employee records, live workforce presence, leave and overtime."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
-    {tab === 'Employees' && <Employees data={data} can={can} onOpen={openEmployee} />}
+    {tab === 'Employees' && <Employees data={data} can={can} onOpen={openEmployee} focusRequest={employeeSearchRequest} />}
     {tab === 'Workforce map' && <WorkforceMap canManage={can.hr} canPlan={can.hr || can.hrImport} projects={allProjects} />}
     {tab === 'Attendance' && <Attendance data={data} projects={allProjects} reload={reload} can={can} />}
     {tab === 'Attendance register' && <AttendanceRegister projects={allProjects} canCorrect={can.attendance || can.hrImport} />}
@@ -98,10 +104,16 @@ const PAY_COLUMNS = ['Basic salary', 'Daily rate'];
 const NO_PAY_COLUMNS = EMPLOYEE_COLUMNS.filter(column => !PAY_COLUMNS.includes(column));
 const NO_PAY_TEMPLATE = 'minmax(190px,1.4fr) 100px minmax(140px,1fr) minmax(140px,1fr) 100px';
 
-function Employees({ data, onOpen }) {
+function Employees({ data, onOpen, focusRequest }) {
+  const [search, setSearch] = useState('');
+  const searchInput = useRef(null);
+  useEffect(() => { if (focusRequest) searchInput.current?.focus(); }, [focusRequest]);
   const showsPay = data.employees.some(employee => employee.basicSalary !== undefined);
   const columns = showsPay ? EMPLOYEE_COLUMNS : NO_PAY_COLUMNS;
   const template = showsPay ? EMPLOYEE_TEMPLATE : NO_PAY_TEMPLATE;
+  const term = search.trim().toLocaleLowerCase();
+  const employees = term ? data.employees.filter(employee => [employee.name, employee.code, employee.department]
+    .some(value => String(value || '').toLocaleLowerCase().includes(term))) : data.employees;
   return <>
     <div className="attendance-summary">
       <Summary label="Employees" value={data.employees.length} icon={UserRoundCheck} />
@@ -109,8 +121,14 @@ function Employees({ data, onOpen }) {
       <Summary label="On leave" value={data.employees.filter(row => row.status === 'On leave').length} icon={Clock3} />
       <Summary label="Departments" value={data.departments.length} icon={ShieldCheck} />
     </div>
-    <Table columns={columns} template={template} title="Employee register">
-      {data.employees.map(employee => <Row template={template} key={employee.id}
+    <Table columns={columns} template={template} title="Employee register"
+      empty={term ? `No employees match “${search.trim()}”.` : 'No employees have been added yet.'}
+      tools={<label className="employee-search"><Search size={16} aria-hidden="true" />
+        <input ref={searchInput} type="search" value={search} onChange={event => setSearch(event.target.value)}
+          placeholder="Search name, code or department" aria-label="Search employees by name, code or department" />
+        <span aria-live="polite">{employees.length} of {data.employees.length}</span>
+      </label>}>
+      {employees.map(employee => <Row template={template} key={employee.id}
         onClick={() => onOpen(employee.id)}>
         <div className="person"><Avatar name={employee.name} /><div><strong>{employee.name}</strong><small>{employee.code}</small></div></div>
         <Badge tone={employee.workerType === 'Office' ? 'active' : 'pending'}>{employee.workerType}</Badge>
@@ -603,8 +621,8 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
     <SelectField name="payrollCategory" label="Payroll category" options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} defaultValue="Site labourer" />
     <Field name="compensationEffectiveFrom" label="Compensation effective from" type="date" defaultValue={todayInput()} />
     <Field name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue="0" />
-    <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" defaultValue="0" />
-    <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" defaultValue="0" />
+    <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" required={false} />
+    <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" required={false} />
     <SelectField name="epfEligible" label="EPF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
     <SelectField name="etfEligible" label="ETF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
     <Field name="overtimeRate" label="Legacy/custom OT rate (LKR/h)" type="number" min="0" defaultValue="0" required={false} />

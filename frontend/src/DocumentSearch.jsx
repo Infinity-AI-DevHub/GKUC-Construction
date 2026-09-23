@@ -98,10 +98,10 @@ export default function DocumentSearch({ open, onClose }) {
 }
 
 /** The control that opens it, sat beside the notification bell. */
-export function DocumentSearchButton({ onOpen }) {
+export function DocumentSearchButton({ onOpen, label = 'Search scanned documents' }) {
   return (
     <button type="button" className="icon-btn" onClick={onOpen}
-      title="Search inside documents" aria-label="Search inside documents">
+      title={label} aria-label={label}>
       <Search size={17} />
     </button>
   );

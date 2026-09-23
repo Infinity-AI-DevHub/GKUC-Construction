@@ -271,6 +271,7 @@ function App() {
   const banners = useBanners();
   const [live, setLive] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [peopleSearchRequest, setPeopleSearchRequest] = useState(0);
   /*
    * Shown once, the first time somebody signs in. Held here rather than read straight from
    * the user record so that finishing it closes the tour immediately, without waiting for
@@ -426,7 +427,7 @@ function App() {
     'Quantity Surveying': <QuantitySurveying {...shared} />,
     Projects: <Projects {...shared} />,
     Tasks: <Tasks {...shared} />,
-    People: <People {...shared} />,
+    People: <People {...shared} employeeSearchRequest={peopleSearchRequest} />,
     Materials: <Materials {...shared} />,
     'Stock locations': <Inventory {...shared} />,
     Fleet: <Fleet {...shared} />,
@@ -442,6 +443,10 @@ function App() {
   /* A dialog rather than a page, because everyone may change their own password but most
      people cannot open the Administration page it would otherwise live on. */
   const openAccount = () => { setAccountOpen(true); setMenu(false); };
+  const openGlobalSearch = () => {
+    if (activePage === 'People') setPeopleSearchRequest(request => request + 1);
+    else setSearching(true);
+  };
   const bell = placement => (
     /* The placement travels on the group, not only on the bell inside it. The bell is
        rendered in both the bar and the header with CSS showing whichever fits the width;
@@ -449,7 +454,8 @@ function App() {
        the other two stayed on screen. */
     <span className={`bell-group bell-group-${placement}${live ? ' is-live' : ''}`}
       title={live ? 'Live — updates arrive as they happen' : 'Reconnecting to live updates…'}>
-      <DocumentSearchButton onOpen={() => setSearching(true)} />
+      <DocumentSearchButton onOpen={openGlobalSearch}
+        label={activePage === 'People' ? 'Search employees' : 'Search scanned documents'} />
       <SoundToggle />
       <NotificationBell notifications={data.notifications} reload={reload} onViewAll={openNotifications} placement={placement} />
     </span>
