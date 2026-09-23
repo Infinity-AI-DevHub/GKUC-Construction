@@ -205,9 +205,10 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
       ORDER BY assignedAt DESC`, [employee.id, employee.id, employee.id]),
     query(`SELECT t.id,t.title,t.status,t.priority,t.due_date dueDate,t.updated_at updatedAt,p.id projectId,p.name project
       FROM tasks t JOIN projects p ON p.id=t.project_id
-      WHERE t.assignee_employee_id=? OR (t.assignee_employee_id IS NULL AND LOWER(t.assignee)=LOWER(?)
+      WHERE EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.task_id=t.id AND ta.employee_id=?)
+        OR t.assignee_employee_id=? OR (t.assignee_employee_id IS NULL AND LOWER(t.assignee)=LOWER(?)
         AND (SELECT COUNT(*) FROM employees WHERE LOWER(name)=LOWER(?))=1)
-      ORDER BY t.updated_at DESC`, [employee.id, employee.name, employee.name]),
+      ORDER BY t.updated_at DESC`, [employee.id, employee.id, employee.name, employee.name]),
     query(`SELECT r.id,r.report_date reportDate,r.work_completed work,r.issue,r.workforce,p.id projectId,p.name project
       FROM daily_reports r JOIN projects p ON p.id=r.project_id WHERE LOWER(r.supervisor)=LOWER(?)
       AND (SELECT COUNT(*) FROM employees WHERE LOWER(name)=LOWER(?))=1

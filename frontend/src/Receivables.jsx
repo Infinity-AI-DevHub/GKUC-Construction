@@ -19,6 +19,10 @@ const INVOICE_TEMPLATE = 'minmax(120px,1fr) minmax(140px,1.1fr) minmax(180px,1.5
 export function ClientInvoices({ data, can, companyId }) {
   const [invoices, setInvoices] = useState([]);
   const [ageing, setAgeing] = useState(null);
+  const [acceptedQuotes, setAcceptedQuotes] = useState([]);
+  const [billingPlans, setBillingPlans] = useState([]);
+  const [planning, setPlanning] = useState(false);
+  const [termInvoice, setTermInvoice] = useState(null);
   const [raising, setRaising] = useState(false);
   const [receipting, setReceipting] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -26,7 +30,9 @@ export function ClientInvoices({ data, can, companyId }) {
 
   const load = () => Promise.all([
     api(`/receivables/invoices?companyId=${companyId}`).then(setInvoices).catch(() => setInvoices([])),
-    api(`/receivables/ageing?companyId=${companyId}`).then(setAgeing).catch(() => setAgeing(null))
+    api(`/receivables/ageing?companyId=${companyId}`).then(setAgeing).catch(() => setAgeing(null)),
+    api(`/receivables/accepted-quotations?companyId=${companyId}`).then(setAcceptedQuotes).catch(() => setAcceptedQuotes([])),
+    api(`/receivables/quotation-plans?companyId=${companyId}`).then(setBillingPlans).catch(() => setBillingPlans([]))
   ]);
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
@@ -47,6 +53,25 @@ export function ClientInvoices({ data, can, companyId }) {
     </div>}
 
     {error && <p className="form-error">{error}</p>}
+    <Table columns={['Accepted quotation', 'Client / project', 'Agreed total', 'Billing terms']} template="minmax(140px,1fr) minmax(180px,1.5fr) 140px minmax(260px,2fr)"
+      title="Quotation to invoice" empty="No accepted quotations for this company yet. QS marks a quotation Accepted before Finance sets its terms."
+      tools={can.invoice && acceptedQuotes.some(quote => !quote.billingPlanId)
+        ? <button className="secondary" onClick={() => setPlanning(true)}>Set invoice terms</button> : null}>
+      {acceptedQuotes.map(quote => {
+        const plan = billingPlans.find(item => Number(item.quotationId) === Number(quote.id));
+        return <Row key={quote.id} template="minmax(140px,1fr) minmax(180px,1.5fr) 140px minmax(260px,2fr)">
+          <div><strong>{quote.reference}</strong><small>{quote.title}</small></div>
+          <div><strong>{quote.client}</strong><small>{quote.project || 'No project'}</small></div>
+          <strong>{rupees(quote.total)}</strong>
+          <div className="row-actions">{plan ? plan.terms.map(term => <span key={term.id}>
+            {term.label} ({term.percentage}% · {rupees(term.amount)}){' '}
+            {term.invoiceId ? <button className="status-button" onClick={() => setSelected(invoices.find(invoice => Number(invoice.id) === Number(term.invoiceId)) || null)}>{term.invoiceReference}</button>
+              : can.invoice ? <button className="status-button" onClick={() => setTermInvoice(term)}>Create invoice</button> : 'Not invoiced'}
+          </span>) : <span>Terms not set</span>}</div>
+        </Row>;
+      })}
+    </Table>
+    <div style={{ height: '14px' }} />
     <p className="invoice-note">Create an invoice, check its PDF, then click Issue. Record each partial payment from that invoice; cheque payments are confirmed through Cheques.</p>
 
     <Table columns={INVOICE_COLUMNS} template={INVOICE_TEMPLATE} title="Invoices issued to clients"
@@ -88,6 +113,23 @@ export function ClientInvoices({ data, can, companyId }) {
     </> : null}
 
     {raising && <CertificateForm data={data} companyId={companyId} close={() => setRaising(false)} reload={load} />}
+    {planning && <BillingPlanForm quotations={acceptedQuotes.filter(quote => !quote.billingPlanId)} close={() => setPlanning(false)} reload={load} />}
+    {termInvoice && <FormModal title={`Invoice ${termInvoice.label}`} close={() => setTermInvoice(null)} label="Save invoice as draft"
+      onSubmit={async values => {
+        await post(`/receivables/quotation-terms/${termInvoice.id}/invoice`, {
+          invoiceDate: values.invoiceDate, deliveryDate: values.deliveryDate || undefined,
+          placeOfSupply: values.placeOfSupply || undefined, paymentMode: values.paymentMode || undefined,
+          notes: values.notes || undefined
+        });
+        await load();
+      }}>
+      <p className="invoice-note">This invoice is linked to the accepted quotation and this term. The company, client, amount and tax choice come from the approved billing plan.</p>
+      <Field name="invoiceDate" label="Invoice date" type="date" defaultValue={todayInput()} />
+      <Field name="deliveryDate" label="Date of delivery" type="date" required={false} />
+      <Field name="placeOfSupply" label="Place of supply" required={false} />
+      <SelectField name="paymentMode" label="Expected payment mode" options={['Bank transfer','Cheque','Cash','Card','Other']} />
+      <TextArea name="notes" label="Additional information" required={false} />
+    </FormModal>}
     {receipting && <ReceiptForm invoice={receipting} close={() => setReceipting(null)} reload={load} />}
     {selected && <InvoicePayments invoice={selected} close={() => setSelected(null)} onPayment={() => {
       setReceipting(selected); setSelected(null);
@@ -108,10 +150,11 @@ function InvoicePayments({ invoice, close, onPayment, canRecord }) {
     </div>
     <h3>Payment history</h3>
     {!detail ? <p>Loading payments…</p> : detail.receipts.length ? <div className="table-wrap"><table>
-      <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th></tr></thead>
+      <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th><th>Receipt</th></tr></thead>
       <tbody>{detail.receipts.map(receipt => <tr key={receipt.id}>
         <td>{shortDate(receipt.receivedDate)}</td><td>{receipt.method}</td>
         <td>{receipt.reference || '—'}</td><td>{rupees(receipt.amount)}</td>
+        <td><button className="status-button" onClick={() => openDocument(`/receivables/receipts/${receipt.id}/document`)}>View / PDF</button></td>
       </tr>)}</tbody>
     </table></div> : <p>No payments recorded yet.</p>}
     {canRecord && invoice.status !== 'Draft' && invoice.status !== 'Paid' && <button className="primary" onClick={onPayment}>Record another payment</button>}
@@ -154,6 +197,46 @@ function ReceiptForm({ invoice, close, reload }) {
     <SelectField name="method" label="Method" options={['Bank transfer', 'Card', 'Cash']} />
     <Field name="reference" label="Bank reference" required={false} />
     <p className="invoice-note">For cheques, use Received cheques and link this invoice. Clearing the cheque records its receipt automatically.</p>
+  </FormModal>;
+}
+
+function BillingPlanForm({ quotations, close, reload }) {
+  const [terms, setTerms] = useState([{ label: 'Deposit', percentage: '100', dueDate: '' }]);
+  const [documentType, setDocumentType] = useState('Tax Invoice');
+  const [taxTreatment, setTaxTreatment] = useState('Standard');
+  const [vatRate, setVatRate] = useState('18');
+  const total = terms.reduce((sum, term) => sum + (Number(term.percentage) || 0), 0);
+  const update = (index, field, value) => setTerms(current => current.map((term, position) =>
+    position === index ? { ...term, [field]: value } : term));
+  return <FormModal title="Set quotation billing terms" close={close} label="Save billing plan" wide
+    onSubmit={async values => {
+      if (Math.abs(total - 100) > 0.0001) throw new Error('Invoice terms must add up to exactly 100%.');
+      await post('/receivables/quotation-plans', { quotationId: Number(values.quotationId), documentType,
+        taxTreatment, vatRate: Number(vatRate), terms: terms.map(term => ({ label: term.label,
+          percentage: Number(term.percentage), dueDate: term.dueDate || undefined })) });
+      await reload();
+    }}>
+    <SelectField name="quotationId" label="Accepted quotation" options={quotations.map(quote =>
+      [quote.id, `${quote.reference} — ${quote.client} — ${rupees(quote.total)}`])} />
+    <label>Invoice format<select value={documentType} onChange={event => {
+      setDocumentType(event.target.value);
+      setTaxTreatment(event.target.value === 'Invoice' ? 'Exempt' : 'Standard');
+    }}><option value="Tax Invoice">Tax invoice</option><option value="Invoice">Normal invoice, no VAT</option></select></label>
+    {documentType === 'Tax Invoice' && <><label>Tax treatment<select value={taxTreatment} onChange={event => setTaxTreatment(event.target.value)}>
+      <option value="Standard">Standard VAT</option><option value="SVAT">SVAT suspended</option></select></label>
+      <label>VAT rate (%)<input type="number" min="0" max="100" step="0.01" value={vatRate} onChange={event => setVatRate(event.target.value)} /></label></>}
+    <div className="wide"><h3>Invoice terms</h3><p className="invoice-note">Name each term and set its share of the accepted quotation. Finance creates and issues each invoice when that term is due.</p>
+      {terms.map((term, index) => <div className="invoice-line" key={index}>
+        <input aria-label={`Term ${index + 1} name`} placeholder="Deposit, progress payment, final payment" value={term.label} onChange={event => update(index, 'label', event.target.value)} />
+        <input aria-label={`Term ${index + 1} percentage`} type="number" min="0.01" max="100" step="0.01" value={term.percentage} onChange={event => update(index, 'percentage', event.target.value)} />
+        <input aria-label={`Term ${index + 1} due date`} type="date" value={term.dueDate} onChange={event => update(index, 'dueDate', event.target.value)} />
+        <button type="button" className="icon-btn" aria-label={`Remove term ${index + 1}`} disabled={terms.length === 1}
+          onClick={() => setTerms(current => current.filter((_, position) => position !== index))}>×</button>
+      </div>)}
+      <button type="button" className="secondary" onClick={() => setTerms(current => [...current,
+        { label: `Term ${current.length + 1}`, percentage: '', dueDate: '' }])}>Add another term</button>
+      <p className={Math.abs(total - 100) < 0.0001 ? 'invoice-note' : 'form-error'}>Allocated: {total}% of the quotation (must be 100%).</p>
+    </div>
   </FormModal>;
 }
 
