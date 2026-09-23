@@ -110,6 +110,15 @@ async function createCompaniesTable() {
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
   await query(`INSERT IGNORE INTO companies (id,code,name) VALUES
     (1,'GKUC','GKUC Construction'),(2,'GKRM','GKUC Readymix')`);
+  /* The supplied Readymix tax-invoice letterhead is the authority for this legal identity.
+     Preserve any later administrator edits; only fill fields that are still blank. */
+  await query(`UPDATE companies SET
+    address=CASE WHEN TRIM(address)='' THEN 'A-01, Industrial Park, Avissawella Road, Galigamuwa Town' ELSE address END,
+    telephone=CASE WHEN TRIM(telephone)='' THEN '035 455 0328 | 076 582 9000 | 076 583 9000 | 076 817 2376' ELSE telephone END,
+    email=CASE WHEN TRIM(email)='' THEN 'gkucreadymix@gmail.com' ELSE email END,
+    tin=CASE WHEN TRIM(tin)='' THEN '103293863-7000' ELSE tin END,
+    vat_number=CASE WHEN TRIM(vat_number)='' THEN '103293863-7000' ELSE vat_number END
+    WHERE id=2`);
 }
 
 /** Core tables that existed before the module expansion. */

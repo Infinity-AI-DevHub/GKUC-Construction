@@ -561,6 +561,11 @@ test('accepted Readymix quotation becomes term invoices, payment receipts and a 
   const html = await rendered.text();
   assert.match(html, /GKUC Readymix/);
   assert.match(html, /CLIENT-TIN-42/);
+  const invoiceDownload = await fetch(`${base}/receivables/invoices/${first.body.id}/document?download=pdf`,
+    { headers: { authorization: `Bearer ${owner}` } });
+  assert.equal(invoiceDownload.status, 200);
+  assert.match(invoiceDownload.headers.get('content-type') || '', /application\/pdf/);
+  assert.equal(Buffer.from(await invoiceDownload.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
   assert.equal((await call(owner, 'POST', `/receivables/invoices/${first.body.id}/issue`)).status, 204);
   const payment = await call(owner, 'POST', `/receivables/invoices/${first.body.id}/receipts`,
     { amount: 10000, receivedDate: today(), method: 'Bank transfer', reference: `TEST-${Date.now()}` });
@@ -569,6 +574,11 @@ test('accepted Readymix quotation becomes term invoices, payment receipts and a 
   const receipt = await fetch(`${base}/receivables/receipts/${payment.body.receiptId}/document`,
     { headers: { authorization: `Bearer ${owner}` } });
   assert.match(await receipt.text(), /Payment Receipt/);
+  const receiptDownload = await fetch(`${base}/receivables/receipts/${payment.body.receiptId}/document?download=pdf`,
+    { headers: { authorization: `Bearer ${owner}` } });
+  assert.equal(receiptDownload.status, 200);
+  assert.match(receiptDownload.headers.get('content-type') || '', /application\/pdf/);
+  assert.equal(Buffer.from(await receiptDownload.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
   assert.equal((await call(owner, 'GET', `/receivables/invoices/${first.body.id}`)).body.status, 'Part paid');
   const alerts = (await call(owner, 'GET', '/bootstrap')).body.data.notifications;
   assert.ok(alerts.some(row => String(row.title).includes('Client payment received')));

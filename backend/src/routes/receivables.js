@@ -562,14 +562,16 @@ router.patch('/receivables/cheques/:id',auth,permit('finance.invoice'),validate(
     if(!cheque)throw fail(404,'Received cheque not found');
     if(cheque.status==='Cleared'&&req.body.status!=='Cleared')throw fail(409,'A cleared receipt cannot be reversed from this screen');
     if(cheque.status==='Cleared')return cheque;
+    let receiptId=null,invoiceReference=null;
     if(req.body.status==='Cleared'){
       if(cheque.invoice_id){
         const [rows]=await connection.execute('SELECT * FROM client_invoices WHERE id=? FOR UPDATE',[cheque.invoice_id]);
         const invoice=rows[0],paid=Number(invoice.paid_amount)+Number(cheque.amount);
         if(paid>Number(invoice.net_payable)+0.001) throw Object.assign(new Error('Cheque exceeds the remaining client balance'),{status:409});
         await connection.execute('UPDATE client_invoices SET paid_amount=?,status=? WHERE id=?',[paid,paid>=Number(invoice.net_payable)-1?'Paid':'Part paid',invoice.id]);
-        await connection.execute(`INSERT INTO client_receipts (invoice_id,amount,received_date,method,reference,recorded_by)
+        const [receipt] = await connection.execute(`INSERT INTO client_receipts (invoice_id,amount,received_date,method,reference,recorded_by)
           VALUES (?,?,CURDATE(),'Cheque',?,?)`,[invoice.id,cheque.amount,cheque.cheque_number,req.user.id]);
+        receiptId=receipt.insertId;invoiceReference=invoice.reference;
       }
       await connection.execute(`INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,created_by)
         VALUES (?,?,?,?,CURDATE(),'Cheque',?,?)`,[cheque.project_id,cheque.company_id,
@@ -580,8 +582,14 @@ router.patch('/receivables/cheques/:id',auth,permit('finance.invoice'),validate(
       confirmed_at=CASE WHEN ? IN ('Cleared','Returned','Cancelled') THEN NOW() ELSE confirmed_at END,confirmed_by=? WHERE id=?`,
     [req.body.status,req.body.notes||null,req.body.status,req.body.status,req.user.id,cheque.id]);
     await audit(connection,req.user.id,'CONFIRM','received_cheque',cheque.id,cheque,{status:req.body.status,notes:req.body.notes},req.ip);
-    return cheque;
-  });publishChange('receivables',{});res.json(await getOne('SELECT * FROM received_cheques WHERE id=?',[result.id]));
+    return {...cheque,receiptId,invoiceReference};
+  });publishChange('receivables',{});
+  if(req.body.status==='Cleared'&&result.receiptId&&result.project_id){
+    const project=await getOne('SELECT name FROM projects WHERE id=?',[result.project_id]);
+    await announceProjectPayment({id:result.receiptId,projectId:result.project_id,project:project?.name||'the project',
+      invoiceReference:result.invoiceReference,amount:result.amount});
+  }
+  res.json({...(await getOne('SELECT * FROM received_cheques WHERE id=?',[result.id])),receiptId:result.receiptId||null});
 }catch(error){next(error);}});
 
 /* ---- bank bonds ----------------------------------------------------------- */
