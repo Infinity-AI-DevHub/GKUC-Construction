@@ -516,6 +516,41 @@ test('Finance invoices support approved BOQ lines, standalone work and several c
   assert.equal(reporting.body.incomes.filter(row => row.description.includes(standard.body.reference)).length, 2);
 });
 
+test('QS creates a manual quotation without a BOQ and the server calculates every amount', async () => {
+  const owner = await login();
+  const qs = await login('qs@gkuc.lk');
+  const client = await call(owner, 'POST', '/clients', {
+    type: 'Organisation', name: `Manual Quote Client ${Date.now()}`, contactPerson: 'Commercial Manager'
+  });
+  assert.equal(client.status, 201, JSON.stringify(client.body));
+  const project = await call(owner, 'POST', '/projects', {
+    companyId: 1, name: `Manual quotation works ${Date.now()}`, clientId: client.body.id,
+    manager: 'Project Manager', site: 'Colombo', stage: 'Pricing'
+  });
+  assert.equal(project.status, 201, JSON.stringify(project.body));
+
+  const quotation = await call(qs, 'POST', '/qs/quotations/manual', {
+    companyId: 1, clientId: client.body.id, projectId: project.body.id,
+    title: 'Manually priced drainage works', quoteDate: today(), markupPercent: 10, vatPercent: 18,
+    notes: 'Free-form quotation test', lines: [
+      { category: 'Labour', description: 'Drain excavation', unit: 'm', quantity: 10, rate: 1250 },
+      { category: 'Material', description: 'Concrete drain', unit: 'm', quantity: 10, rate: 2750 }
+    ]
+  });
+  assert.equal(quotation.status, 201, JSON.stringify(quotation.body));
+  assert.equal(quotation.body.boqId, null);
+  assert.equal(Number(quotation.body.subtotal), 40000);
+  assert.equal(Number(quotation.body.total), 51920);
+
+  const detail = await call(qs, 'GET', `/qs/quotations/${quotation.body.id}`);
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.items.length, 2);
+  assert.deepEqual(detail.body.items.map(item => Number(item.amount)), [12500, 27500]);
+  assert.equal((await call(qs, 'PATCH', `/qs/quotations/${quotation.body.id}`, { status: 'Accepted' })).status, 200);
+  const acceptedProject = await call(owner, 'GET', `/projects/${project.body.id}`);
+  assert.equal(Number(acceptedProject.body.budget), 51920);
+});
+
 test('accepted Readymix quotation becomes term invoices, payment receipts and a project payment signal', async () => {
   const owner = await login();
   const client = await call(owner, 'POST', '/clients', { type: 'Organisation',

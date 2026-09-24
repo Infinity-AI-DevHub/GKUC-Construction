@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Download, FileText, Upload } from 'lucide-react';
+import { Download, FileText, Plus, Trash2, Upload } from 'lucide-react';
 import { api, fetchDownload, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import BoqImport from '../BoqImport.jsx';
@@ -86,9 +86,9 @@ function Quotations({ can, reload, companyId }) {
   return <>
     {error && <p className="form-error">{error}</p>}
     <Table columns={['Reference', 'Title', 'Client', 'Total', 'Status', '']} template={QUOTE_TEMPLATE}
-      title="Client quotations" empty="No quotations yet. Create one from an approved BOQ.">
+      title="Client quotations" empty="No quotations yet. Create one from a BOQ or enter it manually.">
       {rows.map(row => <Row template={QUOTE_TEMPLATE} key={row.id}>
-        <div><strong>{row.reference}</strong><small>{row.boqReference || '—'}</small></div>
+        <div><strong>{row.reference}</strong><small>{row.boqReference || 'Manual'}</small></div>
         <span>{row.title}</span>
         <span>{row.client}</span>
         <strong>{rupees(row.total)}</strong>
@@ -150,7 +150,7 @@ function QuotationDetail({ quotation, close }) {
       </div>
       <div className="wide">
         <Table columns={['Category', 'Description', 'Quantity', 'Rate', 'Amount']} template={template}
-          title="Priced from the BOQ — nothing retyped">
+          title={quotation.boqId ? 'Priced from the BOQ — nothing retyped' : 'Manually entered priced items'}>
           {quotation.items.map(item => <Row template={template} key={item.id}>
             <Badge tone={slug(item.category)}>{item.category}</Badge>
             <span>{item.description}</span>
@@ -925,40 +925,82 @@ function SubcontractQuotationForm({ data, subcontractors, companyId, close, relo
 function QuotationForm({ data, companyId, close, reload }) {
   const [boqs, setBoqs] = useState([]);
   const [clients, setClients] = useState([]);
+  const [mode, setMode] = useState('boq');
   const [clientId, setClientId] = useState('');
   const [boqId, setBoqId] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [lines, setLines] = useState([{ category: 'Work', description: '', unit: '', quantity: '', rate: '' }]);
   useEffect(() => {
     api(`/boq?companyId=${companyId}`).then(setBoqs).catch(() => setBoqs([]));
     api('/clients').then(setClients).catch(() => setClients([]));
   }, [companyId]);
   const clientBoqs = boqs.filter(boq => String(boq.clientId) === String(clientId));
-  return <FormModal title="Create quotation from a BOQ" close={close} label="Build quotation" onSubmit={async values => {
-    await post('/qs/quotations', {
-      boqId: Number(boqId), clientId: Number(clientId),
-      title: values.title || undefined,
-      quoteDate: values.quoteDate,
+  const clientProjects = data.projects.filter(project => !clientId || String(project.clientId) === String(clientId));
+  const updateLine = (index, key, value) => setLines(current => current.map((line, position) =>
+    position === index ? { ...line, [key]: value } : line));
+  const manualSubtotal = lines.reduce((sum, line) => sum + Number(line.quantity || 0) * Number(line.rate || 0), 0);
+  return <FormModal title="Create client quotation" close={close} label="Create quotation" wide onSubmit={async values => {
+    const common = {
+      clientId: Number(clientId), quoteDate: values.quoteDate,
       validUntil: values.validUntil || undefined,
-      markupPercent: Number(values.markupPercent || 0),
-      vatPercent: Number(values.vatPercent || 0),
+      markupPercent: Number(values.markupPercent || 0), vatPercent: Number(values.vatPercent || 0),
       notes: values.notes || undefined
+    };
+    if (mode === 'boq') await post('/qs/quotations', {
+      ...common, boqId: Number(boqId), title: values.title || undefined
     });
+    else {
+      if (lines.some(line => !line.description.trim() || !line.unit.trim() || Number(line.quantity) <= 0 || Number(line.rate) < 0))
+        throw new Error('Complete every manual line with a description, unit, quantity above zero and a valid rate.');
+      await post('/qs/quotations/manual', {
+        ...common, companyId, projectId: projectId ? Number(projectId) : undefined,
+        title: values.title,
+        terms: values.terms || undefined,
+        lines: lines.map(line => ({ category: line.category.trim() || 'Work', description: line.description.trim(),
+          unit: line.unit.trim(), quantity: Number(line.quantity), rate: Number(line.rate) }))
+      });
+    }
     await reload();
   }}>
-    <label>Client<select name="clientId" value={clientId} required onChange={event => { setClientId(event.target.value); setBoqId(''); }}>
+    <div className="quotation-source-switch wide" role="group" aria-label="Quotation source">
+      <button type="button" className={mode === 'boq' ? 'active' : ''} onClick={() => setMode('boq')}>From a BOQ</button>
+      <button type="button" className={mode === 'manual' ? 'active' : ''} onClick={() => setMode('manual')}>Enter manually</button>
+    </div>
+    <label>Client<select name="clientId" value={clientId} required onChange={event => { setClientId(event.target.value); setBoqId(''); setProjectId(''); }}>
       <option value="">Choose saved client…</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
     </select></label>
-    <label>Bill of quantities<select name="boqId" value={boqId} required onChange={event => setBoqId(event.target.value)}>
+    {mode === 'boq' ? <label>Bill of quantities<select name="boqId" value={boqId} required onChange={event => setBoqId(event.target.value)}>
       <option value="">Choose this client's BOQ…</option>{clientBoqs.map(boq => <option key={boq.id} value={boq.id}>{boq.reference} — {boq.title} ({rupees(boq.total)})</option>)}
-    </select></label>
-    <Field name="title" label="Quotation title" required={false} />
+    </select></label> : <label>Project (optional)<select value={projectId} onChange={event => setProjectId(event.target.value)}>
+      <option value="">Not linked to a project</option>{clientProjects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+    </select></label>}
+    <Field name="title" label="Quotation title" required={mode === 'manual'} />
     <Field name="quoteDate" label="Quotation date" type="date" defaultValue={todayInput()} />
     <Field name="validUntil" label="Valid until" type="date" required={false} />
     <Field name="markupPercent" label="Markup %" type="number" step="0.01" min="0" max="100" defaultValue="10" required={false} />
     <Field name="vatPercent" label="VAT %" type="number" step="0.01" min="0" max="100" defaultValue="18" required={false} />
+    {mode === 'manual' && <div className="manual-quotation-lines wide">
+      <div className="manual-quotation-heading"><div><strong>Quoted items</strong><span>Amounts are calculated automatically.</span></div>
+        <button type="button" className="secondary" onClick={() => setLines(current => [...current,
+          { category: 'Work', description: '', unit: '', quantity: '', rate: '' }])}><Plus size={15} />Add item</button></div>
+      {lines.map((line, index) => <div className="manual-quotation-line" key={index}>
+        <input aria-label={`Item ${index + 1} category`} placeholder="Category" value={line.category} onChange={event => updateLine(index, 'category', event.target.value)} />
+        <input aria-label={`Item ${index + 1} description`} placeholder="Description" value={line.description} onChange={event => updateLine(index, 'description', event.target.value)} />
+        <input aria-label={`Item ${index + 1} unit`} placeholder="Unit" value={line.unit} onChange={event => updateLine(index, 'unit', event.target.value)} />
+        <input aria-label={`Item ${index + 1} quantity`} type="number" min="0.001" step="0.001" placeholder="Qty" value={line.quantity} onChange={event => updateLine(index, 'quantity', event.target.value)} />
+        <input aria-label={`Item ${index + 1} rate`} type="number" min="0" step="0.01" placeholder="Rate" value={line.rate} onChange={event => updateLine(index, 'rate', event.target.value)} />
+        <strong>{rupees(Number(line.quantity || 0) * Number(line.rate || 0))}</strong>
+        <button type="button" className="icon-btn" aria-label={`Remove item ${index + 1}`} disabled={lines.length === 1}
+          onClick={() => setLines(current => current.filter((_, position) => position !== index))}><Trash2 size={15} /></button>
+      </div>)}
+      <div className="manual-quotation-total"><span>Manual subtotal</span><strong>{rupees(manualSubtotal)}</strong></div>
+    </div>}
     <TextArea name="notes" label="Notes to the client" required={false} placeholder="Optional" />
+    {mode === 'manual' && <TextArea name="terms" label="Terms for this quotation" required={false} placeholder="Optional — standing quotation terms apply when blank" />}
     <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
-      Every priced line is copied from the BOQ, so nothing is retyped. If the client accepts,
-      the quoted total becomes the project budget.
+      {mode === 'boq' ? 'Every priced line is copied from the BOQ, so nothing is retyped.'
+        : 'Manual line amounts, markup, VAT and the final total are recalculated by the server.'}
+      {' '}If the client accepts a project-linked quotation, the quoted total becomes the project budget.
     </p>
   </FormModal>;
 }
@@ -989,8 +1031,9 @@ function QuotationWording({ quotation, close, reload }) {
     <TextArea name="terms" label="Terms for this quotation only (leave blank to use the standing terms)"
       rows={3} required={false} defaultValue={quotation.terms || ''} />
     <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
-      The priced lines come from the BOQ and are not edited here. An accepted quotation can no
-      longer be reworded — raise a new one instead.
+      {quotation.boqId ? 'The priced lines come from the BOQ and are not edited here.'
+        : 'The manually priced lines are preserved as issued and are not edited here.'}
+      {' '}An accepted quotation can no longer be reworded — raise a new one instead.
     </p>
   </FormModal>;
 }
