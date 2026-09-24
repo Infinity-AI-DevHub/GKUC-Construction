@@ -42,6 +42,7 @@ export const DEFAULT_DOCUMENT_SETTINGS = {
   showAmountInWords: true,
   showBankDetails: true,
   footerNote: '',
+  quotationNotes: '',
   quotationTerms: '',
   boqTerms: '',
   invoiceTerms: ''
@@ -274,7 +275,7 @@ function page({ design, company, title, heading, reference, date, blocks, settin
 </body></html>`;
 }
 
-export function quotationDocument({ company, quotation, items, settings: given, design: givenDesign }) {
+export function quotationDocument({ company, quotation, items, bankAccount, settings: given, design: givenDesign }) {
   const settings = settingsFor(given);
   const design = normaliseDesign(givenDesign);
 
@@ -287,7 +288,7 @@ export function quotationDocument({ company, quotation, items, settings: given, 
   const rows = items.map((item, index) => (item.isSection
     ? `<tr class="section"><td colspan="6">${escape(item.description)}</td></tr>`
     : `<tr>
-        <td class="ref">${escape(item.reference || index + 1)}</td>
+        <td class="ref">${escape(item.area || item.category || item.reference || index + 1)}</td>
         <td>${escape(item.description)}</td>
         <td class="unit">${escape(item.unit || '')}</td>
         <td class="qty num">${quantity(item.quantity)}</td>
@@ -295,7 +296,19 @@ export function quotationDocument({ company, quotation, items, settings: given, 
         <td class="amount num">${money(item.amount)}</td>
       </tr>`)).join('');
 
+  const commonNotes = lines(settings.quotationNotes || '');
+  const quotationNotes = lines(quotation.notes || '');
   const terms = lines(quotation.terms || settings.quotationTerms || '');
+  const paymentTerms = lines(quotation.paymentTerms || '');
+  const methods = items.filter(item => item.methodStatement).map(item => ({
+    name: item.area || item.category || item.description,
+    steps: lines(item.methodStatement)
+  }));
+  const selectedBank = bankAccount
+    ? [bankAccount.label, `Bank: ${bankAccount.bankName}`, bankAccount.branch && `Branch: ${bankAccount.branch}`,
+      `Account name: ${bankAccount.accountName}`, `Account number: ${bankAccount.accountNumber}`,
+      bankAccount.swiftCode && `SWIFT: ${bankAccount.swiftCode}`].filter(Boolean)
+    : lines(company.bankDetails || '');
 
   /* Totals belong to the table, so they travel with it rather than as a block of their own
      — a total floating away from the figures it sums would be worse than useless. */
@@ -318,6 +331,8 @@ export function quotationDocument({ company, quotation, items, settings: given, 
         ${quotation.clientVatNumber ? `<p><strong>VAT registration:</strong> ${escape(quotation.clientVatNumber)}</p>` : ''}
         ${quotation.clientAddress ? `<p>${lines(quotation.clientAddress).join('<br>')}</p>` : ''}
         ${quotation.clientPhone ? `<p>Telephone: ${escape(quotation.clientPhone)}</p>` : ''}
+        ${quotation.location ? `<p><strong>Location:</strong> ${escape(quotation.location)}</p>` : ''}
+        ${quotation.contact ? `<p><strong>Contact:</strong> ${escape(quotation.contact)}</p>` : ''}
         ${quotation.project ? `<p>Project: ${escape(quotation.project)}</p>` : ''}
       </div>
       <div class="party">
@@ -333,8 +348,8 @@ export function quotationDocument({ company, quotation, items, settings: given, 
 
     table: `<table data-block="table">
       <thead><tr>
-        <th class="ref">Item</th><th>Description</th><th class="unit">Unit</th>
-        <th class="qty num">Quantity</th><th class="rate num">Rate (Rs.)</th><th class="amount num">Amount (Rs.)</th>
+        <th class="ref">Area</th><th>Description</th><th class="unit">Unit</th>
+        <th class="qty num">Qty</th><th class="rate num">Rate (Rs.)</th><th class="amount num">Amount (Rs.)</th>
       </tr></thead>
       <tbody>${rows}</tbody>
       ${shows(design, 'totals') ? totals : ''}
@@ -343,16 +358,22 @@ export function quotationDocument({ company, quotation, items, settings: given, 
     words: `<p class="words" data-block="words"><strong>Amount in words:</strong>
       ${escape(amountInWords(quotation.total))}</p>`,
 
-    notes: quotation.notes
-      ? `<div class="terms" data-block="notes"><h4>Notes</h4><p>${lines(quotation.notes).join('<br>')}</p></div>` : '',
+    notes: commonNotes.length || quotationNotes.length || methods.length || quotation.additionalNotes
+      ? `<div class="terms" data-block="notes">
+        ${commonNotes.length || quotationNotes.length ? `<h4>Notes</h4><ul>${[...commonNotes, ...quotationNotes].map(line => `<li>${line}</li>`).join('')}</ul>` : ''}
+        ${methods.length ? `<h4>Method</h4>${methods.map(method => `<p><strong>${escape(method.name)}</strong></p><ul>${method.steps.map(step => `<li>${step}</li>`).join('')}</ul>`).join('')}` : ''}
+        ${quotation.additionalNotes ? `<h4>Additional notes</h4><ul>${lines(quotation.additionalNotes).map(line => `<li>${line}</li>`).join('')}</ul>` : ''}
+      </div>` : '',
 
-    terms: terms.length
-      ? `<div class="terms" data-block="terms"><h4>Terms &amp; conditions</h4>
-        <ul>${terms.map(line => `<li>${line}</li>`).join('')}</ul></div>` : '',
+    terms: paymentTerms.length || terms.length
+      ? `<div class="terms" data-block="terms">
+        ${paymentTerms.length ? `<h4>Payment terms</h4><ul>${paymentTerms.map(line => `<li>${line}</li>`).join('')}</ul>` : ''}
+        ${terms.length ? `<h4>Terms &amp; conditions</h4><ul>${terms.map(line => `<li>${line}</li>`).join('')}</ul>` : ''}
+      </div>` : '',
 
-    bank: company.bankDetails
+    bank: selectedBank.length
       ? `<div class="terms" data-block="bank"><h4>Bank details</h4>
-        <p>${lines(company.bankDetails).join('<br>')}</p></div>` : '',
+        <p>${selectedBank.map(escape).join('<br>')}</p></div>` : '',
 
     signatures: `<div class="sign" data-block="signatures">
       <div>For and on behalf of ${escape(company.name)}<br><br>Name &amp; signature</div>
@@ -638,7 +659,7 @@ export async function documentContext(getOne, companyId = 1) {
     getOne(`SELECT accent_colour accentColour,paper_size paperSize,show_logo showLogo,
       show_signatures showSignatures,show_amount_in_words showAmountInWords,
       show_bank_details showBankDetails,footer_note footerNote,
-      quotation_terms quotationTerms,boq_terms boqTerms,invoice_terms invoiceTerms,design
+      quotation_notes quotationNotes,quotation_terms quotationTerms,boq_terms boqTerms,invoice_terms invoiceTerms,design
       FROM document_settings WHERE id=1`)
   ]);
   /* MySQL hands JSON back already parsed on some drivers and as text on others. */

@@ -528,12 +528,19 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
     manager: 'Project Manager', site: 'Colombo', stage: 'Pricing'
   });
   assert.equal(project.status, 201, JSON.stringify(project.body));
+  const bank = await call(owner, 'POST', '/company-bank-accounts', {
+    companyId: 1, label: 'Quotation account', bankName: 'Test Bank', branch: 'Colombo',
+    accountName: 'GKUC Construction', accountNumber: `TEST-${Date.now()}`
+  });
+  assert.equal(bank.status, 201, JSON.stringify(bank.body));
 
   const quotation = await call(qs, 'POST', '/qs/quotations/manual', {
     companyId: 1, clientId: client.body.id, projectId: project.body.id,
     title: 'Manually priced drainage works', quoteDate: today(), markupPercent: 10, vatPercent: 18,
-    notes: 'Free-form quotation test', lines: [
-      { category: 'Labour', description: 'Drain excavation', unit: 'm', quantity: 10, rate: 1250 },
+    notes: 'Free-form quotation test', paymentTerms: '70% upfront\n30% on delivery',
+    additionalNotes: 'Access must be available', bankAccountId: bank.body.id, lines: [
+      { category: 'Labour', area: 'Drain line', description: 'Drain excavation',
+        methodStatement: 'Set out the line\nExcavate to level', unit: 'm', quantity: 10, rate: 1250 },
       { category: 'Material', description: 'Concrete drain', unit: 'm', quantity: 10, rate: 2750 }
     ]
   });
@@ -545,7 +552,20 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
   const detail = await call(qs, 'GET', `/qs/quotations/${quotation.body.id}`);
   assert.equal(detail.status, 200);
   assert.equal(detail.body.items.length, 2);
+  assert.equal(detail.body.bankAccountId, bank.body.id);
+  assert.equal(detail.body.paymentTerms, '70% upfront\n30% on delivery');
+  assert.equal(detail.body.items[0].area, 'Drain line');
+  assert.match(detail.body.items[0].methodStatement, /Excavate to level/);
   assert.deepEqual(detail.body.items.map(item => Number(item.amount)), [12500, 27500]);
+  const document = await fetch(`${base}/qs/quotations/${quotation.body.id}/document`, {
+    headers: { authorization: `Bearer ${qs}` }
+  });
+  const html = await document.text();
+  assert.match(html, /<th class="ref">Area<\/th>/);
+  assert.match(html, /Payment terms/);
+  assert.match(html, /70% upfront/);
+  assert.match(html, /Test Bank/);
+  assert.match(html, /Excavate to level/);
   assert.equal((await call(qs, 'PATCH', `/qs/quotations/${quotation.body.id}`, { status: 'Accepted' })).status, 200);
   const acceptedProject = await call(owner, 'GET', `/projects/${project.body.id}`);
   assert.equal(Number(acceptedProject.body.budget), 51920);
