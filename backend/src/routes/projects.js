@@ -18,7 +18,7 @@ const projectShape = z.object({
   managerEmployeeId: z.number().int().positive().optional(),
   site: z.string().min(2).max(180),
   stage: z.string().min(2).max(150),
-  budget: z.number().nonnegative(),
+  budget: z.number().nonnegative().default(0),
   progress: z.number().int().min(0).max(100).default(0),
   health: z.enum(['On track', 'Watch', 'At risk']).default('On track'),
   startDate: isoDate.optional(),
