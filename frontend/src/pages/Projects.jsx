@@ -363,9 +363,7 @@ function ProjectForm({ companyId, companies, setCompanyId, employees, close, rel
       managerEmployeeId: Number(values.managerEmployeeId),
       site: values.site,
       stage: values.stage,
-      budget: Number(values.budget),
-      startDate: values.startDate,
-      endDate: values.endDate
+      startDate: values.startDate
     });
     setCompanyId(selectedCompanyId);
     await reload();
@@ -378,9 +376,7 @@ function ProjectForm({ companyId, companies, setCompanyId, employees, close, rel
     <SelectField name="managerEmployeeId" label="Project manager" options={[["", 'Choose an employee…'], ...employees.filter(employee => ['Active', 'On leave'].includes(employee.status)).map(employee => [employee.id, `${employee.name} — ${employee.designation}`])]} />
     <Field name="site" label="Site location" />
     <Field name="stage" label="Current stage" />
-    <Field name="budget" label="Opening budget (LKR)" type="number" min="0" />
     <Field name="startDate" label="Start date" type="date" defaultValue={todayInput()} />
-    <Field name="endDate" label="Target completion" type="date" defaultValue={todayInput()} />
   </FormModal>;
 }
 
