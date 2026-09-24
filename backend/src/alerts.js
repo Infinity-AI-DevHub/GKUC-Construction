@@ -405,6 +405,34 @@ async function pendingApprovalAlerts(stamp, alerts) {
   });
 }
 
+async function projectStartReminderAlerts(stamp, alerts) {
+  const rows = await query(`SELECT r.id reminderId,r.project_id projectId,r.frequency,r.reminder_date reminderDate,
+    p.name project,u.id userId
+    FROM project_start_reminders r
+    JOIN projects p ON p.id=r.project_id
+    JOIN project_start_reminder_users ru ON ru.reminder_id=r.id
+    JOIN users u ON u.id=ru.user_id AND u.active=1
+    WHERE r.active=1 AND p.active=1 AND p.stage='Not started' AND r.reminder_date<=CURDATE()
+      AND (r.last_notified_on IS NULL
+        OR (r.frequency='Daily' AND r.last_notified_on<CURDATE())
+        OR (r.frequency='Weekly' AND DATE_ADD(r.last_notified_on,INTERVAL 7 DAY)<=CURDATE())
+        OR (r.frequency='Monthly' AND DATE_ADD(r.last_notified_on,INTERVAL 1 MONTH)<=CURDATE()))`);
+  const raised = new Set();
+  for (const row of rows) {
+    alerts.push({
+      key: `project-start:${row.reminderId}:${row.userId}:${stamp}`,
+      userId: row.userId,
+      severity: 'Info',
+      title: `Project has not started — ${row.project}`,
+      message: `${row.project} is still marked “Not started”. Review the planned start and update the project stage when work begins.`,
+      referenceType: 'project', referenceId: row.projectId
+    });
+    raised.add(row.reminderId);
+  }
+  if (raised.size) await query(`UPDATE project_start_reminders SET last_notified_on=CURDATE()
+    WHERE id IN (${[...raised].map(() => '?').join(',')})`, [...raised]);
+}
+
 /** Scans every tracked deadline and threshold and queues notifications for anything at risk. */
 export async function runAlertScan() {
   const stamp = today();
@@ -428,7 +456,8 @@ export async function runAlertScan() {
     receivableAlerts(stamp, alerts),
     toolReturnAlerts(stamp, alerts),
     chequeAlerts(stamp, alerts),
-    receivedChequeAlerts(stamp, alerts)
+    receivedChequeAlerts(stamp, alerts),
+    projectStartReminderAlerts(stamp, alerts)
   ]);
   for (const alert of alerts) await raise(alert);
   await dispatchQueued().catch(error => console.error('Channel dispatch failed', error));

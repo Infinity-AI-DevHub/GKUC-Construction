@@ -308,6 +308,28 @@ async function createHrTables() {
 }
 
 /** 2.3 / 2.4 Task and project detail. */
+async function createProjectReminderTables() {
+  await query(`CREATE TABLE IF NOT EXISTS project_start_reminders (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    project_id BIGINT UNSIGNED NOT NULL UNIQUE,
+    reminder_date DATE NOT NULL,
+    frequency ENUM('Daily','Weekly','Monthly') NOT NULL,
+    last_notified_on DATE NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_project_start_reminder_project FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    CONSTRAINT fk_project_start_reminder_creator FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  await query(`CREATE TABLE IF NOT EXISTS project_start_reminder_users (
+    reminder_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY(reminder_id,user_id),
+    CONSTRAINT fk_project_start_reminder_recipient FOREIGN KEY(reminder_id) REFERENCES project_start_reminders(id) ON DELETE CASCADE,
+    CONSTRAINT fk_project_start_reminder_user FOREIGN KEY(user_id) REFERENCES users(id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+}
+
 async function createProjectDetailTables() {
   await query(`CREATE TABLE IF NOT EXISTS task_comments (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, task_id BIGINT UNSIGNED NOT NULL, user_id BIGINT UNSIGNED NOT NULL,
@@ -2734,6 +2756,7 @@ export async function migrate() {
   await createCoreTables();
   await createHrTables();
   await createProjectDetailTables();
+  await createProjectReminderTables();
   await createBoqTables();
   await createPurchasingTables();
   await createAssetTables();

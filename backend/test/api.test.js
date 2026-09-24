@@ -571,6 +571,73 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
   assert.equal(Number(acceptedProject.body.budget), 51920);
 });
 
+test('quotation templates prefill traceable lines and project subcontractor amounts stay authoritative', async () => {
+  const owner = await login();
+  const suffix = Date.now();
+  const client = await call(owner, 'POST', '/clients', {
+    type: 'Organisation', name: `Template Client ${suffix}`, contactPerson: 'Estimator'
+  });
+  const project = await call(owner, 'POST', '/projects', {
+    companyId: 1, name: `Template Project ${suffix}`, clientId: client.body.id,
+    manager: 'Project Manager', site: 'Nawinna', stage: 'Pricing'
+  });
+  const template = await call(owner, 'POST', '/qs/methods', {
+    code: `T${String(suffix).slice(-8)}`, name: `Asphalt template ${suffix}`, category: 'Road works',
+    description: 'Supply and lay asphalt', unit: 'sq.ft', defaultRate: 350,
+    methodStatement: 'Clean the surface\nApply tack coat\nLay and compact asphalt'
+  });
+  assert.equal(template.status, 201, JSON.stringify(template.body));
+  const edited = await call(owner, 'PATCH', `/qs/methods/${template.body.id}`, {
+    code: `E${String(suffix).slice(-8)}`, name: `Edited asphalt template ${suffix}`,
+    category: 'Surfacing', unit: 'm2', description: 'Edited standard description', defaultRate: 425,
+    methodStatement: 'Prepare\nLay\nCompact'
+  });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal(edited.body.name, `Edited asphalt template ${suffix}`);
+
+  const subcontractor = await call(owner, 'POST', '/qs/subcontractors', {
+    name: `Subcontractor ${suffix}`, trade: 'Paving', contactType: 'Company'
+  });
+  assert.equal(subcontractor.status, 201, JSON.stringify(subcontractor.body));
+  const subQuote = await call(owner, 'POST', '/qs/subcontract-quotations', {
+    companyId: 1, subcontractorId: subcontractor.body.id, projectId: project.body.id,
+    package: 'Kerb installation', quoteDate: today(), validityDays: 14,
+    items: [{ description: 'Install precast kerbs', unit: 'm', quantity: 20, rate: 1000, discount: 0 }]
+  });
+  assert.equal(subQuote.status, 201, JSON.stringify(subQuote.body));
+
+  const quotation = await call(owner, 'POST', '/qs/quotations/manual', {
+    companyId: 1, clientId: client.body.id, projectId: project.body.id,
+    title: 'Template and subcontract works', quoteDate: today(), markupPercent: 0, vatPercent: 0,
+    lines: [
+      { methodId: template.body.id, category: 'Surfacing', area: 'Driveway',
+        description: 'Edited for this quotation', methodStatement: 'Site-specific method',
+        unit: 'm2', quantity: 10, rate: 500 },
+      { subQuotationId: subQuote.body.id, subcontractMarkupPercent: 15, category: 'Subcontract',
+        area: 'Kerbs', description: 'Kerb installation by approved subcontractor', unit: 'sum',
+        quantity: 99, rate: 1 }
+    ]
+  });
+  assert.equal(quotation.status, 201, JSON.stringify(quotation.body));
+  assert.equal(Number(quotation.body.subtotal), 28000);
+  const detail = await call(owner, 'GET', `/qs/quotations/${quotation.body.id}`);
+  assert.equal(detail.body.items[0].description, 'Edited for this quotation');
+  assert.equal(Number(detail.body.items[1].rate), 23000);
+  assert.equal(detail.body.items[1].sourceSubquoteId, subQuote.body.id);
+
+  const wrongProject = await call(owner, 'POST', '/projects', {
+    companyId: 1, name: `Wrong Project ${suffix}`, clientId: client.body.id,
+    manager: 'Project Manager', site: 'Colombo', stage: 'Pricing'
+  });
+  const rejected = await call(owner, 'POST', '/qs/quotations/manual', {
+    companyId: 1, clientId: client.body.id, projectId: wrongProject.body.id,
+    title: 'Wrong subcontract source', lines: [{ subQuotationId: subQuote.body.id,
+      category: 'Subcontract', description: 'Wrong project amount', unit: 'sum', quantity: 1, rate: 20000 }]
+  });
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.body.error, /not linked to the selected project/i);
+});
+
 test('accepted Readymix quotation becomes term invoices, payment receipts and a project payment signal', async () => {
   const owner = await login();
   const client = await call(owner, 'POST', '/clients', { type: 'Organisation',
@@ -726,7 +793,9 @@ test('a new project belongs to the selected operating company', async () => {
   const owner = await login();
   const data = (await call(owner, 'GET', '/bootstrap')).body.data;
   const manager = data.employees.find(employee => employee.status === 'Active');
-  const client = (await call(owner, 'GET', '/clients')).body[0];
+  const client = (await call(owner, 'POST', '/clients', {
+    type: 'Organisation', name: `Reminder Client ${Date.now()}`
+  })).body;
   const created = await call(owner, 'POST', '/projects', {
     companyId: 2, name: `Readymix site ${Date.now()}`, clientId: client.id,
     managerEmployeeId: manager.id, site: 'Readymix yard', stage: 'Planning', budget: 0
@@ -740,6 +809,45 @@ test('a new project belongs to the selected operating company', async () => {
     companyId: 999, name: 'Invalid company project', clientId: client.id,
     managerEmployeeId: manager.id, site: 'Nowhere', stage: 'Planning', budget: 0
   })).status, 400);
+});
+
+test('not-started projects notify every selected user on the configured schedule', async () => {
+  const owner = await login();
+  const qs = await login('qs@gkuc.lk');
+  const data = (await call(owner, 'GET', '/bootstrap')).body.data;
+  const manager = data.employees.find(employee => employee.status === 'Active');
+  const client = (await call(owner, 'POST', '/clients', {
+    type: 'Organisation', name: `Reminder Schedule Client ${Date.now()}`
+  })).body;
+  const users = (await call(owner, 'GET', '/projects/reminder-users')).body;
+  const ownerUser = users.find(user => user.email === 'owner@gkuc.lk');
+  const qsUser = users.find(user => user.email === 'qs@gkuc.lk');
+  assert.ok(ownerUser && qsUser);
+
+  const created = await call(owner, 'POST', '/projects', {
+    companyId: 1, name: `Scheduled project ${Date.now()}`, clientId: client.id,
+    managerEmployeeId: manager.id, site: 'Reminder site', stage: 'Not started', budget: 0,
+    reminderDate: today(), reminderFrequency: 'Weekly', reminderUserIds: [ownerUser.id, qsUser.id]
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal((await call(owner, 'POST', '/notifications/scan')).status, 200);
+  const ownerAlerts = (await call(owner, 'GET', '/notifications')).body;
+  const qsAlerts = (await call(qs, 'GET', '/notifications')).body;
+  assert.ok(ownerAlerts.some(row => row.referenceType === 'project' && Number(row.referenceId) === created.body.id));
+  assert.ok(qsAlerts.some(row => row.referenceType === 'project' && Number(row.referenceId) === created.body.id));
+
+  const before = ownerAlerts.filter(row => row.referenceType === 'project' && Number(row.referenceId) === created.body.id).length;
+  await call(owner, 'POST', '/notifications/scan');
+  const after = (await call(owner, 'GET', '/notifications')).body
+    .filter(row => row.referenceType === 'project' && Number(row.referenceId) === created.body.id).length;
+  assert.equal(after, before);
+
+  const invalid = await call(owner, 'POST', '/projects', {
+    companyId: 1, name: `Missing reminder people ${Date.now()}`, clientId: client.id,
+    managerEmployeeId: manager.id, site: 'Reminder site', stage: 'Not started', budget: 0,
+    reminderDate: today(), reminderFrequency: 'Daily', reminderUserIds: []
+  });
+  assert.equal(invalid.status, 400);
 });
 
 test('approving a BOQ and its variation sets the project budget', async () => {
