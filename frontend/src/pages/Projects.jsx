@@ -7,6 +7,7 @@ import ClientDirectory from './ClientDirectory.jsx';
 import { useOptions } from '../options.js';
 
 const TABS = ['Projects', 'Clients', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquiries'];
+const PROJECT_STAGES = ['Not started', 'Mid-way'];
 const healthTone = health => (health === 'On track' ? 'on-track' : health === 'At risk' ? 'at-risk' : 'watch');
 
 /** PID 2.4 / 2.5 — projects, their milestones, and the estimates the budget comes from. */
@@ -344,7 +345,7 @@ function ConvertForm({ inquiry, employees, close, reload }) {
   }}>
     <Field name="name" label="Project name" wide defaultValue={`${inquiry.customer} — ${inquiry.location}`} />
     <SelectField name="managerEmployeeId" label="Project manager" options={[["", 'Choose an employee…'], ...employees.filter(employee => ['Active', 'On leave'].includes(employee.status)).map(employee => [employee.id, `${employee.name} — ${employee.designation}`])]} />
-    <Field name="stage" label="Starting stage" defaultValue="Pre-construction" />
+    <SelectField name="stage" label="Starting stage" options={PROJECT_STAGES} defaultValue="Not started" />
     <Field name="budget" label="Opening budget (LKR)" type="number" min="0" defaultValue={inquiry.expectedValue} />
     <Field name="startDate" label="Start date" type="date" defaultValue={todayInput()} required={false} />
     <Field name="endDate" label="Target completion" type="date" required={false} />
@@ -353,8 +354,16 @@ function ConvertForm({ inquiry, employees, close, reload }) {
 
 function ProjectForm({ companyId, companies, setCompanyId, employees, close, reload }) {
   const [clients, setClients] = useState([]);
-  useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
+  const [reminderUsers, setReminderUsers] = useState([]);
+  const [reminderUserIds, setReminderUserIds] = useState([]);
+  const [stage, setStage] = useState('Not started');
+  useEffect(() => {
+    api('/clients').then(setClients).catch(() => setClients([]));
+    api('/projects/reminder-users').then(setReminderUsers).catch(() => setReminderUsers([]));
+  }, []);
   return <FormModal title="Create project" close={close} label="Create project" onSubmit={async values => {
+    if (stage === 'Not started' && !reminderUserIds.length)
+      throw new Error('Choose at least one user who should receive the project-start reminder.');
     const selectedCompanyId = Number(values.companyId);
     await post('/projects', {
       companyId: selectedCompanyId,
@@ -363,7 +372,12 @@ function ProjectForm({ companyId, companies, setCompanyId, employees, close, rel
       managerEmployeeId: Number(values.managerEmployeeId),
       site: values.site,
       stage: values.stage,
-      startDate: values.startDate
+      startDate: values.startDate,
+      ...(stage === 'Not started' ? {
+        reminderDate: values.reminderDate,
+        reminderFrequency: values.reminderFrequency,
+        reminderUserIds
+      } : {})
     });
     setCompanyId(selectedCompanyId);
     await reload();
@@ -375,7 +389,30 @@ function ProjectForm({ companyId, companies, setCompanyId, employees, close, rel
     {!clients.length && <p className="form-note wide">Add a client in Projects → Clients first, then create this project.</p>}
     <SelectField name="managerEmployeeId" label="Project manager" options={[["", 'Choose an employee…'], ...employees.filter(employee => ['Active', 'On leave'].includes(employee.status)).map(employee => [employee.id, `${employee.name} — ${employee.designation}`])]} />
     <Field name="site" label="Site location" />
-    <Field name="stage" label="Current stage" />
+    <label>Current stage<select name="stage" value={stage}
+      onChange={event => setStage(event.target.value)} required>
+      {PROJECT_STAGES.map(option => <option key={option} value={option}>{option}</option>)}
+    </select></label>
+    {stage === 'Not started' && <>
+      <Field name="reminderDate" label="Start reminding on" type="date" min={todayInput()} defaultValue={todayInput()} />
+      <SelectField name="reminderFrequency" label="Reminder frequency" options={['Daily', 'Weekly', 'Monthly']} defaultValue="Weekly" />
+      <fieldset className="project-reminder-users wide">
+        <legend>Notify these users <span className="required">*</span></legend>
+        <p>Select everyone who should receive the recurring in-app notification.</p>
+        <div>
+          {reminderUsers.map(user => {
+            const selected = reminderUserIds.includes(user.id);
+            return <button type="button" key={user.id} className={selected ? 'selected' : ''}
+              aria-pressed={selected} onClick={() => setReminderUserIds(current => selected
+                ? current.filter(id => id !== user.id) : [...current, user.id])}>
+              <span>{selected ? <Check size={14} /> : null}</span>
+              <strong>{user.name}</strong><small>{user.role}</small>
+            </button>;
+          })}
+        </div>
+        {!reminderUsers.length && <p>No active system users are available.</p>}
+      </fieldset>
+    </>}
     <Field name="startDate" label="Start date" type="date" defaultValue={todayInput()} />
   </FormModal>;
 }

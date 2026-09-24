@@ -22,7 +22,10 @@ const projectShape = z.object({
   progress: z.number().int().min(0).max(100).default(0),
   health: z.enum(['On track', 'Watch', 'At risk']).default('On track'),
   startDate: isoDate.optional(),
-  endDate: isoDate.optional()
+  endDate: isoDate.optional(),
+  reminderDate: isoDate.optional(),
+  reminderFrequency: z.enum(['Daily', 'Weekly', 'Monthly']).optional(),
+  reminderUserIds: z.array(z.number().int().positive()).max(100).optional()
 });
 
 /* A programme that finishes before it starts is a typo, not a plan. */
@@ -31,7 +34,13 @@ const backwards = { message: 'Target completion cannot be before the start date'
 
 const projectSchema = projectShape.refine(runsForwards, backwards)
   .refine(value => value.clientId || value.client, { message: 'Choose a client for this project', path: ['clientId'] })
-  .refine(value => value.managerEmployeeId || value.manager, { message: 'Choose an employee as project manager', path: ['managerEmployeeId'] });
+  .refine(value => value.managerEmployeeId || value.manager, { message: 'Choose an employee as project manager', path: ['managerEmployeeId'] })
+  .refine(value => value.stage !== 'Not started' || Boolean(value.reminderDate),
+    { message: 'Choose when the project-start reminders should begin', path: ['reminderDate'] })
+  .refine(value => value.stage !== 'Not started' || Boolean(value.reminderFrequency),
+    { message: 'Choose how often the reminder should repeat', path: ['reminderFrequency'] })
+  .refine(value => value.stage !== 'Not started' || Boolean(value.reminderUserIds?.length),
+    { message: 'Choose at least one user to notify', path: ['reminderUserIds'] });
 const projectPatch = projectShape.partial().refine(runsForwards, backwards);
 
 const columns = { companyId: 'company_id', clientId: 'client_id', managerEmployeeId: 'manager_employee_id', startDate: 'start_date', endDate: 'end_date' };
@@ -56,6 +65,10 @@ router.get('/', auth, permit('projects.view'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 0);
   res.json(await query(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id
     WHERE p.active=1 ${companyId ? 'AND p.company_id=?' : ''} ORDER BY p.id`, companyId ? [companyId] : []));
+}));
+
+router.get('/reminder-users', auth, permit('projects.manage'), wrap(async (_req, res) => {
+  res.json(await query(`SELECT id,name,role,email FROM users WHERE active=1 ORDER BY name`));
 }));
 
 router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
@@ -173,12 +186,25 @@ router.post('/', auth, permit('projects.manage'), validate(projectSchema), wrap(
     return res.status(400).json({ error: 'Choose GKUC Construction or GKUC Readymix as the operating company.' });
   const client = await resolveClient(req.body);
   const manager = await resolveProjectManager(req.body);
-  const { fields, values } = toRow({ ...req.body, clientId: client.id, client: client.name, ...manager });
+  const { reminderDate, reminderFrequency, reminderUserIds = [], ...projectBody } = req.body;
+  if (req.body.stage === 'Not started') {
+    const uniqueIds = [...new Set(reminderUserIds)];
+    const users = await query(`SELECT id FROM users WHERE active=1 AND id IN (${uniqueIds.map(() => '?').join(',')})`, uniqueIds);
+    if (users.length !== uniqueIds.length) return res.status(400).json({ error: 'One of the selected reminder users is no longer active.' });
+  }
+  const { fields, values } = toRow({ ...projectBody, clientId: client.id, client: client.name, ...manager });
   const result = await transaction(async connection => {
     const [created] = await connection.execute(`INSERT INTO projects (${fields.join(',')}) VALUES (${fields.map(() => '?').join(',')})`, values);
     if (manager.managerEmployeeId) await connection.execute(
       'INSERT INTO project_manager_assignments (project_id,employee_id) VALUES (?,?)',
       [created.insertId, manager.managerEmployeeId]);
+    if (req.body.stage === 'Not started') {
+      const [reminder] = await connection.execute(`INSERT INTO project_start_reminders
+        (project_id,reminder_date,frequency,created_by) VALUES (?,?,?,?)`,
+      [created.insertId, reminderDate, reminderFrequency, req.user.id]);
+      for (const userId of [...new Set(reminderUserIds)]) await connection.execute(
+        'INSERT INTO project_start_reminder_users (reminder_id,user_id) VALUES (?,?)', [reminder.insertId, userId]);
+    }
     return created;
   });
   const row = await getOne(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode
@@ -202,6 +228,7 @@ router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wr
   }
 
   const body = { ...req.body };
+  delete body.reminderDate; delete body.reminderFrequency; delete body.reminderUserIds;
   if (body.companyId && !await getOne('SELECT id FROM companies WHERE id=? AND active=1', [body.companyId]))
     return res.status(400).json({ error: 'Choose an active operating company for this project.' });
   if (body.clientId || body.client) {
@@ -213,6 +240,8 @@ router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wr
   if (!fields.length) return res.json(before);
   await transaction(async connection => {
     await connection.execute(`UPDATE projects SET ${fields.map(key => `${key}=?`).join(',')} WHERE id=?`, [...values, req.params.id]);
+    if (body.stage === 'Mid-way') await connection.execute(
+      'UPDATE project_start_reminders SET active=0 WHERE project_id=?', [before.id]);
     if ((body.managerEmployeeId || body.manager)
       && Number(body.managerEmployeeId || 0) !== Number(before.manager_employee_id || 0)) {
       await connection.execute('UPDATE project_manager_assignments SET released_at=NOW() WHERE project_id=? AND released_at IS NULL', [before.id]);

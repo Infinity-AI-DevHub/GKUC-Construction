@@ -30,7 +30,7 @@ router.get('/quotations', auth, permit('qs.view'), wrap(async (req, res) => {
 router.get('/quotations/:id', auth, permit('qs.view'), wrap(async (req, res) => {
   const quotation = await getOne(`${quoteSelect} WHERE q.id=?`, [req.params.id]);
   if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
-  const items = await query('SELECT id,category,area,description,unit,quantity,rate,amount,method_statement methodStatement,material_id materialId,source_subquote_id sourceSubquoteId FROM quotation_items WHERE quotation_id=? ORDER BY id',
+  const items = await query('SELECT id,method_id methodId,category,area,description,unit,quantity,rate,amount,method_statement methodStatement,material_id materialId,source_subquote_id sourceSubquoteId FROM quotation_items WHERE quotation_id=? ORDER BY id',
     [quotation.id]);
   res.json({ ...quotation, items });
 }));
@@ -119,6 +119,10 @@ router.post('/methods', auth, permit('qs.quotation'), validate(z.object({
 }));
 
 router.patch('/methods/:id', auth, permit('qs.quotation'), validate(z.object({
+  code: z.string().min(1).max(20).optional(),
+  name: z.string().min(2).max(180).optional(),
+  category: z.string().min(2).max(60).optional(),
+  unit: z.string().min(1).max(20).optional(),
   defaultRate: z.number().nonnegative().optional(),
   description: z.string().max(600).optional(),
   methodStatement: z.string().max(2000).optional(),
@@ -260,6 +264,9 @@ router.post('/quotations/manual', auth, permit('qs.quotation'), validate(z.objec
   additionalNotes: z.string().max(2000).optional(),
   bankAccountId: z.number().int().positive().optional(),
   lines: z.array(z.object({
+    methodId: z.number().int().positive().optional(),
+    subQuotationId: z.number().int().positive().optional(),
+    subcontractMarkupPercent: z.number().min(0).max(200).optional(),
     category: z.string().min(1).max(40),
     area: z.string().max(120).optional(),
     description: z.string().min(2).max(300),
@@ -267,6 +274,8 @@ router.post('/quotations/manual', auth, permit('qs.quotation'), validate(z.objec
     unit: z.string().min(1).max(30),
     quantity: z.number().positive(),
     rate: z.number().nonnegative()
+  }).refine(line => !(line.methodId && line.subQuotationId), {
+    message: 'A quotation line cannot use both a saved template and a subcontractor quotation.'
   })).min(1).max(100)
 })), wrap(async (req, res) => {
   const body = req.body;
@@ -283,8 +292,33 @@ router.post('/quotations/manual', auth, permit('qs.quotation'), validate(z.objec
       return res.status(400).json({ error: 'The quotation client must match the selected project client.' });
   }
 
-  const lines = body.lines.map(line => ({ ...line,
-    amount: Math.round(line.quantity * line.rate * 100) / 100 }));
+  const methodIds = [...new Set(body.lines.map(line => line.methodId).filter(Boolean))];
+  const subQuotationIds = [...new Set(body.lines.map(line => line.subQuotationId).filter(Boolean))];
+  const methods = methodIds.length ? await query(
+    `SELECT id FROM work_methods WHERE active=1 AND id IN (${methodIds.map(() => '?').join(',')})`, methodIds) : [];
+  if (methods.length !== methodIds.length) return res.status(400).json({ error: 'One of the selected quotation templates is no longer available.' });
+  const subQuotations = subQuotationIds.length ? await query(
+    `SELECT id,company_id companyId,project_id projectId,total,status FROM subcontractor_quotations
+     WHERE id IN (${subQuotationIds.map(() => '?').join(',')})`, subQuotationIds) : [];
+  if (subQuotations.length !== subQuotationIds.length) return res.status(400).json({ error: 'One of the selected subcontractor quotations no longer exists.' });
+  const subById = new Map(subQuotations.map(row => [Number(row.id), row]));
+  for (const line of body.lines.filter(item => item.subQuotationId)) {
+    const source = subById.get(Number(line.subQuotationId));
+    if (!project) return res.status(400).json({ error: 'Choose a project before adding a subcontractor quotation.' });
+    if (Number(source.companyId) !== Number(body.companyId) || Number(source.projectId) !== Number(project.id))
+      return res.status(400).json({ error: 'That subcontractor quotation is not linked to the selected project.' });
+    if (['Rejected', 'Superseded'].includes(source.status))
+      return res.status(409).json({ error: `That subcontractor quotation was ${source.status.toLowerCase()}.` });
+  }
+
+  const lines = body.lines.map(line => {
+    const source = line.subQuotationId ? subById.get(Number(line.subQuotationId)) : null;
+    const quantity = source ? 1 : line.quantity;
+    const rate = source
+      ? Math.round(Number(source.total) * (1 + Number(line.subcontractMarkupPercent || 0) / 100) * 100) / 100
+      : line.rate;
+    return { ...line, quantity, rate, amount: Math.round(quantity * rate * 100) / 100 };
+  });
   const subtotal = Math.round(lines.reduce((sum, line) => sum + line.amount, 0) * 100) / 100;
   const markedUp = subtotal * (1 + body.markupPercent / 100);
   const total = Math.round(markedUp * (1 + body.vatPercent / 100) * 100) / 100;
@@ -304,9 +338,10 @@ router.post('/quotations/manual', auth, permit('qs.quotation'), validate(z.objec
       client.contactPerson || null, req.user.id]);
     for (const line of lines) {
       await connection.execute(`INSERT INTO quotation_items
-        (quotation_id,category,area,description,method_statement,unit,quantity,rate,amount) VALUES (?,?,?,?,?,?,?,?,?)`,
-      [result.insertId, line.category, line.area || line.category, line.description,
-        line.methodStatement || null, line.unit, line.quantity, line.rate, line.amount]);
+        (quotation_id,method_id,category,area,description,method_statement,unit,quantity,rate,amount,source_subquote_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [result.insertId, line.methodId || null, line.category, line.area || line.category, line.description,
+        line.methodStatement || null, line.unit, line.quantity, line.rate, line.amount, line.subQuotationId || null]);
     }
     await audit(connection, req.user.id, 'CREATE', 'quotation', result.insertId, null,
       { reference, source: 'Manual', total, lines: lines.length }, req.ip);
