@@ -13,11 +13,59 @@ import { resolveProjectManager } from '../lib/project-manager.js';
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
+const quotationVisibility = z.object({
+  company: z.object({
+    logo: z.boolean(), name: z.boolean(), address: z.boolean(), telephone: z.boolean(),
+    email: z.boolean(), tin: z.boolean(), vatNumber: z.boolean(), svatNumber: z.boolean(),
+    bankDetails: z.boolean()
+  }).strict(),
+  client: z.object({
+    name: z.boolean(), billingAddress: z.boolean(), siteAddress: z.boolean(),
+    contactPerson: z.boolean(), phone: z.boolean(), alternatePhone: z.boolean(), email: z.boolean(),
+    city: z.boolean(), district: z.boolean(), province: z.boolean(), country: z.boolean(),
+    registrationNumber: z.boolean(), tin: z.boolean(), vatNumber: z.boolean(), project: z.boolean()
+  }).strict()
+}).strict();
+
+const parsePresentation = value => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch { return null; }
+};
+
+async function quotationIdentity(companyId, clientId, fallbackName = '') {
+  const [{ company }, client] = await Promise.all([
+    documentContext(getOne, companyId),
+    clientId ? getOne(`SELECT name,billing_address billingAddress,site_address siteAddress,
+      contact_person contactPerson,phone,alternate_phone alternatePhone,email,city,district,province,country,
+      registration_number registrationNumber,
+      COALESCE(NULLIF(tin,''),tax_number) tin,vat_number vatNumber
+      FROM clients WHERE id=? AND active=1`, [clientId]) : null
+  ]);
+  if (!company) return null;
+  return {
+    company: { name: company.name, address: company.address, telephone: company.telephone,
+      email: company.email, tin: company.tin, vatNumber: company.vatNumber, svatNumber: company.svatNumber,
+      bankDetails: company.bankDetails },
+    client: client || { name: fallbackName }
+  };
+}
+
+async function quotationPresentation(companyId, clientId, projectName, bankAccountId, visibility, fallbackName = '') {
+  const identity = await quotationIdentity(companyId, clientId, fallbackName);
+  if (!identity) return null;
+  const bank = bankAccountId ? await getOne(`SELECT label,bank_name bankName,branch,
+    account_name accountName,account_number accountNumber,swift_code swiftCode
+    FROM company_bank_accounts WHERE id=? AND company_id=? AND active=1`, [bankAccountId, companyId]) : null;
+  return JSON.stringify({ show: visibility, company: identity.company,
+    client: { ...identity.client, project: projectName || null }, bank });
+}
+
 /* ------------------------------------------------------------------ Quotations */
 
 const quoteSelect = `SELECT q.id,q.reference,q.title,q.client_name client,q.client_id clientId,q.location,q.contact,q.engagement,q.main_contractor mainContractor,q.quote_date quoteDate,q.valid_until validUntil,
   q.subtotal,q.markup_percent markupPercent,q.vat_percent vatPercent,q.total,q.status,q.notes,q.terms,
-  q.payment_terms paymentTerms,q.additional_notes additionalNotes,q.bank_account_id bankAccountId,
+  q.payment_terms paymentTerms,q.additional_notes additionalNotes,q.bank_account_id bankAccountId,q.presentation,
   q.company_id companyId,c.name company,q.boq_id boqId,b.reference boqReference,q.project_id projectId,p.name project,q.inquiry_id inquiryId,u.name preparedBy
   FROM quotations_client q LEFT JOIN boqs b ON b.id=q.boq_id LEFT JOIN projects p ON p.id=q.project_id
   JOIN companies c ON c.id=q.company_id JOIN users u ON u.id=q.prepared_by`;
@@ -27,12 +75,22 @@ router.get('/quotations', auth, permit('qs.view'), wrap(async (req, res) => {
   res.json(await query(`${quoteSelect} ${companyId>0?'WHERE q.company_id=?':''} ORDER BY q.id DESC`,companyId>0?[companyId]:[]));
 }));
 
+router.get('/quotation-identity', auth, permit('qs.view', 'qs.quotation'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId);
+  const clientId = Number(req.query.clientId);
+  if (!Number.isInteger(companyId) || companyId < 1 || !Number.isInteger(clientId) || clientId < 1)
+    return res.status(400).json({ error: 'Choose an operating company and a saved client first.' });
+  const identity = await quotationIdentity(companyId, clientId);
+  if (!identity?.client?.name) return res.status(404).json({ error: 'The selected company or client is unavailable.' });
+  res.json(identity);
+}));
+
 router.get('/quotations/:id', auth, permit('qs.view'), wrap(async (req, res) => {
   const quotation = await getOne(`${quoteSelect} WHERE q.id=?`, [req.params.id]);
   if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
   const items = await query('SELECT id,method_id methodId,category,area,description,unit,quantity,rate,amount,method_statement methodStatement,material_id materialId,source_subquote_id sourceSubquoteId FROM quotation_items WHERE quotation_id=? ORDER BY id',
     [quotation.id]);
-  res.json({ ...quotation, items });
+  res.json({ ...quotation, presentation: parsePresentation(quotation.presentation), items });
 }));
 
 /**
@@ -64,7 +122,8 @@ router.get('/quotations/:id/document', auth, permit('qs.view'), wrap(async (req,
   const page = quotationDocument({
     ...context,
     /* The select names the client column `client`; the document speaks in client names. */
-    quotation: { ...quotation, clientName: quotation.client, ...client }, bankAccount,
+    quotation: { ...quotation, presentation: parsePresentation(quotation.presentation),
+      clientName: quotation.client, ...client }, bankAccount,
     items: items.map((item, index) => ({ ...item, reference: index + 1 }))
   });
 
@@ -142,6 +201,44 @@ router.patch('/methods/:id', auth, permit('qs.quotation'), validate(z.object({
   res.json(after);
 }));
 
+router.get('/quotation-note-templates', auth, permit('qs.view', 'qs.quotation'), wrap(async (_req, res) => {
+  res.json(await query(`SELECT id,name,body FROM quotation_note_templates WHERE active=1 ORDER BY name`));
+}));
+
+router.post('/quotation-note-templates', auth, permit('qs.quotation'), validate(z.object({
+  name: z.string().trim().min(2).max(120),
+  body: z.string().trim().min(2).max(1000)
+})), wrap(async (req, res) => {
+  try {
+    const result = await query('INSERT INTO quotation_note_templates (name,body) VALUES (?,?)',
+      [req.body.name, req.body.body]);
+    const row = await getOne('SELECT id,name,body FROM quotation_note_templates WHERE id=?', [result.insertId]);
+    await audit(pool, req.user.id, 'CREATE', 'quotation_note_template', row.id, null, row, req.ip);
+    res.status(201).json(row);
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'A note template with that name already exists.' });
+    throw error;
+  }
+}));
+
+router.patch('/quotation-note-templates/:id', auth, permit('qs.quotation'), validate(z.object({
+  name: z.string().trim().min(2).max(120),
+  body: z.string().trim().min(2).max(1000)
+})), wrap(async (req, res) => {
+  const before = await getOne('SELECT id,name,body FROM quotation_note_templates WHERE id=? AND active=1', [req.params.id]);
+  if (!before) return res.status(404).json({ error: 'Note template not found.' });
+  try {
+    await query('UPDATE quotation_note_templates SET name=?,body=? WHERE id=?',
+      [req.body.name, req.body.body, before.id]);
+    const after = await getOne('SELECT id,name,body FROM quotation_note_templates WHERE id=?', [before.id]);
+    await audit(pool, req.user.id, 'UPDATE', 'quotation_note_template', before.id, before, after, req.ip);
+    res.json(after);
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'A note template with that name already exists.' });
+    throw error;
+  }
+}));
+
 /**
  * A quotation built by choosing methods rather than from a bill of quantities.
  *
@@ -163,6 +260,7 @@ router.post('/quotations/from-methods', auth, permit('qs.quotation'), validate(z
   vatPercent: z.number().min(0).max(100).default(18),
   notes: z.string().max(1000).optional(),
   paymentTerms: z.string().max(1000).optional(),
+  visibility: quotationVisibility.optional(),
   lines: z.array(z.object({
     methodId: z.number().int().positive(),
     description: z.string().max(300).optional(),
@@ -223,16 +321,20 @@ router.post('/quotations/from-methods', auth, permit('qs.quotation'), validate(z
   const terms = body.paymentTerms
     || methods.map(method => method.payment_terms).find(Boolean)
     || null;
+  const project = body.projectId ? await getOne('SELECT name FROM projects WHERE id=?', [body.projectId]) : null;
+  const presentation = body.visibility ? await quotationPresentation(
+    body.companyId, client.id, project?.name, null, body.visibility) : null;
 
   const id = await transaction(async connection => {
     const [result] = await connection.execute(`INSERT INTO quotations_client
       (company_id,reference,project_id,inquiry_id,client_id,client_name,title,quote_date,valid_until,subtotal,
-       markup_percent,vat_percent,total,notes,method_codes,location,contact,payment_terms,prepared_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?)`,
+       markup_percent,vat_percent,total,notes,method_codes,location,contact,payment_terms,presentation,prepared_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?)`,
     [body.companyId, reference, body.projectId || null, body.inquiryId || null, client.id, client.name,
       names.join(' / '), body.quoteDate || today(), body.validUntil || null, subtotal,
       body.vatPercent, total, body.notes || null, codes.join(','),
-      body.location || client.siteAddress || client.billingAddress || null, body.contact || client.contactPerson || null, terms, req.user.id]);
+      body.location || client.siteAddress || client.billingAddress || null, body.contact || client.contactPerson || null,
+      terms, presentation, req.user.id]);
 
     for (const line of priced) {
       await connection.execute(`INSERT INTO quotation_items
@@ -263,6 +365,7 @@ router.post('/quotations/manual', auth, permit('qs.quotation'), validate(z.objec
   paymentTerms: z.string().max(2000).optional(),
   additionalNotes: z.string().max(2000).optional(),
   bankAccountId: z.number().int().positive().optional(),
+  visibility: quotationVisibility.optional(),
   lines: z.array(z.object({
     methodId: z.number().int().positive().optional(),
     subQuotationId: z.number().int().positive().optional(),
@@ -285,7 +388,7 @@ router.post('/quotations/manual', auth, permit('qs.quotation'), validate(z.objec
 
   let project = null;
   if (body.projectId) {
-    project = await getOne('SELECT id,client_id clientId FROM projects WHERE id=? AND company_id=? AND active=1',
+    project = await getOne('SELECT id,name,client_id clientId FROM projects WHERE id=? AND company_id=? AND active=1',
       [body.projectId, body.companyId]);
     if (!project) return res.status(400).json({ error: 'That project does not belong to the selected company.' });
     if (project.clientId && Number(project.clientId) !== Number(client.id))
@@ -325,17 +428,19 @@ router.post('/quotations/manual', auth, permit('qs.quotation'), validate(z.objec
   const reference = await nextReference('QUO', 'quotations_client');
   if (body.bankAccountId && !await getOne('SELECT id FROM company_bank_accounts WHERE id=? AND company_id=? AND active=1', [body.bankAccountId, body.companyId]))
     return res.status(400).json({ error: 'Choose an active bank account for the selected company.' });
+  const presentation = body.visibility ? await quotationPresentation(
+    body.companyId, client.id, project?.name, body.bankAccountId, body.visibility) : null;
 
   const id = await transaction(async connection => {
     const [result] = await connection.execute(`INSERT INTO quotations_client
       (company_id,reference,project_id,client_id,client_name,title,quote_date,valid_until,subtotal,
-       markup_percent,vat_percent,total,notes,terms,payment_terms,additional_notes,bank_account_id,location,contact,prepared_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       markup_percent,vat_percent,total,notes,terms,payment_terms,additional_notes,bank_account_id,location,contact,presentation,prepared_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [body.companyId, reference, project?.id || null, client.id, client.name, body.title,
       body.quoteDate || today(), body.validUntil || null, subtotal, body.markupPercent,
       body.vatPercent, total, body.notes || null, body.terms || null, body.paymentTerms || null,
       body.additionalNotes || null, body.bankAccountId || null, client.location || null,
-      client.contactPerson || null, req.user.id]);
+      client.contactPerson || null, presentation, req.user.id]);
     for (const line of lines) {
       await connection.execute(`INSERT INTO quotation_items
         (quotation_id,method_id,category,area,description,method_statement,unit,quantity,rate,amount,source_subquote_id)
@@ -367,7 +472,8 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
   mainContractor: z.string().max(180).optional(),
   notes: z.string().max(1000).optional(),
   paymentTerms: z.string().max(2000).optional(), additionalNotes: z.string().max(2000).optional(),
-  bankAccountId: z.number().int().positive().optional()
+  bankAccountId: z.number().int().positive().optional(),
+  visibility: quotationVisibility.optional()
 })), wrap(async (req, res) => {
   const boq = await getOne(`SELECT b.*,p.name project,COALESCE(c.name,p.client) client,p.client_id clientId,p.company_id,
     c.contact_person clientContact,COALESCE(c.site_address,c.billing_address) clientLocation
@@ -385,18 +491,21 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
   const reference = await nextReference('QUO', 'quotations_client');
   if (req.body.bankAccountId && !await getOne('SELECT id FROM company_bank_accounts WHERE id=? AND company_id=? AND active=1', [req.body.bankAccountId, boq.company_id]))
     return res.status(400).json({ error: 'Choose an active bank account for this project company.' });
+  const presentation = req.body.visibility ? await quotationPresentation(
+    boq.company_id, boq.clientId, boq.project, req.body.bankAccountId, req.body.visibility, boq.client) : null;
 
   const id = await transaction(async connection => {
     const [result] = await connection.execute(`INSERT INTO quotations_client
       (company_id,reference,boq_id,project_id,inquiry_id,client_id,client_name,title,quote_date,valid_until,subtotal,
-       markup_percent,vat_percent,total,notes,payment_terms,additional_notes,bank_account_id,engagement,main_contractor,location,contact,prepared_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       markup_percent,vat_percent,total,notes,payment_terms,additional_notes,bank_account_id,engagement,main_contractor,location,contact,presentation,prepared_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [boq.company_id, reference, boq.id, boq.project_id, req.body.inquiryId || null, boq.clientId,
       boq.client, req.body.title || describe(boq),
       req.body.quoteDate || today(), req.body.validUntil || null, subtotal,
       req.body.markupPercent, req.body.vatPercent, total, req.body.notes || null,
       req.body.paymentTerms || null, req.body.additionalNotes || null, req.body.bankAccountId || null,
-      req.body.engagement, req.body.mainContractor || null, boq.clientLocation || null, boq.clientContact || null, req.user.id]);
+      req.body.engagement, req.body.mainContractor || null, boq.clientLocation || null, boq.clientContact || null,
+      presentation, req.user.id]);
     /* The lines are copied, not referenced: a later BOQ edit must not silently restate a
        quotation the client has already been given. */
     for (const item of items) {
@@ -431,7 +540,8 @@ router.patch('/quotations/:id', auth, permit('qs.quotation'), validate(z.object(
   terms: z.string().max(2000).nullable().optional(),
   paymentTerms: z.string().max(2000).nullable().optional(),
   additionalNotes: z.string().max(2000).nullable().optional(),
-  bankAccountId: z.number().int().positive().nullable().optional()
+  bankAccountId: z.number().int().positive().nullable().optional(),
+  visibility: quotationVisibility.optional()
 }).refine(value => Object.keys(value).length > 0, { message: 'Nothing to change' })),
 wrap(async (req, res) => {
   const quotation = await getOne('SELECT * FROM quotations_client WHERE id=?', [req.params.id]);
@@ -440,7 +550,7 @@ wrap(async (req, res) => {
   /* An accepted quotation is what the client agreed to; its wording stops being ours to
      rewrite, though its status can still move on. */
   const rewording = ['title', 'clientName', 'clientId', 'quoteDate', 'validUntil', 'notes', 'terms',
-    'paymentTerms', 'additionalNotes', 'bankAccountId']
+    'paymentTerms', 'additionalNotes', 'bankAccountId', 'visibility']
     .some(field => req.body[field] !== undefined);
   if (rewording && quotation.status === 'Accepted') {
     return res.status(409).json({ error: 'An accepted quotation cannot be reworded. Raise a new one instead.' });
@@ -452,6 +562,10 @@ wrap(async (req, res) => {
     additionalNotes: 'additional_notes', bankAccountId: 'bank_account_id'
   };
   const edits = Object.entries(columns).filter(([key]) => req.body[key] !== undefined);
+  if (req.body.bankAccountId && !await getOne(
+    'SELECT id FROM company_bank_accounts WHERE id=? AND company_id=? AND active=1',
+    [req.body.bankAccountId, quotation.company_id]))
+    return res.status(400).json({ error: 'Choose an active bank account for this quotation’s company.' });
   if (req.body.clientId || req.body.clientName) {
     const client = req.body.clientId
       ? await getOne('SELECT id,name FROM clients WHERE id=? AND active=1', [req.body.clientId])
@@ -464,6 +578,20 @@ wrap(async (req, res) => {
     }
     edits.push(['clientId', 'client_id'], ['clientName', 'client_name']);
     req.body.clientId = client.id; req.body.clientName = client.name;
+  }
+  const previousPresentation = parsePresentation(quotation.presentation);
+  const visibility = req.body.visibility || (previousPresentation &&
+    (req.body.clientId !== undefined || req.body.bankAccountId !== undefined)
+    ? previousPresentation.show : null);
+  if (visibility) {
+    const project = quotation.project_id ? await getOne('SELECT name FROM projects WHERE id=?', [quotation.project_id]) : null;
+    const presentation = await quotationPresentation(quotation.company_id,
+      req.body.clientId || quotation.client_id, project?.name,
+      req.body.bankAccountId === undefined ? quotation.bank_account_id : req.body.bankAccountId,
+      visibility, req.body.clientName || quotation.client_name);
+    if (!presentation) return res.status(400).json({ error: 'The quotation company is unavailable.' });
+    edits.push(['presentation', 'presentation']);
+    req.body.presentation = presentation;
   }
 
   await transaction(async connection => {

@@ -520,7 +520,9 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
   const owner = await login();
   const qs = await login('qs@gkuc.lk');
   const client = await call(owner, 'POST', '/clients', {
-    type: 'Organisation', name: `Manual Quote Client ${Date.now()}`, contactPerson: 'Commercial Manager'
+    type: 'Organisation', name: `Manual Quote Client ${Date.now()}`, contactPerson: 'Commercial Manager',
+    phone: '077 123 4567', email: 'original-client@example.lk',
+    billingAddress: 'Original client billing address', siteAddress: 'Original worksite'
   });
   assert.equal(client.status, 201, JSON.stringify(client.body));
   const project = await call(owner, 'POST', '/projects', {
@@ -534,11 +536,33 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
   });
   assert.equal(bank.status, 201, JSON.stringify(bank.body));
 
+  const noteTemplate = await call(qs, 'POST', '/qs/quotation-note-templates', {
+    name: `Site preparation ${Date.now()}`, body: 'Client to provide site access'
+  });
+  assert.equal(noteTemplate.status, 201, JSON.stringify(noteTemplate.body));
+  const editedNote = await call(qs, 'PATCH', `/qs/quotation-note-templates/${noteTemplate.body.id}`, {
+    name: noteTemplate.body.name, body: 'Client to provide site access\nClear the working area'
+  });
+  assert.equal(editedNote.status, 200, JSON.stringify(editedNote.body));
+  const savedNotes = await call(qs, 'GET', '/qs/quotation-note-templates');
+  assert.equal(savedNotes.body.find(row => row.id === noteTemplate.body.id).body, editedNote.body.body);
+  const visibility = {
+    company: { logo: true, name: false, address: true, telephone: true, email: false,
+      tin: true, vatNumber: true, svatNumber: true, bankDetails: true },
+    client: { name: true, billingAddress: true, siteAddress: false, contactPerson: true,
+      phone: true, alternatePhone: true, email: false, city: true, district: true,
+      province: true, country: true, registrationNumber: true, tin: true, vatNumber: true, project: true }
+  };
+  const availableIdentity = await call(qs, 'GET',
+    `/qs/quotation-identity?companyId=1&clientId=${client.body.id}`);
+  assert.equal(availableIdentity.status, 200);
+  assert.equal(availableIdentity.body.client.phone, '077 123 4567');
+
   const quotation = await call(qs, 'POST', '/qs/quotations/manual', {
     companyId: 1, clientId: client.body.id, projectId: project.body.id,
     title: 'Manually priced drainage works', quoteDate: today(), markupPercent: 10, vatPercent: 18,
-    notes: 'Free-form quotation test', paymentTerms: '70% upfront\n30% on delivery',
-    additionalNotes: 'Access must be available', bankAccountId: bank.body.id, lines: [
+    notes: `${editedNote.body.body}\nFree-form quotation test`, paymentTerms: '70% upfront\n30% on delivery',
+    additionalNotes: 'Access must be available', bankAccountId: bank.body.id, visibility, lines: [
       { category: 'Labour', area: 'Drain line', description: 'Drain excavation',
         methodStatement: 'Set out the line\nExcavate to level', unit: 'm', quantity: 10, rate: 1250 },
       { category: 'Material', description: 'Concrete drain', unit: 'm', quantity: 10, rate: 2750 }
@@ -555,8 +579,12 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
   assert.equal(detail.body.bankAccountId, bank.body.id);
   assert.equal(detail.body.paymentTerms, '70% upfront\n30% on delivery');
   assert.equal(detail.body.items[0].area, 'Drain line');
+  assert.equal(detail.body.presentation.show.company.name, false);
+  assert.equal(detail.body.presentation.client.phone, '077 123 4567');
   assert.match(detail.body.items[0].methodStatement, /Excavate to level/);
   assert.deepEqual(detail.body.items.map(item => Number(item.amount)), [12500, 27500]);
+  const updatedClient = await call(owner, 'PATCH', `/clients/${client.body.id}`, { phone: '077 999 9999' });
+  assert.equal(updatedClient.status, 200, JSON.stringify(updatedClient.body));
   const document = await fetch(`${base}/qs/quotations/${quotation.body.id}/document`, {
     headers: { authorization: `Bearer ${qs}` }
   });
@@ -566,7 +594,26 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
   assert.match(html, /70% upfront/);
   assert.match(html, /Test Bank/);
   assert.match(html, /Excavate to level/);
+  assert.match(html, /Client to provide site access/);
+  assert.match(html, /Clear the working area/);
+  assert.match(html, /Free-form quotation test/);
+  assert.match(html, /077 123 4567/);
+  assert.doesNotMatch(html, /077 999 9999/);
+  assert.doesNotMatch(html, /original-client@example.lk/);
+  assert.doesNotMatch(html, /Original worksite/);
+  assert.doesNotMatch(html, /data-piece="companyName"/);
+  const reworded = await call(qs, 'PATCH', `/qs/quotations/${quotation.body.id}`, {
+    visibility: { ...visibility, client: { ...visibility.client, phone: false, email: true } }
+  });
+  assert.equal(reworded.status, 200, JSON.stringify(reworded.body));
+  const revisedDocument = await fetch(`${base}/qs/quotations/${quotation.body.id}/document`, {
+    headers: { authorization: `Bearer ${qs}` }
+  });
+  const revisedHtml = await revisedDocument.text();
+  assert.match(revisedHtml, /original-client@example.lk/);
+  assert.doesNotMatch(revisedHtml, /077 999 9999/);
   assert.equal((await call(qs, 'PATCH', `/qs/quotations/${quotation.body.id}`, { status: 'Accepted' })).status, 200);
+  assert.equal((await call(qs, 'PATCH', `/qs/quotations/${quotation.body.id}`, { visibility })).status, 409);
   const acceptedProject = await call(owner, 'GET', `/projects/${project.body.id}`);
   assert.equal(Number(acceptedProject.body.budget), 51920);
 });
@@ -594,6 +641,21 @@ test('quotation templates prefill traceable lines and project subcontractor amou
   });
   assert.equal(edited.status, 200, JSON.stringify(edited.body));
   assert.equal(edited.body.name, `Edited asphalt template ${suffix}`);
+  const methodQuote = await call(owner, 'POST', '/qs/quotations/from-methods', {
+    companyId: 1, clientId: client.body.id, projectId: project.body.id,
+    vatPercent: 0, visibility: {
+      company: { logo: false, name: true, address: true, telephone: true, email: true,
+        tin: true, vatNumber: true, svatNumber: true, bankDetails: false },
+      client: { name: true, billingAddress: true, siteAddress: true, contactPerson: true,
+        phone: true, alternatePhone: true, email: true, city: true, district: true,
+        province: true, country: true, registrationNumber: true, tin: true, vatNumber: true, project: true }
+    },
+    lines: [{ methodId: template.body.id, quantity: 2, rate: 425 }]
+  });
+  assert.equal(methodQuote.status, 201, JSON.stringify(methodQuote.body));
+  const methodDetail = await call(owner, 'GET', `/qs/quotations/${methodQuote.body.id}`);
+  assert.equal(methodDetail.body.presentation.show.company.logo, false);
+  assert.equal(methodDetail.body.presentation.client.project, project.body.name);
 
   const subcontractor = await call(owner, 'POST', '/qs/subcontractors', {
     name: `Subcontractor ${suffix}`, trade: 'Paving', contactType: 'Company'
@@ -650,9 +712,22 @@ test('accepted Readymix quotation becomes term invoices, payment receipts and a 
   const boq = await call(owner, 'POST', '/boq', { projectId: project.body.id, title: 'Readymix supply',
     items: [{ category: 'Material', description: 'Ready mix concrete', unit: 'm3', quantity: 10, rate: 10000 }] });
   assert.equal(boq.status, 201, JSON.stringify(boq.body));
+  const visibility = {
+    company: Object.fromEntries(['logo', 'name', 'address', 'telephone', 'email', 'tin',
+      'vatNumber', 'svatNumber', 'bankDetails'].map(key => [key, key !== 'telephone'])),
+    client: Object.fromEntries(['name', 'billingAddress', 'siteAddress', 'contactPerson', 'phone',
+      'alternatePhone', 'email', 'city', 'district', 'province', 'country', 'registrationNumber',
+      'tin', 'vatNumber', 'project'].map(key => [key, key !== 'tin']))
+  };
   const quote = await call(owner, 'POST', '/qs/quotations', { boqId: boq.body.id, clientId: client.body.id,
-    markupPercent: 0, vatPercent: 18 });
+    markupPercent: 0, vatPercent: 18, visibility });
   assert.equal(quote.status, 201, JSON.stringify(quote.body));
+  const quotedPdf = await fetch(`${base}/qs/quotations/${quote.body.id}/document`,
+    { headers: { authorization: `Bearer ${owner}` } });
+  const quoteHtml = await quotedPdf.text();
+  assert.match(quoteHtml, /GKUC Readymix/);
+  assert.doesNotMatch(quoteHtml, /CLIENT-TIN-42/);
+  assert.match(quoteHtml, /Client billing office/);
   assert.equal((await call(owner, 'PATCH', `/qs/quotations/${quote.body.id}`, { status: 'Accepted' })).status, 200);
   const invalid = await call(owner, 'POST', '/receivables/quotation-plans', { quotationId: quote.body.id,
     documentType: 'Tax Invoice', taxTreatment: 'Standard', vatRate: 18,
@@ -884,19 +959,23 @@ test('QS tracks daily actual costs, item overruns, forecasts and unexpected expe
   assert.equal(Number(control.body.summary.currentBudget), 2500000);
   const item = control.body.items.find(row => row.description === 'Roof sheets');
   assert.ok(item);
-
-  const actual = await call(qs, 'POST', '/boq/cost-control/expenses', {
-    projectId: 2, boqItemId: item.id, expenseDate: today(), source: 'Material', costType: 'Expected',
-    description: 'Roof sheets installed to date', quantity: 1000, unit: 'm2', unitRate: 2100, reference: 'SITE-COST-01'
+  const options = await call(qs,'GET','/boq/cost-control/options?projectId=2');
+  assert.equal(options.status,200);
+  const taskId = options.body.tasks[0]?.id;
+  assert.ok(taskId,'project work must be selected from Tasks');
+  const submitted = await call(qs,'POST','/boq/cost-control/daily-sheets',{
+    projectId:2,workDate:today(),lines:[
+      {taskId,boqItemId:item.id,source:'Material',costType:'Expected',description:'Roof sheets installed to date',
+        quantity:1000,unit:'m2',unitRate:2100,amount:2100000,reference:'SITE-COST-01'},
+      {taskId,source:'Other',costType:'Unexpected',description:'Unplanned dewatering operation',amount:75000}
+    ]
   });
-  assert.equal(actual.status, 201);
-  assert.equal(Number(actual.body.amount), 2100000);
-
-  const unexpected = await call(qs, 'POST', '/boq/cost-control/expenses', {
-    projectId: 2, boqItemId: null, expenseDate: today(), source: 'Other', costType: 'Unexpected',
-    description: 'Unplanned dewatering operation', amount: 75000
-  });
-  assert.equal(unexpected.status, 201);
+  assert.equal(submitted.status,201,JSON.stringify(submitted.body));
+  control = await call(owner,'GET','/boq/cost-control?projectId=2');
+  assert.equal(control.body.items.find(row=>row.id===item.id).actualAmount,0,'unreviewed costs are not posted');
+  assert.equal((await call(qs,'POST',`/boq/cost-control/daily-sheets/${submitted.body.id}/review`,{decision:'Approved'})).status,403);
+  assert.equal((await call(owner,'POST',`/boq/cost-control/daily-sheets/${submitted.body.id}/review`,{decision:'Approved'})).status,200);
+  assert.equal((await call(owner,'POST',`/boq/cost-control/daily-sheets/${submitted.body.id}/review`,{decision:'Approved'})).status,409);
 
   const forecast = await call(qs, 'PATCH', `/boq/cost-control/items/${item.id}/forecast`, {
     projectId: 2, forecastQuantity: 1050, forecastRate: 2100, forecastAmount: 2205000,
@@ -920,13 +999,120 @@ test('Finance and QS share one cost ledger and reject repeated manual entries', 
     amount: 3217, expenseDate: today(), reference: `AUDIT-COST-${Date.now()}` };
   assert.equal((await call(owner, 'POST', '/finance/expenses', entry)).status, 201);
   assert.equal((await call(owner, 'POST', '/finance/expenses', entry)).status, 409);
-  assert.equal((await call(owner, 'POST', '/boq/cost-control/expenses', entry)).status, 409);
+  assert.equal((await call(owner, 'POST', '/boq/cost-control/expenses', entry)).status, 410,'direct posting is closed');
+  const options = await call(owner,'GET','/boq/cost-control/options?projectId=1');
+  const taskId=options.body.tasks[0]?.id;
+  assert.ok(taskId);
   const qsEntry = { ...entry, reference: `AUDIT-QS-${Date.now()}` };
-  assert.equal((await call(owner, 'POST', '/boq/cost-control/expenses', qsEntry)).status, 201);
+  const sheet=await call(owner,'POST','/boq/cost-control/daily-sheets',{
+    projectId:1,workDate:today(),lines:[{taskId,source:'Other',description:qsEntry.description,
+      amount:qsEntry.amount,reference:qsEntry.reference}]
+  });
+  assert.equal(sheet.status,201,JSON.stringify(sheet.body));
+  assert.equal((await call(owner,'POST',`/boq/cost-control/daily-sheets/${sheet.body.id}/review`,{decision:'Approved'})).status,200);
   assert.equal((await call(owner, 'POST', '/finance/expenses', qsEntry)).status, 409);
   assert.equal((await call(owner, 'POST', '/finance/expenses', {
     ...entry, source: 'Audit site security', reference: `AUDIT-CUSTOM-${Date.now()}`
   })).status, 201);
+});
+
+test('Finance review links station fuel once and charges reserve fuel to stock, not petty cash', async () => {
+  const owner=await login();
+  const qs=await login('qs@gkuc.lk');
+  const options=(await call(qs,'GET','/boq/cost-control/options?projectId=1')).body;
+  const taskId=options.tasks[0]?.id;
+  assert.ok(taskId);
+  const opened=await call(owner,'POST','/receivables/petty-cash',{
+    name:`Daily cost fuel ${Date.now()}`,accountType:'Fuel',holderName:'Test transport',projectId:1,
+    ceiling:5000,lowAt:500
+  });
+  assert.equal(opened.status,201);
+  const floatId=opened.body.id;
+  assert.equal((await call(owner,'POST',`/receivables/petty-cash/${floatId}/entries`,{
+    kind:'Top up',amount:5000,entryDate:today(),description:'Daily cost test float'
+  })).status,201);
+  const vehicle=await call(owner,'POST','/fleet',{
+    vehicle:'Daily-cost test tipper',registration:`DAILY-${Date.now()}`,status:'Available',
+    renewal:'Insurance',dueDate:today(),projectId:1,odometer:100
+  });
+  assert.equal(vehicle.status,201);
+  const fuel=await call(owner,'POST',`/fleet/${vehicle.body.id}/fuel`,{
+    fuelFloatId:floatId,projectId:1,fuelDate:today(),litres:10,cost:1000,odometer:110
+  });
+  assert.equal(fuel.status,201);
+  const expensesBefore=(await call(owner,'GET','/finance/expenses?projectId=1')).body;
+  const station=await call(qs,'POST','/boq/cost-control/daily-sheets',{
+    projectId:1,workDate:today(),lines:[{taskId,source:'Fuel',costType:'Expected',
+      description:'Tipper diesel from station',amount:1000,quantity:10,unit:'litres',
+      vehicleId:vehicle.body.id,fuelOrigin:'Station',fuelRecordId:fuel.body.id}]
+  });
+  assert.equal(station.status,201,JSON.stringify(station.body));
+  const stationReview=await call(owner,'POST',`/boq/cost-control/daily-sheets/${station.body.id}/review`,{decision:'Approved'});
+  assert.equal(stationReview.status,200,`${JSON.stringify(stationReview.body)} ${serverOutput.slice(-2000)}`);
+  const expensesAfter=(await call(owner,'GET','/finance/expenses?projectId=1')).body;
+  assert.equal(expensesAfter.length,expensesBefore.length,'review links Fleet expense without creating another one');
+  const balance=Number((await call(owner,'GET','/receivables/petty-cash?companyId=1')).body.find(row=>row.id===floatId).balance);
+  assert.equal(balance,4000,'review never charges the fuel float again');
+  const newStation=await call(qs,'POST','/boq/cost-control/daily-sheets',{
+    projectId:1,workDate:today(),lines:[{taskId,source:'Fuel',costType:'Expected',
+      description:'New tipper diesel purchase',amount:500,quantity:5,unit:'litres',
+      vehicleId:vehicle.body.id,fuelOrigin:'Station',fuelFloatId:floatId,odometer:120}]
+  });
+  assert.equal(newStation.status,201,JSON.stringify(newStation.body));
+  assert.equal(Number((await call(owner,'GET','/receivables/petty-cash?companyId=1')).body.find(row=>row.id===floatId).balance),4000,
+    'QS submission does not spend petty cash before Finance approves');
+  const newStationReview=await call(owner,'POST',`/boq/cost-control/daily-sheets/${newStation.body.id}/review`,{decision:'Approved'});
+  assert.equal(newStationReview.status,200,JSON.stringify(newStationReview.body));
+  assert.equal(Number((await call(owner,'GET','/receivables/petty-cash?companyId=1')).body.find(row=>row.id===floatId).balance),3500,
+    'Finance approval posts the new station purchase once');
+  const newFuelExpenses=(await call(owner,'GET','/finance/expenses?projectId=1')).body;
+  assert.equal(newFuelExpenses.filter(row=>row.originType==='fuel_record'&&row.description==='New tipper diesel purchase').length,1);
+  assert.equal((await call(owner,'POST',`/boq/cost-control/daily-sheets/${newStation.body.id}/review`,{decision:'Approved'})).status,409);
+  const material=await call(owner,'POST','/materials',{
+    name:`Reserve diesel ${Date.now()}`,unit:'litres',stock:30,minimum:0,site:'Central store',unitCost:100,
+    stockKind:'Consumable'
+  });
+  assert.equal(material.status,201,JSON.stringify(material.body));
+  const reserve=await call(qs,'POST','/boq/cost-control/daily-sheets',{
+    projectId:1,workDate:today(),lines:[{taskId,source:'Fuel',costType:'Unexpected',
+      description:'Unexpected reserve diesel usage',amount:1000,quantity:10,unit:'litres',unitRate:100,
+      vehicleId:vehicle.body.id,fuelOrigin:'Reserve',reserveMaterialId:material.body.id}]
+  });
+  assert.equal(reserve.status,201,JSON.stringify(reserve.body));
+  assert.equal((await call(owner,'POST',`/boq/cost-control/daily-sheets/${reserve.body.id}/review`,{decision:'Approved'})).status,200);
+  const stocked=(await call(owner,'GET','/materials')).body.find(row=>row.id===material.body.id);
+  assert.equal(Number(stocked.stock),20);
+  const newExpenses=(await call(owner,'GET','/finance/expenses?projectId=1')).body;
+  assert.equal(newExpenses.filter(row=>row.originType==='daily_cost_line'&&row.description==='Unexpected reserve diesel usage').length,1);
+  assert.equal(Number((await call(owner,'GET','/receivables/petty-cash?companyId=1')).body.find(row=>row.id===floatId).balance),3500);
+});
+
+test('returned manpower costs can be corrected, but a day salary cannot be charged twice',async()=>{
+  const owner=await login(),qs=await login('qs@gkuc.lk');
+  const options=(await call(qs,'GET','/boq/cost-control/options?projectId=1')).body;
+  const worker=options.employees.find(employee=>Number(employee.dailyRate)>0);
+  assert.ok(worker,'the test needs a labourer with a configured daily rate');
+  const taskId=options.tasks[0]?.id;
+  const payload={projectId:1,workDate:shift(-2),lines:[{taskId,source:'Labour',
+    description:`${worker.name} day salary`,employeeId:worker.id,amount:Number(worker.dailyRate),
+    quantity:1,unit:'day',unitRate:Number(worker.dailyRate)}]};
+  const first=await call(qs,'POST','/boq/cost-control/daily-sheets',payload);
+  assert.equal(first.status,201,JSON.stringify(first.body));
+  const returned=await call(owner,'POST',`/boq/cost-control/daily-sheets/${first.body.id}/review`,{
+    decision:'Returned',note:'Confirm the employee worked on this task.'
+  });
+  assert.equal(returned.status,200,JSON.stringify(returned.body));
+  const corrected=await call(qs,'POST','/boq/cost-control/daily-sheets',payload);
+  assert.equal(corrected.status,201,JSON.stringify(corrected.body));
+  assert.equal((await call(owner,'POST',`/boq/cost-control/daily-sheets/${corrected.body.id}/review`,{
+    decision:'Approved'
+  })).status,200);
+  const duplicate=await call(qs,'POST','/boq/cost-control/daily-sheets',payload);
+  assert.equal(duplicate.status,409);
+  assert.match(duplicate.body.error,/already has a day-salary/);
+  const costs=(await call(owner,'GET','/finance/expenses?projectId=1')).body.filter(row=>
+    row.originType==='daily_cost_line'&&row.description===payload.lines[0].description);
+  assert.equal(costs.length,1);
 });
 
 test('cheque payments use dedicated clearing workflows and manual income is deduplicated', async () => {

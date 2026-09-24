@@ -6,8 +6,9 @@ import { useOptions } from '../options.js';
 import { Bonds, ClientInvoices, PettyCash } from '../Receivables.jsx';
 import FinanceReports from './FinanceReports.jsx';
 import Cheques from './Cheques.jsx';
+import { DailySheetDetail } from './CostControl.jsx';
 
-const TABS = ['Financial reports','Invoices','Budget monitoring','Bills','Credit cards','VAT ledger','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Categories'];
+const TABS = ['Financial reports','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Categories'];
 
 /** PID 2.10 — costs, payments and profitability in one view, watched continuously. */
 export default function Finance({ data, reload, can, companyId, company }) {
@@ -22,6 +23,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
   const actions = {
     'Financial reports': null,
     'Budget monitoring': null,
+    'Daily cost review': null,
     Bills: can.finance&&'Record bill',
     'Credit cards': null,
     'VAT ledger': null,
@@ -43,6 +45,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
 
     {tab === 'Financial reports' && <FinanceReports projects={data.projects} companyId={companyId} company={company} />}
     {tab === 'Budget monitoring' && <BudgetMonitoring summary={summary} />}
+    {tab === 'Daily cost review' && <DailyCostReview companyId={companyId} can={can} />}
     {tab === 'Bills' && <Bills data={data} can={can} companyId={companyId} open={open==='Bills'} close={()=>setOpen('')} />}
     {tab === 'Credit cards' && <CreditCards can={can} companyId={companyId} />}
     {tab === 'VAT ledger' && <VatLedger companyId={companyId} />}
@@ -60,6 +63,17 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {open === 'Supplier invoices' && <InvoiceForm companyId={companyId} close={() => setOpen('')} reload={refresh} />}
     {open === 'Categories' && <CategoryForm close={() => setOpen('')} reload={refresh} />}
   </Page>;
+}
+
+function DailyCostReview({ companyId, can }) {
+  const [rows,setRows]=useState([]),[selected,setSelected]=useState(null),[error,setError]=useState('');
+  const load=()=>api(`/boq/cost-control/review-queue?companyId=${companyId}`).then(setRows).catch(failure=>setError(failure.message));
+  useEffect(()=>{setRows([]);setError('');load();},[companyId]);
+  const template='120px minmax(160px,1.3fr) 120px 70px 130px 130px 115px 90px';
+  return <>{error && <p className="form-error">{error}</p>}<div className="attendance-summary"><Summary label="Awaiting review" value={rows.filter(row=>row.status==='Submitted').length} icon={Wallet}/><Summary label="Approved sheets" value={rows.filter(row=>row.status==='Approved').length} icon={CircleDollarSign}/></div>
+    <Table title="QS daily cost submissions" columns={['Date','Project','Submitted by','Lines','Site cost','Quoted recovery','Status','']} template={template} empty="No daily cost sheets have been submitted for this company.">{rows.map(row=><Row template={template} key={row.id}><span>{shortDate(row.workDate)}</span><strong>{row.project}</strong><span>{row.submittedBy}</span><span>{row.lineCount}</span><strong>{rupees(row.totalCost)}</strong><span>{rupees(row.quotedRecovery)}</span><Badge tone={row.status==='Approved'?'on-track':row.status==='Returned'?'at-risk':'watch'}>{row.status}</Badge><button className="status-button" onClick={()=>setSelected(row.id)}>{can.finance&&row.status==='Submitted'?'Review':'View'}</button></Row>)}</Table>
+    {selected && <DailySheetDetail id={selected} close={()=>setSelected(null)} review={can.finance} reload={load} />}
+  </>;
 }
 
 function Bills({data,can,companyId,open,close}){
