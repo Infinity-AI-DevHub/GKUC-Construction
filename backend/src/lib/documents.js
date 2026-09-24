@@ -188,20 +188,21 @@ function titleSize(element, heading) {
   return Math.max(11, Math.floor(fitted * 10) / 10);
 }
 
-function letterhead(company, heading, reference, date, design = DEFAULT_DESIGN) {
+function letterhead(company, heading, reference, date, design = DEFAULT_DESIGN, visibility = {}) {
   const header = design.header;
 
   const contents = {
-    logo: design.logo.show === false
+    logo: design.logo.show === false || visibility.logo === false
       ? ''
       : '<img src="/brand/gkuc-mark-256.png" alt="">',
-    companyName: escape(company.name),
+    companyName: visibility.name === false ? '' : escape(company.name),
     companyDetails: [
-      ...lines(company.address),
-      company.telephone ? `Telephone: ${escape(company.telephone)}` : '',
-      company.email ? escape(company.email) : '',
-      company.tin ? `TIN: ${escape(company.tin)}` : '',
-      company.vatNumber ? `VAT Reg. No: ${escape(company.vatNumber)}` : ''
+      ...(visibility.address === false ? [] : lines(company.address)),
+      visibility.telephone !== false && company.telephone ? `Telephone: ${escape(company.telephone)}` : '',
+      visibility.email !== false && company.email ? escape(company.email) : '',
+      visibility.tin !== false && company.tin ? `TIN: ${escape(company.tin)}` : '',
+      visibility.vatNumber !== false && company.vatNumber ? `VAT Reg. No: ${escape(company.vatNumber)}` : '',
+      visibility.svatNumber !== false && company.svatNumber ? `SVAT No: ${escape(company.svatNumber)}` : ''
     ].filter(Boolean).join('<br>'),
     /* Left in its real case: uppercasing is presentation, and the words themselves
        should stay searchable and copyable as written. */
@@ -278,6 +279,13 @@ function page({ design, company, title, heading, reference, date, blocks, settin
 export function quotationDocument({ company, quotation, items, bankAccount, settings: given, design: givenDesign }) {
   const settings = settingsFor(given);
   const design = normaliseDesign(givenDesign);
+  const presentation = typeof quotation.presentation === 'string'
+    ? (() => { try { return JSON.parse(quotation.presentation); } catch { return null; } })()
+    : quotation.presentation;
+  const issuer = presentation?.company || company;
+  const recipient = presentation?.client || null;
+  const issuerShow = presentation?.show?.company || {};
+  const recipientShow = presentation?.show?.client || {};
 
   const markup = Number(quotation.markupPercent || 0);
   const vat = Number(quotation.vatPercent || 0);
@@ -304,11 +312,12 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
     name: item.area || item.category || item.description,
     steps: lines(item.methodStatement)
   }));
-  const selectedBank = bankAccount
-    ? [bankAccount.label, `Bank: ${bankAccount.bankName}`, bankAccount.branch && `Branch: ${bankAccount.branch}`,
-      `Account name: ${bankAccount.accountName}`, `Account number: ${bankAccount.accountNumber}`,
-      bankAccount.swiftCode && `SWIFT: ${bankAccount.swiftCode}`].filter(Boolean)
-    : lines(company.bankDetails || '');
+  const bank = presentation ? presentation.bank : bankAccount;
+  const selectedBank = issuerShow.bankDetails === false ? [] : bank
+    ? [bank.label, `Bank: ${bank.bankName}`, bank.branch && `Branch: ${bank.branch}`,
+      `Account name: ${bank.accountName}`, `Account number: ${bank.accountNumber}`,
+      bank.swiftCode && `SWIFT: ${bank.swiftCode}`].filter(Boolean)
+    : lines(issuer.bankDetails || '');
 
   /* Totals belong to the table, so they travel with it rather than as a block of their own
      — a total floating away from the figures it sums would be worse than useless. */
@@ -321,19 +330,26 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
     </tfoot>`;
 
   const blocks = {
-    letterhead: letterhead(company, 'Quotation', quotation.reference, quotation.quoteDate, design),
+    letterhead: letterhead(issuer, 'Quotation', quotation.reference, quotation.quoteDate, design, issuerShow),
 
     parties: `<div class="parties" data-block="parties">
       <div class="party">
         <h3>Quotation for</h3>
-        <strong>${escape(quotation.clientName || '—')}</strong>
-        ${quotation.clientTin ? `<p><strong>Purchaser TIN:</strong> ${escape(quotation.clientTin)}</p>` : ''}
-        ${quotation.clientVatNumber ? `<p><strong>VAT registration:</strong> ${escape(quotation.clientVatNumber)}</p>` : ''}
-        ${quotation.clientAddress ? `<p>${lines(quotation.clientAddress).join('<br>')}</p>` : ''}
-        ${quotation.clientPhone ? `<p>Telephone: ${escape(quotation.clientPhone)}</p>` : ''}
-        ${quotation.location ? `<p><strong>Location:</strong> ${escape(quotation.location)}</p>` : ''}
-        ${quotation.contact ? `<p><strong>Contact:</strong> ${escape(quotation.contact)}</p>` : ''}
-        ${quotation.project ? `<p>Project: ${escape(quotation.project)}</p>` : ''}
+        ${recipientShow.name !== false ? `<strong>${escape(recipient?.name || quotation.clientName || '—')}</strong>` : ''}
+        ${recipientShow.registrationNumber !== false && recipient?.registrationNumber ? `<p><strong>Registration:</strong> ${escape(recipient.registrationNumber)}</p>` : ''}
+        ${recipientShow.tin !== false && (recipient?.tin || (!recipient && quotation.clientTin)) ? `<p><strong>Purchaser TIN:</strong> ${escape(recipient?.tin || quotation.clientTin)}</p>` : ''}
+        ${recipientShow.vatNumber !== false && (recipient?.vatNumber || (!recipient && quotation.clientVatNumber)) ? `<p><strong>VAT registration:</strong> ${escape(recipient?.vatNumber || quotation.clientVatNumber)}</p>` : ''}
+        ${recipientShow.billingAddress !== false && (recipient?.billingAddress || (!recipient && quotation.clientAddress)) ? `<p><strong>Billing address:</strong> ${lines(recipient?.billingAddress || quotation.clientAddress).join('<br>')}</p>` : ''}
+        ${recipientShow.siteAddress !== false && (recipient?.siteAddress || (!recipient && quotation.location)) ? `<p><strong>Location:</strong> ${escape(recipient?.siteAddress || quotation.location)}</p>` : ''}
+        ${recipientShow.contactPerson !== false && (recipient?.contactPerson || (!recipient && quotation.contact)) ? `<p><strong>Contact:</strong> ${escape(recipient?.contactPerson || quotation.contact)}</p>` : ''}
+        ${recipientShow.phone !== false && (recipient?.phone || (!recipient && quotation.clientPhone)) ? `<p>Telephone: ${escape(recipient?.phone || quotation.clientPhone)}</p>` : ''}
+        ${recipientShow.alternatePhone !== false && recipient?.alternatePhone ? `<p>Alternate telephone: ${escape(recipient.alternatePhone)}</p>` : ''}
+        ${recipientShow.email !== false && recipient?.email ? `<p>Email: ${escape(recipient.email)}</p>` : ''}
+        ${recipientShow.city !== false && recipient?.city ? `<p>City: ${escape(recipient.city)}</p>` : ''}
+        ${recipientShow.district !== false && recipient?.district ? `<p>District: ${escape(recipient.district)}</p>` : ''}
+        ${recipientShow.province !== false && recipient?.province ? `<p>Province: ${escape(recipient.province)}</p>` : ''}
+        ${recipientShow.country !== false && recipient?.country ? `<p>Country: ${escape(recipient.country)}</p>` : ''}
+        ${recipientShow.project !== false && (recipient?.project || (!recipient && quotation.project)) ? `<p>Project: ${escape(recipient?.project || quotation.project)}</p>` : ''}
       </div>
       <div class="party">
         <h3>Details</h3>
@@ -376,11 +392,11 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
         <p>${selectedBank.map(escape).join('<br>')}</p></div>` : '',
 
     signatures: `<div class="sign" data-block="signatures">
-      <div>For and on behalf of ${escape(company.name)}<br><br>Name &amp; signature</div>
+      <div>For and on behalf of ${issuerShow.name === false ? 'the issuing company' : escape(issuer.name)}<br><br>Name &amp; signature</div>
       <div>Accepted by the client<br><br>Name, signature &amp; date</div>
     </div>`,
 
-    footer: footer(company, quotation.reference, settings)
+    footer: footer({ ...issuer, name: issuerShow.name === false ? '' : issuer.name }, quotation.reference, settings)
   };
 
   return page({
@@ -653,6 +669,7 @@ export async function documentContext(getOne, companyId = 1) {
       COALESCE(NULLIF(c.email,''),CASE WHEN c.id=1 THEN s.email END,'') email,
       COALESCE(NULLIF(c.tin,''),CASE WHEN c.id=1 THEN s.tin END,'') tin,
       COALESCE(NULLIF(c.vat_number,''),CASE WHEN c.id=1 THEN s.vat_number END,'') vatNumber,
+      COALESCE(NULLIF(c.svat_number,''),CASE WHEN c.id=1 THEN s.svat_number END,'') svatNumber,
       COALESCE(NULLIF(c.bank_details,''),CASE WHEN c.id=1 THEN s.bank_details END,'') bankDetails,
       CASE WHEN c.id=1 THEN s.quotation_terms ELSE NULL END quotationTerms
       FROM companies c LEFT JOIN company_settings s ON s.id=1 WHERE c.id=?`, [companyId]),

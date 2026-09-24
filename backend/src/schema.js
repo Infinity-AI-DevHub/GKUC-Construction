@@ -409,6 +409,54 @@ async function createBoqTables() {
   ) ENGINE=InnoDB`);
 }
 
+/** QS daily worksheets are reviewed before they affect the project's actual-cost ledger. */
+async function createDailyCostTables() {
+  await query(`CREATE TABLE IF NOT EXISTS daily_cost_sheets (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, project_id BIGINT UNSIGNED NOT NULL,
+    work_date DATE NOT NULL, status ENUM('Draft','Submitted','Approved','Returned') NOT NULL DEFAULT 'Submitted',
+    notes VARCHAR(1000) NULL, review_note VARCHAR(1000) NULL,
+    submitted_by BIGINT UNSIGNED NOT NULL, reviewed_by BIGINT UNSIGNED NULL,
+    reviewed_at DATETIME NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_daily_cost_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_daily_cost_submitter FOREIGN KEY(submitted_by) REFERENCES users(id),
+    CONSTRAINT fk_daily_cost_reviewer FOREIGN KEY(reviewed_by) REFERENCES users(id),
+    INDEX idx_daily_cost_project(project_id,work_date,status)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS daily_cost_lines (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, sheet_id BIGINT UNSIGNED NOT NULL,
+    task_id BIGINT UNSIGNED NOT NULL, boq_item_id BIGINT UNSIGNED NULL,
+    source ENUM('Material','Labour','Fuel','Equipment','Subcontractor','Overhead','Other') NOT NULL,
+    cost_type ENUM('Expected','Variation','Unexpected') NOT NULL DEFAULT 'Expected',
+    description VARCHAR(400) NOT NULL, quantity DECIMAL(14,3) NULL, unit VARCHAR(30) NULL,
+    unit_rate DECIMAL(14,2) NULL, amount DECIMAL(15,2) NOT NULL,
+    employee_id BIGINT UNSIGNED NULL, vehicle_id BIGINT UNSIGNED NULL,
+    fuel_origin ENUM('Station','Reserve') NULL, fuel_record_id BIGINT UNSIGNED NULL,
+    fuel_float_id BIGINT UNSIGNED NULL, odometer INT UNSIGNED NULL,
+    reserve_material_id BIGINT UNSIGNED NULL, reference VARCHAR(120) NULL,
+    quotation_item_id BIGINT UNSIGNED NULL, quoted_recovery DECIMAL(15,2) NOT NULL DEFAULT 0,
+    posted_expense_id BIGINT UNSIGNED NULL,
+    CONSTRAINT fk_daily_line_sheet FOREIGN KEY(sheet_id) REFERENCES daily_cost_sheets(id),
+    CONSTRAINT fk_daily_line_task FOREIGN KEY(task_id) REFERENCES tasks(id),
+    CONSTRAINT fk_daily_line_boq FOREIGN KEY(boq_item_id) REFERENCES boq_items(id),
+    CONSTRAINT fk_daily_line_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
+    CONSTRAINT fk_daily_line_vehicle FOREIGN KEY(vehicle_id) REFERENCES fleet(id),
+    CONSTRAINT fk_daily_line_fuel FOREIGN KEY(fuel_record_id) REFERENCES fuel_records(id),
+    CONSTRAINT fk_daily_line_float FOREIGN KEY(fuel_float_id) REFERENCES petty_cash_floats(id),
+    CONSTRAINT fk_daily_line_material FOREIGN KEY(reserve_material_id) REFERENCES materials(id),
+    CONSTRAINT fk_daily_line_quote FOREIGN KEY(quotation_item_id) REFERENCES quotation_items(id),
+    CONSTRAINT fk_daily_line_expense FOREIGN KEY(posted_expense_id) REFERENCES expenses(id),
+    UNIQUE KEY uq_daily_line_expense(posted_expense_id),
+    INDEX idx_daily_line_fuel(fuel_record_id),
+    INDEX idx_daily_line_task(task_id)
+  ) ENGINE=InnoDB`);
+  await addColumn('daily_cost_lines','fuel_float_id','BIGINT UNSIGNED NULL');
+  await addColumn('daily_cost_lines','odometer','INT UNSIGNED NULL');
+  await addForeignKey('daily_cost_lines','fk_daily_line_float',
+    'CONSTRAINT fk_daily_line_float FOREIGN KEY(fuel_float_id) REFERENCES petty_cash_floats(id)');
+  await addIndex('daily_cost_lines','idx_daily_line_fuel','INDEX idx_daily_line_fuel(fuel_record_id)');
+  await dropIndex('daily_cost_lines','uq_daily_line_fuel');
+}
+
 /** 2.7 Purchase Management. */
 async function createPurchasingTables() {
   await query(`CREATE TABLE IF NOT EXISTS suppliers (
@@ -1065,6 +1113,16 @@ async function createMethodTables() {
     UNIQUE KEY uq_work_method (name)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await query(`CREATE TABLE IF NOT EXISTS quotation_note_templates (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    body VARCHAR(1000) NOT NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_quotation_note_template_name (name)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
   /* A quotation records which methods it offered, so the reference and the method
      statements on the page follow from the work rather than being typed again. */
   await addColumn('quotations_client', 'method_codes', 'VARCHAR(120) NULL');
@@ -1073,6 +1131,7 @@ async function createMethodTables() {
   await addColumn('quotations_client', 'payment_terms', 'TEXT NULL');
   await addColumn('quotations_client', 'additional_notes', 'TEXT NULL');
   await addColumn('quotations_client', 'bank_account_id', 'BIGINT UNSIGNED NULL');
+  await addColumn('quotations_client', 'presentation', 'JSON NULL');
   await addColumn('quotation_items', 'method_id', 'BIGINT UNSIGNED NULL');
   await addColumn('quotation_items', 'area', 'VARCHAR(120) NULL');
   await addColumn('quotation_items', 'method_statement', 'TEXT NULL');
@@ -2781,6 +2840,7 @@ export async function migrate() {
   await createOnboardingColumns();
   await createChatTables();
   await createReceivableTables();
+  await createDailyCostTables();
   await createDriveTables();
   await createIntegrityTables();
   await createOptionTables();

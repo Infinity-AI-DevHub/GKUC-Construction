@@ -119,21 +119,53 @@ function Quotations({ can, reload, companyId }) {
 
 function QuotationTemplates({ close }) {
   const [rows, setRows] = useState([]);
+  const [noteRows, setNoteRows] = useState([]);
   const [editing, setEditing] = useState(null);
+  const [editingNote, setEditingNote] = useState(null);
+  const [section, setSection] = useState('notes');
   const load = () => api('/qs/methods').then(setRows);
-  useEffect(() => { load(); }, []);
+  const loadNotes = () => api('/qs/quotation-note-templates').then(setNoteRows);
+  useEffect(() => { load(); loadNotes(); }, []);
   return <>
     <Modal title="Quotation templates" close={close} wide>
-      <div className="template-library-intro"><p>Save standard descriptions and work methods once, then insert and edit them while preparing future quotations.</p>
-        <button className="primary" onClick={() => setEditing({})}><Plus size={15} />Add template</button></div>
-      <div className="template-library-list">{rows.map(row => <article key={row.id}>
-        <div><strong>{row.name}</strong><small>{row.code} · {row.category} · {row.unit} · {rupees(row.defaultRate)}</small></div>
-        <p>{row.description || 'No standard description'}</p>
-        <button className="secondary" onClick={() => setEditing(row)}>Edit</button>
-      </article>)}</div>
+      <div className="quotation-source-switch template-library-switch" role="group" aria-label="Template type">
+        <button type="button" className={section === 'notes' ? 'active' : ''} onClick={() => setSection('notes')}>Client notes</button>
+        <button type="button" className={section === 'methods' ? 'active' : ''} onClick={() => setSection('methods')}>Descriptions & methods</button>
+      </div>
+      {section === 'notes' ? <>
+        <div className="template-library-intro"><p>Save reusable wording for the quotation’s Notes section. Each selected note can still be edited on the quotation.</p>
+          <button className="primary" onClick={() => setEditingNote({})}><Plus size={15} />Add note template</button></div>
+        <div className="template-library-list">{noteRows.map(row => <article key={row.id}>
+          <strong>{row.name}</strong><p>{row.body}</p><button className="secondary" onClick={() => setEditingNote(row)}>Edit</button>
+        </article>)}</div>
+      </> : <>
+        <div className="template-library-intro"><p>Save standard descriptions and work methods once, then insert and edit them while preparing future quotations.</p>
+          <button className="primary" onClick={() => setEditing({})}><Plus size={15} />Add template</button></div>
+        <div className="template-library-list">{rows.map(row => <article key={row.id}>
+          <div><strong>{row.name}</strong><small>{row.code} · {row.category} · {row.unit} · {rupees(row.defaultRate)}</small></div>
+          <p>{row.description || 'No standard description'}</p>
+          <button className="secondary" onClick={() => setEditing(row)}>Edit</button>
+        </article>)}</div>
+      </>}
     </Modal>
     {editing && <QuotationTemplateForm template={editing} close={() => setEditing(null)} reload={load} />}
+    {editingNote && <QuotationNoteTemplateForm template={editingNote} close={() => setEditingNote(null)} reload={loadNotes} />}
   </>;
+}
+
+function QuotationNoteTemplateForm({ template, close, reload }) {
+  const existing = Boolean(template.id);
+  return <FormModal title={existing ? `Edit ${template.name}` : 'Add note template'} close={close}
+    label={existing ? 'Save note template' : 'Add note template'} onSubmit={async values => {
+      const body = { name: values.name.trim(), body: values.body.trim() };
+      if (existing) await patch(`/qs/quotation-note-templates/${template.id}`, body);
+      else await post('/qs/quotation-note-templates', body);
+      await reload();
+    }}>
+    <Field name="name" label="Template name" defaultValue={template.name || ''} placeholder="Site access and preparation" />
+    <TextArea name="body" label="Notes wording" rows={5} defaultValue={template.body || ''}
+      placeholder="Write one bullet per line. You can change it after inserting it into a quotation." />
+  </FormModal>;
 }
 
 function QuotationTemplateForm({ template, close, reload }) {
@@ -965,11 +997,68 @@ function SubcontractQuotationForm({ data, subcontractors, companyId, close, relo
 
 /* ----------------------------------------------------------------- forms */
 
+const QUOTATION_IDENTITY_FIELDS = {
+  company: [
+    ['logo', 'GKUC logo'], ['name', 'Operating company name'], ['address', 'Address'],
+    ['telephone', 'Telephone'], ['email', 'Email'], ['tin', 'TIN'],
+    ['vatNumber', 'VAT registration'], ['svatNumber', 'SVAT registration'],
+    ['bankDetails', 'Bank details']
+  ],
+  client: [
+    ['name', 'Client name'], ['registrationNumber', 'Registration number'],
+    ['tin', 'TIN'], ['vatNumber', 'VAT registration'], ['billingAddress', 'Billing address'],
+    ['siteAddress', 'Site / delivery location'], ['contactPerson', 'Contact person'],
+    ['phone', 'Telephone'], ['alternatePhone', 'Alternate telephone'], ['email', 'Email'],
+    ['city', 'City'], ['district', 'District'], ['province', 'Province'], ['country', 'Country'],
+    ['project', 'Project name']
+  ]
+};
+
+const defaultQuotationVisibility = () => Object.fromEntries(Object.entries(QUOTATION_IDENTITY_FIELDS)
+  .map(([party, fields]) => [party, Object.fromEntries(fields.map(([key]) => [key, true]))]));
+
+const asPresentation = value => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch { return null; }
+};
+
+function QuotationIdentityChoices({ identity, visibility, onChange, projectName, bankName }) {
+  if (!identity) return <p className="wide quotation-identity-hint">Choose a client to review which client and GKUC details will print on this quotation.</p>;
+  return <fieldset className="quotation-identity wide">
+    <legend>Information to show on this quotation</legend>
+    <p>Choose for this quotation. The PDF keeps these choices and the saved details as they are now.</p>
+    <div className="quotation-identity-columns">{Object.entries(QUOTATION_IDENTITY_FIELDS).map(([party, fields]) =>
+      <div key={party}><h3>{party === 'company' ? 'GKUC information' : 'Client information'}</h3>
+        {fields.map(([key, label]) => {
+          const value = key === 'logo' ? 'GKUC brand mark'
+            : key === 'project' ? projectName
+              : key === 'bankDetails' ? bankName || identity.company.bankDetails
+                : identity[party]?.[key];
+          return <label className="quotation-identity-option" key={key}>
+            <input type="checkbox" checked={Boolean(value) && visibility[party][key]} disabled={!value}
+              onChange={event => onChange(current => ({ ...current,
+                [party]: { ...current[party], [key]: event.target.checked } }))} />
+            <span><strong>{label}</strong><small>{value || 'Not saved in the profile'}</small></span>
+          </label>;
+        })}
+      </div>)}</div>
+  </fieldset>;
+}
+
 function QuotationForm({ data, companyId, close, reload }) {
   const [boqs, setBoqs] = useState([]);
   const [clients, setClients] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [bankAccountId, setBankAccountId] = useState('');
+  const [identity, setIdentity] = useState(null);
+  const [identityError, setIdentityError] = useState('');
+  const [visibility, setVisibility] = useState(defaultQuotationVisibility);
   const [templates, setTemplates] = useState([]);
+  const [noteTemplates, setNoteTemplates] = useState([]);
+  const [selectedNoteTemplate, setSelectedNoteTemplate] = useState('');
+  const [notes, setNotes] = useState('');
+  const [noteError, setNoteError] = useState('');
   const [subQuotes, setSubQuotes] = useState([]);
   const [mode, setMode] = useState('boq');
   const [clientId, setClientId] = useState('');
@@ -983,7 +1072,30 @@ function QuotationForm({ data, companyId, close, reload }) {
     api('/clients').then(setClients).catch(() => setClients([]));
     api(`/company-bank-accounts?companyId=${companyId}`).then(setBankAccounts).catch(() => setBankAccounts([]));
     api('/qs/methods').then(setTemplates).catch(() => setTemplates([]));
+    api('/qs/quotation-note-templates').then(setNoteTemplates).catch(() => setNoteTemplates([]));
   }, [companyId]);
+  useEffect(() => {
+    if (!clientId) { setIdentity(null); setIdentityError(''); return; }
+    let cancelled = false;
+    setIdentity(null);
+    setIdentityError('');
+    api(`/qs/quotation-identity?companyId=${companyId}&clientId=${clientId}`)
+      .then(result => { if (!cancelled) setIdentity(result); })
+      .catch(error => { if (!cancelled) setIdentityError(error.message); });
+    return () => { cancelled = true; };
+  }, [companyId, clientId]);
+  const insertNoteTemplate = () => {
+    const template = noteTemplates.find(row => String(row.id) === selectedNoteTemplate);
+    if (!template) return;
+    const combined = [notes.trimEnd(), template.body].filter(Boolean).join('\n');
+    if (combined.length > 1000) {
+      setNoteError('The Notes section can contain up to 1,000 characters. Shorten the text before adding this template.');
+      return;
+    }
+    setNotes(combined);
+    setSelectedNoteTemplate('');
+    setNoteError('');
+  };
   useEffect(() => {
     if (!projectId) return setSubQuotes([]);
     api(`/qs/subcontract-quotations?companyId=${companyId}&projectId=${projectId}`)
@@ -1013,13 +1125,15 @@ function QuotationForm({ data, companyId, close, reload }) {
   const manualSubtotal = lines.reduce((sum, line) => sum + Number(line.quantity || 0) * Number(line.rate || 0)
     * (line.subQuotationId ? 1 + Number(line.subcontractMarkupPercent || 0) / 100 : 1), 0);
   return <FormModal title="Create client quotation" close={close} label="Create quotation" wide onSubmit={async values => {
+    if (!identity) throw new Error(identityError || 'Wait for the client and GKUC details to load, then review the quotation information.');
     const common = {
       clientId: Number(clientId), quoteDate: values.quoteDate,
       validUntil: values.validUntil || undefined,
       markupPercent: Number(values.markupPercent || 0), vatPercent: Number(values.vatPercent || 0),
-      notes: values.notes || undefined, paymentTerms: values.paymentTerms || undefined,
+      notes: notes || undefined, paymentTerms: values.paymentTerms || undefined,
       additionalNotes: values.additionalNotes || undefined,
-      bankAccountId: values.bankAccountId ? Number(values.bankAccountId) : undefined
+      bankAccountId: bankAccountId ? Number(bankAccountId) : undefined,
+      visibility
     };
     if (mode === 'boq') await post('/qs/quotations', {
       ...common, boqId: Number(boqId), title: values.title || undefined
@@ -1058,10 +1172,16 @@ function QuotationForm({ data, companyId, close, reload }) {
     <Field name="validUntil" label="Valid until" type="date" required={false} />
     <Field name="markupPercent" label="Markup %" type="number" step="0.01" min="0" max="100" defaultValue="10" required={false} />
     <Field name="vatPercent" label="VAT %" type="number" step="0.01" min="0" max="100" defaultValue="18" required={false} />
-    <label>Bank account<select name="bankAccountId" defaultValue="">
+    <label>Bank account<select name="bankAccountId" value={bankAccountId} onChange={event => setBankAccountId(event.target.value)}>
       <option value="">Use legacy company bank details</option>{bankAccounts.map(account => <option key={account.id} value={account.id}>
         {account.label} — {account.bankName} · {account.accountNumber}</option>)}
     </select></label>
+    {identityError && <p className="form-error wide" role="alert">{identityError}</p>}
+    <QuotationIdentityChoices identity={identity} visibility={visibility} onChange={setVisibility}
+      projectName={mode === 'boq' ? clientBoqs.find(boq => String(boq.id) === boqId)?.project
+        : clientProjects.find(project => String(project.id) === projectId)?.name}
+      bankName={(() => { const bank = bankAccounts.find(account => String(account.id) === bankAccountId);
+        return bank ? `${bank.label} · ${bank.bankName} · ${bank.accountNumber}` : ''; })()} />
     {mode === 'manual' && <div className="manual-quotation-lines wide">
       <div className="manual-quotation-heading"><div><strong>Quoted items</strong><span>Amounts are calculated automatically.</span></div>
         <button type="button" className="secondary" onClick={() => setLines(current => [...current,
@@ -1093,7 +1213,17 @@ function QuotationForm({ data, companyId, close, reload }) {
       </div>)}
       <div className="manual-quotation-total"><span>Manual subtotal</span><strong>{rupees(manualSubtotal)}</strong></div>
     </div>}
-    <TextArea name="notes" label="Notes to the client" required={false} placeholder="One note per line. Common notes are added automatically." />
+    <div className="quotation-note-picker wide">
+      <label>Insert a saved note into Notes<select value={selectedNoteTemplate} onChange={event => setSelectedNoteTemplate(event.target.value)}>
+        <option value="">Choose a note template…</option>
+        {noteTemplates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}
+      </select></label>
+      <button type="button" className="secondary" disabled={!selectedNoteTemplate} onClick={insertNoteTemplate}>Insert note</button>
+    </div>
+    {noteError && <p className="form-error wide" role="alert">{noteError}</p>}
+    <label className="wide">Notes to the client<textarea name="notes" maxLength={1000} rows={4}
+      placeholder="One note per line. Common notes are added automatically."
+      value={notes} onChange={event => { setNotes(event.target.value); setNoteError(''); }} /></label>
     <TextArea name="paymentTerms" label="Payment terms" required={false} placeholder="Example: 70% upfront, 30% before delivery" />
     <TextArea name="additionalNotes" label="Additional notes" required={false} placeholder="Any final notes specific to this quotation" />
     {mode === 'manual' && <TextArea name="terms" label="Terms for this quotation" required={false} placeholder="Optional — standing quotation terms apply when blank" />}
@@ -1110,34 +1240,64 @@ function QuotationForm({ data, companyId, close, reload }) {
  * the BOQ, and not the standing terms every other document carries.
  */
 function QuotationWording({ quotation, close, reload }) {
+  const savedPresentation = asPresentation(quotation.presentation);
   const [clients, setClients] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [clientId, setClientId] = useState(String(quotation.clientId || ''));
+  const [bankAccountId, setBankAccountId] = useState(String(quotation.bankAccountId || ''));
+  const [identity, setIdentity] = useState(savedPresentation
+    ? { company: savedPresentation.company, client: savedPresentation.client } : null);
+  const [identityError, setIdentityError] = useState('');
+  const [visibility, setVisibility] = useState(savedPresentation?.show || defaultQuotationVisibility);
   useEffect(() => {
     api('/clients').then(setClients).catch(() => setClients([]));
     api(`/company-bank-accounts?companyId=${quotation.companyId}`).then(setBankAccounts).catch(() => setBankAccounts([]));
   }, [quotation.companyId]);
-  return <FormModal title={`Edit ${quotation.reference}`} close={close} label="Save wording" onSubmit={async values => {
+  useEffect(() => {
+    if (savedPresentation && String(quotation.clientId) === clientId) {
+      setIdentity({ company: savedPresentation.company, client: savedPresentation.client });
+      setIdentityError('');
+      return;
+    }
+    if (!clientId) { setIdentity(null); return; }
+    let cancelled = false;
+    setIdentity(null);
+    api(`/qs/quotation-identity?companyId=${quotation.companyId}&clientId=${clientId}`)
+      .then(result => { if (!cancelled) { setIdentity(result); setIdentityError(''); } })
+      .catch(error => { if (!cancelled) setIdentityError(error.message); });
+    return () => { cancelled = true; };
+  }, [quotation.companyId, quotation.clientId, clientId]);
+  return <FormModal title={`Edit ${quotation.reference}`} close={close} label="Save wording" wide onSubmit={async values => {
+    if (!identity) throw new Error(identityError || 'Wait for the client details to load before saving.');
     await patch(`/qs/quotations/${quotation.id}`, {
       title: values.title,
-      clientId: Number(values.clientId),
+      clientId: Number(clientId),
       validUntil: values.validUntil || null,
       notes: values.notes || null,
       terms: values.terms || null,
       paymentTerms: values.paymentTerms || null,
       additionalNotes: values.additionalNotes || null,
-      bankAccountId: values.bankAccountId ? Number(values.bankAccountId) : null
+      bankAccountId: bankAccountId ? Number(bankAccountId) : null,
+      visibility
     });
     await reload();
   }}>
     <Field name="title" label="Quotation title" wide defaultValue={quotation.title} />
-    <SelectField name="clientId" label="Client" options={clients.map(client => [client.id, client.name])}
-      defaultValue={quotation.clientId || ''} />
+    <label>Client<select name="clientId" value={clientId} required onChange={event => setClientId(event.target.value)}>
+      <option value="">Choose saved client…</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+    </select></label>
     <Field name="validUntil" label="Valid until" type="date" required={false}
       defaultValue={quotation.validUntil ? quotation.validUntil.slice(0, 10) : ''} />
     <TextArea name="notes" label="Note to the client" rows={3} required={false} defaultValue={quotation.notes || ''} />
-    <SelectField name="bankAccountId" label="Bank account" options={[["", 'Use legacy company bank details'],
-      ...bankAccounts.map(account => [account.id, `${account.label} — ${account.accountNumber}`])]}
-      defaultValue={quotation.bankAccountId || ''} required={false} />
+    <label>Bank account<select name="bankAccountId" value={bankAccountId} onChange={event => setBankAccountId(event.target.value)}>
+      <option value="">Use legacy company bank details</option>
+      {bankAccounts.map(account => <option key={account.id} value={account.id}>{account.label} — {account.accountNumber}</option>)}
+    </select></label>
+    {identityError && <p className="form-error wide" role="alert">{identityError}</p>}
+    <QuotationIdentityChoices identity={identity} visibility={visibility} onChange={setVisibility}
+      projectName={savedPresentation?.client?.project || quotation.project}
+      bankName={(() => { const bank = bankAccounts.find(account => String(account.id) === bankAccountId);
+        return bank ? `${bank.label} · ${bank.bankName} · ${bank.accountNumber}` : ''; })()} />
     <TextArea name="paymentTerms" label="Payment terms" rows={3} required={false} defaultValue={quotation.paymentTerms || ''} />
     <TextArea name="additionalNotes" label="Additional notes" rows={3} required={false} defaultValue={quotation.additionalNotes || ''} />
     <TextArea name="terms" label="Terms for this quotation only (leave blank to use the standing terms)"
