@@ -860,6 +860,23 @@ async function createDocumentSettingsTable() {
   /* The whole design — page, palette, type, and the order and styling of every block — as
      one document, because it is edited as one thing and read as one thing. */
   await addColumn('document_settings', 'design', 'JSON NULL');
+  await addColumn('document_settings', 'quotation_notes', 'TEXT NULL');
+
+  await query(`CREATE TABLE IF NOT EXISTS company_bank_accounts (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    company_id TINYINT UNSIGNED NOT NULL,
+    label VARCHAR(100) NOT NULL,
+    bank_name VARCHAR(140) NOT NULL,
+    branch VARCHAR(140) NULL,
+    account_name VARCHAR(180) NOT NULL,
+    account_number VARCHAR(80) NOT NULL,
+    swift_code VARCHAR(40) NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_company_bank_account_company FOREIGN KEY(company_id) REFERENCES companies(id),
+    UNIQUE KEY uq_company_bank_account (company_id, account_number)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
   /* The terms already typed against the company move across, so nothing is lost. */
   await query(`UPDATE document_settings d
@@ -1032,7 +1049,11 @@ async function createMethodTables() {
   await addColumn('quotations_client', 'location', 'VARCHAR(180) NULL');
   await addColumn('quotations_client', 'contact', 'VARCHAR(120) NULL');
   await addColumn('quotations_client', 'payment_terms', 'TEXT NULL');
+  await addColumn('quotations_client', 'additional_notes', 'TEXT NULL');
+  await addColumn('quotations_client', 'bank_account_id', 'BIGINT UNSIGNED NULL');
   await addColumn('quotation_items', 'method_id', 'BIGINT UNSIGNED NULL');
+  await addColumn('quotation_items', 'area', 'VARCHAR(120) NULL');
+  await addColumn('quotation_items', 'method_statement', 'TEXT NULL');
 }
 
 async function createQsTables() {

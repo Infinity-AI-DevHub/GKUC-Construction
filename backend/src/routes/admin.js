@@ -61,6 +61,42 @@ router.put('/company', auth, permit('admin.users'), validate(z.object({
   res.json(after);
 }));
 
+const BANK_ACCOUNT = `SELECT id,company_id companyId,label,bank_name bankName,branch,
+  account_name accountName,account_number accountNumber,swift_code swiftCode,active
+  FROM company_bank_accounts`;
+
+router.get('/company-bank-accounts', auth, permit('admin.users', 'qs.view', 'qs.quotation'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId) || 1;
+  res.json(await query(`${BANK_ACCOUNT} WHERE company_id=? AND active=1 ORDER BY label,bank_name`, [companyId]));
+}));
+
+router.post('/company-bank-accounts', auth, permit('admin.users'), validate(z.object({
+  companyId: z.number().int().positive(), label: z.string().min(2).max(100),
+  bankName: z.string().min(2).max(140), branch: z.string().max(140).optional(),
+  accountName: z.string().min(2).max(180), accountNumber: z.string().min(3).max(80),
+  swiftCode: z.string().max(40).optional()
+})), wrap(async (req, res) => {
+  const body = req.body;
+  const result = await query(`INSERT INTO company_bank_accounts
+    (company_id,label,bank_name,branch,account_name,account_number,swift_code) VALUES (?,?,?,?,?,?,?)`,
+  [body.companyId, body.label, body.bankName, body.branch || null, body.accountName,
+    body.accountNumber, body.swiftCode || null]);
+  const row = await getOne(`${BANK_ACCOUNT} WHERE id=?`, [result.insertId]);
+  await audit(pool, req.user.id, 'CREATE', 'company_bank_account', row.id, null, row, req.ip);
+  res.status(201).json(row);
+}));
+
+router.patch('/company-bank-accounts/:id', auth, permit('admin.users'), validate(z.object({
+  active: z.boolean()
+})), wrap(async (req, res) => {
+  const before = await getOne(`${BANK_ACCOUNT} WHERE id=?`, [req.params.id]);
+  if (!before) return res.status(404).json({ error: 'Bank account not found' });
+  await query('UPDATE company_bank_accounts SET active=? WHERE id=?', [req.body.active ? 1 : 0, req.params.id]);
+  const after = await getOne(`${BANK_ACCOUNT} WHERE id=?`, [req.params.id]);
+  await audit(pool, req.user.id, 'UPDATE', 'company_bank_account', after.id, before, after, req.ip);
+  res.json(after);
+}));
+
 /**
  * How documents look and what standing text they carry. Readable by anyone signed in,
  * because every document renders from it; changed only by an administrator.
@@ -68,7 +104,7 @@ router.put('/company', auth, permit('admin.users'), validate(z.object({
 const DOCUMENT_SETTINGS = `SELECT accent_colour accentColour,paper_size paperSize,
   show_logo showLogo,show_signatures showSignatures,show_amount_in_words showAmountInWords,
   show_bank_details showBankDetails,footer_note footerNote,
-  quotation_terms quotationTerms,boq_terms boqTerms,invoice_terms invoiceTerms
+  quotation_notes quotationNotes,quotation_terms quotationTerms,boq_terms boqTerms,invoice_terms invoiceTerms
   FROM document_settings WHERE id=1`;
 
 const asBooleans = row => (row && {
@@ -90,6 +126,7 @@ router.put('/document-settings', auth, permit('admin.users'), validate(z.object(
   showAmountInWords: z.boolean().default(true),
   showBankDetails: z.boolean().default(true),
   footerNote: z.string().max(300).default(''),
+  quotationNotes: z.string().max(3000).default(''),
   quotationTerms: z.string().max(2000).default(''),
   boqTerms: z.string().max(2000).default(''),
   invoiceTerms: z.string().max(2000).default('')
@@ -97,11 +134,11 @@ router.put('/document-settings', auth, permit('admin.users'), validate(z.object(
   const body = req.body;
   const before = await getOne(DOCUMENT_SETTINGS);
   await query(`UPDATE document_settings SET accent_colour=?,paper_size=?,show_logo=?,show_signatures=?,
-      show_amount_in_words=?,show_bank_details=?,footer_note=?,quotation_terms=?,boq_terms=?,invoice_terms=?,
+      show_amount_in_words=?,show_bank_details=?,footer_note=?,quotation_notes=?,quotation_terms=?,boq_terms=?,invoice_terms=?,
       updated_by=? WHERE id=1`,
   [body.accentColour, body.paperSize, body.showLogo ? 1 : 0, body.showSignatures ? 1 : 0,
     body.showAmountInWords ? 1 : 0, body.showBankDetails ? 1 : 0, body.footerNote,
-    body.quotationTerms, body.boqTerms, body.invoiceTerms, req.user.id]);
+    body.quotationNotes, body.quotationTerms, body.boqTerms, body.invoiceTerms, req.user.id]);
   const after = await getOne(DOCUMENT_SETTINGS);
   await audit(pool, req.user.id, 'UPDATE', 'document_settings', 1, before, after, req.ip);
   res.json(asBooleans(after));

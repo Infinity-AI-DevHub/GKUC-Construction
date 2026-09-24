@@ -15,10 +15,12 @@ export default function CompanySettings({ can, companyId }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [bankAccounts, setBankAccounts] = useState([]);
 
   useEffect(() => {
     setCompany(null);setError('');setMessage('');
     api(`/company?companyId=${companyId}`).then(setCompany).catch(failure => setError(failure.message));
+    api(`/company-bank-accounts?companyId=${companyId}`).then(setBankAccounts).catch(() => setBankAccounts([]));
   }, [companyId]);
 
   const submit = async event => {
@@ -46,6 +48,21 @@ export default function CompanySettings({ can, companyId }) {
     } finally { setBusy(false); }
   };
 
+  const addBankAccount = async event => {
+    event.preventDefault(); setError(''); setMessage('');
+    const form = new FormData(event.currentTarget);
+    try {
+      await api('/company-bank-accounts', { method: 'POST', body: JSON.stringify({
+        companyId, label: form.get('label'), bankName: form.get('bankName'),
+        branch: form.get('branch') || undefined, accountName: form.get('accountName'),
+        accountNumber: form.get('accountNumber'), swiftCode: form.get('swiftCode') || undefined
+      }) });
+      event.currentTarget.reset();
+      setBankAccounts(await api(`/company-bank-accounts?companyId=${companyId}`));
+      setMessage('Bank account added and available when creating quotations.');
+    } catch (failure) { setError(failure.message); }
+  };
+
   if (!company) return <p className="empty-state">{error || 'Loading company details…'}</p>;
 
   return <section className="table-panel">
@@ -58,7 +75,7 @@ export default function CompanySettings({ can, companyId }) {
       <Field name="tin" label="TIN" defaultValue={company.tin} required={false} />
       <Field name="vatNumber" label="VAT registration number" defaultValue={company.vatNumber} required={false} />
       <TextArea name="address" label="Address (one line each)" defaultValue={company.address} required={false} />
-      <TextArea name="bankDetails" label="Bank details" defaultValue={company.bankDetails} required={false} />
+      <TextArea name="bankDetails" label="Legacy bank details (used when no account is selected)" defaultValue={company.bankDetails} required={false} />
       <p className="wide document-credit">
         Terms and the look of documents are set under <strong>Documents</strong>.
       </p>
@@ -68,6 +85,24 @@ export default function CompanySettings({ can, companyId }) {
         <button className="primary" disabled={busy || !can.manage}>{busy ? 'Saving…' : 'Save details'}</button>
       </div>
     </form>
+    <div className="table-tools"><h2>Bank accounts available on quotations</h2></div>
+    {bankAccounts.map(account => <div className="table-row" key={account.id} style={{ gridTemplateColumns: '1fr 1.2fr auto' }}>
+      <div><strong>{account.label}</strong><small>{account.bankName}{account.branch ? ` — ${account.branch}` : ''}</small></div>
+      <div><strong>{account.accountName}</strong><small>{account.accountNumber}</small></div>
+      <button type="button" className="secondary" disabled={!can.manage} onClick={async () => {
+        await api(`/company-bank-accounts/${account.id}`, { method: 'PATCH', body: JSON.stringify({ active: false }) });
+        setBankAccounts(current => current.filter(item => item.id !== account.id));
+      }}>Archive</button>
+    </div>)}
+    {can.manage && <form className="report-form" onSubmit={addBankAccount}>
+      <Field name="label" label="Account label" placeholder="Main current account" />
+      <Field name="bankName" label="Bank name" />
+      <Field name="branch" label="Branch" required={false} />
+      <Field name="accountName" label="Account name" />
+      <Field name="accountNumber" label="Account number" />
+      <Field name="swiftCode" label="SWIFT code" required={false} />
+      <div className="form-actions"><button className="primary">Add bank account</button></div>
+    </form>}
     {!can.manage && <p className="empty-state">Only an administrator can change these.</p>}
   </section>;
 }

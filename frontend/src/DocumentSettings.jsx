@@ -29,6 +29,7 @@ export default function DocumentSettings({ can }) {
         method: 'PUT',
         body: JSON.stringify({
           footerNote: form.get('footerNote') || '',
+          quotationNotes: form.get('quotationNotes') || '',
           quotationTerms: form.get('quotationTerms') || '',
           boqTerms: form.get('boqTerms') || '',
           invoiceTerms: form.get('invoiceTerms') || ''
@@ -54,6 +55,8 @@ export default function DocumentSettings({ can }) {
 
       <Field name="footerNote" label="Extra footer line (optional)" wide
         defaultValue={settings.footerNote} required={false} />
+      <TextArea name="quotationNotes" label="Common quotation notes (one bullet per line)"
+        rows={4} defaultValue={settings.quotationNotes} required={false} />
       <TextArea name="quotationTerms" label="Standing terms on quotations (one per line)"
         rows={3} defaultValue={settings.quotationTerms} required={false} />
       <TextArea name="boqTerms" label="Standing terms on bills of quantities (one per line)"
