@@ -20,6 +20,9 @@ import projectRoutes from './routes/projects.js';
 import clientRoutes from './routes/clients.js';
 import taskRoutes from './routes/tasks.js';
 import employeeRoutes from './routes/employees.js';
+import hiringRoutes from './routes/hiring.js';
+import insuranceRoutes from './routes/insurance.js';
+import payrollInputsRoutes from './routes/payroll-inputs.js';
 import attendanceRoutes from './routes/attendance.js';
 import materialRoutes from './routes/materials.js';
 import purchasingRoutes from './routes/purchasing.js';
@@ -45,7 +48,7 @@ import siteRoutes from './routes/sites.js';
 import qsRoutes from './routes/qs.js';
 import biometricRoutes from './routes/biometric.js';
 import inquiryRoutes from './routes/inquiries.js';
-import payrollRoutes from './routes/payroll.js';
+import payrollRoutes, { startPayrollScheduler } from './routes/payroll.js';
 import galleryRoutes from './routes/gallery.js';
 import eventRoutes from './routes/events.js';
 import messageRoutes from './routes/messages.js';
@@ -193,6 +196,9 @@ app.use('/api/projects', projectRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/employees', employeeRoutes);
+app.use('/api/hiring', hiringRoutes);
+app.use('/api/insurance', insuranceRoutes);
+app.use('/api/payroll/inputs',payrollInputsRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/purchasing', purchasingRoutes);
@@ -268,6 +274,7 @@ if (process.env.NODE_ENV !== 'production' || process.env.SEED_DEMO_DATA === 'tru
   if (!count) console.warn('No users exist and demo seeding is off. Create the first account before use.');
 }
 startAlertScheduler();
+startPayrollScheduler();
 await startOcrWorker();
 /* Arrivals and departures are announced to everybody signed in. */
 startPresence();

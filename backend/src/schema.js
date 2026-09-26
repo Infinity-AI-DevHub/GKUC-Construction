@@ -1,5 +1,5 @@
 import { ddl, query } from './db.js';
-import { DEFAULT_ROLES, LEGACY_ROLE_MAP, PERMISSIONS } from './lib/permissions.js';
+import { DEFAULT_ROLES, LEGACY_ROLE_MAP, PERMISSIONS, FEATURE_PERMISSION_PARENTS } from './lib/permissions.js';
 
 export const ROLES = [
   'Owner / Director', 'Administrator', 'Project Manager', 'Site Supervisor', 'Storekeeper',
@@ -244,6 +244,50 @@ async function createHrTables() {
     CONSTRAINT fk_employee_user FOREIGN KEY(user_id) REFERENCES users(id)
   ) ENGINE=InnoDB`);
   await addColumn('employees', 'weekly_rate', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('employees', 'birth_date', 'DATE NULL');
+  await addColumn('employees', 'job_description', 'TEXT NULL');
+  await query(`CREATE TABLE IF NOT EXISTS employee_asset_handovers (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,employee_id BIGINT UNSIGNED NOT NULL,
+    asset_name VARCHAR(180) NOT NULL,asset_code VARCHAR(120) NOT NULL,category VARCHAR(80) NOT NULL,
+    handed_on DATE NOT NULL,condition_before TEXT NOT NULL,notes TEXT NULL,
+    returned_on DATE NULL,condition_returned TEXT NULL,created_by BIGINT UNSIGNED NOT NULL,
+    active_code VARCHAR(120) GENERATED ALWAYS AS (CASE WHEN returned_on IS NULL THEN asset_code ELSE NULL END) STORED,
+    UNIQUE KEY uq_asset_open(active_code),
+    FOREIGN KEY(employee_id) REFERENCES employees(id),FOREIGN KEY(created_by) REFERENCES users(id),
+    INDEX idx_employee_asset_open(employee_id,returned_on)
+  ) ENGINE=InnoDB`);
+  await addColumn('employee_asset_handovers','active_code',"VARCHAR(120) GENERATED ALWAYS AS (CASE WHEN returned_on IS NULL THEN asset_code ELSE NULL END) STORED");
+  await addIndex('employee_asset_handovers','uq_asset_open','UNIQUE KEY uq_asset_open(active_code)');
+  await query(`CREATE TABLE IF NOT EXISTS hiring_candidates (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,name VARCHAR(120) NOT NULL,phone VARCHAR(40) NULL,
+    address VARCHAR(1000) NULL,email VARCHAR(190) NULL,position VARCHAR(120) NULL,
+    status ENUM('Shortlisted','Interviewing','Selected','Dropped','Hired') NOT NULL DEFAULT 'Shortlisted',
+    decision_notes TEXT NULL,employee_id BIGINT UNSIGNED NULL UNIQUE,
+    created_by BIGINT UNSIGNED NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_candidate_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
+    CONSTRAINT fk_candidate_author FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS hiring_interviews (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,candidate_id BIGINT UNSIGNED NOT NULL,
+    scheduled_at DATETIME NOT NULL,interviewer VARCHAR(120) NOT NULL,location VARCHAR(300) NULL,
+    status ENUM('Scheduled','Completed','Cancelled','No show') NOT NULL DEFAULT 'Scheduled',notes TEXT NULL,
+    created_by BIGINT UNSIGNED NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_interview_candidate FOREIGN KEY(candidate_id) REFERENCES hiring_candidates(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS employee_conduct_records (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,employee_id BIGINT UNSIGNED NOT NULL,
+    kind ENUM('Offence','Good rating') NOT NULL,record_date DATE NOT NULL,
+    description TEXT NOT NULL,rating TINYINT UNSIGNED NULL,created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_conduct_employee FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+    CONSTRAINT fk_conduct_author FOREIGN KEY(created_by) REFERENCES users(id),INDEX idx_conduct_employee(employee_id,record_date)
+  ) ENGINE=InnoDB`);
+  await addColumn('employees', 'nic_number', 'VARCHAR(40) NULL');
+  await addColumn('employees', 'additional_phone_1', 'VARCHAR(40) NULL');
+  await addColumn('employees', 'additional_phone_2', 'VARCHAR(40) NULL');
+  await addColumn('employees', 'residential_address', 'VARCHAR(1000) NULL');
+  await addColumn('employees', 'permanent_address', 'VARCHAR(1000) NULL');
+  if (!(await columnIsNullable('employees', 'join_date'))) await query('ALTER TABLE employees MODIFY join_date DATE NULL');
   await addColumn('employees', 'pay_basis', "ENUM('Monthly salary','Weekly rate','Daily rate') NOT NULL DEFAULT 'Monthly salary'");
   await addColumn('employees', 'pay_frequency', "ENUM('Daily','Weekly','Monthly') NOT NULL DEFAULT 'Monthly'");
   const hadPayrollCategory = await columnExists('employees', 'payroll_category');
@@ -283,6 +327,16 @@ async function createHrTables() {
     CONSTRAINT fk_leave_employee FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE,
     CONSTRAINT fk_leave_decider FOREIGN KEY(decided_by) REFERENCES users(id), INDEX idx_leave_status(status)
   ) ENGINE=InnoDB`);
+  const hadLeavePaymentType = await columnExists('leave_requests','payment_type');
+  await addColumn('leave_requests', 'payment_type', "ENUM('Paid','Unpaid') NOT NULL DEFAULT 'Paid'");
+  await query(`CREATE TABLE IF NOT EXISTS payroll_schedules (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,company_id TINYINT UNSIGNED NOT NULL,
+    period_start DATE NOT NULL,period_end DATE NOT NULL,pay_frequency VARCHAR(20) NOT NULL,
+    run_at DATETIME NOT NULL,created_by BIGINT UNSIGNED NOT NULL,
+    status ENUM('Scheduled','Running','Completed','Failed') NOT NULL DEFAULT 'Scheduled',
+    message VARCHAR(600) NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB`);
+  if (!hadLeavePaymentType) await query("UPDATE leave_requests SET payment_type='Unpaid' WHERE leave_type='Unpaid'");
   await query(`CREATE TABLE IF NOT EXISTS overtime_records (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_id BIGINT UNSIGNED NOT NULL, project_id BIGINT UNSIGNED NULL,
     work_date DATE NOT NULL, overtime_type ENUM('Office','Site','Travel') NOT NULL DEFAULT 'Site',
@@ -572,6 +626,18 @@ async function createAssetTables() {
     CONSTRAINT fk_vehdoc_vehicle FOREIGN KEY(vehicle_id) REFERENCES fleet(id) ON DELETE CASCADE,
     UNIQUE KEY uq_vehicle_doc(vehicle_id,doc_type), INDEX idx_vehdoc_expiry(expiry_date)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS hr_insurance (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,name VARCHAR(180) NOT NULL,
+    kind ENUM('Work site','Employee life','Vehicle') NOT NULL,
+    project_id BIGINT UNSIGNED NULL,employee_id BIGINT UNSIGNED NULL,vehicle_id BIGINT UNSIGNED NULL,
+    insurer VARCHAR(180) NOT NULL DEFAULT '',policy_number VARCHAR(120) NOT NULL DEFAULT '',
+    start_date DATE NOT NULL,end_date DATE NOT NULL,expiry_date DATE NOT NULL,
+    premium DECIMAL(12,2) NOT NULL DEFAULT 0,contact VARCHAR(300) NOT NULL DEFAULT '',
+    coverage TEXT NULL,notes TEXT NULL,reminders JSON NOT NULL,
+    status ENUM('Active','Archived') NOT NULL DEFAULT 'Active',created_by BIGINT UNSIGNED NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id),FOREIGN KEY(employee_id) REFERENCES employees(id),
+    FOREIGN KEY(vehicle_id) REFERENCES fleet(id),FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS fuel_records (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, vehicle_id BIGINT UNSIGNED NOT NULL, project_id BIGINT UNSIGNED NULL,
     fuel_date DATE NOT NULL, litres DECIMAL(10,2) NOT NULL, cost DECIMAL(12,2) NOT NULL, odometer INT UNSIGNED NOT NULL DEFAULT 0,
@@ -711,7 +777,7 @@ async function createReportDetailTables() {
 async function createAttachmentTables() {
   await query(`CREATE TABLE IF NOT EXISTS attachments (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    owner_type ENUM('task','project','employee','report','vehicle','equipment') NOT NULL,
+    owner_type ENUM('task','project','employee','report','vehicle','equipment','candidate','handover') NOT NULL,
     owner_id BIGINT UNSIGNED NOT NULL, storage_key VARCHAR(400) NOT NULL, url VARCHAR(600) NOT NULL,
     filename VARCHAR(200) NOT NULL, mime VARCHAR(120) NOT NULL, size_bytes BIGINT UNSIGNED NOT NULL,
     title VARCHAR(200) NULL, category VARCHAR(80) NULL, kind ENUM('File','Site photo') NOT NULL DEFAULT 'File',
@@ -719,6 +785,7 @@ async function createAttachmentTables() {
     CONSTRAINT fk_upload_user FOREIGN KEY(uploaded_by) REFERENCES users(id),
     INDEX idx_attachment_owner(owner_type,owner_id), INDEX idx_attachment_expiry(expiry_date)
   ) ENGINE=InnoDB`);
+  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim') NOT NULL");
 }
 
 /** 2.2 payroll and performance, and PID section 3 step 1 (customer inquiry). */
@@ -2703,7 +2770,9 @@ async function seedAccessControl() {
     for (const role of DEFAULT_ROLES) {
       const result = await query('INSERT INTO roles (name,description,is_system) VALUES (?,?,?)',
         [role.name, role.description, role.system ? 1 : 0]);
-      for (const key of role.permissions()) {
+      const defaults=role.permissions();
+      const featureDefaults=Object.entries(FEATURE_PERMISSION_PARENTS).filter(([,parent])=>defaults.includes(parent)).map(([feature])=>feature);
+      for (const key of [...new Set([...defaults,...featureDefaults])]) {
         await query('INSERT IGNORE INTO role_permissions (role_id,permission_key) VALUES (?,?)', [result.insertId, key]);
       }
     }
@@ -2712,6 +2781,24 @@ async function seedAccessControl() {
   /* A role created before a permission existed should still receive it if it holds
      everything else — this keeps the MD's "full access" role genuinely full. */
   const systemRoles = await query('SELECT id FROM roles WHERE is_system=1');
+  await query('CREATE TABLE IF NOT EXISTS permission_catalogue_migrations (permission_key VARCHAR(100) PRIMARY KEY) ENGINE=InnoDB');
+  for(const [feature,parent] of Object.entries(FEATURE_PERMISSION_PARENTS)) {
+    const migrated=await query('SELECT permission_key FROM permission_catalogue_migrations WHERE permission_key=?',[feature]);
+    if(!migrated.length){
+      await query('INSERT IGNORE INTO role_permissions(role_id,permission_key) SELECT role_id,? FROM role_permissions WHERE permission_key=?',[feature,parent]);
+      await query('INSERT IGNORE INTO permission_catalogue_migrations(permission_key) VALUES(?)',[feature]);
+    }
+    const delegationKey=`delegation:${feature}`;
+    if(!(await query('SELECT permission_key FROM permission_catalogue_migrations WHERE permission_key=?',[delegationKey])).length){
+      await query(`INSERT IGNORE INTO user_permissions(user_id,permission_key,effect,reason,expires_at,granted_by)
+        SELECT user_id,?,effect,reason,expires_at,granted_by FROM user_permissions WHERE permission_key=?`,[feature,parent]);
+      await query('INSERT IGNORE INTO permission_catalogue_migrations(permission_key) VALUES(?)',[delegationKey]);
+    }
+  }
+  if (!(await query("SELECT permission_key FROM permission_catalogue_migrations WHERE permission_key='hr-fleet-view-v1'")).length) {
+    await query("INSERT IGNORE INTO role_permissions(role_id,permission_key) SELECT role_id,'transport.view' FROM role_permissions WHERE permission_key='hr.insurance'");
+    await query("INSERT INTO permission_catalogue_migrations(permission_key) VALUES('hr-fleet-view-v1')");
+  }
   for (const role of systemRoles) {
     for (const permission of PERMISSIONS) {
       await query('INSERT IGNORE INTO role_permissions (role_id,permission_key) VALUES (?,?)', [role.id, permission.key]);
@@ -2866,6 +2953,34 @@ export async function migrate() {
   await createFleetHistoryTables();
   await createClientDirectory();
   await createProjectManagerLinks();
+  await addColumn('payroll_policies','hr_rules','JSON NULL');
+  await modifyColumn('attendance','source',"VARCHAR(50) NOT NULL DEFAULT 'Manual'");
+  await addColumn('attendance','source_notes','TEXT NULL');
+  await addColumn('employees','allowance_eligibility','JSON NULL');
+  await addColumn('overtime_records','input_detail','JSON NULL');
+  await query(`CREATE TABLE IF NOT EXISTS hr_payroll_claims (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,employee_id BIGINT UNSIGNED NOT NULL,work_date DATE NOT NULL,
+    project_id BIGINT UNSIGNED NULL,kind ENUM('Travel','Mileage','Special duty','Machine/operator') NOT NULL,
+    detail JSON NOT NULL,calculation JSON NOT NULL,policy_id BIGINT UNSIGNED NOT NULL,
+    status ENUM('Draft','Confirmed','Approved','Rejected') NOT NULL DEFAULT 'Draft',
+    created_by BIGINT UNSIGNED NOT NULL,reviewed_by BIGINT UNSIGNED NULL,reviewed_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_claim_day(employee_id,work_date,kind),
+    FOREIGN KEY(employee_id) REFERENCES employees(id),FOREIGN KEY(project_id) REFERENCES projects(id),
+    FOREIGN KEY(policy_id) REFERENCES payroll_policies(id),FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('payslip_components','claim_id','BIGINT UNSIGNED NULL');
+  await addIndex('payslip_components','uq_paid_claim','UNIQUE KEY uq_paid_claim(claim_id)');
+  await query(`CREATE TABLE IF NOT EXISTS payroll_project_allocations (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,payslip_id BIGINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NOT NULL,employee_id BIGINT UNSIGNED NOT NULL,work_date DATE NOT NULL,
+    source_type ENUM('Attendance','Overtime','Claim') NOT NULL,source_id BIGINT UNSIGNED NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,UNIQUE KEY uq_payroll_cost_source(source_type,source_id),
+    FOREIGN KEY(payslip_id) REFERENCES payslips(id),FOREIGN KEY(project_id) REFERENCES projects(id),FOREIGN KEY(employee_id) REFERENCES employees(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('employee_pay_components','calculation_method',"VARCHAR(50) NOT NULL DEFAULT 'Fixed full amount'");
+  await addColumn('employee_pay_components','allowance_type',"VARCHAR(50) NOT NULL DEFAULT 'Other'");
+  await addColumn('payslip_components','calculation_detail','TEXT NULL');
   await seedWorkMethods();
   await seedAccessControl();
 }

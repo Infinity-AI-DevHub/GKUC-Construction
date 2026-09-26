@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { query } from '../db.js';
+import { query,audit,pool } from '../db.js';
 import { isPermission } from './permissions.js';
 import { isValidOption, optionsFor } from './options.js';
 import { touch } from './presence.js';
@@ -79,11 +79,11 @@ export const permit = (...keys) => {
   for (const key of keys) {
     if (!isPermission(key)) throw new Error(`Unknown permission "${key}" — add it to the catalogue`);
   }
-  return (req, res, next) => (
-    keys.some(key => req.user.permissions.includes(key))
-      ? next()
-      : res.status(403).json({ error: 'You do not have permission for this action' })
-  );
+  return wrap(async(req,res,next)=>{
+    if(keys.some(key=>req.user.permissions.includes(key)))return next();
+    await audit(pool,req.user.id,'ACCESS_DENIED','permission','',null,{path:req.path,method:req.method,required:keys},req.ip);
+    return res.status(403).json({error:'You do not have permission for this action. Ask an authorised HR user or administrator to complete it.'});
+  });
 };
 
 export const can = (req, key) => Boolean(req.user?.permissions?.includes(key));

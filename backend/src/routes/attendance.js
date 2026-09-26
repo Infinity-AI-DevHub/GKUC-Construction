@@ -10,7 +10,7 @@ const attendanceTime = z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9](?::[0-5]
 const select = `SELECT a.id,a.employee_name name,a.role,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,a.project_id projectId,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,
   a.state,a.work_date workDate,a.employee_id employeeId FROM attendance a LEFT JOIN projects p ON p.id=a.project_id`;
 
-router.get('/', auth, permit('hr.view','site.attendance','hr.attendance'), wrap(async (req, res) => {
+router.get('/', auth, permit('hr.attendance','hr.manage'), wrap(async (req, res) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : today();
   res.json(await query(`${select} WHERE a.work_date=? ORDER BY a.id`, [date]));
 }));
@@ -31,7 +31,7 @@ const workdays = (from, to) => {
 const percentage = (value, total) => total ? Math.round((value / total) * 100) : 0;
 
 /** Workforce picture for the attendance dashboard, calculated from live records. */
-router.get('/analytics', auth, permit('hr.view','site.attendance','hr.attendance'), wrap(async (_req, res) => {
+router.get('/analytics', auth, permit('hr.attendance','hr.manage'), wrap(async (_req, res) => {
   const end = today();
   const start = dateShift(end, -364);
   const [employees, records] = await Promise.all([
@@ -79,7 +79,7 @@ router.get('/analytics', auth, permit('hr.view','site.attendance','hr.attendance
   });
 }));
 
-router.post('/', auth, permit('site.attendance','hr.attendance'), validate(z.object({
+router.post('/', auth, permit('hr.attendance'), validate(z.object({
   name: z.string().min(2).max(120),
   role: z.string().min(2).max(100),
   projectId: z.number().int().positive().nullable().optional(),
@@ -88,18 +88,24 @@ router.post('/', auth, permit('site.attendance','hr.attendance'), validate(z.obj
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   state: z.enum(['On site', 'Late', 'Checked out', 'Absent', 'On leave', 'Business trip']).default('On site'),
   checkIn: attendanceTime.nullable().optional(),
-  checkOut: attendanceTime.nullable().optional()
+  checkOut: attendanceTime.nullable().optional(),
+  informationSource:z.enum(['Biometric','Attendance sheet','WhatsApp','Signed timesheet','Management instruction','Other']).default('Other'),
+  sourceNotes:z.string().trim().max(2000).default('')
 }).refine(value => value.workLocation !== 'Site' || Boolean(value.projectId), {
   message: 'Choose the site where this person worked', path: ['projectId']
 })), wrap(async (req, res) => {
   const body = req.body;
   try {
-    const checkIn = ['Absent', 'On leave', 'Business trip'].includes(body.state) ? null : (body.checkIn || clock());
-    const checkOut = ['Absent', 'On leave', 'Business trip'].includes(body.state) ? null : (body.checkOut || null);
+    if(!body.employeeId)return res.status(400).json({error:'Select a saved employee. Attendance must belong to one employee profile.'});
+    const employee=await getOne('SELECT name,designation FROM employees WHERE id=?',[body.employeeId]);
+    if(!employee)return res.status(404).json({error:'Employee not found. Refresh the employee list.'});
+    const checkIn = ['Absent', 'On leave'].includes(body.state) ? null : (body.checkIn || null);
+    const checkOut = ['Absent', 'On leave'].includes(body.state) ? null : (body.checkOut || null);
     const state = body.state === 'On site' && checkIn > LATE_AFTER ? 'Late' : body.state;
     const projectId = body.workLocation === 'Office' ? null : body.projectId;
     const result = await query(`INSERT INTO attendance (employee_name,role,project_id,work_location,employee_id,work_date,check_in,check_out,state,confirmed_by,source)
       VALUES (?,?,?,?,?,?,?,?,?,?,'Manual')`, [body.name, body.role, projectId, body.workLocation, body.employeeId || null, body.date, checkIn, checkOut, state, req.user.id]);
+    await query('UPDATE attendance SET employee_name=?,source=?,source_notes=? WHERE id=?',[employee.name,body.informationSource,body.sourceNotes,result.insertId]);
     const row = await getOne(`${select} WHERE a.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'attendance', row.id, null, row, req.ip);
     res.status(201).json(row);
@@ -110,9 +116,10 @@ router.post('/', auth, permit('site.attendance','hr.attendance'), validate(z.obj
 }));
 
 /** One button that checks a worker in, then out — supervisors do not have to pick the action. */
-router.post('/:id/toggle', auth, permit('site.attendance'), wrap(async (req, res) => {
+router.post('/:id/toggle', auth, permit('hr.attendance'), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM attendance WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Attendance record not found' });
+  if(before.work_date!==today())return res.status(409).json({error:'Use attendance correction with a reason to change historical attendance.'});
   const now = clock();
   if (before.check_in && !before.check_out) {
     await query("UPDATE attendance SET check_out=?,state='Checked out',confirmed_by=? WHERE id=?", [now, req.user.id, before.id]);
@@ -126,18 +133,19 @@ router.post('/:id/toggle', auth, permit('site.attendance'), wrap(async (req, res
 }));
 
 /** Corrections are allowed but always carry a reason and land in the audit log. */
-router.patch('/:id', auth, permit('site.attendance','hr.attendance'), validate(z.object({
+router.patch('/:id', auth, permit('hr.attendance','hr.manage'), validate(z.object({
   state: z.enum(['On site', 'Late', 'Checked out', 'Absent', 'On leave', 'Business trip']).optional(),
   checkIn: attendanceTime.nullable().optional(),
   checkOut: attendanceTime.nullable().optional(),
   workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   projectId: z.number().int().positive().nullable().optional(),
   workLocation: z.enum(['Office', 'Site', 'Not working']).optional(),
+  informationSource:z.enum(['Biometric','Attendance sheet','WhatsApp','Signed timesheet','Management instruction','Other']).optional(),sourceNotes:z.string().max(2000).optional(),
   reason: z.string().trim().min(3).max(500)
 })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM attendance WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Attendance record not found' });
-  const columns = { state: 'state', checkIn: 'check_in', checkOut: 'check_out', workDate: 'work_date', projectId: 'project_id', workLocation: 'work_location' };
+  const columns = { state: 'state', checkIn: 'check_in', checkOut: 'check_out', workDate: 'work_date', projectId: 'project_id', workLocation: 'work_location',informationSource:'source',sourceNotes:'source_notes' };
   const body = { ...req.body };
   if (body.workLocation === 'Office' || body.workLocation === 'Not working') body.projectId = null;
   if (body.workLocation === 'Not working' && !['Absent', 'On leave'].includes(body.state || before.state)) {

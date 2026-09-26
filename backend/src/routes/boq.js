@@ -207,7 +207,7 @@ router.get('/cost-control/daily-sheets/:id', auth, permit('qs.view','qs.boq','fi
   res.json({ ...sheet, lines });
 }));
 
-router.post('/cost-control/daily-sheets', auth, permit('qs.boq'), validate(z.object({
+router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), validate(z.object({
   projectId: z.number().int().positive(), workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   notes: z.string().trim().max(1000).nullable().optional(), lines: z.array(dailyLineSchema).min(1).max(100)
 })), wrap(async (req, res) => {
@@ -236,6 +236,8 @@ router.post('/cost-control/daily-sheets', auth, permit('qs.boq'), validate(z.obj
         if (!quoted) throw costError('The quotation item must belong to an accepted quotation for this project.');
       }
       if (line.source === 'Labour') {
+        const [[allocated]]=await connection.execute("SELECT id FROM payroll_project_allocations WHERE employee_id=? AND work_date=? AND source_type='Attendance'",[line.employeeId||0,workDate]);
+        if(allocated)throw costError('This employee/day is already allocated from payroll. Use the payroll allocation instead of recording a second labour cost.',409);
         if (labourersOnSheet.has(line.employeeId)) throw costError('A labourer day salary can be charged only once on this sheet.');
         labourersOnSheet.add(line.employeeId);
         const [[employee]] = await connection.execute('SELECT daily_rate dailyRate FROM employees WHERE id=? AND status<>\'Left\'', [line.employeeId || 0]);
@@ -302,7 +304,7 @@ router.post('/cost-control/daily-sheets', auth, permit('qs.boq'), validate(z.obj
   res.status(201).json({ id, status:'Submitted' });
 }));
 
-router.post('/cost-control/daily-sheets/:id/review', auth, permit('finance.manage'), validate(z.object({
+router.post('/cost-control/daily-sheets/:id/review', auth, permit("finance.costReview"), validate(z.object({
   decision: z.enum(['Approved','Returned']), note: z.string().trim().max(1000).optional()
 })), wrap(async (req, res) => {
   const sheetId = Number(req.params.id);
@@ -415,10 +417,10 @@ router.post('/cost-control/daily-sheets/:id/review', auth, permit('finance.manag
   res.json({ id:sheetId,status:decision });
 }));
 
-router.post('/cost-control/expenses', auth, permit('qs.boq','finance.manage'), (_req, res) =>
+router.post('/cost-control/expenses', auth, permit("qs.costControl"), (_req, res) =>
   res.status(410).json({ error:'Daily costs now require a QS submission and Finance review. Open Cost control and submit a daily cost sheet.' }));
 
-router.patch('/cost-control/expenses/:id', auth, permit('qs.boq','finance.manage'), validate(z.object({
+router.patch('/cost-control/expenses/:id', auth, permit("qs.costControl"), validate(z.object({
   projectId: z.number().int().positive(),
   boqItemId: z.number().int().positive(),
   costType: z.enum(['Expected','Variation','Unexpected']).default('Expected'),
@@ -435,7 +437,7 @@ router.patch('/cost-control/expenses/:id', auth, permit('qs.boq','finance.manage
   res.json(after);
 }));
 
-router.patch('/cost-control/items/:itemId/forecast', auth, permit('qs.boq'), validate(z.object({
+router.patch('/cost-control/items/:itemId/forecast', auth, permit("qs.costControl"), validate(z.object({
   projectId: z.number().int().positive(),
   forecastQuantity: z.number().positive().nullable().optional(),
   forecastRate: z.number().nonnegative().nullable().optional(),

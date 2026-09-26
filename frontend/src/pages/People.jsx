@@ -1,4 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
+import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFields.jsx';
+import Hiring from './Hiring.jsx';
+import Insurance from './Insurance.jsx';
+import PayrollInputs from './PayrollInputs.jsx';
 import { ArrowDownToLine, Check, Clock3, PencilLine, Search, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
 import { api, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { allowedTabs, Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
@@ -13,15 +17,18 @@ import WorkforceMap from './WorkforceMap.jsx';
 /* Each tab beside the permissions the server will accept for it — see allowedTabs. */
 const TABS = [
   ['Employees', ['hr.view', 'hr.manage']],
-  ['Workforce map', ['hr.view', 'hr.manage', 'hr.attendance', 'site.attendance']],
-  ['Attendance', ['hr.view', 'hr.attendance', 'site.attendance']],
-  ['Attendance register', ['hr.view', 'hr.attendance', 'site.attendance']],
+  ['Hiring',['hr.hiring']],
+  ['Insurance',['hr.insurance']],
+  ['Workforce map', ['hr.view', 'hr.manage', 'hr.attendance']],
+  ['Attendance', ['hr.manage', 'hr.attendance']],
+  ['Attendance register', ['hr.manage', 'hr.attendance']],
   ['Biometric import', ['hr.attendance']],
   ['Leave', ['hr.view', 'hr.leave']],
   ['Leave register', ['hr.view', 'hr.leave']],
-  ['Overtime', ['hr.view', 'hr.leave']],
+  ['Overtime', ['hr.payroll']],
   ['Payroll', ['hr.payroll']],
-  ['Payroll settings', ['hr.payroll']],
+  ['Payroll Inputs',['hr.payroll']],
+  ['Payroll settings', ['hr.settings']],
   ['Performance', ['hr.payroll', 'hr.manage']],
   ['Departments', ['hr.view', 'hr.manage']]
 ];
@@ -64,7 +71,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     Departments: can.hr && 'Add department'
   };
 
-  if (employeeId) return <EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr}
+  if (employeeId) return <EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} canConduct={can.conduct} canAssets={can.assets}
     canCorrect={can.attendance || can.hrImport} projects={allProjects} departments={data.departments}
     companies={companies} reloadPeople={reload} />;
 
@@ -73,6 +80,9 @@ export default function People({ data, allData, reload, can, companies, companyI
     <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
     {tab === 'Employees' && <Employees data={data} can={can} onOpen={openEmployee} focusRequest={employeeSearchRequest} />}
+    {tab === 'Hiring' && <Hiring companies={companies} companyId={companyId} reload={reload} />}
+    {tab === 'Insurance' && <Insurance />}
+    {tab === 'Payroll Inputs' && <PayrollInputs data={data}/>}
     {tab === 'Workforce map' && <WorkforceMap canManage={can.hr} canPlan={can.hr || can.hrImport} projects={allProjects} />}
     {tab === 'Attendance' && <Attendance data={data} projects={allProjects} reload={reload} can={can} />}
     {tab === 'Attendance register' && <AttendanceRegister projects={allProjects} canCorrect={can.attendance || can.hrImport} />}
@@ -189,6 +199,16 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
   const toggleComponent = async row => { await patch(`/payroll/settings/components/${row.id}`, { active: !row.active }); await load(); };
 
   return <>
+    <PayrollSchedule companyId={companyId} />
+    <section className="panel">
+      <div className="panel-title"><h2>EPF & ETF rates</h2><button type="button" onClick={()=>setPolicyOpen(true)}>Set / change rates</button></div>
+      <div className="report-form">
+        <div><strong>Employee EPF</strong><p>{settings.activePolicy?.epfEmployeeRate ?? 'Not set'}%</p></div>
+        <div><strong>Employer EPF</strong><p>{settings.activePolicy?.epfEmployerRate ?? 'Not set'}%</p></div>
+        <div><strong>Employer ETF</strong><p>{settings.activePolicy?.etfEmployerRate ?? 'Not set'}%</p></div>
+        <p className="form-note wide">Calculated only on earned basic salary, after unpaid leave deductions. Overtime, allowances and reimbursements are excluded. EPF and ETF eligibility remain configurable separately for each employee. Rate changes use an effective date; existing salary sheets are not recalculated automatically.</p>
+      </div>
+    </section>
     <div className="project-stats">
       <div><span>Effective policy</span><strong>{settings.activePolicy ? shortDate(settings.activePolicy.effectiveFrom) : 'Not set'}</strong></div>
       <div><span>Payroll company</span><strong>{company?.name}</strong></div>
@@ -199,7 +219,7 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
 
     <Table columns={['Effective', 'Office OT', 'Labour site', 'Labour travel', 'Driver OT', 'Supervisor site', 'Supervisor travel', 'EPF employee', 'EPF employer', 'ETF employer']}
       template={POLICY_TEMPLATE} title="Effective-dated payroll policies"
-      tools={<button className="status-button" onClick={() => setPolicyOpen(true)}>Add future policy</button>}>
+      tools={<button className="status-button" onClick={() => setPolicyOpen(true)}>Set payroll rates</button>}>
       {settings.policies.map(row => <Row template={POLICY_TEMPLATE} key={row.id}>
         <strong>{shortDate(row.effectiveFrom)}</strong><span>{rupees(row.officeOtRate)}</span>
         <span>{rupees(row.siteLabourSiteOtRate)}</span><span>{rupees(row.siteLabourTravelOtRate)}</span>
@@ -237,8 +257,26 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
   </>;
 }
 
+function PayrollSchedule({companyId}) {
+  const [rows,setRows]=useState([]);
+  const [open,setOpen]=useState(false);
+  const load=()=>api(`/payroll/schedules?companyId=${companyId}`).then(setRows).catch(()=>setRows([]));
+  useEffect(()=>{load();const timer=setInterval(load,60000);return()=>clearInterval(timer);},[companyId]);
+  return <>
+    <Table title="Automatic payroll" columns={['Period','Pay frequency','Run date / time','Status','Result']} rows={rows.map(row=>[`${shortDate(row.periodStart)} – ${shortDate(row.periodEnd)}`,row.payFrequency,String(row.runAt).replace('T',' ').slice(0,16),row.status,row.message || 'Awaiting scheduled date'])} />
+    <button className="secondary" onClick={()=>setOpen(true)}>Schedule automatic payroll</button>
+    {open && <FormModal title="Schedule automatic payroll" close={()=>setOpen(false)} label="Save schedule" onSubmit={async values=>{await post('/payroll/schedules',{companyId:Number(companyId),periodStart:values.periodStart,periodEnd:values.periodEnd,payFrequency:values.payFrequency,runAt:values.runAt});await load();}}>
+      <p className="form-note wide">At this Sri Lanka date and time, the server creates a draft salary run automatically. HR still reviews and approves it; no salary payment is made automatically. Schedule each required daily, weekly or monthly pay period.</p>
+      <Field name="periodStart" label="Payroll period start" type="date" />
+      <Field name="periodEnd" label="Payroll period end" type="date" />
+      <SelectField name="payFrequency" label="Pay frequency" options={['Daily','Weekly','Monthly']} />
+      <Field name="runAt" label="Run automatically at (Sri Lanka time)" type="datetime-local" />
+    </FormModal>}
+  </>;
+}
+
 function PolicyForm({ companyId, policy, close, reload }) {
-  return <FormModal title="Add an effective payroll policy" close={close} label="Save future policy" wide onSubmit={async values => {
+  return <FormModal title="Set payroll rates and effective date" close={close} label="Save payroll policy" wide onSubmit={async values => {
     await post('/payroll/settings/policies', {
       companyId,
       effectiveFrom: values.effectiveFrom,
@@ -246,11 +284,15 @@ function PolicyForm({ companyId, policy, close, reload }) {
       siteLabourTravelOtRate: Number(values.siteLabourTravelOtRate), driverOtRate: Number(values.driverOtRate),
       supervisorSiteOtRate: Number(values.supervisorSiteOtRate), supervisorTravelOtRate: Number(values.supervisorTravelOtRate),
       epfEmployeeRate: Number(values.epfEmployeeRate), epfEmployerRate: Number(values.epfEmployerRate),
-      etfEmployerRate: Number(values.etfEmployerRate), epfBasis: 'Basic earnings', etfBasis: 'Basic earnings'
+      etfEmployerRate: Number(values.etfEmployerRate), epfBasis: 'Basic earnings', etfBasis: 'Basic earnings',
+      hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),maxDailyOt:Number(values.maxDailyOt),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'}
     });
     await reload();
   }}>
     <Field name="effectiveFrom" label="Effective from" type="date" defaultValue={todayInput()} />
+    {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],otInterval:['OT rounding interval (hours, rounded down)',0.5,'number'],minimumOt:['Minimum payable OT (hours)',0.5,'number'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number'],transportDivisor:['Monthly transport proration divisor (days)',25,'number'],fullTransportDays:['Full transport threshold — confirm with HR','', 'number'],longDistanceKm:['Long-distance threshold (km, greater than)',50,'number'],longDistancePayment:['Long-distance allowance per qualifying claim (LKR)',500,'number'],mileageRate:['Motorcycle mileage rate (LKR/km)',17,'number'],fixedTravelPayment:['Fixed office-travel payment (LKR)',300,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} required={name!=='fullTransportDays'} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
+    <SelectField name="fullTransportComparison" label="Full transport threshold comparison" options={['At least','More than']} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.fullTransportComparison||'At least'}/>
+    {['allowMileageAndFixed','countLeaveForTransport','countAbsenceForTransport'].map(name=><SelectField key={name} name={name} label={{allowMileageAndFixed:'Allow mileage and fixed travel together',countLeaveForTransport:'Count leave days for transport',countAbsenceForTransport:'Count absent days for transport'}[name]} options={[[false,'No'],[true,'Yes']]} defaultValue={String((typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]||false)}/>)}
     <Field name="officeOtRate" label="Office OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.officeOtRate ?? 225} />
     <Field name="siteLabourSiteOtRate" label="Labour site OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.siteLabourSiteOtRate ?? 200} />
     <Field name="siteLabourTravelOtRate" label="Labour travel OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.siteLabourTravelOtRate ?? 100} />
@@ -275,11 +317,13 @@ function PayProfileForm({ employee, companies, close, reload }) {
       epfEligible: values.epfEligible === 'true', etfEligible: values.etfEligible === 'true',
       customOfficeOtRate: values.customOfficeOtRate === '' ? null : Number(values.customOfficeOtRate),
       customSiteOtRate: values.customSiteOtRate === '' ? null : Number(values.customSiteOtRate),
-      customTravelOtRate: values.customTravelOtRate === '' ? null : Number(values.customTravelOtRate)
+      customTravelOtRate: values.customTravelOtRate === '' ? null : Number(values.customTravelOtRate),
+      allowanceEligibility:Object.fromEntries(['transport','longDistance','motorcycle','machine','specialDuty'].map(key=>[key,values[`eligible_${key}`]==='true']))
     });
     await reload();
   }}>
     <SelectField name="payrollCompanyId" label="Salary paid by" options={companies.map(row => [row.id, row.name])} defaultValue={employee.payrollCompanyId || 1} />
+    {['transport','longDistance','motorcycle','machine','specialDuty'].map(key=><SelectField key={key} name={`eligible_${key}`} label={`${{transport:'Monthly transport',longDistance:'Long-distance site',motorcycle:'Personal motorcycle mileage',machine:'Machine/operator',specialDuty:'Special daily-duty'}[key]} eligibility`} options={[[false,'Not eligible'],[true,'Eligible']]} defaultValue={String((typeof employee.allowanceEligibility==='string'?JSON.parse(employee.allowanceEligibility):employee.allowanceEligibility)?.[key]||false)}/>)}
     <SelectField name="payBasis" label="Pay basis" options={['Monthly salary', 'Weekly rate', 'Daily rate']} defaultValue={employee.payBasis} />
     <SelectField name="payFrequency" label="Payment frequency" options={['Daily', 'Weekly', 'Monthly']} defaultValue={employee.payFrequency} />
     <SelectField name="payrollCategory" label="Payroll category" options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} defaultValue={employee.payrollCategory} />
@@ -299,11 +343,14 @@ function PayComponentForm({ employee, close, reload }) {
   return <FormModal title={`Add pay component for ${employee.name}`} close={close} label="Add recurring component" onSubmit={async values => {
     await post('/payroll/settings/components', {
       employeeId: employee.id, name: values.name, kind: values.kind, amount: Number(values.amount),
-      payFrequency: values.payFrequency, effectiveFrom: values.effectiveFrom, effectiveTo: values.effectiveTo || null
+      payFrequency: values.payFrequency, effectiveFrom: values.effectiveFrom, effectiveTo: values.effectiveTo || null,
+      calculationMethod:values.calculationMethod,allowanceType:values.allowanceType
     });
     await reload();
   }}>
     <Field name="name" label="Component name" placeholder="Transport allowance" />
+    <SelectField name="allowanceType" label="Allowance purpose" options={['Other','Transport','Machine/operator','Special duty']}/>
+    <SelectField name="calculationMethod" label="Calculation method" options={['Fixed full amount','Attendance-prorated amount','Per-day amount']}/>
     <SelectField name="kind" label="Type" options={['Allowance', 'Deduction', 'Reimbursement']} />
     <Field name="amount" label="Amount per pay cycle (LKR)" type="number" min="0" step="0.01" />
     <SelectField name="payFrequency" label="Pay frequency" options={['Daily', 'Weekly', 'Monthly']} defaultValue={employee.payFrequency} />
@@ -351,7 +398,7 @@ function PayrollDetail({ run, close }) {
         <Table columns={['Employee', 'Type', 'Component', 'Amount']} template="minmax(170px,1.2fr) 130px minmax(220px,1.5fr) 140px" title="Recurring component breakdown">
           {components.map(component => <Row template="minmax(170px,1.2fr) 130px minmax(220px,1.5fr) 140px" key={`${component.employeeCode}-${component.id}`}>
             <div><strong>{component.employee}</strong><small>{component.employeeCode}</small></div>
-            <span>{component.kind}</span><span>{component.name}</span><strong>{rupees(component.amount)}</strong>
+            <span>{component.kind}</span><span>{component.name}<small>{component.calculationDetail}</small></span><strong>{rupees(component.amount)}</strong>
           </Row>)}
         </Table>
       </div>}
@@ -527,12 +574,12 @@ function Leave({ can }) {
   return <Table columns={LEAVE_COLUMNS} template={LEAVE_TEMPLATE} title="Leave requests" empty="No leave requested.">
     {rows.map(row => <Row template={LEAVE_TEMPLATE} key={row.id}>
       <div><strong>{row.employee}</strong><small>{row.employeeCode}</small></div>
-      <span>{row.leaveType}</span>
+      <span>{row.leaveType}<small>{row.paymentType || (row.leaveType === 'Unpaid' ? 'Unpaid' : 'Paid')}</small></span>
       <span>{shortDate(row.fromDate)}</span>
       <span>{shortDate(row.toDate)}</span>
       <span>{row.days}</span>
       <Badge tone={slug(row.status)}>{row.status}</Badge>
-      {can.leave && row.status === 'Pending'
+      {can.payroll && row.status === 'Pending'
         ? <span className="row-actions">
           <button className="status-button" onClick={() => decide(row.id, 'Approved')}>Approve</button>
           <button className="status-button" onClick={() => decide(row.id, 'Rejected')}>Reject</button>
@@ -585,6 +632,7 @@ function Departments({ data }) {
 function EmployeeForm({ data, companies, companyId, close, reload }) {
   return <FormModal title="Add employee" close={close} label="Add employee" onSubmit={async values => {
     await post('/employees', {
+      ...personalDetails(values),
       code: values.code,
       name: values.name,
       departmentId: values.departmentId ? Number(values.departmentId) : undefined,
@@ -592,7 +640,7 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
       workerType: values.workerType,
       phone: values.phone || undefined,
       email: values.email || undefined,
-      joinDate: values.joinDate,
+      joinDate: values.joinDate || null,
       basicSalary: Number(values.basicSalary || 0),
       dailyRate: Number(values.dailyRate || 0),
       weeklyRate: Number(values.weeklyRate || 0),
@@ -601,7 +649,7 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
       payFrequency: values.payFrequency,
       payrollCategory: values.payrollCategory,
       payrollCompanyId: Number(values.payrollCompanyId),
-      compensationEffectiveFrom: values.compensationEffectiveFrom,
+      compensationEffectiveFrom: values.compensationEffectiveFrom || undefined,
       epfEligible: values.epfEligible === 'true',
       etfEligible: values.etfEligible === 'true'
     });
@@ -609,22 +657,24 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
   }}>
     <Field name="code" label="Employee code" defaultValue={`EMP-${String(data.employees.length + 1).padStart(4, '0')}`} />
     <Field name="name" label="Full name" />
-    <SelectField name="departmentId" label="Department" options={data.departments.map(department => [department.id, department.name])} />
-    <Field name="designation" label="Designation / trade" />
-    <SelectField name="workerType" label="Employee type" options={[["Office", "Office employee"], ["Site", "Site worker"]]} />
+    <EmployeePersonalFields />
+    <SelectField name="departmentId" label="Department" required={false} options={[["", "Not recorded"], ...data.departments.map(department => [department.id, department.name])]} />
+    <Field name="designation" label="Designation / trade" required={false} />
+    <SelectField required={false} name="workerType" label="Employee type" options={[["Office", "Office employee"], ["Site", "Site worker"]]} />
     <Field name="phone" label="Phone" required={false} />
     <Field name="email" label="Email" type="email" required={false} />
-    <Field name="joinDate" label="Join date" type="date" defaultValue={todayInput()} />
-    <SelectField name="payrollCompanyId" label="Salary paid by" options={companies.map(row => [row.id, row.name])} defaultValue={companyId} />
-    <SelectField name="payBasis" label="Pay basis" options={['Monthly salary', 'Weekly rate', 'Daily rate']} defaultValue="Monthly salary" />
-    <SelectField name="payFrequency" label="Payment frequency" options={['Daily', 'Weekly', 'Monthly']} defaultValue="Monthly" />
-    <SelectField name="payrollCategory" label="Payroll category" options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} defaultValue="Site labourer" />
-    <Field name="compensationEffectiveFrom" label="Compensation effective from" type="date" defaultValue={todayInput()} />
-    <Field name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue="0" />
+    <Field required={false} name="joinDate" label="Employment start date" type="date" />
+    <p className="form-note wide">Enter the date this employee actually started working for the company, including existing employees. This is not their registration date. Paid leave becomes available after six months.</p>
+    <SelectField required={false} name="payrollCompanyId" label="Salary paid by" options={companies.map(row => [row.id, row.name])} defaultValue={companyId} />
+    <SelectField required={false} name="payBasis" label="Pay basis" options={['Monthly salary', 'Weekly rate', 'Daily rate']} defaultValue="Monthly salary" />
+    <SelectField required={false} name="payFrequency" label="Payment frequency" options={['Daily', 'Weekly', 'Monthly']} defaultValue="Monthly" />
+    <SelectField required={false} name="payrollCategory" label="Payroll category" options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} defaultValue="Site labourer" />
+    <Field required={false} name="compensationEffectiveFrom" label="Compensation effective from" type="date" defaultValue={todayInput()} />
+    <Field required={false} name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue="0" />
     <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" required={false} />
     <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" required={false} />
-    <SelectField name="epfEligible" label="EPF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
-    <SelectField name="etfEligible" label="ETF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
+    <SelectField required={false} name="epfEligible" label="EPF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
+    <SelectField required={false} name="etfEligible" label="ETF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
     <Field name="overtimeRate" label="Legacy/custom OT rate (LKR/h)" type="number" min="0" defaultValue="0" required={false} />
   </FormModal>;
 }
@@ -642,7 +692,7 @@ function AttendanceForm({ data, close, reload }) {
       date: values.date,
       state: values.state,
       checkIn: values.checkIn || null,
-      checkOut: values.checkOut || null
+      checkOut: values.checkOut || null,informationSource:values.informationSource,sourceNotes:values.sourceNotes
     });
     await reload();
   }}>
@@ -653,23 +703,41 @@ function AttendanceForm({ data, close, reload }) {
     <SelectField name="state" label="Status" options={['On site', 'Late', 'Absent', 'On leave', 'Business trip']} />
     <Field name="checkIn" label="Check in (optional)" type="time" required={false} />
     <Field name="checkOut" label="Check out (optional)" type="time" required={false} />
+    <SelectField name="informationSource" label="Information source" options={['Biometric','Attendance sheet','WhatsApp','Signed timesheet','Management instruction','Other']}/>
+    <TextArea name="sourceNotes" label="Source reference / notes" required={false}/>
   </FormModal>;
 }
 
 function LeaveForm({ data, close, reload }) {
+  const [employeeId,setEmployeeId]=useState(String(data.employees[0]?.id || ''));
+  const [fromDate,setFromDate]=useState(todayInput());
+  const employee=data.employees.find(row=>String(row.id)===employeeId);
+  const start=employee?.joinDate ? inputDate(employee.joinDate) : '';
+  let eligibleFrom='';
+  if(start){
+    const [year,month,day]=start.split('-').map(Number);
+    const target=new Date(Date.UTC(year,month-1+6,1));
+    const lastDay=new Date(Date.UTC(target.getUTCFullYear(),target.getUTCMonth()+1,0)).getUTCDate();
+    target.setUTCDate(Math.min(day,lastDay));eligibleFrom=target.toISOString().slice(0,10);
+  }
+  const eligible=eligibleFrom && fromDate>=eligibleFrom;
   const leaveTypes = useOptions('leave.type');
   return <FormModal title="Record leave" close={close} label="Save leave request" onSubmit={async values => {
     await post(`/employees/${values.employeeId}/leave`, {
       leaveType: values.leaveType,
+      paymentType: values.paymentType,
       fromDate: values.fromDate,
       toDate: values.toDate,
       reason: values.reason
     });
     await reload();
   }}>
-    <SelectField name="employeeId" label="Employee" options={data.employees.map(employee => [employee.id, employee.name])} />
+    <label>Employee<select name="employeeId" required value={employeeId} onChange={event=>setEmployeeId(event.target.value)}>{data.employees.map(employee=><option key={employee.id} value={employee.id}>{employee.name}</option>)}</select></label>
     <SelectField name="leaveType" label="Leave type" options={leaveTypes} />
-    <Field name="fromDate" label="From" type="date" defaultValue={todayInput()} />
+    {!eligible && <p className="form-note wide" role="alert">{start ? `This employee has less than six months of employment on the leave start date and is not eligible for paid leave. Eligible from ${shortDate(eligibleFrom)}. Choose unpaid leave.` : 'Employment start date is not recorded. Update the employee profile before requesting paid leave. Unpaid leave can still be recorded.'}</p>}
+    <SelectField name="paymentType" label="Leave payment" options={['Paid','Unpaid']} />
+    <p className="form-note wide">Annual allowance: 14 calendar days. Paid and unpaid requests count toward this allowance. Approved unpaid leave is deducted in payroll.</p>
+    <label>From<input name="fromDate" type="date" required value={fromDate} onChange={event=>setFromDate(event.target.value)} /></label>
     <Field name="toDate" label="To" type="date" defaultValue={todayInput()} />
     <TextArea name="reason" label="Reason" />
   </FormModal>;
@@ -686,7 +754,7 @@ function OvertimeForm({ data, close, reload }) {
       projectId: Number(values.projectId),
       workDate: values.workDate,
       hours: Number(values.hours),
-      overtimeType: values.overtimeType
+      overtimeType: values.overtimeType,startTime:values.startTime||undefined,endTime:values.endTime||undefined,reason:values.reason||undefined
     });
     await reload();
   }}>
@@ -697,6 +765,10 @@ function OvertimeForm({ data, close, reload }) {
       options={[["", "Head office / no project"], ...data.projects.map(project => [project.id, project.name])]} />
     <Field name="workDate" label="Work date" type="date" defaultValue={todayInput()} />
     <Field name="hours" label="Overtime hours" type="number" step="0.5" min="0.5" defaultValue="2" />
+    <Field name="startTime" label="OT interval starts (manual correction)" type="time" required={false}/>
+    <Field name="endTime" label="OT interval ends (manual correction)" type="time" required={false}/>
+    <TextArea name="reason" label="Correction / exceptional attendance reason" required={false}/>
+    <p className="form-note wide">Travel OT must be entered through Payroll Inputs → Travel claim, not this form.</p>
   </FormModal>;
 }
 

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, getOne, hashPassword, pool, query } from '../db.js';
+import { audit, getOne, hashPassword, pool, query, transaction } from '../db.js';
 import { auth, permissionsFor, permit, validate, wrap } from '../lib/http.js';
 import { PRIVILEGED_KEYS } from '../lib/permissions.js';
 import { strongPassword } from '../lib/passwords.js';
@@ -30,12 +30,12 @@ const COMPANY = `SELECT c.id,c.code,c.name,
 
 /* Bank account, TIN and VAT registration live here, so this is not general reading — it is
    the Administration screen's own data and follows the same right as editing it. */
-router.get('/company', auth, permit('admin.users'), wrap(async (req, res) => {
+router.get('/company', auth, permit("admin.company"), wrap(async (req, res) => {
   const companyId=Number(req.query.companyId)||1;
   res.json(await getOne(COMPANY,[companyId]) || {});
 }));
 
-router.put('/company', auth, permit('admin.users'), validate(z.object({
+router.put('/company', auth, permit("admin.company"), validate(z.object({
   name: z.string().min(2).max(180),
   address: z.string().max(400).default(''),
   telephone: z.string().max(120).default(''),
@@ -65,12 +65,12 @@ const BANK_ACCOUNT = `SELECT id,company_id companyId,label,bank_name bankName,br
   account_name accountName,account_number accountNumber,swift_code swiftCode,active
   FROM company_bank_accounts`;
 
-router.get('/company-bank-accounts', auth, permit('admin.users', 'qs.view', 'qs.quotation'), wrap(async (req, res) => {
+router.get('/company-bank-accounts', auth, permit("admin.company"), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId) || 1;
   res.json(await query(`${BANK_ACCOUNT} WHERE company_id=? AND active=1 ORDER BY label,bank_name`, [companyId]));
 }));
 
-router.post('/company-bank-accounts', auth, permit('admin.users'), validate(z.object({
+router.post('/company-bank-accounts', auth, permit("admin.company"), validate(z.object({
   companyId: z.number().int().positive(), label: z.string().min(2).max(100),
   bankName: z.string().min(2).max(140), branch: z.string().max(140).optional(),
   accountName: z.string().min(2).max(180), accountNumber: z.string().min(3).max(80),
@@ -86,7 +86,7 @@ router.post('/company-bank-accounts', auth, permit('admin.users'), validate(z.ob
   res.status(201).json(row);
 }));
 
-router.patch('/company-bank-accounts/:id', auth, permit('admin.users'), validate(z.object({
+router.patch('/company-bank-accounts/:id', auth, permit("admin.company"), validate(z.object({
   active: z.boolean()
 })), wrap(async (req, res) => {
   const before = await getOne(`${BANK_ACCOUNT} WHERE id=?`, [req.params.id]);
@@ -115,10 +115,10 @@ const asBooleans = row => (row && {
   showBankDetails: Boolean(row.showBankDetails)
 });
 
-router.get('/document-settings', auth, permit('admin.users'), wrap(async (_req, res) =>
+router.get('/document-settings', auth, permit("admin.documents"), wrap(async (_req, res) =>
   res.json(asBooleans(await getOne(DOCUMENT_SETTINGS)) || {})));
 
-router.put('/document-settings', auth, permit('admin.users'), validate(z.object({
+router.put('/document-settings', auth, permit("admin.documents"), validate(z.object({
   accentColour: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a colour like #16305c').default('#16305c'),
   paperSize: z.enum(['A4', 'Letter']).default('A4'),
   showLogo: z.boolean().default(true),
@@ -151,7 +151,7 @@ router.put('/document-settings', auth, permit('admin.users'), validate(z.object(
  * layout and colour, and a person arranging a page should not need a real client's figures
  * in front of them to do it — nor should a design change touch a real record.
  */
-router.get('/document-design', auth, permit('admin.users'), wrap(async (_req, res) => {
+router.get('/document-design', auth, permit("admin.designer"), wrap(async (_req, res) => {
   const row = await getOne('SELECT design FROM document_settings WHERE id=1');
   const stored = typeof row?.design === 'string'
     ? (() => { try { return JSON.parse(row.design); } catch { return null; } })()
@@ -159,7 +159,7 @@ router.get('/document-design', auth, permit('admin.users'), wrap(async (_req, re
   res.json({ design: normaliseDesign(stored), blocks: BLOCKS, pieces: HEADER_PIECES, fonts: FONTS, defaults: DEFAULT_DESIGN });
 }));
 
-router.put('/document-design', auth, permit('admin.users'), wrap(async (req, res) => {
+router.put('/document-design', auth, permit("admin.designer"), wrap(async (req, res) => {
   const design = normaliseDesign(req.body?.design);
   const before = await getOne('SELECT design FROM document_settings WHERE id=1');
   await query('UPDATE document_settings SET design=?,updated_by=? WHERE id=1',
@@ -168,7 +168,7 @@ router.put('/document-design', auth, permit('admin.users'), wrap(async (req, res
   res.json({ design });
 }));
 
-router.post('/document-design/preview', auth, permit('admin.users'), wrap(async (req, res) => {
+router.post('/document-design/preview', auth, permit("admin.designer"), wrap(async (req, res) => {
   const design = normaliseDesign(req.body?.design);
   const context = await documentContext(getOne);
   res.type('html').send(quotationDocument({
@@ -195,19 +195,45 @@ router.post('/document-design/preview', auth, permit('admin.users'), wrap(async 
 router.get('/users/roles', auth, permit('admin.users', 'admin.roles'), wrap(async (_req, res) =>
   res.json(await query('SELECT id,name,description FROM roles ORDER BY is_system DESC, name'))));
 
+router.get('/users/employee-options', auth, permit('admin.users'), wrap(async (_req, res) =>
+  res.json(await query("SELECT id,code,name,email FROM employees WHERE user_id IS NULL AND status='Active' ORDER BY name"))));
+
 router.post('/users', auth, permit('admin.users'), validate(z.object({
   name: z.string().min(2).max(120),
   email: z.string().email(),
   password: strongPassword,
-  roleId: z.number().int().positive()
+  roleId: z.number().int().positive(),
+  employeeId: z.number().int().positive().optional(),
+  employmentStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
 })), wrap(async (req, res) => {
   const body = req.body;
   const role = await getOne('SELECT id,name FROM roles WHERE id=?', [body.roleId]);
   if (!role) return res.status(400).json({ error: 'Unknown role' });
-  const result = await query('INSERT INTO users (name,email,password_hash,role,role_id) VALUES (?,?,?,?,?)',
-    [body.name, body.email.toLowerCase(), hashPassword(body.password), role.name, role.id]);
-  const row = await getOne('SELECT id,name,email,role,active FROM users WHERE id=?', [result.insertId]);
-  await audit(pool, req.user.id, 'CREATE', 'user', row.id, null, row, req.ip);
+  const row = await transaction(async connection => {
+    const [matches] = await connection.query(body.employeeId
+      ? 'SELECT id,user_id FROM employees WHERE id=? FOR UPDATE'
+      : 'SELECT id,user_id FROM employees WHERE LOWER(email)=? FOR UPDATE',
+    [body.employeeId || body.email.toLowerCase()]);
+    if ((body.employeeId && !matches.length) || matches.length > 1 || matches.some(employee => employee.user_id)) {
+      throw Object.assign(new Error('This employee is missing, already has system access, or has duplicate profiles. Please check the employee record before creating the account.'), { status: 409 });
+    }
+    const [result] = await connection.query('INSERT INTO users (name,email,password_hash,role,role_id) VALUES (?,?,?,?,?)',
+      [body.name, body.email.toLowerCase(), hashPassword(body.password), role.name, role.id]);
+    let employeeId = matches[0]?.id;
+    if (employeeId) {
+      await connection.query('UPDATE employees SET user_id=? WHERE id=?', [result.insertId, employeeId]);
+    } else {
+      const [employee] = await connection.query(`INSERT INTO employees
+        (code,name,email,user_id,designation,join_date,worker_type,payroll_category)
+        VALUES (?,?,?,?,?,?,'Office','Office employee')`,
+      [`USR-${result.insertId}`, body.name, body.email.toLowerCase(), result.insertId, role.name, body.employmentStartDate || null]);
+      employeeId = employee.insertId;
+      await audit(connection, req.user.id, 'CREATE', 'employee', employeeId, null, { name: body.name, userId: result.insertId }, req.ip);
+    }
+    const row = { id: result.insertId, name: body.name, email: body.email.toLowerCase(), role: role.name, active: 1, employeeId };
+    await audit(connection, req.user.id, 'CREATE', 'user', row.id, null, row, req.ip);
+    return row;
+  });
   res.status(201).json(row);
 }));
 

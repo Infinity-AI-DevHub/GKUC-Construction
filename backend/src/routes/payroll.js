@@ -1,13 +1,47 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { auth, permit, validate, wrap } from '../lib/http.js';
+import { auth, permit, permissionsFor, validate, wrap } from '../lib/http.js';
 import { PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES, calculatePayslip, payProfileError } from '../lib/payroll-policy.js';
+import {rulesFor,calculateTransport,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const percent = z.number().min(0).max(100);
 const money = value => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+
+router.get('/schedules',auth,permit("hr.settings"),wrap(async(req,res)=>res.json(await query('SELECT id,period_start periodStart,period_end periodEnd,pay_frequency payFrequency,run_at runAt,status,message FROM payroll_schedules WHERE company_id=? ORDER BY id DESC',[Number(req.query.companyId)||1]))));
+router.post('/schedules',auth,permit("hr.settings"),validate(z.object({companyId:z.number().int().positive(),periodStart:isoDate,periodEnd:isoDate,payFrequency:z.enum(PAY_FREQUENCIES),runAt:z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)})),wrap(async(req,res)=>{
+  const b=req.body;
+  if(b.periodEnd<b.periodStart) return res.status(400).json({error:'Payroll period cannot end before it starts.'});
+  if(new Date(`${b.runAt}:00+05:30`).getTime()<=Date.now()) return res.status(400).json({error:'Choose a future payroll run date and time (Sri Lanka time).'});
+  const result=await query('INSERT INTO payroll_schedules(company_id,period_start,period_end,pay_frequency,run_at,created_by) VALUES(?,?,?,?,?,?)',[b.companyId,b.periodStart,b.periodEnd,b.payFrequency,b.runAt.replace('T',' '),req.user.id]);
+  res.status(201).json({id:result.insertId});
+}));
+
+export function startPayrollScheduler(){
+  let scanning=false;
+  const scan=async()=>{
+    if(scanning)return;scanning=true;
+    try{
+      const schedules=await query("SELECT *,DATE_FORMAT(period_start,'%Y-%m-%d') periodStart,DATE_FORMAT(period_end,'%Y-%m-%d') periodEnd FROM payroll_schedules WHERE status='Scheduled' AND run_at<=CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+05:30')");
+      for(const schedule of schedules){
+        const claimed=await query("UPDATE payroll_schedules SET status='Running' WHERE id=? AND status='Scheduled'",[schedule.id]);
+        if(!claimed.affectedRows)continue;
+        let status=200;
+        const res={status(value){status=value;return this;},async json(body){await query('UPDATE payroll_schedules SET status=?,message=? WHERE id=?',[status===201?'Completed':'Failed',body.error||'Draft payroll created. HR must review and approve it.',schedule.id]);}};
+        try{
+          const user=await getOne('SELECT id,active,role_id FROM users WHERE id=?',[schedule.created_by]);
+          if(!user?.active)throw new Error('The scheduling user is no longer active. HR must schedule this payroll again.');
+          if(!(await permissionsFor(user.id,user.role_id)).includes('hr.payroll'))throw new Error('The scheduling user no longer has payroll permission. HR must schedule this payroll again.');
+          await generatePayroll({body:{companyId:schedule.company_id,periodStart:schedule.periodStart,periodEnd:schedule.periodEnd,payFrequency:schedule.pay_frequency},user,ip:'automatic-payroll'},res);
+        }catch(error){await query("UPDATE payroll_schedules SET status='Failed',message=? WHERE id=?",[error.message.slice(0,600),schedule.id]);}
+      }
+    }finally{scanning=false;}
+  };
+  const timer=setInterval(()=>scan().catch(error=>console.error('Payroll scheduler:',error.message)),60000);timer.unref();
+  void scan().catch(error=>console.error('Payroll scheduler:',error.message));
+}
 
 const policySchema = z.object({
   companyId: z.number().int().positive().default(1),
@@ -22,7 +56,8 @@ const policySchema = z.object({
   epfEmployerRate: percent,
   etfEmployerRate: percent,
   epfBasis: z.literal('Basic earnings').default('Basic earnings'),
-  etfBasis: z.literal('Basic earnings').default('Basic earnings')
+  etfBasis: z.literal('Basic earnings').default('Basic earnings'),
+  hrRules:z.object({normalStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),normalEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),otInterval:z.number().positive().max(4),minimumOt:z.number().nonnegative().max(24),maxDailyOt:z.number().positive().max(24),transportDivisor:z.number().positive().max(366),fullTransportDays:z.number().int().min(0).max(366).nullable(),fullTransportComparison:z.enum(['At least','More than']),longDistanceKm:z.number().nonnegative(),longDistancePayment:z.number().nonnegative(),mileageRate:z.number().nonnegative(),fixedTravelPayment:z.number().nonnegative(),allowMileageAndFixed:z.boolean(),countLeaveForTransport:z.boolean(),countAbsenceForTransport:z.boolean(),separateApproval:z.boolean().default(false)}).refine(r=>r.normalEnd>r.normalStart,'Normal shift end must be after its start').default(INITIAL_HR_RULES)
 });
 
 const policySelect = `SELECT p.id,p.company_id companyId,c.name company,p.effective_from effectiveFrom,p.office_ot_rate officeOtRate,
@@ -30,7 +65,7 @@ const policySelect = `SELECT p.id,p.company_id companyId,c.name company,p.effect
   p.driver_ot_rate driverOtRate,p.supervisor_site_ot_rate supervisorSiteOtRate,
   p.supervisor_travel_ot_rate supervisorTravelOtRate,p.epf_employee_rate epfEmployeeRate,
   p.epf_employer_rate epfEmployerRate,p.etf_employer_rate etfEmployerRate,
-  p.epf_basis epfBasis,p.etf_basis etfBasis,u.name createdBy,p.created_at createdAt
+  p.epf_basis epfBasis,p.etf_basis etfBasis,p.hr_rules hrRules,u.name createdBy,p.created_at createdAt
   FROM payroll_policies p JOIN companies c ON c.id=p.company_id LEFT JOIN users u ON u.id=p.created_by`;
 
 /**
@@ -50,12 +85,12 @@ router.get('/', auth, permit('hr.payroll'), wrap(async (req, res) => {
   res.json(await query(`${select} ${companyId ? 'WHERE r.company_id=?' : ''} ORDER BY r.id DESC`, companyId ? [companyId] : []));
 }));
 
-router.get('/settings', auth, permit('hr.payroll', 'hr.manage'), wrap(async (req, res) => {
+router.get('/settings', auth, permit("hr.settings"), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 1);
   const [policies, components] = await Promise.all([
     query(`${policySelect} WHERE p.company_id=? ORDER BY p.effective_from DESC,p.id DESC`, [companyId]),
     query(`SELECT c.id,c.employee_id employeeId,e.code employeeCode,e.name employee,c.name,c.kind,c.amount,
-      c.pay_frequency payFrequency,c.effective_from effectiveFrom,c.effective_to effectiveTo,c.active,
+      c.pay_frequency payFrequency,c.effective_from effectiveFrom,c.effective_to effectiveTo,c.active,c.calculation_method calculationMethod,c.allowance_type allowanceType,
       u.name createdBy,c.created_at createdAt
       FROM employee_pay_components c JOIN employees e ON e.id=c.employee_id JOIN users u ON u.id=c.created_by
       WHERE e.payroll_company_id=? ORDER BY c.active DESC,e.code,c.kind,c.name`, [companyId])
@@ -64,7 +99,7 @@ router.get('/settings', auth, permit('hr.payroll', 'hr.manage'), wrap(async (req
     policies, components });
 }));
 
-router.post('/settings/policies', auth, permit('hr.payroll'), validate(policySchema), wrap(async (req, res) => {
+router.post('/settings/policies', auth, permit("hr.settings"), validate(policySchema), wrap(async (req, res) => {
   const body = req.body;
   try {
     const result = await query(`INSERT INTO payroll_policies
@@ -74,6 +109,7 @@ router.post('/settings/policies', auth, permit('hr.payroll'), validate(policySch
     [body.companyId, body.effectiveFrom, body.officeOtRate, body.siteLabourSiteOtRate, body.siteLabourTravelOtRate,
       body.driverOtRate, body.supervisorSiteOtRate, body.supervisorTravelOtRate, body.epfEmployeeRate,
       body.epfEmployerRate, body.etfEmployerRate, body.epfBasis, body.etfBasis, req.user.id]);
+    await query('UPDATE payroll_policies SET hr_rules=? WHERE id=?',[JSON.stringify(body.hrRules),result.insertId]);
     const row = await getOne(`${policySelect} WHERE p.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'payroll_policy', row.id, null, row, req.ip);
     res.status(201).json(row);
@@ -86,11 +122,13 @@ router.post('/settings/policies', auth, permit('hr.payroll'), validate(policySch
 const componentSchema = z.object({
   employeeId: z.number().int().positive(), name: z.string().trim().min(2).max(120),
   kind: z.enum(['Allowance', 'Deduction', 'Reimbursement']), amount: z.number().nonnegative(),
-  payFrequency: z.enum(PAY_FREQUENCIES), effectiveFrom: isoDate, effectiveTo: isoDate.nullable().optional()
+  payFrequency: z.enum(PAY_FREQUENCIES), effectiveFrom: isoDate, effectiveTo: isoDate.nullable().optional(),
+  calculationMethod:z.enum(['Fixed full amount','Attendance-prorated amount','Per-day amount','Manually approved amount']).default('Fixed full amount'),
+  allowanceType:z.enum(['Other','Transport','Machine/operator','Special duty']).default('Other')
 }).refine(value => !value.effectiveTo || value.effectiveTo >= value.effectiveFrom,
   { message: 'The end date cannot be before the start date', path: ['effectiveTo'] });
 
-router.post('/settings/components', auth, permit('hr.payroll'), validate(componentSchema), wrap(async (req, res) => {
+router.post('/settings/components', auth, permit("hr.settings"), validate(componentSchema), wrap(async (req, res) => {
   const body = req.body;
   if (!await getOne('SELECT id FROM employees WHERE id=?', [body.employeeId]))
     return res.status(404).json({ error: 'Employee not found' });
@@ -98,12 +136,13 @@ router.post('/settings/components', auth, permit('hr.payroll'), validate(compone
     (employee_id,name,kind,amount,pay_frequency,effective_from,effective_to,created_by)
     VALUES (?,?,?,?,?,?,?,?)`, [body.employeeId, body.name, body.kind, body.amount, body.payFrequency,
     body.effectiveFrom, body.effectiveTo || null, req.user.id]);
+  await query('UPDATE employee_pay_components SET calculation_method=?,allowance_type=? WHERE id=?',[body.calculationMethod,body.allowanceType,result.insertId]);
   const row = await getOne('SELECT * FROM employee_pay_components WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'employee_pay_component', row.id, null, row, req.ip);
   res.status(201).json(row);
 }));
 
-router.patch('/settings/components/:id', auth, permit('hr.payroll'), validate(z.object({ active: z.boolean() })), wrap(async (req, res) => {
+router.patch('/settings/components/:id', auth, permit("hr.settings"), validate(z.object({ active: z.boolean() })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM employee_pay_components WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Pay component not found' });
   await query('UPDATE employee_pay_components SET active=? WHERE id=?', [req.body.active, before.id]);
@@ -121,9 +160,10 @@ const payProfileSchema = z.object({
   customOfficeOtRate: z.number().nonnegative().nullable().optional(),
   customSiteOtRate: z.number().nonnegative().nullable().optional(),
   customTravelOtRate: z.number().nonnegative().nullable().optional()
+  ,allowanceEligibility:z.object({transport:z.boolean(),longDistance:z.boolean(),motorcycle:z.boolean(),machine:z.boolean(),specialDuty:z.boolean()}).optional()
 });
 
-router.patch('/settings/employees/:id', auth, permit('hr.payroll', 'hr.manage'), validate(payProfileSchema), wrap(async (req, res) => {
+router.patch('/settings/employees/:id', auth, permit("hr.settings"), validate(payProfileSchema), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
   const body = req.body;
@@ -134,6 +174,7 @@ router.patch('/settings/employees/:id', auth, permit('hr.payroll', 'hr.manage'),
     WHERE id=?`, [body.payrollCompanyId, body.payBasis, body.payFrequency, body.payrollCategory, body.basicSalary, body.weeklyRate,
     body.dailyRate, body.compensationEffectiveFrom, body.epfEligible, body.etfEligible,
     body.customOfficeOtRate ?? null, body.customSiteOtRate ?? null, body.customTravelOtRate ?? null, before.id]);
+  if(body.allowanceEligibility)await query('UPDATE employees SET allowance_eligibility=? WHERE id=?',[JSON.stringify(body.allowanceEligibility),before.id]);
   const after = await getOne('SELECT * FROM employees WHERE id=?', [before.id]);
   await audit(pool, req.user.id, 'UPDATE', 'employee_pay_profile', before.id, before, after, req.ip);
   res.json({ id: before.id });
@@ -157,7 +198,7 @@ router.get('/:id', auth, permit('hr.payroll'), wrap(async (req, res) => {
     FROM salary_advance_recoveries sar JOIN payslips ps ON ps.id=sar.payslip_id
     JOIN petty_cash_entries pe ON pe.id=sar.entry_id JOIN employees e ON e.id=ps.employee_id
     WHERE ps.run_id=? ORDER BY e.code,pe.entry_date,pe.id`, [run.id]);
-  const components = await query(`SELECT sc.id,sc.payslip_id payslipId,sc.name,sc.kind,sc.amount
+  const components = await query(`SELECT sc.id,sc.payslip_id payslipId,sc.name,sc.kind,sc.amount,sc.calculation_detail calculationDetail
     FROM payslip_components sc JOIN payslips ps ON ps.id=sc.payslip_id
     WHERE ps.run_id=? ORDER BY sc.kind,sc.name`, [run.id]);
   res.json({ ...run, payslips: payslips.map(slip => ({ ...slip,
@@ -174,15 +215,19 @@ router.post('/', auth, permit('hr.payroll'), validate(z.object({
   periodStart: isoDate,
   periodEnd: isoDate,
   payFrequency: z.enum(PAY_FREQUENCIES).default('Monthly')
-})), wrap(async (req, res) => {
+})), wrap(generatePayroll));
+
+export async function generatePayroll(req, res) {
   const { companyId, periodStart, periodEnd, payFrequency } = req.body;
   if (periodEnd < periodStart) return res.status(400).json({ error: 'The period end must fall after its start' });
+  const overlap=await getOne('SELECT id FROM payroll_runs WHERE company_id=? AND pay_frequency=? AND period_start<=? AND period_end>=?',[companyId,payFrequency,periodEnd,periodStart]);
+  if(overlap)return res.status(409).json({error:'A payroll run overlaps this payment period. Review the existing draft/run rather than paying these inputs twice.'});
 
   const policy = await getOne('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1', [companyId, periodEnd]);
   if (!policy) return res.status(409).json({ error: 'Configure a payroll policy for this period first' });
 
   const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,
-      e.epf_eligible,e.etf_eligible,
+      e.epf_eligible,e.etf_eligible,e.allowance_eligibility,
       (SELECT COUNT(*) FROM attendance a WHERE (a.employee_id=e.id OR a.employee_name=e.name)
         AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip')) days_present,
       (SELECT COUNT(*) FROM attendance a WHERE (a.employee_id=e.id OR a.employee_name=e.name)
@@ -203,8 +248,8 @@ router.post('/', auth, permit('hr.payroll'), validate(z.object({
         WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') travel_ot_hours,
       (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours*o.rate ELSE 0 END),0) FROM overtime_records o
         WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') travel_ot_pay,
-      (SELECT COALESCE(SUM(l.days),0) FROM leave_requests l WHERE l.employee_id=e.id AND l.status='Approved'
-        AND l.leave_type='Unpaid' AND l.from_date BETWEEN ? AND ?) unpaid_days,
+      (SELECT COALESCE(SUM(GREATEST(0,1-DATEDIFF(GREATEST(l.from_date,?),LEAST(l.to_date,?)))),0) FROM leave_requests l WHERE l.employee_id=e.id AND l.status='Approved'
+        AND l.payment_type='Unpaid') unpaid_days,
       (SELECT COALESCE(SUM(GREATEST(0,ABS(pe.amount)-COALESCE(
           (SELECT SUM(sar.amount) FROM salary_advance_recoveries sar WHERE sar.entry_id=pe.id),0))),0)
         FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
@@ -215,6 +260,8 @@ router.post('/', auth, permit('hr.payroll'), validate(z.object({
   [...Array.from({ length: 11 }, () => [periodStart, periodEnd]).flat(), periodEnd, companyId, payFrequency, periodEnd]);
 
   if (!employees.length) return res.status(409).json({ error: `No active ${payFrequency.toLowerCase()}-paid employees fall inside this period` });
+  const covered=await getOne(`SELECT ps.employee_id FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1`,[...employees.map(e=>e.id),periodEnd,periodStart]);
+  if(covered)return res.status(409).json({error:'An employee is already included in another payroll run for these dates. Changing payment frequency must not pay the same period twice.'});
 
   const components = await query(`SELECT * FROM employee_pay_components
     WHERE active=1 AND pay_frequency=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)
@@ -229,7 +276,22 @@ router.post('/', auth, permit('hr.payroll'), validate(z.object({
 
       let total = 0;
       for (const employee of employees) {
-        const employeeComponents = components.filter(row => row.employee_id === employee.id);
+        const rules=rulesFor(policy);
+        const extraStates=[...(rules.countLeaveForTransport?['On leave']:[]),...(rules.countAbsenceForTransport?['Absent']:[])];
+        const [extraDays]=extraStates.length?await connection.query(`SELECT COUNT(DISTINCT work_date) days FROM attendance WHERE employee_id=? AND work_date BETWEEN ? AND ? AND state IN (${extraStates.map(()=>'?').join(',')})`,[employee.id,periodStart,periodEnd,...extraStates]):[[{days:0}]];
+        const eligibleTransportDays=Number(employee.days_present)+Number(extraDays[0].days);
+        const eligibility=typeof employee.allowance_eligibility==='string'?JSON.parse(employee.allowance_eligibility):employee.allowance_eligibility||{};
+        const employeeComponents = components.filter(row => row.employee_id === employee.id && (row.allowance_type==='Other'||eligibility[{Transport:'transport','Machine/operator':'machine','Special duty':'specialDuty'}[row.allowance_type]])).map(row=>{
+          if(row.calculation_method==='Attendance-prorated amount'&&row.allowance_type!=='Transport')return {...row,amount:money(Number(row.amount)/rulesFor(policy).transportDivisor*Number(employee.days_present)),formula:`${row.amount} ÷ ${rulesFor(policy).transportDivisor} × ${employee.days_present} eligible attendance days`};
+          let result;
+          try{result=calculateTransport(Number(row.amount),row.allowance_type==='Transport'?eligibleTransportDays:Number(employee.days_present),row.calculation_method,rules);}catch(e){throw Object.assign(e,{status:409});}
+          return {...row,amount:result.amount,formula:result.formula};
+        });
+        const [claims]=await connection.query(`SELECT c.* FROM hr_payroll_claims c WHERE c.employee_id=? AND c.work_date BETWEEN ? AND ? AND c.status='Approved' AND NOT EXISTS(SELECT 1 FROM payslip_components pc WHERE pc.claim_id=c.id) FOR UPDATE`,[employee.id,periodStart,periodEnd]);
+        for(const claim of claims){
+          const c=typeof claim.calculation==='string'?JSON.parse(claim.calculation):claim.calculation;
+          employeeComponents.push({id:null,claimId:claim.id,name:claim.kind==='Travel'?'Long-distance site allowance':claim.kind==='Mileage'?'Motorcycle mileage reimbursement':`${claim.kind} allowance`,kind:claim.kind==='Mileage'?'Reimbursement':'Allowance',amount:claim.kind==='Travel'?c.allowance:claim.kind==='Mileage'?c.total:c.amount,formula:JSON.stringify({claimId:claim.id,date:claim.work_date,projectId:claim.project_id,calculation:c})});
+        }
         const calculation = calculatePayslip(employee, policy, employeeComponents);
         total += calculation.netPay;
         const [slip] = await connection.execute(`INSERT INTO payslips
@@ -248,8 +310,16 @@ router.post('/', auth, permit('hr.payroll'), validate(z.object({
           calculation.netPay, calculation.employerCost]);
 
         for (const component of employeeComponents) await connection.execute(`INSERT INTO payslip_components
-          (payslip_id,source_component_id,name,kind,amount) VALUES (?,?,?,?,?)`,
-        [slip.insertId, component.id, component.name, component.kind, component.amount]);
+          (payslip_id,source_component_id,name,kind,amount,calculation_detail,claim_id) VALUES (?,?,?,?,?,?,?)`,
+        [slip.insertId, component.id, component.name, component.kind, component.amount,component.formula,component.claimId||null]);
+        const [sourceOt]=await connection.query("SELECT id,project_id,work_date,hours*rate amount FROM overtime_records WHERE employee_id=? AND work_date BETWEEN ? AND ? AND status='Approved' AND project_id IS NOT NULL",[employee.id,periodStart,periodEnd]);
+        for(const o of sourceOt)await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Overtime',?,?)",[slip.insertId,o.project_id,employee.id,o.work_date,o.id,o.amount]);
+        for(const c of claims.filter(c=>c.project_id)){
+          const component=employeeComponents.find(p=>p.claimId===c.id);
+          await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Claim',?,?)",[slip.insertId,c.project_id,employee.id,c.work_date,c.id,component.amount]);
+        }
+        const [sourceDays]=await connection.query(`SELECT a.id,a.project_id,a.work_date FROM attendance a WHERE a.employee_id=? AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip') AND a.project_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM daily_cost_lines l JOIN daily_cost_sheets s ON s.id=l.sheet_id WHERE l.employee_id=a.employee_id AND s.work_date=a.work_date AND s.status IN ('Submitted','Approved'))`,[employee.id,periodStart,periodEnd]);
+        for(const a of sourceDays)await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Attendance',?,?)",[slip.insertId,a.project_id,employee.id,a.work_date,a.id,money((calculation.basic-calculation.unpaidLeaveDeduction)/Math.max(1,employee.days_present))]);
 
         /* Recover oldest advances first and keep any unpaid remainder for a later run. */
         let remaining = calculation.salaryAdvanceDeduction;
@@ -279,12 +349,14 @@ router.post('/', auth, permit('hr.payroll'), validate(z.object({
     if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: `A ${payFrequency.toLowerCase()} payroll run already exists for that period` });
     throw error;
   }
-}));
+}
 
 /** Approving locks the run; marking it paid posts the wage bill as a labour cost. */
 router.patch('/:id', auth, permit('hr.payroll'), validate(z.object({ status: z.enum(['Draft', 'Approved', 'Paid']) })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM payroll_runs WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Payroll run not found' });
+  const allowed={Draft:['Approved'],Approved:['Paid'],Paid:[]};
+  if(!allowed[before.status].includes(req.body.status))return res.status(409).json({error:'Payroll can only move from Draft to Approved, then Paid. Approved or paid salary snapshots cannot be reopened or changed.'});
   await query('UPDATE payroll_runs SET status=?,approved_by=? WHERE id=?',
     [req.body.status, req.body.status === 'Draft' ? null : req.user.id, before.id]);
   await audit(pool, req.user.id, req.body.status.toUpperCase(), 'payroll_run', before.id, before, { status: req.body.status }, req.ip);

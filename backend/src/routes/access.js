@@ -18,6 +18,8 @@ const roleSelect = `SELECT r.id,r.name,r.description,r.is_system isSystem,
   (SELECT COUNT(*) FROM users u WHERE u.role_id=r.id) users
   FROM roles r`;
 
+router.get('/users',auth,permit('admin.roles'),wrap(async(_req,res)=>res.json(await query('SELECT id,name,email,role,role_id roleId,active FROM users ORDER BY name'))));
+
 /** The catalogue the toggle screen is drawn from. */
 router.get('/permissions', auth, permit('admin.roles'), (_req, res) => res.json({
   departments: DEPARTMENTS.filter(department => PERMISSIONS.some(item => item.department === department)),

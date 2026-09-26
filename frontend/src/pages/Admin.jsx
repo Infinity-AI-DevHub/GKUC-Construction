@@ -15,7 +15,9 @@ export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Designe
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
 export default function Admin({ can, user, reload, companyId, initialTab = TABS[0], onTabChange }) {
-  const [tab, setTab] = useState(TABS.includes(initialTab) ? initialTab : TABS[0]);
+  const allowed = TABS.filter(name => ({Users:can.manage,'Access control':can.roles,Company:can.companySettings,Documents:can.documentSettings,Designer:can.designer,Notifications:true,'Evening summary':can.audit,Messages:can.messages,Lists:can.lists,'Fraud watch':can.audit,'Audit log':can.audit,'My account':true})[name]);
+  const [selectedTab, setTab] = useState(initialTab);
+  const tab = allowed.includes(selectedTab) ? selectedTab : allowed[0];
   const [creating, setCreating] = useState(false);
 
   /* Arriving from the alert bell should land on Notifications, not the last tab used. */
@@ -23,16 +25,16 @@ export default function Admin({ can, user, reload, companyId, initialTab = TABS[
 
   /* This is the one tab set that lives in the address bar, because alerts elsewhere link
      straight to the notification centre — so choosing a tab has to update the URL too. */
-  const chooseTab = next => { setTab(next); onTabChange?.(next); };
+  const chooseTab = next => { if(allowed.includes(next)){setTab(next); onTabChange?.(next);} };
 
   return <Page title="Administration" subtitle="Manage staff accounts, role-based permissions, alerts and the audit trail."
     action={tab === 'Users' && can.manage ? 'Add user' : null} onAction={() => setCreating(true)}>
-    <Tabs tabs={TABS} active={tab} onChange={chooseTab} />
+    <Tabs tabs={allowed} active={tab} onChange={chooseTab} />
     {tab === 'Users' && <Users can={can} creating={creating} closeCreate={() => setCreating(false)} />}
     {tab === 'Access control' && <AccessControl user={user} />}
-    {tab === 'Company' && <CompanySettings can={can} companyId={companyId} />}
-    {tab === 'Documents' && <DocumentSettings can={can} />}
-    {tab === 'Designer' && <DocumentDesigner can={can} />}
+    {tab === 'Company' && <CompanySettings can={{...can,manage:can.companySettings}} companyId={companyId} />}
+    {tab === 'Documents' && <DocumentSettings can={{...can,manage:can.documentSettings}} />}
+    {tab === 'Designer' && <DocumentDesigner can={{...can,manage:can.designer}} />}
     {tab === 'Notifications' && <Notifications can={can} reload={reload} />}
     {tab === 'Evening summary' && <EveningSummary can={can} />}
     {tab === 'Messages' && (can.messages
@@ -181,15 +183,24 @@ function AuditLog() {
 
 function UserForm({ close, reload }) {
   const [roles, setRoles] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  useEffect(() => { api('/users/employee-options').then(setEmployees).catch(() => setEmployees([])); }, []);
   useEffect(() => { api('/users/roles').then(setRoles).catch(() => setRoles([])); }, []);
   return <FormModal title="Add user" close={close} label="Create user" onSubmit={async values => {
     await post('/users', {
-      name: values.name, email: values.email, password: values.password, roleId: Number(values.roleId)
+      name: values.name, email: values.email, password: values.password, roleId: Number(values.roleId),
+      ...(values.employeeId ? { employeeId: Number(values.employeeId) } : {}),
+      ...(values.employmentStartDate ? { employmentStartDate: values.employmentStartDate } : {})
     });
     await reload();
   }}>
+    <p className="form-note wide">Creates system access and an employee profile. Select an existing employee to avoid creating another profile. For a new employee, HR should complete their personal details and pay settings in People before payroll.</p>
+    <SelectField name="employeeId" label="Employee profile" required={false} wide options={[
+      ['', 'Create a new profile (or match the same email)'], ...employees.map(employee => [employee.id, `${employee.name} — ${employee.code}`])
+    ]} />
     <Field name="name" label="Full name" />
     <Field name="email" label="Email" type="email" />
+    <Field name="employmentStartDate" label="Employment start date (new profile only)" type="date" required={false} />
     <TemporaryPasswordField />
     <SelectField name="roleId" label="Role" options={roles.map(role => [role.id, role.name])} />
   </FormModal>;

@@ -9,6 +9,9 @@ const router = Router();
 
 /** Uploading against a record needs the same permission as editing that record. */
 const WRITERS = {
+  attendance:'hr.attendance',claim:'hr.payroll',
+  handover:'hr.assets',
+  candidate:'hr.hiring',
   task: 'site.tasks',
   project: 'projects.manage',
   employee: 'hr.manage',
@@ -23,6 +26,9 @@ const WRITERS = {
  * revealing as opening the employee page itself.
  */
 const READERS = {
+  attendance:['hr.attendance','hr.manage'],claim:['hr.payroll'],
+  handover:['hr.assets','hr.manage'],
+  candidate:['hr.hiring'],
   task: ['site.tasks', 'projects.view'],
   project: ['projects.view'],
   employee: ['hr.view', 'hr.manage'],
@@ -39,6 +45,9 @@ const OWNER_TYPES = Object.keys(WRITERS);
 
 /** Each owner type points at the table its id must exist in. */
 const OWNER_TABLES = {
+  attendance:'attendance',claim:'hr_payroll_claims',
+  handover:'employee_asset_handovers',
+  candidate:'hiring_candidates',
   task: 'tasks', project: 'projects', employee: 'employees',
   report: 'daily_reports', vehicle: 'fleet', equipment: 'equipment'
 };

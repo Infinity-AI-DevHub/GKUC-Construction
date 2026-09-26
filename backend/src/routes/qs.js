@@ -151,7 +151,7 @@ router.get('/methods', auth, permit('qs.view', 'qs.quotation'), wrap(async (_req
     method_statement methodStatement,payment_terms paymentTerms
     FROM work_methods WHERE active=1 ORDER BY category,name`))));
 
-router.post('/methods', auth, permit('qs.quotation'), validate(z.object({
+router.post('/methods', auth, permit('qs.templates'), validate(z.object({
   code: z.string().min(1).max(20),
   name: z.string().min(2).max(180),
   category: z.string().min(2).max(60).default('Surfacing'),
@@ -177,7 +177,7 @@ router.post('/methods', auth, permit('qs.quotation'), validate(z.object({
   }
 }));
 
-router.patch('/methods/:id', auth, permit('qs.quotation'), validate(z.object({
+router.patch('/methods/:id', auth, permit('qs.templates'), validate(z.object({
   code: z.string().min(1).max(20).optional(),
   name: z.string().min(2).max(180).optional(),
   category: z.string().min(2).max(60).optional(),
@@ -205,7 +205,7 @@ router.get('/quotation-note-templates', auth, permit('qs.view', 'qs.quotation'),
   res.json(await query(`SELECT id,name,body FROM quotation_note_templates WHERE active=1 ORDER BY name`));
 }));
 
-router.post('/quotation-note-templates', auth, permit('qs.quotation'), validate(z.object({
+router.post('/quotation-note-templates', auth, permit("qs.templates"), validate(z.object({
   name: z.string().trim().min(2).max(120),
   body: z.string().trim().min(2).max(1000)
 })), wrap(async (req, res) => {
@@ -221,7 +221,7 @@ router.post('/quotation-note-templates', auth, permit('qs.quotation'), validate(
   }
 }));
 
-router.patch('/quotation-note-templates/:id', auth, permit('qs.quotation'), validate(z.object({
+router.patch('/quotation-note-templates/:id', auth, permit("qs.templates"), validate(z.object({
   name: z.string().trim().min(2).max(120),
   body: z.string().trim().min(2).max(1000)
 })), wrap(async (req, res) => {

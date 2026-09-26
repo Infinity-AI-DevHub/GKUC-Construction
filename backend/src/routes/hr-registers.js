@@ -29,7 +29,7 @@ const monthRange = value => {
  * Returned as one row per person with a day-keyed object rather than a wide table, so the
  * interface can lay it out and a short month does not need special handling.
  */
-router.get('/hr/attendance-register', auth, permit('hr.view', 'hr.attendance', 'site.attendance'),
+router.get('/hr/attendance-register', auth, permit('hr.manage', 'hr.attendance'),
   async (req, res, next) => {
     try {
       const period = monthRange(req.query.month);
