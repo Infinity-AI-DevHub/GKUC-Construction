@@ -7,7 +7,7 @@ import { notify } from '../alerts.js';
 import { listAttachments } from './uploads.js';
 
 const router = Router();
-const STATUSES = ['Not started', 'In progress', 'Blocked', 'Completed', 'Approved'];
+const STATUSES = ['Not started', 'In progress', 'Blocked', 'Completed', 'Approved', 'Rejected'];
 
 const taskSchema = z.object({
   title: z.string().min(3).max(220),
@@ -17,6 +17,10 @@ const taskSchema = z.object({
   assigneeEmployeeIds: z.array(z.number().int().positive()).min(1).max(50).optional(),
   due: z.string().min(2).max(100),
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  dueTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  reminderAt: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).optional(),
+  reminderFrequency: z.enum(['Once','Daily','Weekly','Monthly']).optional(),
+  reminderUserIds: z.array(z.number().int().positive()).max(100).optional(),
   priority: z.enum(['Low', 'Medium', 'High']),
   status: z.enum(STATUSES).default('Not started'),
   notes: z.string().max(3000).default('')
@@ -69,6 +73,10 @@ router.get('/', auth, permit('site.tasks','projects.view'), wrap(async (req, res
   res.json(await withTaskAssignees(await query(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN employees e ON e.id=t.assignee_employee_id ${where} ORDER BY t.id`, params)));
 }));
 
+router.get('/reminder-users', auth, permit('site.tasks'), wrap(async (_req,res) => {
+  res.json(await query('SELECT id,name,role FROM users WHERE active=1 ORDER BY name'));
+}));
+
 router.get('/:id', auth, permit('site.tasks','projects.view'), wrap(async (req, res) => {
   const task = await withProject(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -82,12 +90,25 @@ router.get('/:id', auth, permit('site.tasks','projects.view'), wrap(async (req, 
 
 router.post('/', auth, permit('site.tasks'), validate(taskSchema), wrap(async (req, res) => {
   const body = req.body;
+  if (body.reminderAt || body.reminderFrequency || body.reminderUserIds?.length) {
+    if (!body.reminderAt || !body.reminderFrequency || !body.reminderUserIds?.length)
+      return res.status(400).json({error:'Choose the reminder date and time, frequency and at least one recipient.'});
+    const ids=[...new Set(body.reminderUserIds)];
+    const recipients=await query(`SELECT id FROM users WHERE active=1 AND id IN (${ids.map(()=>'?').join(',')})`,ids);
+    if (recipients.length!==ids.length) return res.status(400).json({error:'One selected reminder recipient is no longer active. Refresh the user list.'});
+  }
   const assignee = await resolveAssignees(body);
   const taskId = await transaction(async connection => {
     const [result] = await connection.execute('INSERT INTO tasks (title,project_id,assignee,assignee_employee_id,due,due_date,priority,status,notes) VALUES (?,?,?,?,?,?,?,?,?)',
       [body.title, body.projectId, assignee.assignee, assignee.assigneeEmployeeId, body.due, body.dueDate || null, body.priority, body.status, body.notes]);
     for (const employeeId of assignee.ids) await connection.execute(
       'INSERT INTO task_assignees (task_id,employee_id) VALUES (?,?)', [result.insertId, employeeId]);
+    if (body.dueTime) await connection.execute('UPDATE tasks SET due_time=? WHERE id=?',[body.dueTime,result.insertId]);
+    if (body.reminderAt) {
+      await connection.execute('INSERT INTO task_reminders (task_id,next_due,frequency) VALUES (?,?,?)',
+        [result.insertId,body.reminderAt.replace('T',' ')+':00',body.reminderFrequency]);
+      for (const userId of new Set(body.reminderUserIds)) await connection.execute('INSERT INTO task_reminder_users (task_id,user_id) VALUES (?,?)',[result.insertId,userId]);
+    }
     return result.insertId;
   });
   const row = await withProject(taskId);

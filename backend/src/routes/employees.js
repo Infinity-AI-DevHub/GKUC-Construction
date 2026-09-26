@@ -85,7 +85,7 @@ router.get('/', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
   res.json(forViewer(req, await query(`${listQuery} ORDER BY e.code`)))));
 
 /** Daily deployment plan, independent of scanner attendance and project-team membership. */
-router.get('/work-locations', auth, permit('hr.view','hr.manage','hr.attendance','site.attendance'), wrap(async (req, res) => {
+router.get('/work-locations', auth, permit('hr.view','hr.manage','hr.attendance','site.attendance','resources.view','resources.reassign','projects.schedule'), wrap(async (req, res) => {
   const from = isoDate.safeParse(req.query.from);
   const to = isoDate.safeParse(req.query.to);
   if (!from.success || !to.success || to.data < from.data)
@@ -97,7 +97,7 @@ router.get('/work-locations', auth, permit('hr.view','hr.manage','hr.attendance'
   res.json(rows);
 }));
 
-router.post('/work-locations', auth, permit('hr.manage','hr.attendance'), validate(z.object({
+router.post('/work-locations', auth, permit('hr.manage','hr.attendance','resources.reassign','projects.schedule'), validate(z.object({
   employeeId: z.number().int().positive(),
   from: isoDate, to: isoDate,
   workLocation: z.enum(['Office','Site','Unassigned']),
@@ -133,7 +133,7 @@ router.post('/work-locations', auth, permit('hr.manage','hr.attendance'), valida
 }));
 
 /** A date-specific deployment board: leave wins over attendance, which wins over plans. */
-router.get('/availability', auth, permit('hr.view','hr.manage','site.attendance','hr.attendance'), wrap(async (req, res) => {
+router.get('/availability', auth, permit('hr.view','hr.manage','site.attendance','hr.attendance','resources.view','resources.reassign','projects.schedule'), wrap(async (req, res) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : new Date().toLocaleDateString('en-CA');
   const [employees, attendance, leave, assignments, locations] = await Promise.all([
     query(`SELECT e.id,e.code,e.name,e.designation,e.worker_type workerType,e.photo_url photoUrl,e.status employmentStatus,

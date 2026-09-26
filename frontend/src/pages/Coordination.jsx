@@ -3,8 +3,9 @@ import { AlertTriangle, ArrowRightLeft, CloudRain, HardHat, MessageSquare, Truck
 import { api, daysUntil, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { useOptions } from '../options.js';
+import WorkforceMap from './WorkforceMap.jsx';
 
-const TABS = ['Live sites', 'Resource availability', 'Enquiries', 'Movement history'];
+const TABS = ['Live sites', 'Workforce assignments', 'Resource availability', 'Enquiries', 'Movement history'];
 
 /**
  * PID v3 §3.5 and §4.3 — the Project Coordinator's screen. GKUC runs two sites at a time,
@@ -33,6 +34,7 @@ export default function Coordination({ data, reload, can }) {
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
     {tab === 'Live sites' && <LiveSites board={board} can={can} onReschedule={setRescheduling} />}
+    {tab === 'Workforce assignments' && <WorkforceMap canManage={false} canPlan={can.reassign || can.schedule || can.hr || can.hrImport} projects={data.projects} />}
     {tab === 'Resource availability' && <Availability resources={resources} can={can} onMove={setMoving} />}
     {tab === 'Enquiries' && <Enquiries can={can} reload={reload} />}
     {tab === 'Movement history' && <MovementHistory />}
