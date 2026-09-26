@@ -169,6 +169,29 @@ test('reviews and saves a PDF tender while linking an existing client', async ()
   assert.equal(newClientTender.client, 'PDF Import New Employer');
 });
 
+test('task reminders reach selected users once per schedule and stop on completion',async()=>{
+  const owner=await login();
+  const people=(await call(owner,'GET','/tasks/reminder-users')).body;
+  const recipient=people[0];
+  const created=await call(owner,'POST','/tasks',{title:'Reminder delivery test',projectId:1,
+    assignee:'Test crew',due:'2026-10-01 at 16:00',dueDate:'2026-10-01',dueTime:'16:00',priority:'Medium',
+    reminderAt:'2020-01-01T09:00',reminderFrequency:'Daily',reminderUserIds:[recipient.id]});
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  assert.equal((await call(owner,'POST','/notifications/scan',{})).status,200);
+  const [[first]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.notifications
+    WHERE dedupe_key LIKE ? AND user_id=?`,[`task-reminder:${created.body.id}:%`,recipient.id]);
+  assert.equal(Number(first.total),1);
+  await call(owner,'POST','/notifications/scan',{});
+  const [[second]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.notifications WHERE dedupe_key LIKE ?`,[`task-reminder:${created.body.id}:%`]);
+  assert.equal(Number(second.total),1);
+  await call(owner,'PATCH',`/tasks/${created.body.id}`,{status:'Completed'});
+  await admin.query(`UPDATE ${testDatabase}.task_reminders SET next_due='2020-01-01' WHERE task_id=?`,[created.body.id]);
+  await call(owner,'POST','/notifications/scan',{});
+  const [[stopped]]=await admin.query(`SELECT active FROM ${testDatabase}.task_reminders WHERE task_id=?`,[created.body.id]);
+  assert.equal(Number(stopped.active),0);
+  await admin.query(`DELETE FROM ${testDatabase}.tasks WHERE id=?`,[created.body.id]);
+});
+
 test('requires authentication for operational data', async () => {
   assert.equal((await fetch(`${base}/bootstrap`)).status, 401);
 });

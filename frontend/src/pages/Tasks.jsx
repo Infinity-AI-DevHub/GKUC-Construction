@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Check, FolderKanban } from 'lucide-react';
 import { api, openRecord, patch, post, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
 
-const FILTERS = ['All', 'Not started', 'In progress', 'Blocked', 'Completed', 'Approved'];
+const FILTERS = ['All', 'Not started', 'In progress', 'Blocked', 'Completed', 'Approved', 'Rejected'];
 const COLUMNS = ['Task', 'Assignee', 'Due', 'Priority', 'Status'];
 const TEMPLATE = 'minmax(270px,2fr) minmax(140px,1fr) 110px 90px 140px';
 
@@ -14,31 +14,39 @@ export default function Tasks({ data, reload, can }) {
   const [filter, setFilter] = useState('All');
   const [creating, setCreating] = useState(false);
   const [detail, setDetail] = useState(null);
+  const [saving, setSaving] = useState(null);
+  const [error, setError] = useState('');
 
   const shown = data.tasks.filter(task => filter === 'All' || task.status === filter);
 
-  /** One click moves a task along its normal path; approval is a separate management step. */
-  const cycle = async (event, task) => {
-    event.stopPropagation();
-    const next = { 'Not started': 'In progress', 'In progress': 'Completed', Blocked: 'In progress', Completed: 'Not started', Approved: 'Approved' }[task.status];
-    await patch(`/tasks/${task.id}`, { status: next });
-    await reload();
+  const groups = [...new Map(shown.map(task => [task.projectId ?? task.project, {id:task.projectId ?? task.project,name:task.project}])).values()];
+  const changeStatus = async (task, status) => {
+    setSaving(task.id); setError('');
+    try { await patch(`/tasks/${task.id}`, { status }); await reload(); }
+    catch (failure) { setError(failure.message); }
+    finally { setSaving(null); }
   };
 
   return <Page title="Tasks" subtitle="Assign, follow up, and approve work across every site."
     action={can.site ? 'Create task' : null} onAction={() => setCreating(true)}>
     <Tabs tabs={FILTERS} active={filter} onChange={setFilter} />
-    <Table columns={COLUMNS} template={TEMPLATE} empty="No tasks in this view.">
-      {shown.map(task => <Row template={TEMPLATE} key={task.id} onClick={() => openRecord(`/tasks/${task.id}`, setDetail)}>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {!shown.length && <p className="empty-state">No tasks in this view.</p>}
+    <div className="task-project-groups">{groups.map(group => <section className="task-project-group" key={group.id}>
+      <header className="task-project-heading"><span className="task-project-icon"><FolderKanban size={21}/></span><div><small>Project tasks</small><h2>{group.name}</h2></div><span className="task-project-count">{shown.filter(task => (task.projectId ?? task.project) === group.id).length} task(s)</span></header>
+      <Table columns={COLUMNS} template={TEMPLATE} empty="No tasks in this view.">
+      {shown.filter(task => (task.projectId ?? task.project) === group.id).map(task => <Row template={TEMPLATE} key={task.id} onClick={() => openRecord(`/tasks/${task.id}`, setDetail)}>
         <div><strong>{task.title}</strong><small>{task.project}</small></div>
         <div className="person"><Avatar name={task.assignee} /><span>{task.assignee}</span></div>
         <span className={task.due === 'Yesterday' ? 'overdue' : ''}>{task.due}</span>
         <Badge tone={slug(task.priority)}>{task.priority}</Badge>
-        <button className="status-button" onClick={event => can.site && cycle(event, task)}>
-          <span className={`status-dot ${slug(task.status)}`} />{task.status}<ChevronDown size={13} />
-        </button>
+        <select className={`task-status-select ${slug(task.status)}`} aria-label={`Status for ${task.title}`} value={task.status}
+          disabled={!can.site || saving === task.id} onClick={event => event.stopPropagation()}
+          onChange={event => changeStatus(task,event.target.value)}>
+          {FILTERS.slice(1).map(status => <option key={status} value={status} disabled={status === 'Approved' && !can.projects}>{status}</option>)}
+        </select>
       </Row>)}
-    </Table>
+    </Table></section>)}</div>
 
     {creating && <TaskForm data={data} close={() => setCreating(false)} reload={reload} />}
     {detail && <TaskDetail task={detail} close={() => setDetail(null)} reload={reload} can={can}
@@ -48,14 +56,19 @@ export default function Tasks({ data, reload, can }) {
 
 function TaskForm({ data, close, reload }) {
   const [selected, setSelected] = useState([]);
+  const [reminders,setReminders]=useState(false),[users,setUsers]=useState([]),[recipients,setRecipients]=useState([]),[userError,setUserError]=useState('');
+  useEffect(()=>{api('/tasks/reminder-users').then(setUsers).catch(e=>setUserError(e.message));},[]);
   return <FormModal title="Create task" close={close} label="Create task" onSubmit={async values => {
     if (!selected.length) throw new Error('Select at least one employee for this task.');
+    if (reminders && !recipients.length) throw new Error('Choose at least one user to receive reminders.');
     await post('/tasks', {
       title: values.title,
       projectId: Number(values.projectId),
       assigneeEmployeeIds: selected,
-      due: values.due,
+      due: `${values.dueDate} at ${values.dueTime}`,
       dueDate: values.dueDate,
+      dueTime: values.dueTime,
+      ...(reminders ? {reminderAt:values.reminderAt,reminderFrequency:values.reminderFrequency,reminderUserIds:recipients}:{}),
       priority: values.priority,
       notes: values.notes || ''
     });
@@ -64,10 +77,17 @@ function TaskForm({ data, close, reload }) {
     <Field name="title" label="Task title" wide />
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
     <EmployeeMultiSelect employees={data.employees} selected={selected} onChange={setSelected} />
-    <Field name="due" label="Due (as shown to the team)" defaultValue="Today, 4:00 PM" />
     <Field name="dueDate" label="Deadline date" type="date" defaultValue={todayInput()} />
+    <Field name="dueTime" label="Deadline time (Sri Lanka)" type="time" defaultValue="16:00" />
     <SelectField name="priority" label="Priority" options={['Low', 'Medium', 'High']} defaultValue="Medium" />
     <TextArea name="notes" label="Notes" required={false} placeholder="Optional" />
+    <label className="wide"><input type="checkbox" checked={reminders} onChange={event=>setReminders(event.target.checked)}/> Send task reminders</label>
+    {reminders && <>
+      <Field name="reminderAt" label="First reminder date & time (Sri Lanka)" type="datetime-local" />
+      <SelectField name="reminderFrequency" label="Reminder frequency" options={['Once','Daily','Weekly','Monthly']} defaultValue="Daily" />
+      {userError && <p className="form-error wide">{userError}</p>}
+      <fieldset className="project-reminder-users wide"><legend>Reminder recipients</legend><p>Select one or more system users. Reminders stop when the task is completed or approved.</p><div>{users.map(user=><button type="button" key={user.id} className={recipients.includes(user.id)?'selected':''} aria-pressed={recipients.includes(user.id)} onClick={()=>setRecipients(old=>old.includes(user.id)?old.filter(id=>id!==user.id):[...old,user.id])}><span>{recipients.includes(user.id)?'✓':''}</span><strong>{user.name}</strong><small>{user.role}</small></button>)}</div></fieldset>
+    </>}
   </FormModal>;
 }
 

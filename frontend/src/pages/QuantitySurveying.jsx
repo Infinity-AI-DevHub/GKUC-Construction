@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Download, FileText, Plus, Trash2, Upload } from 'lucide-react';
+import { Download, FileText, Plus, Trash2, Upload, ChartNoAxesCombined, Calculator, ClipboardList, ShieldCheck, Users, ChevronRight, Layers } from 'lucide-react';
 import { api, fetchDownload, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import BoqImport from '../BoqImport.jsx';
 import BoqChanges from '../BoqChanges.jsx';
 import CostControl from './CostControl.jsx';
+import './quantity-surveying.css';
 
 /* The bills already on the system, so this tab shows what exists as well as how to add. */
 function BoqList({ companyId }) {
@@ -20,6 +21,14 @@ function BoqList({ companyId }) {
 import { BoqForm } from './Projects.jsx';
 
 const TABS = ['Cost control', 'Quotations', 'Bills of quantities', 'Tenders', 'Retention', 'Subcontractors'];
+const QS_SECTIONS = {
+  'Cost control': { icon: ChartNoAxesCombined, caption: 'Daily costs & forecasts', description: 'Keep the daily site ledger, approved costs and commercial outlook connected.' },
+  Quotations: { icon: FileText, caption: 'Client pricing & templates', description: 'Prepare, review and share client-ready quotations, with reusable wording in one place.' },
+  'Bills of quantities': { icon: Calculator, caption: 'Estimates & measured work', description: 'Build a bill manually or bring in an Excel or PDF document, then verify it before saving.' },
+  Tenders: { icon: ClipboardList, caption: 'Bids & commitments', description: 'Track bidding opportunities, key dates and supporting documents through every stage.' },
+  Retention: { icon: ShieldCheck, caption: 'Held amounts & releases', description: 'A clear view of retained amounts, upcoming release dates and recorded releases.' },
+  Subcontractors: { icon: Users, caption: 'Partners, rates & quotations', description: 'Keep subcontractor details, project rate cards, quotations and bills together.' }
+};
 
 /** PID v3 §3.3 — one connected thread from first estimate to final account. */
 export default function QuantitySurveying({ data, reload, can, companyId, company }) {
@@ -34,9 +43,16 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
     Subcontractors: can.subcontractors && 'Add subcontractor'
   };
 
-  return <Page title="Quantity Surveying" subtitle={`Quotations, BOQs, tenders and commercial control for ${company?.name || 'the selected company'}.`}
+  return <div className="qs-workspace"><Page title="Quantity Surveying" subtitle={`Commercial workspace · ${company?.name || 'the selected company'}`}
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
-    <Tabs tabs={TABS} active={tab} onChange={setTab} />
+    <div className="qs-layout">
+      <aside className="qs-navigation" aria-label="Quantity surveying sections">
+        <div className="qs-navigation-title"><Layers size={17} /><span>Commercial desk</span></div>
+        <nav>{TABS.map(section => { const Icon=QS_SECTIONS[section].icon; return <button type="button" key={section} className={tab===section?'is-active':''} aria-current={tab===section?'page':undefined} onClick={()=>setTab(section)}><span className="qs-nav-icon"><Icon size={19}/></span><span><strong>{section}</strong><small>{QS_SECTIONS[section].caption}</small></span><ChevronRight size={14}/></button>; })}</nav>
+        <div className="qs-navigation-note"><ShieldCheck size={19}/><strong>One connected workflow</strong><p>Estimate. Quote. Review.<br/>Track every project cost.</p></div>
+      </aside>
+      <div className="qs-content" key={tab}>
+        {tab !== 'Cost control' && <header className="qs-section-intro"><span>Commercial management</span><h2>{tab}</h2><p>{QS_SECTIONS[tab].description}</p></header>}
 
     {tab === 'Cost control' && <CostControl projects={data.projects} can={can} />}
     {tab === 'Quotations' && <Quotations can={can} reload={reload} companyId={companyId} />}
@@ -48,13 +64,15 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
     {tab === 'Tenders' && <Tenders can={can} companyId={companyId} company={company} employees={data.employees} />}
     {tab === 'Retention' && <Retention can={can} companyId={companyId} />}
     {tab === 'Subcontractors' && <Subcontractors can={can} data={data} companyId={companyId} />}
+      </div>
+    </div>
 
     {open === 'Create BOQ' && <BoqForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Quotations' && <QuotationForm data={data} companyId={companyId} close={() => setOpen('')} reload={reload} />}
     {open === 'Tenders' && <TenderForm companyId={companyId} company={company} close={() => setOpen('')} reload={reload} />}
     {open === 'Retention' && <RetentionForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Subcontractors' && <SubcontractorForm close={() => setOpen('')} reload={reload} />}
-  </Page>;
+  </Page></div>;
 }
 
 const QUOTE_TEMPLATE = 'minmax(115px,.75fr) minmax(150px,1.2fr) minmax(120px,.9fr) 125px 100px 235px';
@@ -1159,6 +1177,7 @@ function QuotationForm({ data, companyId, close, reload }) {
       <button type="button" className={mode === 'boq' ? 'active' : ''} onClick={() => setMode('boq')}>From a BOQ</button>
       <button type="button" className={mode === 'manual' ? 'active' : ''} onClick={() => setMode('manual')}>Enter manually</button>
     </div>
+    <div className="qs-form-section wide"><span>01</span><div><h3>Quotation essentials</h3><p>Select the client, pricing source and document dates.</p></div></div>
     <label>Client<select name="clientId" value={clientId} required onChange={event => { setClientId(event.target.value); setBoqId(''); setProjectId(''); }}>
       <option value="">Choose saved client…</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
     </select></label>
@@ -1170,6 +1189,7 @@ function QuotationForm({ data, companyId, close, reload }) {
     <Field name="title" label="Quotation title" required={mode === 'manual'} />
     <Field name="quoteDate" label="Quotation date" type="date" defaultValue={todayInput()} />
     <Field name="validUntil" label="Valid until" type="date" required={false} />
+    <div className="qs-form-section wide"><span>02</span><div><h3>Pricing & document details</h3><p>Set the pricing adjustments, bank account and information to print.</p></div></div>
     <Field name="markupPercent" label="Markup %" type="number" step="0.01" min="0" max="100" defaultValue="10" required={false} />
     <Field name="vatPercent" label="VAT %" type="number" step="0.01" min="0" max="100" defaultValue="18" required={false} />
     <label>Bank account<select name="bankAccountId" value={bankAccountId} onChange={event => setBankAccountId(event.target.value)}>
@@ -1213,6 +1233,7 @@ function QuotationForm({ data, companyId, close, reload }) {
       </div>)}
       <div className="manual-quotation-total"><span>Manual subtotal</span><strong>{rupees(manualSubtotal)}</strong></div>
     </div>}
+    <div className="qs-form-section wide"><span>03</span><div><h3>Notes & payment terms</h3><p>Use saved notes or tailor the wording for this client.</p></div></div>
     <div className="quotation-note-picker wide">
       <label>Insert a saved note into Notes<select value={selectedNoteTemplate} onChange={event => setSelectedNoteTemplate(event.target.value)}>
         <option value="">Choose a note template…</option>

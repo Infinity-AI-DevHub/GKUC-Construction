@@ -309,6 +309,22 @@ async function createHrTables() {
 
 /** 2.3 / 2.4 Task and project detail. */
 async function createProjectReminderTables() {
+  const [taskStatusColumn] = await query("SHOW COLUMNS FROM tasks LIKE 'status'");
+  if (!taskStatusColumn.Type.includes("'Rejected'")) await query("ALTER TABLE tasks MODIFY status ENUM('Not started','In progress','Blocked','Completed','Approved','Rejected') NOT NULL");
+  await addColumn('tasks','due_time','TIME NULL');
+  await query(`CREATE TABLE IF NOT EXISTS task_reminders (
+    task_id BIGINT UNSIGNED PRIMARY KEY,
+    next_due DATETIME NOT NULL,
+    frequency ENUM('Once','Daily','Weekly','Monthly') NOT NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    CONSTRAINT fk_task_reminder_task FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS task_reminder_users (
+    task_id BIGINT UNSIGNED NOT NULL,user_id BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY(task_id,user_id),
+    CONSTRAINT fk_task_reminder_user_task FOREIGN KEY(task_id) REFERENCES task_reminders(task_id) ON DELETE CASCADE,
+    CONSTRAINT fk_task_reminder_user FOREIGN KEY(user_id) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS project_start_reminders (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     project_id BIGINT UNSIGNED NOT NULL UNIQUE,

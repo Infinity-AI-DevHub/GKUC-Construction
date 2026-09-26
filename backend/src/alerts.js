@@ -1,4 +1,4 @@
-import { pool, query, spendSql, today } from './db.js';
+import { pool, query, spendSql, today, transaction } from './db.js';
 import { dispatchQueued, dispatch } from './lib/channels.js';
 import { publish } from './lib/realtime.js';
 
@@ -435,6 +435,7 @@ async function projectStartReminderAlerts(stamp, alerts) {
 
 /** Scans every tracked deadline and threshold and queues notifications for anything at risk. */
 export async function runAlertScan() {
+  await runTaskReminderScan();
   const stamp = today();
   const alerts = [];
   await Promise.all([
@@ -605,5 +606,33 @@ export function startAlertScheduler(intervalMinutes = Number(process.env.ALERT_I
   tick();
   const timer = setInterval(tick, intervalMinutes * 60000);
   timer.unref();
+  const taskTimer=setInterval(()=>runTaskReminderScan().catch(error=>console.error('Task reminders failed',error)),60000);
+  taskTimer.unref();
   return timer;
+}
+
+/** Targeted clock-based reminders, stopped as soon as the work is finished. */
+export async function runTaskReminderScan() {
+  await transaction(async connection => {
+    const [reminders]=await connection.execute(`SELECT r.*,t.title,t.status,t.due,p.name project
+      FROM task_reminders r JOIN tasks t ON t.id=r.task_id JOIN projects p ON p.id=t.project_id
+      WHERE r.active=1 AND r.next_due<=NOW() FOR UPDATE`);
+    for (const reminder of reminders) {
+      if (['Completed','Approved'].includes(reminder.status)) {
+        await connection.execute('UPDATE task_reminders SET active=0 WHERE task_id=?',[reminder.task_id]);
+        continue;
+      }
+      const [users]=await connection.execute(`SELECT ru.user_id FROM task_reminder_users ru
+        JOIN users u ON u.id=ru.user_id WHERE ru.task_id=? AND u.active=1`,[reminder.task_id]);
+      for (const recipient of users) await raise({key:`task-reminder:${reminder.task_id}:${recipient.user_id}:${reminder.next_due}`,
+        userId:recipient.user_id,severity:'Info',title:`Task reminder — ${reminder.title}`,
+        message:`${reminder.project}: ${reminder.title} is ${reminder.status.toLowerCase()}. Deadline: ${reminder.due}.`,
+        referenceType:'task',referenceId:reminder.task_id});
+      if (reminder.frequency==='Once') await connection.execute('UPDATE task_reminders SET active=0 WHERE task_id=?',[reminder.task_id]);
+      else {
+        const interval={Daily:'1 DAY',Weekly:'7 DAY',Monthly:'1 MONTH'}[reminder.frequency];
+        await connection.execute(`UPDATE task_reminders SET next_due=DATE_ADD(GREATEST(next_due,NOW()),INTERVAL ${interval}) WHERE task_id=?`,[reminder.task_id]);
+      }
+    }
+  });
 }
