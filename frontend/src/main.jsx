@@ -53,7 +53,7 @@ const NAV = [
   ['Projects', Building2, ['projects.view']],
   ['Tasks', ClipboardCheck, ['projects.view']],
   ['Quantity Surveying', Calculator, ['qs.view']],
-  ['People', Users, ['hr.view', 'hr.attendance', 'hr.leave', 'hr.payroll', 'site.attendance']],
+  ['People', Users, ['hr.view', 'hr.manage', 'hr.attendance', 'hr.leave', 'hr.payroll', 'hr.settings', 'hr.conduct', 'hr.hiring', 'hr.insurance','hr.assets']],
   ['Materials', Warehouse, ['store.view', 'store.manage']],
   ['Stock locations', Warehouse, ['store.view', 'store.manage', 'projects.view']],
   ['Fleet', Truck, ['transport.view', 'transport.manage', 'store.lending']],
@@ -62,7 +62,7 @@ const NAV = [
   ['Chat', MessageSquare, ['chat.use']],
   ['Drive', HardDrive, ['drive.use']],
   ['Reports', ClipboardList, []],
-  ['Administration', ShieldCheck, ['admin.users', 'admin.roles', 'admin.audit', 'admin.lists', 'admin.notifications']]
+  ['Administration', ShieldCheck, ['admin.users', 'admin.roles', 'admin.audit', 'admin.lists', 'admin.notifications', 'admin.company','admin.documents','admin.designer']]
 ];
 
 /**
@@ -75,6 +75,15 @@ const capabilities = permissions => {
   const any = (...keys) => keys.some(key => held.has(key));
   return {
     has: key => held.has(key),
+    conduct:any('hr.conduct'),
+    assets:any('hr.assets'),
+    payrollSettings:any('hr.settings'),
+    templates:any('qs.templates'),
+    costControl:any('qs.costControl'),
+    costReview:any('finance.costReview'),
+    companySettings:any('admin.company'),
+    documentSettings:any('admin.documents'),
+    designer:any('admin.designer'),
     manage: any('admin.users'),
     roles: any('admin.roles'),
     audit: any('admin.audit'),
@@ -90,7 +99,7 @@ const capabilities = permissions => {
     enquiries: any('enquiries.manage'),
     site: any('site.tasks'),
     reports: any('site.reports'),
-    attendance: any('site.attendance'),
+    attendance: any('hr.attendance'),
     stock: any('store.manage'),
     lending: any('store.lending'),
     purchasing: any('store.manage', 'finance.pay'),
@@ -104,7 +113,7 @@ const capabilities = permissions => {
        leave and overtime are approved by the HR office or by whoever holds leave, and
        overtime is also recorded by the site that worked it. */
     leave: any('hr.manage', 'hr.leave'),
-    overtime: any('site.attendance', 'hr.leave', 'hr.manage'),
+    overtime: any('hr.payroll'),
     qs: any('qs.boq'),
     boq: any('qs.boq'),
     quotation: any('qs.quotation'),

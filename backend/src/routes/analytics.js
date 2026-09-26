@@ -107,7 +107,7 @@ export const REPORT_TYPES = Object.keys(builders);
  * refused when they ask for them directly.
  */
 const REPORT_PERMISSIONS = {
-  attendance: ['hr.view', 'site.attendance', 'hr.attendance'],
+  attendance: ['hr.manage', 'hr.attendance'],
   employees: ['hr.view', 'hr.manage'],
   projects: ['projects.view'],
   tasks: ['site.tasks', 'projects.view'],

@@ -1,16 +1,40 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, BriefcaseBusiness, CalendarDays, CheckCircle2, ClipboardCheck,
   Clock3, Mail, MapPin, PencilLine, Phone, ShieldCheck, Star, TrendingUp, UserRound } from 'lucide-react';
-import { api, inputDate, patch, rupees, shortDate, slug } from '../api.js';
+import { api, inputDate, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Row, SelectField, Table, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFields.jsx';
 import AttendanceCorrection from './AttendanceCorrection.jsx';
+import EmployeeAssets from './EmployeeAssets.jsx';
 
 function RateRing({ value, label }) {
   return <div className="people-rate-ring" style={{ '--people-rate': `${Math.max(0, Math.min(100, value || 0))}%` }}>
     <div><strong>{value || 0}%</strong><span>{label}</span></div>
   </div>;
+}
+
+function ConductHistory({employeeId}) {
+  const [records,setRecords]=useState([]);
+  const [open,setOpen]=useState(false);
+  const [kind,setKind]=useState('Good rating');
+  const [error,setError]=useState('');
+  const load=()=>api(`/employees/${employeeId}/conduct`).then(rows=>{setRecords(rows);setError('');}).catch(failure=>setError(failure.message));
+  useEffect(()=>{load();},[employeeId]);
+  return <section className="employee-panel employee-wide-panel">
+    <div className="employee-section-title"><div><span>HR record · confidential</span><h2>Conduct & recognition</h2></div><button className="secondary" type="button" onClick={()=>setOpen(true)}>Add entry</button></div>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <Table title="Offences and positive ratings" columns={['Date','Type','Rating','Description','Recorded by']} template="120px 130px 100px minmax(230px,1fr) 160px" empty="No conduct or recognition entries recorded yet.">
+      {records.map(record=><Row key={record.id} template="120px 130px 100px minmax(230px,1fr) 160px"><span>{shortDate(record.recordDate)}</span><Badge tone={record.kind==='Offence'?'critical':'active'}>{record.kind}</Badge><span>{record.rating ? `${record.rating} / 5` : '—'}</span><span style={{whiteSpace:'pre-wrap'}}>{record.description}</span><span>{record.recordedBy}</span></Row>)}
+    </Table>
+    {open && <FormModal title="Record conduct or recognition" close={()=>setOpen(false)} label="Save entry" onSubmit={async values=>{await post(`/employees/${employeeId}/conduct`,{kind,recordDate:values.recordDate,description:values.description,rating:kind==='Good rating'&&values.rating?Number(values.rating):null});await load();}}>
+      <label>Entry type<select name="kind" value={kind} onChange={event=>setKind(event.target.value)}><option>Good rating</option><option>Offence</option></select></label>
+      <Field name="recordDate" label="Date" type="date" defaultValue={todayInput()} />
+      {kind==='Good rating' && <SelectField name="rating" label="Rating (optional)" required={false} options={[["","No star rating"],[1,'1 / 5'],[2,'2 / 5'],[3,'3 / 5'],[4,'4 / 5'],[5,'5 / 5']]} />}
+      <TextArea name="description" label="Description" rows={5} />
+      <p className="form-note wide">HR-only history. This records an observation and does not automatically change salary or performance-review scores.</p>
+    </FormModal>}
+  </section>;
 }
 
 function TrendBars({ points }) {
@@ -46,11 +70,12 @@ function ReviewRadar({ review }) {
   </div>;
 }
 
-export default function EmployeeProfile({ employeeId, close, canManage, canCorrect, projects = [], departments = [], companies = [], reloadPeople }) {
+export default function EmployeeProfile({ employeeId, close, canManage, canConduct, canAssets, canCorrect, projects = [], departments = [], companies = [], reloadPeople }) {
   const [employee, setEmployee] = useState(null);
   const [error, setError] = useState('');
   const [correcting, setCorrecting] = useState(null);
   const [editing, setEditing] = useState(false);
+  const [editingJob, setEditingJob] = useState(false);
   const reloadEmployee = async () => setEmployee(await api(`/employees/${employeeId}`));
   useEffect(() => {
     setEmployee(null); setError('');
@@ -94,6 +119,17 @@ export default function EmployeeProfile({ employeeId, close, canManage, canCorre
       <article><ClipboardCheck /><div><span>Task delivery</span><strong>{employee.workStats.completedTasks}/{employee.workStats.tasks}</strong><small>completed assignments</small></div></article>
       <article><Star /><div><span>Performance</span><strong>{employee.workStats.averagePerformance ?? '—'}</strong><small>{employee.reviews.length} formal reviews</small></div></article>
       <article><BriefcaseBusiness /><div><span>Site reporting</span><strong>{employee.workStats.reports}</strong><small>daily reports submitted</small></div></article>
+    </section>
+
+    <section className="employee-panel employee-wide-panel">
+      <div className="employee-section-title"><div><span>Role & responsibilities</span><h2>Job description</h2></div>
+        {canManage && <button className="icon-btn" type="button" aria-label="Edit job description" title="Edit job description" onClick={()=>setEditingJob(true)}><PencilLine size={16}/></button>}
+      </div>
+      {employee.jobDescription?.trim() ? <ul>{employee.jobDescription.split('\n').map(line=>line.trim()).filter(Boolean).map((line,index)=><li key={index} style={{whiteSpace:'pre-wrap',marginBottom:8}}>{line.replace(/^[-•]\s*/, '')}</li>)}</ul> : <p className="empty-state">No job description recorded yet.</p>}
+      {editingJob && <FormModal title="Edit job description" close={()=>setEditingJob(false)} label="Save job description" onSubmit={async values=>{await patch(`/employees/${employee.id}`,{jobDescription:values.jobDescription.split('\n').map(line=>line.trim().replace(/^[-•]\s*/, '')).filter(Boolean).join('\n')});await reloadEmployee();}}>
+        <TextArea name="jobDescription" label="Responsibilities — one bullet point per line" required={false} rows={10} defaultValue={employee.jobDescription||''}/>
+        <p className="form-note wide">Enter each responsibility on a separate line. Leave blank to clear the job description.</p>
+      </FormModal>}
     </section>
 
     <div className="employee-profile-grid">
@@ -190,6 +226,8 @@ export default function EmployeeProfile({ employeeId, close, canManage, canCorre
         close={() => setCorrecting(null)} reload={reloadEmployee} />}
     </section>
 
+    {(canManage||canAssets)&&<EmployeeAssets employeeId={employee.id} canEdit={canAssets}/>}
+    {canConduct && <ConductHistory employeeId={employee.id} />}
     <section className="employee-panel employee-wide-panel employee-documents">
       <Attachments ownerType="employee" ownerId={employee.id} title="Employee documents"
         canUpload={canManage} canDelete={canManage} withCategory withExpiry />
@@ -242,7 +280,7 @@ function PersonalDetailsForm({ employee, departments, companies, close, reload }
       options={['Active', 'On leave', 'Suspended', 'Left']} />
     <Field name="phone" label="Phone" defaultValue={employee.phone || ''} required={false} />
     <Field name="email" label="Email" type="email" defaultValue={employee.email || ''} required={false} />
-    <Field required={false} name="joinDate" label="Join date" type="date" defaultValue={inputDate(employee.joinDate)} />
+    <Field required={false} name="joinDate" label="Employment start date" type="date" defaultValue={inputDate(employee.joinDate)} />
     <SelectField required={false} name="payrollCompanyId" label="Salary paid by" defaultValue={employee.payrollCompanyId || 1}
       options={companies.map(company => [company.id, company.name])} />
     <SelectField required={false} name="payBasis" label="Pay basis" defaultValue={employee.payBasis}

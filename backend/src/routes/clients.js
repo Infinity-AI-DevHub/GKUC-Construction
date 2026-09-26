@@ -24,12 +24,12 @@ const select = `SELECT id,type,name,contact_person contactPerson,phone,alternate
   registration_number registrationNumber,tax_number taxNumber,tin,vat_number vatNumber,
   notes,active,created_at createdAt,updated_at updatedAt FROM clients`;
 
-router.get('/', auth, permit('projects.view'), wrap(async (req, res) => {
+router.get('/', auth, permit('clients.view'), wrap(async (req, res) => {
   const archived = req.query.archived === '1';
   res.json(await query(`${select} WHERE active=? ORDER BY name,id`, [archived ? 0 : 1]));
 }));
 
-router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
+router.get('/:id', auth, permit('clients.view'), wrap(async (req, res) => {
   const client = await getOne(`${select} WHERE id=?`, [req.params.id]);
   if (!client) return res.status(404).json({ error: 'Client not found' });
   const companyId = req.query.companyId === undefined ? null : Number(req.query.companyId);
@@ -73,7 +73,7 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
       received: payments.reduce((sum, row) => sum + Number(row.amount), 0) } });
 }));
 
-router.post('/', auth, permit('projects.manage'), validate(shape), wrap(async (req, res) => {
+router.post('/', auth, permit('clients.manage'), validate(shape), wrap(async (req, res) => {
   const duplicate = await getOne('SELECT id FROM clients WHERE LOWER(name)=LOWER(?) AND type=? LIMIT 1', [req.body.name, req.body.type]);
   if (duplicate) return res.status(409).json({ error: 'A client with this name and type already exists. Open that profile instead of adding a duplicate.' });
   const values = Object.entries(req.body).filter(([key]) => key in columns);
@@ -84,7 +84,7 @@ router.post('/', auth, permit('projects.manage'), validate(shape), wrap(async (r
   res.status(201).json(client);
 }));
 
-router.patch('/:id', auth, permit('projects.manage'), validate(shape.partial().extend({ active: z.boolean().optional() })), wrap(async (req, res) => {
+router.patch('/:id', auth, permit('clients.manage'), validate(shape.partial().extend({ active: z.boolean().optional() })), wrap(async (req, res) => {
   const before = await getOne(`${select} WHERE id=?`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Client not found' });
   if ((req.body.name && req.body.name.toLowerCase() !== before.name.toLowerCase())
@@ -102,7 +102,7 @@ router.patch('/:id', auth, permit('projects.manage'), validate(shape.partial().e
   res.json(after);
 }));
 
-router.delete('/:id', auth, permit('projects.manage'), wrap(async (req, res) => {
+router.delete('/:id', auth, permit('clients.manage'), wrap(async (req, res) => {
   const before = await getOne(`${select} WHERE id=?`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Client not found' });
   const linked = await getOne(`SELECT

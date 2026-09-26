@@ -108,7 +108,8 @@ export async function audit(executor, userId, action, entity, entityId, before, 
  * the dashboard, the finance module and the alert scanner never disagree.
  */
 export const spendSql = alias =>
-  `(${alias}.actual + COALESCE((SELECT SUM(x.amount) FROM expenses x WHERE x.project_id=${alias}.id),0))`;
+  `(${alias}.actual + COALESCE((SELECT SUM(x.amount) FROM expenses x WHERE x.project_id=${alias}.id),0)
+    + COALESCE((SELECT SUM(pa.amount) FROM payroll_project_allocations pa JOIN payslips ps ON ps.id=pa.payslip_id JOIN payroll_runs pr ON pr.id=ps.run_id WHERE pa.project_id=${alias}.id AND pr.status IN ('Approved','Paid')),0))`;
 
 /**
  * Reserves the next document number in a series, e.g. PR-2026-0007.

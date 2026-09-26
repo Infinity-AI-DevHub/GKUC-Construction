@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import 'dotenv/config';
 import mysql from 'mysql2/promise';
+import {INITIAL_HR_RULES} from '../src/lib/hr-payroll-rules.js';
 
 const port = 43971;
 const base = `http://127.0.0.1:${port}/api`;
@@ -60,6 +61,182 @@ const call = async (token, method, path, body) => {
   return { status: response.status, body: response.status === 204 ? null : await response.json() };
 };
 
+test('HR reviewed inputs reach weekly payroll once with separate OT, allowances and reimbursement snapshots',async()=>{
+  const hr=await login('hr@gkuc.lk'),owner=await login(),site=await login('supervisor@gkuc.lk');
+  const employee=await call(hr,'POST','/employees',{code:'HR-INPUT-QA',name:'HR Inputs QA',joinDate:shift(60)});assert.equal(employee.status,201);
+  const employeeId=employee.body.id,date=shift(60);
+  assert.equal((await call(hr,'PATCH',`/payroll/settings/employees/${employeeId}`,{payBasis:'Daily rate',payFrequency:'Weekly',payrollCategory:'Site labourer',basicSalary:0,weeklyRate:0,dailyRate:2500,compensationEffectiveFrom:date,epfEligible:false,etfEligible:false,allowanceEligibility:{transport:true,longDistance:true,motorcycle:true,machine:true,specialDuty:true}})).status,200);
+  const policy={effectiveFrom:date,officeOtRate:225,siteLabourSiteOtRate:200,siteLabourTravelOtRate:100,driverOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3,hrRules:{...INITIAL_HR_RULES,fullTransportDays:20}};
+  assert.equal((await call(hr,'POST','/payroll/settings/policies',policy)).status,201);
+  const attendance=await call(hr,'POST','/attendance',{employeeId,name:'HR Inputs QA',role:'Labourer',projectId:1,date,state:'On site',checkIn:'07:00',checkOut:'17:30',informationSource:'Signed timesheet',sourceNotes:'QA source'});assert.equal(attendance.status,201);
+  assert.equal((await call(site,'GET','/payroll/inputs')).status,403);
+  const suggestions=(await call(hr,'GET','/payroll/inputs')).body.suggestions;
+  assert.equal(suggestions.find(r=>r.id===attendance.body.id).suggestion.hours,1.5);
+  const suggested=await call(hr,'POST',`/payroll/inputs/suggestions/${attendance.body.id}`,{hours:1.5,reason:'Checked signed record'});assert.equal(suggested.status,201);
+  assert.equal((await call(hr,'POST',`/payroll/inputs/suggestions/${attendance.body.id}`,{hours:1.5,reason:'Duplicate'})).status,409);
+  const ot=(await call(hr,'GET','/employees/overtime/all')).body.find(o=>o.employee==='HR Inputs QA');
+  assert.equal((await call(hr,'PATCH',`/employees/overtime/${ot.id}`,{status:'Approved'})).status,200);
+  const travel={employeeId,workDate:date,projectId:1,kind:'Travel',departure:'07:00',arrival:'08:00',hours:1,distance:60,source:'Signed timesheet'};
+  assert.equal((await call(hr,'POST','/payroll/inputs',travel)).status,409);
+  const claims=[];
+  for(const body of [{...travel,departure:'18:00',arrival:'19:00'},{employeeId,workDate:shift(61),projectId:1,kind:'Mileage',approvedKm:20,source:'Signed timesheet'},{employeeId,workDate:shift(61),projectId:1,kind:'Special duty',amount:500,source:'Management instruction'}]){
+    const claim=await call(hr,'POST','/payroll/inputs',body);assert.equal(claim.status,201,JSON.stringify(claim.body));claims.push(claim.body.id);
+    assert.equal((await call(hr,'PATCH',`/payroll/inputs/${claim.body.id}/review`,{status:'Approved',reason:'Too early'})).status,409);
+    for(const status of ['Confirmed','Approved'])assert.equal((await call(hr,'PATCH',`/payroll/inputs/${claim.body.id}/review`,{status,reason:'Reviewed by HR'})).status,200);
+  }
+  assert.equal((await call(hr,'POST','/payroll/inputs',{employeeId,workDate:shift(62),kind:'Mileage',startOdometer:100,endOdometer:90,source:'Other'})).status,400);
+  assert.equal((await call(hr,'POST','/payroll/inputs',{employeeId,workDate:shift(62),kind:'Mileage',approvedKm:20,fixedTravel:true,source:'Other'})).status,400);
+  const run=await call(hr,'POST','/payroll',{periodStart:date,periodEnd:shift(66),payFrequency:'Weekly'});assert.equal(run.status,201,JSON.stringify(run.body));
+  const before=(await call(hr,'GET',`/payroll/${run.body.id}`)).body;
+  const slip=before.payslips.find(p=>p.employeeCode==='HR-INPUT-QA');assert.equal(slip.basic,2500);assert.equal(slip.siteOtPay,300);assert.equal(slip.travelOtPay,100);assert.equal(slip.allowanceTotal,1000);assert.equal(slip.reimbursementTotal,340);assert.equal(slip.netPay,4240);
+  for(const status of ['Approved','Paid'])assert.equal((await call(hr,'PATCH',`/payroll/${run.body.id}`,{status})).status,200);
+  assert.equal((await call(hr,'PATCH',`/payroll/${run.body.id}`,{status:'Draft'})).status,409);
+  assert.equal((await call(hr,'POST','/payroll/settings/policies',{...policy,effectiveFrom:shift(62),siteLabourSiteOtRate:500})).status,201);
+  const after=(await call(hr,'GET',`/payroll/${run.body.id}`)).body.payslips.find(p=>p.id===slip.id);assert.equal(after.netPay,slip.netPay);assert.equal(after.siteOtPay,slip.siteOtPay);
+  const [[alloc]]=await admin.query(`SELECT SUM(amount) total,COUNT(*) n FROM ${testDatabase}.payroll_project_allocations WHERE employee_id=?`,[employeeId]);assert.equal(Number(alloc.total),4240);
+  const audits=(await call(owner,'GET','/audit')).body;assert.ok(audits.some(a=>a.entity==='payroll_claim'&&a.action==='APPROVED'));
+  await admin.query(`DELETE FROM ${testDatabase}.payroll_project_allocations WHERE employee_id=?`,[employeeId]);
+  await admin.query(`DELETE FROM ${testDatabase}.payslip_components WHERE payslip_id IN (SELECT id FROM ${testDatabase}.payslips WHERE run_id=?)`,[run.body.id]);
+  await admin.query(`DELETE FROM ${testDatabase}.payslips WHERE run_id=?`,[run.body.id]);
+  await admin.query(`DELETE FROM ${testDatabase}.payroll_runs WHERE id=?`,[run.body.id]);
+  for(const table of ['hr_payroll_claims','overtime_records','attendance'])await admin.query(`DELETE FROM ${testDatabase}.${table} WHERE employee_id=?`,[employeeId]);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[employeeId]);
+  await admin.query(`DELETE FROM ${testDatabase}.payroll_policies WHERE effective_from IN (?,?)`,[date,shift(62)]);
+});
+
+test('employee offboarding is blocked by assets, vehicles and unfinished tasks until cleared',async()=>{
+  const hr=await login('hr@gkuc.lk'),qs=await login('qs@gkuc.lk');
+  const person=await call(hr,'POST','/employees',{code:'ASSET-QA-01',name:'Asset Clearance QA'});assert.equal(person.status,201);
+  const employeeId=person.body.id;
+  const handover=await call(hr,'POST',`/employees/${employeeId}/assets`,{assetName:'Company phone',assetCode:'PHONE-QA-01',category:'Phone',handedOn:today(),conditionBefore:'Good condition, no scratches'});assert.equal(handover.status,201);
+  assert.equal((await call(qs,'POST',`/employees/${employeeId}/assets`,{assetName:'Phone',assetCode:'QA-X',category:'Phone',handedOn:today(),conditionBefore:'Good'})).status,403);
+  assert.equal((await call(hr,'PATCH',`/employees/${employeeId}`,{status:'Left'})).status,409);
+  assert.equal((await call(hr,'PATCH',`/employees/${employeeId}/assets/${handover.body.id}/return`,{returnedOn:today(),conditionReturned:'Returned in good condition'})).status,200);
+  const [[task]]=await admin.query(`SELECT id FROM ${testDatabase}.tasks WHERE status NOT IN ('Completed','Approved') LIMIT 1`);
+  await admin.query(`INSERT INTO ${testDatabase}.task_assignees(task_id,employee_id) VALUES(?,?)`,[task.id,employeeId]);
+  assert.equal((await call(hr,'PATCH',`/employees/${employeeId}`,{status:'Left'})).status,409);
+  await admin.query(`DELETE FROM ${testDatabase}.task_assignees WHERE employee_id=?`,[employeeId]);
+  const [[vehicle]]=await admin.query(`SELECT id,driver_employee_id FROM ${testDatabase}.fleet LIMIT 1`);
+  await admin.query(`UPDATE ${testDatabase}.fleet SET driver_employee_id=? WHERE id=?`,[employeeId,vehicle.id]);
+  assert.equal((await call(hr,'PATCH',`/employees/${employeeId}`,{status:'Left'})).status,409);
+  await admin.query(`UPDATE ${testDatabase}.fleet SET driver_employee_id=? WHERE id=?`,[vehicle.driver_employee_id,vehicle.id]);
+  assert.equal((await call(hr,'GET',`/employees/${employeeId}/offboarding`)).body.clear,true);
+  assert.equal((await call(hr,'PATCH',`/employees/${employeeId}`,{status:'Left'})).status,200);
+  await admin.query(`DELETE FROM ${testDatabase}.employee_asset_handovers WHERE employee_id=?`,[employeeId]);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[employeeId]);
+});
+
+test('HR insurance connects to Fleet and sends custom reminders without duplicates',async()=>{
+  const hr=await login('hr@gkuc.lk'),owner=await login(),qs=await login('qs@gkuc.lk');
+  assert.equal((await call(hr,'GET','/fleet')).status,200);
+  assert.equal((await call(qs,'GET','/insurance')).status,403);
+  const options=(await call(hr,'GET','/insurance/options')).body;
+  const vehicleId=options.vehicles[0].id;
+  const [oldDocs]=await admin.query(`SELECT * FROM ${testDatabase}.vehicle_documents WHERE vehicle_id=? AND doc_type='Insurance'`,[vehicleId]);
+  const recordIds=[];
+  const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Colombo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const body={name:'Test site cover',kind:'Work site',projectId:options.projects[0].id,insurer:'Test insurer',startDate:stamp,endDate:shift(60),expiryDate:shift(60),reminders:[{unit:'Date',date:stamp},{unit:'Date',date:stamp}]};
+  try {
+    const site=await call(hr,'POST','/insurance',body);assert.equal(site.status,201,JSON.stringify(site.body));recordIds.push(site.body.id);
+    const employee=await call(hr,'POST','/insurance',{...body,name:'Test life cover',kind:'Employee life',projectId:null,employeeId:options.employees[0].id,reminders:[]});assert.equal(employee.status,201);recordIds.push(employee.body.id);
+    const vehicleBody={...body,name:'Test motor cover',kind:'Vehicle',projectId:null,vehicleId,policyNumber:'HR-TEST-POLICY',reminders:[]};
+    const vehicle=await call(hr,'POST','/insurance',vehicleBody);assert.equal(vehicle.status,201);recordIds.push(vehicle.body.id);
+    assert.equal((await call(hr,'POST','/insurance',vehicleBody)).status,409);
+    const fleet=(await call(hr,'GET',`/fleet/${vehicleId}`)).body;
+    assert.ok(fleet.documents.some(doc=>doc.docType==='Insurance'&&doc.reference==='HR-TEST-POLICY'&&doc.expiryDate===body.expiryDate));
+    for(let i=0;i<2;i++)assert.equal((await call(owner,'POST','/notifications/scan',{})).status,200);
+    const [[count]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.notifications WHERE dedupe_key LIKE ?`,[`insurance:${site.body.id}:%`]);assert.equal(count.n,1);
+    assert.ok((await call(hr,'GET','/notifications')).body.some(n=>n.referenceType==='insurance'&&Number(n.referenceId)===site.body.id));
+    assert.equal((await call(qs,'PATCH',`/insurance/${site.body.id}`,body)).status,403);
+    assert.equal((await call(hr,'PATCH',`/insurance/${site.body.id}`,{...body,notes:'Renewal requested',status:'Archived'})).status,200);
+  } finally {
+    for(const id of recordIds){await admin.query(`DELETE FROM ${testDatabase}.notifications WHERE dedupe_key LIKE ?`,[`insurance:${id}:%`]);await admin.query(`DELETE FROM ${testDatabase}.hr_insurance WHERE id=?`,[id]);}
+    await admin.query(`DELETE FROM ${testDatabase}.vehicle_documents WHERE vehicle_id=? AND doc_type='Insurance'`,[vehicleId]);
+    if(oldDocs[0]){const d=oldDocs[0];await admin.query(`INSERT INTO ${testDatabase}.vehicle_documents(id,vehicle_id,doc_type,reference,expiry_date,cost) VALUES(?,?,?,?,?,?)`,[d.id,d.vehicle_id,d.doc_type,d.reference,d.expiry_date,d.cost]);}
+  }
+});
+
+test('HR can edit and clear employee job descriptions; other roles cannot',async()=>{
+  const hr=await login('hr@gkuc.lk'),qs=await login('qs@gkuc.lk');
+  const [[employee]]=await admin.query(`SELECT id FROM ${testDatabase}.employees LIMIT 1`);
+  const description='Inspect daily site work\nCoordinate materials and labour';
+  assert.equal((await call(hr,'PATCH',`/employees/${employee.id}`,{jobDescription:description})).status,200);
+  assert.equal((await call(hr,'GET',`/employees/${employee.id}`)).body.jobDescription,description);
+  assert.equal((await call(qs,'PATCH',`/employees/${employee.id}`,{jobDescription:'Changed'})).status,403);
+  assert.equal((await call(hr,'PATCH',`/employees/${employee.id}`,{jobDescription:''})).status,200);
+  assert.equal((await call(hr,'GET',`/employees/${employee.id}`)).body.jobDescription,'');
+});
+
+test('birthday notifications reach HR once and stay hidden from QS',async()=>{
+  const owner=await login(),hr=await login('hr@gkuc.lk'),qs=await login('qs@gkuc.lk');
+  const [[employee]]=await admin.query(`SELECT id,birth_date FROM ${testDatabase}.employees WHERE status='Active' LIMIT 1`);
+  const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Colombo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  await admin.query(`UPDATE ${testDatabase}.employees SET birth_date=? WHERE id=?`,[`1990-${stamp.slice(5)}`,employee.id]);
+  try {
+    for(let i=0;i<2;i++)assert.equal((await call(owner,'POST','/notifications/scan',{})).status,200);
+    const [[count]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.notifications WHERE dedupe_key LIKE ?`,[`employee-birthday:${employee.id}:%`]);
+    assert.equal(count.n,1);
+    const hasBirthday=rows=>rows.some(row=>row.title.startsWith('Birthday today')&&Number(row.referenceId)===employee.id);
+    assert.ok(hasBirthday((await call(hr,'GET','/notifications')).body));
+    assert.equal(hasBirthday((await call(qs,'GET','/notifications')).body),false);
+  } finally {
+    await admin.query(`UPDATE ${testDatabase}.employees SET birth_date=? WHERE id=?`,[employee.birth_date,employee.id]);
+    await admin.query(`DELETE FROM ${testDatabase}.notifications WHERE dedupe_key LIKE ?`,[`employee-birthday:${employee.id}:%`]);
+  }
+});
+
+test('hiring tracks interviews and converts selected candidates once with optional protected access',async()=>{
+  const owner=await login();
+  const candidate=await call(owner,'POST','/hiring',{name:'Hiring Test Candidate',phone:'0710000000',address:'Test address',email:'hiring.test@gkuc.lk',position:'Engineer'});
+  assert.equal(candidate.status,201);
+  const id=candidate.body.id;
+  const interview=await call(owner,'POST',`/hiring/${id}/interviews`,{scheduledAt:'2027-01-05T10:00',interviewer:'HR Test',location:'Office'});
+  assert.equal(interview.status,201);
+  assert.equal((await call(owner,'PATCH',`/hiring/${id}/interviews/${interview.body.id}`,{scheduledAt:'2027-01-05T10:00',interviewer:'HR Test',status:'Completed',notes:'Recommended for selection.'})).status,200);
+  const hiring={code:'HIRING-TEST',startDate:'2027-01-10',workerType:'Office',companyId:1};
+  assert.equal((await call(owner,'POST',`/hiring/${id}/hire`,hiring)).status,409);
+  await call(owner,'PATCH',`/hiring/${id}`,{status:'Selected',decisionNotes:'Approved after interview.'});
+  const hired=await call(owner,'POST',`/hiring/${id}/hire`,hiring);
+  assert.equal(hired.status,201);
+  assert.equal(hired.body.userId,null);
+  assert.equal((await call(owner,'POST',`/hiring/${id}/hire`,hiring)).status,409);
+  const candidateWithAccess=await call(owner,'POST','/hiring',{name:'Hiring Access Test',email:'hiring.access.test@gkuc.lk'});
+  await call(owner,'PATCH',`/hiring/${candidateWithAccess.body.id}`,{status:'Selected'});
+  const roles=await call(owner,'GET','/hiring/roles');
+  const role=roles.body.find(r=>r.name==='Read-Only Viewer');
+  const withAccess=await call(owner,'POST',`/hiring/${candidateWithAccess.body.id}/hire`,{...hiring,code:'HIRING-ACCESS',createAccess:true,roleId:role.id,password:'AccessCheck!2026'});
+  assert.equal(withAccess.status,201);
+  assert.ok(withAccess.body.userId);
+  const readOnly=await call('', 'POST','/auth/login',{email:'hiring.access.test@gkuc.lk',password:'AccessCheck!2026'});
+  assert.equal(readOnly.status,200);
+  assert.equal((await call(readOnly.body.token,'GET','/hiring')).status,403);
+  await admin.query(`DELETE FROM ${testDatabase}.hiring_candidates WHERE id IN (?,?)`,[id,candidateWithAccess.body.id]);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id IN (?,?)`,[hired.body.employeeId,withAccess.body.employeeId]);
+  await call(owner,'PATCH',`/users/${withAccess.body.userId}`,{active:false});
+});
+
+test('custom feature permission grants template CRUD without granting HR, finance or administration', async () => {
+  const owner=await login();
+  const role=await call(owner,'POST','/access/roles',{name:'Feature Guard Test',permissions:['qs.view','qs.templates']});
+  assert.equal(role.status,201);
+  const user=await call(owner,'POST','/users',{name:'Feature Guard Test',email:'feature.guard.test@gkuc.lk',password:'AccessCheck!2026',roleId:role.body.id});
+  assert.equal(user.status,201);
+  const signedIn=await call('', 'POST','/auth/login',{email:'feature.guard.test@gkuc.lk',password:'AccessCheck!2026'});
+  assert.equal(signedIn.status,200);
+  const limited=signedIn.body.token;
+  const note=await call(limited,'POST','/qs/quotation-note-templates',{name:'Feature guard test note',body:'Temporary note for permission verification.'});
+  assert.equal(note.status,201);
+  assert.equal((await call(limited,'PATCH',`/qs/quotation-note-templates/${note.body.id}`,{name:'Feature guard test note',body:'Updated test note.'})).status,200);
+  for(const [method,path] of [['POST','/employees'],['PATCH','/employees/1'],['DELETE','/clients/1'],['POST','/receivables/invoices'],['GET','/access/permissions'],['GET','/payroll/settings'],['GET','/employees/1/conduct']]){
+    assert.equal((await call(limited,method,path,method==='GET'?undefined:{})).status,403,`${method} ${path}`);
+  }
+  assert.equal((await call(owner,'PATCH',`/access/roles/${role.body.id}/permissions`,{permission:'qs.templates',granted:false})).status,200);
+  assert.equal((await call(limited,'POST','/qs/quotation-note-templates',{name:'Forbidden note',body:'This should not be saved.'})).status,403);
+  await admin.query(`DELETE FROM ${testDatabase}.quotation_note_templates WHERE id=?`,[note.body.id]);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE user_id=?`,[user.body.id]);
+  await call(owner,'PATCH',`/users/${user.body.id}`,{active:false});
+});
+
 test('employee needs only name and code and personal details remain editable', async () => {
   const owner = await login();
   const created = await call(owner, 'POST', '/employees', { name:'Personal Test', code:'PERSONAL-TEST' });
@@ -72,6 +249,27 @@ test('employee needs only name and code and personal details remain editable', a
   const cleared = await call(owner,'PATCH',`/employees/${id}`,{birthDate:null,nicNumber:''});
   assert.equal(cleared.status,200);
   assert.equal(cleared.body.birthDate,null);
+  const offence=await call(owner,'POST',`/employees/${id}/conduct`,{kind:'Offence',recordDate:today(),description:'Safety procedure not followed.'});
+  assert.equal(offence.status,201);
+  const recognition=await call(owner,'POST',`/employees/${id}/conduct`,{kind:'Good rating',recordDate:today(),description:'Excellent teamwork and timely delivery.',rating:5});
+  assert.equal(recognition.status,201);
+  const conduct=await call(owner,'GET',`/employees/${id}/conduct`);
+  assert.equal(conduct.body.length,2);
+  assert.equal(conduct.body[0].rating,5);
+  assert.ok(conduct.body[0].recordedBy);
+  assert.equal((await call(owner,'POST',`/employees/${id}/conduct`,{kind:'Offence',recordDate:today(),description:'Invalid rating',rating:4})).status,400);
+  const missingStart=await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Paid',fromDate:'2027-01-01',toDate:'2027-01-01',reason:'Missing start date test'});
+  assert.equal(missingStart.status,409);
+  await call(owner,'PATCH',`/employees/${id}`,{joinDate:'2026-08-31'});
+  const tooEarly=await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Paid',fromDate:'2027-02-27',toDate:'2027-02-27',reason:'Six months test'});
+  assert.equal(tooEarly.status,409);
+  const eligible=await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Paid',fromDate:'2027-02-28',toDate:'2027-02-28',reason:'Six month anniversary test'});
+  assert.equal(eligible.status,201);
+  await call(owner,'PATCH',`/employees/leave/${eligible.body.id}`,{status:'Rejected'});
+  const leave = await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Unpaid',fromDate:'2027-01-01',toDate:'2027-01-14',reason:'Annual leave test'});
+  assert.equal(leave.status,201);
+  const excess=await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Paid',fromDate:'2027-02-01',toDate:'2027-02-01',reason:'Over allowance test'});
+  assert.equal(excess.status,409);
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
 });
 
@@ -1538,16 +1736,20 @@ test('the deadline scan raises alerts for expiries, low stock and overruns', asy
 
 test('attendance is unique per employee per day and corrections are audited', async () => {
   const supervisor = await login('supervisor@gkuc.lk');
-  const first = await call(supervisor, 'POST', '/attendance', {
-    name: 'Test Worker', role: 'Carpenter', projectId: 1, date: today(), state: 'On site'
+  const hr=await login('hr@gkuc.lk');
+  assert.equal((await call(supervisor,'GET','/attendance')).status,403);
+  const worker=await call(hr,'POST','/employees',{code:'TEST-ATT-HR',name:'Test Worker'});
+  const first = await call(hr, 'POST', '/attendance', {
+    employeeId:worker.body.id,name: 'Test Worker', role: 'Carpenter', projectId: 1, date: today(), state: 'On site'
   });
   assert.equal(first.status, 201);
-  const duplicate = await call(supervisor, 'POST', '/attendance', {
-    name: 'Test Worker', role: 'Carpenter', projectId: 1, date: today(), state: 'On site'
+  const duplicate = await call(hr, 'POST', '/attendance', {
+    employeeId:worker.body.id,name: 'Test Worker', role: 'Carpenter', projectId: 1, date: today(), state: 'On site'
   });
   assert.equal(duplicate.status, 409);
 
-  const corrected = await call(supervisor, 'PATCH', `/attendance/${first.body.id}`, { state: 'Late', reason: 'Arrived after gate close' });
+  assert.equal((await call(supervisor,'PATCH',`/attendance/${first.body.id}`,{state:'Late',reason:'Denied correction'})).status,403);
+  const corrected = await call(hr, 'PATCH', `/attendance/${first.body.id}`, { state: 'Late', reason: 'Arrived after gate close' });
   assert.equal(corrected.status, 200);
   const owner = await login();
   const audit = await call(owner, 'GET', '/audit?action=CORRECTION');
@@ -1723,15 +1925,17 @@ test('payroll is calculated from recorded attendance and approved overtime', asy
   const invalidOvertime = await call(supervisor, 'POST', '/employees/2/overtime', {
     workDate: today(), hours: 1, overtimeType: 'Office'
   });
-  assert.equal(invalidOvertime.status, 400, 'site labour cannot be entered against the office overtime policy');
-  const overtime = await call(supervisor, 'POST', '/employees/2/overtime', { workDate: today(), hours: 4, overtimeType: 'Site' });
+  assert.equal(invalidOvertime.status, 403, 'site-role users cannot access HR overtime');
+  const overtime = await call(hr, 'POST', '/employees/2/overtime', { workDate: today(), hours: 4, overtimeType: 'Site',startTime:'17:00',endTime:'21:00',reason:'Signed overtime sheet confirmed by HR' });
   assert.equal(overtime.status, 201);
   assert.equal(Number(overtime.body.rate), 200);
   await call(hr, 'PATCH', `/employees/overtime/${overtime.body.id}`, { status: 'Approved' });
-  const travelOvertime = await call(supervisor, 'POST', '/employees/2/overtime', { workDate: today(), hours: 2, overtimeType: 'Travel' });
-  assert.equal(travelOvertime.status, 201);
-  assert.equal(Number(travelOvertime.body.rate), 100);
-  await call(hr, 'PATCH', `/employees/overtime/${travelOvertime.body.id}`, { status: 'Approved' });
+  assert.equal((await call(supervisor,'POST','/employees/2/overtime',{workDate:today(),hours:2,overtimeType:'Travel'})).status,403);
+  await admin.query(`UPDATE ${testDatabase}.employees SET allowance_eligibility=? WHERE id=2`,[JSON.stringify({longDistance:true})]);
+  const travel=await call(hr,'POST','/payroll/inputs',{employeeId:2,projectId:1,workDate:today(),kind:'Travel',departure:'21:00',arrival:'23:00',hours:2,distance:10,source:'Signed timesheet'});
+  assert.equal(travel.status,201,JSON.stringify(travel.body));
+  assert.equal((await call(hr,'PATCH',`/payroll/inputs/${travel.body.id}/review`,{status:'Confirmed',reason:'HR reviewed times'})).status,200);
+  assert.equal((await call(hr,'PATCH',`/payroll/inputs/${travel.body.id}/review`,{status:'Approved',reason:'HR final approval'})).status,200);
 
   const run = await call(hr, 'POST', '/payroll', { periodStart: shift(-30), periodEnd: today() });
   assert.equal(run.status, 201);
@@ -1754,7 +1958,7 @@ test('payroll is calculated from recorded attendance and approved overtime', asy
   assert.equal(Number(slip.deductions), 20340, 'the salary sheet reconciles statutory, recurring and advance deductions');
   assert.equal(Number(slip.netPay), 82660);
   assert.equal(Number(slip.employerCost), 117700);
-  assert.equal(slip.components.length, 3, 'the payslip preserves the named component breakdown');
+  assert.equal(slip.components.length, 4, 'the payslip preserves recurring components and the linked travel allowance calculation');
   assert.equal(Number(slip.advanceRecoveries[0].amount), 12000);
   const advances = (await call(owner, 'GET', `/receivables/petty-cash/${advanceFloat}/entries`)).body;
   assert.equal(Number(advances.find(row => row.employeeId === 2).outstandingAdvance), 0);
@@ -1766,7 +1970,8 @@ test('payroll is calculated from recorded attendance and approved overtime', asy
     basicSalary: 0, weeklyRate: 0, dailyRate: 3300, compensationEffectiveFrom: shift(-1),
     epfEligible: false, etfEligible: false, customOfficeOtRate: null, customSiteOtRate: null, customTravelOtRate: null
   })).status, 200);
-  const weeklyRun = await call(hr, 'POST', '/payroll', { periodStart: shift(-6), periodEnd: today(), payFrequency: 'Weekly' });
+  assert.equal((await call(hr,'POST','/payroll',{periodStart:shift(-6),periodEnd:today(),payFrequency:'Weekly'})).status,409,'an employee cannot be paid twice after changing frequency');
+  const weeklyRun = await call(hr, 'POST', '/payroll', { periodStart: shift(1), periodEnd: shift(7), payFrequency: 'Weekly' });
   assert.equal(weeklyRun.status, 201, 'a weekly payroll can coexist with a monthly run');
   assert.equal(weeklyRun.body.payFrequency, 'Weekly');
 

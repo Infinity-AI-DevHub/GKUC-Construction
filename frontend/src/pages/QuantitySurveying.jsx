@@ -57,7 +57,7 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
     {tab === 'Cost control' && <CostControl projects={data.projects} can={can} />}
     {tab === 'Quotations' && <Quotations can={can} reload={reload} companyId={companyId} />}
     {tab === 'Bills of quantities' && <>
-      <BoqImport projects={data.projects} onDone={reload} onCreate={() => setOpen('Create BOQ')} />
+      {can.boq && <BoqImport projects={data.projects} onDone={reload} onCreate={() => setOpen('Create BOQ')} />}
       <BoqList companyId={companyId} />
       <BoqChanges can={can} reload={reload} />
     </>}
@@ -105,7 +105,7 @@ function Quotations({ can, reload, companyId }) {
   return <>
     {error && <p className="form-error">{error}</p>}
     <Table columns={['Reference', 'Title', 'Client', 'Total', 'Status', '']} template={QUOTE_TEMPLATE}
-      title="Client quotations" tools={can.quotation ? <button className="secondary" onClick={() => setTemplatesOpen(true)}>Quotation templates</button> : null}
+      title="Client quotations" tools={can.templates ? <button className="secondary" onClick={() => setTemplatesOpen(true)}>Quotation templates</button> : null}
       empty="No quotations yet. Create one from a BOQ or enter it manually.">
       {rows.map(row => <Row template={QUOTE_TEMPLATE} key={row.id}>
         <div><strong>{row.reference}</strong><small>{row.boqReference || 'Manual'}</small></div>

@@ -16,13 +16,14 @@
  * stays possible; reaching an account that can rewrite the rules is not.
  */
 export const PRIVILEGED_KEYS = [
+  'hr.settings','hr.conduct','finance.costReview','admin.company','admin.documents','admin.designer',
   'admin.users', 'admin.roles', 'admin.audit', 'admin.notifications',
   'finance.pay', 'finance.invoice', 'hr.payroll',
   'messages.send', 'qs.boqAmend', 'admin.lists'
 ];
 
 export const DEPARTMENTS = [
-  'Company', 'Finance', 'Human Resources', 'Quantity Surveying',
+  'General', 'Company', 'Finance', 'Human Resources', 'Quantity Surveying',
   'Transport', 'Construction & Coordination', 'Stores', 'Administration'
 ];
 
@@ -31,6 +32,19 @@ export const DEPARTMENTS = [
  * MD sees on the toggle screen. Keep keys stable — they are stored against roles.
  */
 export const PERMISSIONS = [
+  { key:'hr.hiring',department:'Human Resources',label:'Manage shortlisted candidates, CVs, interviews and employee onboarding' },
+  { key:'hr.insurance',department:'Human Resources',label:'Manage site, employee life and vehicle insurance and reminders' },
+  { key:'hr.assets',department:'Human Resources',label:'Manage employee asset handovers, evidence and returns' },
+  { key:'clients.view',department:'Construction & Coordination',label:'View client directory, profiles and permitted client history' },
+  { key:'clients.manage',department:'Construction & Coordination',label:'Create, edit, archive and delete clients' },
+  { key:'hr.conduct',department:'Human Resources',label:'Read and record confidential offences and recognition' },
+  { key:'hr.settings',department:'Human Resources',label:'Configure pay rates, EPF/ETF policies and automatic payroll schedules' },
+  { key:'qs.templates',department:'Quantity Surveying',label:'Add and edit quotation description, method and note templates' },
+  { key:'qs.costControl',department:'Quantity Surveying',label:'Submit daily project costs and update cost forecasts' },
+  { key:'finance.costReview',department:'Finance',label:'Review and approve QS daily cost sheets' },
+  { key:'admin.company',department:'Administration',label:'Manage company details and bank accounts' },
+  { key:'admin.documents',department:'Administration',label:'Manage invoice and quotation document settings' },
+  { key:'admin.designer',department:'Administration',label:'Design and preview document templates' },
   /* Construction & Coordination */
   { key: 'projects.view', department: 'Construction & Coordination', label: 'View projects and sites' },
   { key: 'projects.manage', department: 'Construction & Coordination', label: 'Create and edit projects' },
@@ -59,8 +73,8 @@ export const PERMISSIONS = [
 
   /* Finance */
   { key: 'finance.view', department: 'Finance', label: 'View financial position' },
-  { key: 'finance.manage', department: 'Finance', label: 'Record expenses and income' },
-  { key: 'finance.invoice', department: 'Finance', label: 'Raise customer invoices and mark them received' },
+  { key: 'finance.manage', department: 'Finance', label: 'Manage expenses, income, utility bills, credit cards, VAT and petty-cash floats' },
+  { key: 'finance.invoice', department: 'Finance', label: 'Create normal/tax invoices, quotation term plans, partial receipts, received cheques and bonds' },
   { key: 'finance.pay', department: 'Finance', label: 'Record supplier invoices and payments' },
 
   /* Human Resources */
@@ -72,11 +86,11 @@ export const PERMISSIONS = [
 
   /* Transport */
   { key: 'transport.view', department: 'Transport', label: 'View vehicles and fuel' },
-  { key: 'transport.manage', department: 'Transport', label: 'Manage vehicles, renewals, fuel and service' },
+  { key: 'transport.manage', department: 'Transport', label: 'Manage vehicles, drivers, odometer, fuel, services, repairs, insurance and licences' },
 
   /* Stores */
   { key: 'store.view', department: 'Stores', label: 'View stock and lending' },
-  { key: 'store.manage', department: 'Stores', label: 'Record stock movements and purchases' },
+  { key: 'store.manage', department: 'Stores', label: 'Manage stock locations, receipts, site issues, transfers and purchases' },
   { key: 'store.lending', department: 'Stores', label: 'Lend tools and materials to workers and mark returns' },
 
   /* Administration */
@@ -108,6 +122,15 @@ export const PERMISSIONS = [
 ];
 
 export const PERMISSION_KEYS = PERMISSIONS.map(permission => permission.key);
+export const FEATURE_PERMISSION_PARENTS = {
+  'hr.hiring':'hr.manage',
+  'hr.insurance':'hr.manage',
+  'hr.assets':'hr.manage',
+  'clients.view':'projects.view','clients.manage':'projects.manage',
+  'hr.conduct':'hr.manage','hr.settings':'hr.payroll','qs.templates':'qs.quotation',
+  'qs.costControl':'qs.boq','finance.costReview':'finance.manage',
+  'admin.company':'admin.users','admin.documents':'admin.users','admin.designer':'admin.users'
+};
 export const isPermission = key => PERMISSION_KEYS.includes(key);
 
 const all = () => PERMISSION_KEYS;
@@ -147,7 +170,7 @@ export const DEFAULT_ROLES = [
   {
     name: 'HR Department Head',
     description: 'Full access within Human Resources.',
-    permissions: () => ['hr.view', 'hr.manage', 'hr.attendance', 'hr.leave', 'hr.payroll', 'projects.view']
+    permissions: () => ['hr.view', 'hr.manage', 'hr.attendance', 'hr.leave', 'hr.payroll', 'projects.view', 'transport.view']
   },
   {
     name: 'QS Department Head',

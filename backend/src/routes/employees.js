@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { audit, getOne, pool, query, transaction } from '../db.js';
 import { auth, can, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
+import {offboardingChecklist} from '../lib/offboarding.js';
+import {suggestOvertime,rulesFor,minutes,intervalsOverlap} from '../lib/hr-payroll-rules.js';
 import { OVERTIME_TYPES, PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES,
   payProfileError, resolveOvertimeRate } from '../lib/payroll-policy.js';
 
@@ -44,7 +46,7 @@ const employeeSchema = z.object({
 
 const listQuery = `SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,e.join_date joinDate,
   e.birth_date birthDate,e.nic_number nicNumber,e.additional_phone_1 additionalPhone1,e.additional_phone_2 additionalPhone2,
-  e.residential_address residentialAddress,e.permanent_address permanentAddress,
+  e.residential_address residentialAddress,e.permanent_address permanentAddress,e.job_description jobDescription,e.allowance_eligibility allowanceEligibility,
   e.basic_salary basicSalary,e.daily_rate dailyRate,e.weekly_rate weeklyRate,e.overtime_rate overtimeRate,
   e.pay_basis payBasis,e.pay_frequency payFrequency,e.payroll_category payrollCategory,
   e.payroll_company_id payrollCompanyId,
@@ -305,15 +307,47 @@ router.post('/', auth, permit('hr.manage'), validate(employeeSchema), wrap(async
   }
 }));
 
-router.patch('/:id', auth, permit('hr.manage'), validate(employeeSchema.partial()), wrap(async (req, res) => {
+router.get('/:id/offboarding',auth,permit('hr.manage','hr.assets'),wrap(async(req,res)=>{
+  const employee=await getOne('SELECT id,name FROM employees WHERE id=?',[req.params.id]);
+  if(!employee)return res.status(404).json({error:'Employee not found.'});
+  res.json(await offboardingChecklist(employee));
+}));
+router.get('/:id/assets',auth,permit('hr.assets','hr.manage'),wrap(async(req,res)=>{
+  res.json(await query('SELECT * FROM employee_asset_handovers WHERE employee_id=? ORDER BY id DESC',[req.params.id]));
+}));
+router.post('/:id/assets',auth,permit('hr.assets'),validate(z.object({assetName:z.string().trim().min(2).max(180),assetCode:z.string().trim().min(1).max(120),category:z.string().max(80),handedOn:isoDate,conditionBefore:z.string().trim().min(3).max(10000),notes:z.string().max(10000).default('')})),wrap(async(req,res)=>{
+  const b=req.body;
+  const result=await transaction(async conn=>{
+    const [people]=await conn.query('SELECT id,status FROM employees WHERE id=? FOR UPDATE',[req.params.id]);
+    if(!people[0]||people[0].status==='Left')throw Object.assign(new Error('Choose an employee who has not been offboarded.'),{status:409});
+    const [open]=await conn.query('SELECT id FROM employee_asset_handovers WHERE asset_code=? AND returned_on IS NULL',[b.assetCode]);
+    if(open.length)throw Object.assign(new Error('This asset is already handed over. Record its return before assigning it again.'),{status:409});
+    const [r]=await conn.query('INSERT INTO employee_asset_handovers(employee_id,asset_name,asset_code,category,handed_on,condition_before,notes,created_by) VALUES(?,?,?,?,?,?,?,?)',[req.params.id,b.assetName,b.assetCode,b.category,b.handedOn,b.conditionBefore,b.notes,req.user.id]);
+    await audit(conn,req.user.id,'CREATE','handover',r.insertId,null,b,req.ip);return r.insertId;
+  });res.status(201).json({id:result});
+}));
+router.patch('/:id/assets/:assetId/return',auth,permit('hr.assets'),validate(z.object({returnedOn:isoDate,conditionReturned:z.string().trim().min(3).max(10000)})),wrap(async(req,res)=>{
+  const before=await getOne('SELECT * FROM employee_asset_handovers WHERE id=? AND employee_id=?',[req.params.assetId,req.params.id]);
+  if(!before)return res.status(404).json({error:'Asset handover not found.'});
+  if(before.returned_on)return res.status(409).json({error:'This asset has already been returned.'});
+  if(req.body.returnedOn<before.handed_on)return res.status(400).json({error:'Return date cannot be before handover date.'});
+  await query('UPDATE employee_asset_handovers SET returned_on=?,condition_returned=? WHERE id=? AND returned_on IS NULL',[req.body.returnedOn,req.body.conditionReturned,before.id]);
+  await audit(pool,req.user.id,'RETURN','handover',before.id,before,req.body,req.ip);res.json({id:before.id});
+}));
+router.patch('/:id', auth, permit('hr.manage'), validate(employeeSchema.partial().extend({jobDescription:z.string().max(20000).optional()})), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
+  if(req.body.status==='Left'){
+    const checklist=await offboardingChecklist(before);
+    if(!checklist.clear)return res.status(409).json({error:`Cannot offboard this employee: ${checklist.assets.length} HR asset(s), ${checklist.store.length} store loan(s), ${checklist.vehicles.length} vehicle assignment(s) and ${checklist.tasks.length} unfinished task(s) remain. Return or reassign assets and complete or reassign tasks first. See the profile's Assets & offboarding section.`,checklist});
+  }
   const profileError = payProfileError({
     payBasis: req.body.payBasis ?? before.pay_basis,
     payFrequency: req.body.payFrequency ?? before.pay_frequency
   });
   if (profileError) return res.status(400).json({ error: profileError });
   const columns = {
+    jobDescription: 'job_description',
     birthDate:'birth_date',nicNumber:'nic_number',additionalPhone1:'additional_phone_1',additionalPhone2:'additional_phone_2',residentialAddress:'residential_address',permanentAddress:'permanent_address',
     departmentId: 'department_id', joinDate: 'join_date', basicSalary: 'basic_salary',
     dailyRate: 'daily_rate', weeklyRate: 'weekly_rate', overtimeRate: 'overtime_rate', workerType: 'worker_type',
@@ -332,30 +366,67 @@ router.patch('/:id', auth, permit('hr.manage'), validate(employeeSchema.partial(
 }));
 
 /* Leave management */
+router.get('/:id/conduct',auth,permit("hr.conduct"),wrap(async(req,res)=>{
+  res.json(await query(`SELECT c.id,c.kind,c.record_date recordDate,c.description,c.rating,c.created_at createdAt,u.name recordedBy
+    FROM employee_conduct_records c JOIN users u ON u.id=c.created_by WHERE c.employee_id=? ORDER BY c.record_date DESC,c.id DESC`,[req.params.id]));
+}));
+router.post('/:id/conduct',auth,permit("hr.conduct"),validate(z.object({
+  kind:z.enum(['Offence','Good rating']),recordDate:isoDate,
+  description:z.string().trim().min(3).max(5000),rating:z.number().int().min(1).max(5).nullable().optional()
+})),wrap(async(req,res)=>{
+  if(!(await getOne('SELECT id FROM employees WHERE id=?',[req.params.id]))) return res.status(404).json({error:'Employee not found. Refresh the employee register and try again.'});
+  const b=req.body;
+  if(b.kind==='Offence' && b.rating) return res.status(400).json({error:'Star ratings apply only to good-rating entries, not offences.'});
+  const result=await query('INSERT INTO employee_conduct_records(employee_id,kind,record_date,description,rating,created_by) VALUES(?,?,?,?,?,?)',[req.params.id,b.kind,b.recordDate,b.description,b.rating||null,req.user.id]);
+  await audit(pool,req.user.id,'CREATE','employee_conduct',result.insertId,null,{employeeId:req.params.id,...b},req.ip);
+  res.status(201).json({id:result.insertId});
+}));
 router.get('/leave/all', auth, permit('hr.view','hr.leave'), wrap(async (_req, res) => res.json(await query(`SELECT l.id,l.leave_type leaveType,l.from_date fromDate,
-  l.to_date toDate,l.days,l.reason,l.status,l.created_at createdAt,e.name employee,e.code employeeCode,e.id employeeId
+  l.to_date toDate,l.days,l.reason,l.status,l.payment_type paymentType,l.created_at createdAt,e.name employee,e.code employeeCode,e.id employeeId
   FROM leave_requests l JOIN employees e ON e.id=l.employee_id ORDER BY l.id DESC`))));
 
 router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.object({
   leaveType: z.string().trim().min(1).max(60),
+  paymentType: z.enum(['Paid','Unpaid']).optional(),
   fromDate: isoDate,
   toDate: isoDate,
   reason: z.string().min(3).max(600)
 }).refine(value => value.toDate >= value.fromDate, {
   message: 'Leave cannot end before it starts', path: ['toDate']
 })), fromOptions({ leaveType: 'leave.type' }), wrap(async (req, res) => {
+  return transaction(async connection => {
+  const query = async (sql,params) => (await connection.query(sql,params))[0];
+  const getOne = async (sql,params) => (await query(sql,params))[0];
+  const employee = await getOne("SELECT id,DATE_FORMAT(DATE_ADD(join_date,INTERVAL 6 MONTH),'%Y-%m-%d') paidEligibleFrom FROM employees WHERE id=? FOR UPDATE",[req.params.id]);
+  if(!employee) return res.status(404).json({error:'Employee not found. Please select an existing employee.'});
   const body = req.body;
+  const paymentType = body.paymentType || (body.leaveType==='Unpaid'?'Unpaid':'Paid');
+  if(paymentType==='Paid' && !employee.paidEligibleFrom) return res.status(409).json({error:'Record the employee’s actual employment start date in their profile before requesting paid leave. Registration date is not their employment start date.'});
+  if(paymentType==='Paid' && body.fromDate<employee.paidEligibleFrom) return res.status(409).json({error:`This employee has less than six months of employment and is not eligible for paid leave. Paid leave is available from ${employee.paidEligibleFrom}. Choose unpaid leave or correct the employment start date.`});
   const days = Math.max(1, Math.round((new Date(body.toDate) - new Date(body.fromDate)) / 86400000) + 1);
+  if (body.fromDate.slice(0,4) !== body.toDate.slice(0,4)) return res.status(400).json({error:'Please record leave crossing New Year as two requests, one for each year.'});
+  const used = await getOne(`SELECT COALESCE(SUM(days),0) days FROM leave_requests WHERE employee_id=? AND status!='Rejected' AND YEAR(from_date)=?`,[req.params.id,body.fromDate.slice(0,4)]);
+  if (Number(used.days)+days>14) return res.status(409).json({error:`This employee has ${Math.max(0,14-Number(used.days))} leave day(s) remaining this year. The annual allowance is 14 days, including paid and unpaid leave.`});
+  const overlap = await getOne("SELECT id FROM leave_requests WHERE employee_id=? AND status!='Rejected' AND from_date<=? AND to_date>=?",[req.params.id,body.toDate,body.fromDate]);
+  if (overlap) return res.status(409).json({error:'This employee already has leave recorded for these dates. Please check the leave register.'});
   const result = await query('INSERT INTO leave_requests (employee_id,leave_type,from_date,to_date,days,reason) VALUES (?,?,?,?,?,?)',
     [req.params.id, body.leaveType, body.fromDate, body.toDate, days, body.reason]);
   const row = await getOne('SELECT * FROM leave_requests WHERE id=?', [result.insertId]);
-  await audit(pool, req.user.id, 'CREATE', 'leave_request', row.id, null, row, req.ip);
+  await query('UPDATE leave_requests SET payment_type=? WHERE id=?',[body.paymentType || (body.leaveType==='Unpaid'?'Unpaid':'Paid'),result.insertId]);
+  row.payment_type = body.paymentType || (body.leaveType==='Unpaid'?'Unpaid':'Paid');
+  await audit(connection, req.user.id, 'CREATE', 'leave_request', row.id, null, row, req.ip);
   res.status(201).json(row);
+  });
 }));
 
 router.patch('/leave/:id', auth, permit('hr.manage', 'hr.leave'), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM leave_requests WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Leave request not found' });
+  if(before.status==='Rejected' && req.body.status!=='Rejected') return res.status(409).json({error:'Please create a new leave request instead of reopening a rejected request, so the annual allowance can be checked again.'});
+  if(req.body.status==='Approved' && before.payment_type==='Paid') {
+    const eligibility=await getOne('SELECT (join_date IS NOT NULL AND DATE_ADD(join_date,INTERVAL 6 MONTH)<=?) eligible FROM employees WHERE id=?',[before.from_date,before.employee_id]);
+    if(!eligibility?.eligible) return res.status(409).json({error:'This employee is not eligible for paid leave on the requested start date. Check their employment start date; paid leave requires six months of employment.'});
+  }
   await query('UPDATE leave_requests SET status=?,decided_by=?,decided_at=NOW() WHERE id=?', [req.body.status, req.user.id, req.params.id]);
   if (req.body.status === 'Approved') await query("UPDATE employees SET status='On leave' WHERE id=?", [before.employee_id]);
   const after = await getOne('SELECT * FROM leave_requests WHERE id=?', [req.params.id]);
@@ -364,35 +435,49 @@ router.patch('/leave/:id', auth, permit('hr.manage', 'hr.leave'), validate(z.obj
 }));
 
 /* Overtime */
-router.get('/overtime/all', auth, permit('hr.view','hr.leave'), wrap(async (_req, res) => res.json(await query(`SELECT o.id,o.work_date workDate,o.hours,o.rate,o.status,
+router.get('/overtime/all', auth, permit('hr.payroll'), wrap(async (_req, res) => res.json(await query(`SELECT o.id,o.work_date workDate,o.hours,o.rate,o.status,
   o.overtime_type overtimeType,e.name employee,e.code employeeCode,p.name project FROM overtime_records o JOIN employees e ON e.id=o.employee_id
   LEFT JOIN projects p ON p.id=o.project_id ORDER BY o.id DESC`))));
 
-router.post('/:id/overtime', auth, permit('site.attendance', 'hr.leave', 'hr.manage'), validate(z.object({
+router.post('/:id/overtime', auth, permit('hr.payroll'), validate(z.object({
   projectId: z.number().int().positive().optional(),
   workDate: isoDate,
   hours: z.number().positive().max(24),
-  overtimeType: z.enum(OVERTIME_TYPES).default('Site')
+  overtimeType: z.enum(OVERTIME_TYPES).default('Site'),
+  startTime:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),endTime:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),reason:z.string().trim().min(3).max(1000).optional()
 })), wrap(async (req, res) => {
   const employee = await getOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
   const policy = await getOne(`SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=?
     ORDER BY effective_from DESC,id DESC LIMIT 1`, [employee.payroll_company_id, req.body.workDate]);
   if (!policy) return res.status(409).json({ error: 'Configure an overtime policy for this date first' });
+  if(req.body.overtimeType==='Travel')return res.status(409).json({error:'Record Travel OT through Payroll Inputs → Travel claim, with departure and return times. Do not infer it from ordinary attendance.'});
+  const attendance=await getOne('SELECT * FROM attendance WHERE employee_id=? AND work_date=?',[employee.id,req.body.workDate]);
+  if(attendance&&['Absent','On leave'].includes(attendance.state))return res.status(409).json({error:'No OT is payable for an absent or leave day. Correct attendance first if it is wrong.'});
+  const suggestion=suggestOvertime(attendance,rulesFor(policy));
+  const intervals=req.body.startTime&&req.body.endTime?[[minutes(req.body.startTime),minutes(req.body.endTime)]]:suggestion.intervals;
+  if(!intervals.length||intervals.some(([a,b])=>b<=a))return res.status(400).json({error:'Record valid attended times, or explicit OT start/end times with a correction reason.'});
+  if((!attendance||Math.abs(suggestion.hours-req.body.hours)>.001)&&!req.body.reason)return res.status(400).json({error:'Explain why entered OT differs from the attendance suggestion.'});
   let rate;
   try { rate = resolveOvertimeRate(employee, req.body.overtimeType, policy); }
   catch (error) { return res.status(400).json({ error: error.message }); }
-  const result = await query(`INSERT INTO overtime_records
-    (employee_id,project_id,work_date,overtime_type,hours,rate,policy_id) VALUES (?,?,?,?,?,?,?)`,
-  [employee.id, req.body.projectId || null, req.body.workDate, req.body.overtimeType, req.body.hours, rate, policy.id]);
+  const result = await transaction(async conn=>{
+    await conn.query('SELECT id FROM employees WHERE id=? FOR UPDATE',[employee.id]);
+    const [existing]=await conn.query('SELECT * FROM overtime_records WHERE employee_id=? AND work_date=?',[employee.id,req.body.workDate]);
+    if(existing.some(o=>o.overtime_type===req.body.overtimeType))throw Object.assign(new Error('OT already exists for this employee, date and type. Review the existing record.'),{status:409});
+    const [travel]=await conn.query("SELECT calculation FROM hr_payroll_claims WHERE employee_id=? AND work_date=? AND kind='Travel' AND status<>'Rejected'",[employee.id,req.body.workDate]);
+    if(travel.some(c=>intervalsOverlap(intervals,(typeof c.calculation==='string'?JSON.parse(c.calculation):c.calculation).intervals||[])))throw Object.assign(new Error('Site/Office OT overlaps travel. Correct the intervals before saving.'),{status:409});
+    const [r]=await conn.query(`INSERT INTO overtime_records(employee_id,project_id,work_date,overtime_type,hours,rate,policy_id,input_detail) VALUES(?,?,?,?,?,?,?,?)`,[employee.id,req.body.projectId||null,req.body.workDate,req.body.overtimeType,req.body.hours,rate,policy.id,JSON.stringify({intervals,suggestion,reason:req.body.reason,attendanceId:attendance?.id,warnings:[...suggestion.warnings,...(req.body.hours>rulesFor(policy).maxDailyOt?['OT exceeds daily warning threshold.']:[])]})]);return r;
+  });
   const row = await getOne('SELECT * FROM overtime_records WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'overtime', row.id, null, row, req.ip);
   res.status(201).json(row);
 }));
 
-router.patch('/overtime/:id', auth, permit('hr.manage', 'hr.leave'), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
+router.patch('/overtime/:id', auth, permit('hr.payroll'), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM overtime_records WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Overtime record not found' });
+  if(before.status!=='Pending')return res.status(409).json({error:'Reviewed OT is locked. Use an audited adjustment instead of changing a historical approval.'});
   await query('UPDATE overtime_records SET status=?,approved_by=? WHERE id=?', [req.body.status, req.user.id, req.params.id]);
   const after = await getOne('SELECT * FROM overtime_records WHERE id=?', [req.params.id]);
   await audit(pool, req.user.id, 'UPDATE', 'overtime', after.id, before, after, req.ip);

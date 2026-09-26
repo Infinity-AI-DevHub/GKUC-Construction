@@ -1,0 +1,21 @@
+import React,{useEffect,useState} from 'react';
+import {api,post,patch,shortDate,todayInput} from '../api.js';
+import {FormModal,Field,TextArea,Table,Row} from '../ui.jsx';
+import Attachments from '../Attachments.jsx';
+export default function EmployeeAssets({employeeId,canEdit}){
+  const [rows,setRows]=useState([]),[checklist,setChecklist]=useState(null),[form,setForm]=useState(null),[evidence,setEvidence]=useState(null),[error,setError]=useState('');
+  const load=async()=>{try{const [assets,check]=await Promise.all([api(`/employees/${employeeId}/assets`),api(`/employees/${employeeId}/offboarding`)]);setRows(assets);setChecklist(check);setError('');}catch(e){setError(e.message);}};
+  useEffect(()=>{load();},[employeeId]);
+  return <section className="employee-panel employee-wide-panel">
+    <div className="employee-section-title"><div><span>Company property & clearance</span><h2>Assets & offboarding</h2></div>{canEdit&&<button className="secondary" onClick={()=>setForm({})}>Hand over asset</button>}</div>
+    {error&&<p className="form-error" role="alert">{error}</p>}
+    {checklist&&<><p className="form-note">{checklist.clear?'Clearance checklist is clear.':'Offboarding is blocked until the following obligations are resolved.'} <button className="secondary" onClick={load}>Refresh checklist</button></p>
+      {['assets','store','vehicles','tasks'].map(key=>checklist[key].length>0&&<div key={key}><h3>{{assets:'HR assets to return',store:'Store loans to return',vehicles:'Vehicle assignments to release',tasks:'Tasks to complete or reassign'}[key]}</h3><ul>{checklist[key].map(row=><li key={row.id}>{row.name} {row.code?`(${row.code})`:''} {row.project?`— ${row.project}`:''}</li>)}</ul></div>)}
+      <p className="form-note">Use Store / Stock locations to return store loans, Fleet to release vehicles, and Tasks to complete or reassign work. HR records asset returns below.</p></>}
+    <Table title="HR asset handover history" columns={['Asset','Handed over','Condition before','Return','']} template="minmax(180px,1fr) 120px minmax(200px,1fr) 160px 150px" empty="No HR asset handovers recorded.">{rows.map(row=><Row key={row.id} template="minmax(180px,1fr) 120px minmax(200px,1fr) 160px 150px"><strong>{row.asset_name}<small>{row.asset_code} · {row.category}</small></strong><span>{shortDate(row.handed_on)}</span><span>{row.condition_before}<small>{row.notes}</small></span><span>{row.returned_on?shortDate(row.returned_on):'With employee'}<small>{row.condition_returned}</small></span><div><button className="secondary" onClick={()=>setEvidence(row)}>Evidence</button>{canEdit&&!row.returned_on&&<button className="secondary" onClick={()=>setForm(row)}>Record return</button>}</div></Row>)}</Table>
+    {evidence&&<div><h3>{evidence.asset_name} — evidence</h3><button className="secondary" onClick={()=>setEvidence(null)}>Close evidence</button><Attachments ownerType="handover" ownerId={evidence.id} title="Condition photos & handover files" canUpload={canEdit} canDelete={false}/></div>}
+    {form&&<FormModal title={form.id?'Record asset return':'Hand over company asset'} label={form.id?'Confirm return':'Record handover'} close={()=>setForm(null)} onSubmit={async v=>{if(form.id)await patch(`/employees/${employeeId}/assets/${form.id}/return`,v);else{const created=await post(`/employees/${employeeId}/assets`,v);setEvidence({id:created.id,asset_name:v.assetName});}await load();}}>
+      {form.id?<><Field name="returnedOn" label="Return date" type="date" defaultValue={todayInput()}/><TextArea name="conditionReturned" label="Condition on return / clearance notes"/></>:<><Field name="assetName" label="Asset name"/><Field name="assetCode" label="Unique asset ID / serial / SIM number"/><Field name="category" label="Category (phone, SIM, laptop, etc.)"/><Field name="handedOn" label="Handover date" type="date" defaultValue={todayInput()}/><TextArea name="conditionBefore" label="Condition before handing over"/><TextArea name="notes" label="Accessories / handover notes" required={false}/><p className="form-note wide">After saving, upload photos or documents in Evidence. Store loans and fleet vehicle assignments remain in their existing registers and also appear in the clearance checklist.</p></>}
+    </FormModal>}
+  </section>;
+}

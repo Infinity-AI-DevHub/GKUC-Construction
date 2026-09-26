@@ -12,7 +12,9 @@ const healthTone = health => (health === 'On track' ? 'on-track' : health === 'A
 
 /** PID 2.4 / 2.5 — projects, their milestones, and the estimates the budget comes from. */
 export default function Projects({ data, reload, can, companyId, company, companies, setCompanyId }) {
-  const [tab, setTab] = useState(window.location.pathname.startsWith('/projects/clients/') ? 'Clients' : TABS[0]);
+  const tabs=TABS.filter(section=>section!=='Clients'||can.has('clients.view'));
+  const [selectedTab, setTab] = useState(window.location.pathname.startsWith('/projects/clients/') ? 'Clients' : TABS[0]);
+  const tab=tabs.includes(selectedTab)?selectedTab:tabs[0];
   const [open, setOpen] = useState('');
 
   const projectFromPath = () => Number(window.location.pathname.match(/^\/projects\/(\d+)\/?$/)?.[1]) || null;
@@ -39,7 +41,7 @@ export default function Projects({ data, reload, can, companyId, company, compan
 
   return <Page title="Projects" subtitle={`Monitor progress, cost, and site health for ${company?.name || 'the selected company'}.`}
     action={can.projects ? actionFor : null} onAction={() => setOpen(tab)}>
-    <Tabs tabs={TABS} active={tab} onChange={next => {
+    <Tabs tabs={tabs} active={tab} onChange={next => {
       if (next !== 'Clients' && window.location.pathname.startsWith('/projects/clients/'))
         window.history.pushState({}, '', '/projects');
       setTab(next);
@@ -48,7 +50,7 @@ export default function Projects({ data, reload, can, companyId, company, compan
     {tab === 'Projects' && <ProjectCards data={data} onOpen={openProject} onOpenClient={id => {
       window.history.pushState({}, '', `/projects/clients/${id}`); setTab('Clients');
     }} />}
-    {tab === 'Clients' && <ClientDirectory canManage={can.projects} companyId={companyId} />}
+    {tab === 'Clients' && <ClientDirectory canManage={can.has('clients.manage')} companyId={companyId} />}
     {tab === 'Milestones' && <Milestones data={data} reload={reload} can={can} />}
     {tab === 'BOQ & estimates' && <BoqList data={data} reload={reload} can={can} />}
     {tab === 'Variations' && <Variations can={can} reload={reload} />}

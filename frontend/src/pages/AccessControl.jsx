@@ -24,7 +24,7 @@ export default function AccessControl({ user }) {
     const [permissions, roleRows, userRows] = await Promise.all([
       api('/access/permissions').catch(() => null),
       api('/access/roles').catch(() => []),
-      api('/users').catch(() => [])
+      api('/access/users').catch(() => [])
     ]);
     setCatalogue(permissions);
     setRoles(roleRows);
@@ -106,6 +106,8 @@ export default function AccessControl({ user }) {
                 return (
                   <span key={role.id} className="access-cell">
                     <button
+                      aria-label={`${held ? 'Revoke' : 'Grant'} ${permission.label} for ${role.name}`}
+                      aria-pressed={held}
                       className={`access-toggle ${held ? 'on' : ''}`}
                       disabled={busy || (role.isSystem && held)}
                       title={role.isSystem ? 'The Managing Director always holds every permission' : role.name}

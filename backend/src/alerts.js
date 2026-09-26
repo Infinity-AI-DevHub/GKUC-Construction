@@ -1,6 +1,8 @@
 import { pool, query, spendSql, today, transaction } from './db.js';
 import { dispatchQueued, dispatch } from './lib/channels.js';
 import { publish } from './lib/realtime.js';
+import { upcomingBirthday, BIRTHDAY_REMINDER_DAYS } from './lib/birthdays.js';
+import { insuranceReminderDate } from './lib/insurance-reminders.js';
 
 /**
  * Alerts are addressed to a *permission*, not a role name. With roles under the MD's
@@ -433,9 +435,29 @@ async function projectStartReminderAlerts(stamp, alerts) {
     WHERE id IN (${[...raised].map(() => '?').join(',')})`, [...raised]);
 }
 
+export async function runBirthdayReminderScan(stamp = today()) {
+  const employees = await query("SELECT id,name,code,birth_date FROM employees WHERE birth_date IS NOT NULL AND status IN ('Active','On leave')");
+  let count = 0;
+  for (const employee of employees) {
+    const birthday = upcomingBirthday(employee.birth_date, stamp);
+    if (!birthday || !BIRTHDAY_REMINDER_DAYS.includes(birthday.remaining)) continue;
+    const id = await raise({
+      key: `employee-birthday:${employee.id}:${birthday.date}:${birthday.remaining}`,
+      audience: 'hr.manage', severity: 'Info',
+      title: birthday.remaining === 0 ? `Birthday today — ${employee.name}` : `Birthday in ${birthday.remaining} day(s) — ${employee.name}`,
+      message: `${employee.name} (${employee.code}) celebrates their birthday ${birthday.remaining === 0 ? 'today' : `on ${birthday.date}`}.`,
+      referenceType: 'employee', referenceId: employee.id
+    });
+    if (id) count++;
+  }
+  return count;
+}
+
 /** Scans every tracked deadline and threshold and queues notifications for anything at risk. */
 export async function runAlertScan() {
   await runTaskReminderScan();
+  await runBirthdayReminderScan();
+  await runInsuranceReminderScan();
   const stamp = today();
   const alerts = [];
   await Promise.all([
@@ -598,6 +620,20 @@ async function toolReturnAlerts(stamp, alerts) {
 /** Queues a one-off notification raised by an operator action rather than by the scanner. */
 export async function notify(alert) {
   await raise({ ...alert, key: alert.key || `event:${alert.referenceType}:${alert.referenceId}:${Date.now()}` });
+}
+
+export async function runInsuranceReminderScan(stamp=today()) {
+  const records=await query(`SELECT i.*,COALESCE(vd.expiry_date,i.expiry_date) expiry FROM hr_insurance i
+    LEFT JOIN vehicle_documents vd ON vd.vehicle_id=i.vehicle_id AND vd.doc_type='Insurance' WHERE i.status='Active'`);
+  for(const policy of records){
+    const reminders=typeof policy.reminders==='string'?JSON.parse(policy.reminders):policy.reminders;
+    for(const reminder of reminders){
+      const due=insuranceReminderDate(policy.expiry,reminder);
+      if(due>stamp)continue;
+      await raise({key:`insurance:${policy.id}:${policy.expiry}:${due}`,audience:'hr.insurance',severity:'Warning',
+        title:`Insurance reminder — ${policy.name}`,message:`${policy.kind} policy ${policy.policy_number||policy.name} with ${policy.insurer||'insurer not recorded'} expires on ${policy.expiry}. Reminder scheduled for ${due}. Review renewal or extension.`,referenceType:'insurance',referenceId:policy.id});
+    }
+  }
 }
 
 /** Background scanning so alerts fire even when nobody is signed in. */
