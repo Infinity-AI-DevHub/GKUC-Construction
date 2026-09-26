@@ -1,0 +1,44 @@
+/* Shared presentation system, aligned with the commercial desk. No workflow changes. */
+main{--workspace-ink:#102a43;--workspace-red:#ab1736;--workspace-muted:#65788b;--workspace-line:#e1e7ee}
+main .page-heading{padding:8px 0 26px;margin-bottom:0;align-items:center;gap:20px}
+main .page-heading h1{font-family:Manrope,sans-serif;font-size:30px;letter-spacing:-1.2px;color:var(--workspace-ink)}
+main .page-heading p{font-size:13px;color:var(--workspace-muted);margin-top:8px;line-height:1.7}
+.module-layout{display:grid;grid-template-columns:232px minmax(0,1fr);gap:28px;align-items:start}
+.module-navigation{position:sticky;top:24px;background:#fff;border:1px solid var(--workspace-line);border-radius:18px;padding:20px 10px;box-shadow:0 6px 24px #102a4305;min-width:0}
+.module-navigation{max-height:calc(100vh - 48px);overflow-y:auto;scrollbar-width:thin}
+.module-navigation-label{padding:0 12px 18px;color:#718295;font-size:10px;letter-spacing:1.3px;text-transform:uppercase;font-weight:800}
+.module-navigation .toolbar{padding:0;margin:0;border:0;background:transparent;display:block;box-shadow:none}
+.module-navigation .segments{display:grid;gap:6px;padding:0;background:transparent;border:0;box-shadow:none;min-width:0;width:100%;border-radius:0}
+.module-navigation .segments button{width:100%;text-align:left;padding:13px 14px;border:1px solid transparent;border-radius:11px;background:transparent;color:var(--workspace-muted);font-size:12px;white-space:normal;line-height:1.5;box-shadow:none;transition:background .18s}
+.module-navigation .segments button:hover{background:#f6f8fb;color:var(--workspace-ink)}
+.module-navigation .segments button.active{background:#f9eef1;border-color:#eed5dc;color:var(--workspace-red);font-weight:750;box-shadow:none}
+.module-content{display:grid;gap:22px;min-width:0;align-content:start}
+main :is(.table-panel,.panel){border:1px solid var(--workspace-line);border-radius:16px;background:#fff;box-shadow:0 5px 22px #102a4304;overflow:hidden}
+main :is(.table-tools,.panel-title){padding:20px 24px;gap:16px;border-bottom:1px solid #eef1f5;flex-wrap:wrap}
+main :is(.table-tools,.panel-title) h2{font:750 16px Manrope,sans-serif;letter-spacing:-.3px;color:var(--workspace-ink);margin:0}
+main .table-head{background:#f7f9fc;color:#718295;font-size:10px;letter-spacing:.7px;text-transform:uppercase;min-height:45px}
+main .table-row{min-height:72px;border-color:#edf1f5;padding-block:16px;line-height:1.65;font-size:12px;align-items:center}
+main .table-row:hover{background:#fafbfd}
+main .table-row strong{color:var(--workspace-ink);font-weight:750;font-size:12px}
+main .table-row small{font-size:11px;color:var(--workspace-muted);margin-top:4px}
+main :is(.summary,.metric){border:1px solid var(--workspace-line);border-radius:14px;padding:20px;background:#fff;box-shadow:none}
+main .summary strong{font:800 23px Manrope,sans-serif;color:var(--workspace-ink)}
+main .summary span{font-size:12px;color:var(--workspace-muted)}
+main .primary{background:var(--workspace-red);border-color:var(--workspace-red);border-radius:9px;box-shadow:0 4px 10px #ab173614;min-height:40px;font-size:12px}
+main .secondary{border-radius:9px;min-height:38px;font-size:12px;border:1px solid #dfe6ed;background:#fff;color:#3e566d}
+main button:focus-visible,main a:focus-visible{outline:2px solid var(--workspace-red);outline-offset:3px}
+main .modal{background:#fff;border-radius:18px;border:1px solid #e2e8ee;box-shadow:0 28px 100px #102a4333}
+main .modal-title{padding:23px 26px;background:#fff;border-bottom:1px solid var(--workspace-line)}
+main .modal-title h2{font:800 20px Manrope,sans-serif;color:var(--workspace-ink);letter-spacing:-.4px}
+main :is(.report-form,.modal-body){background:#fff;padding:26px;gap:20px}
+main .report-form label{font-size:12px;color:#52687b;line-height:1.6}
+main .report-form :is(input,select,textarea){background:#fafbfd;border:1px solid #dce4ed;border-radius:8px;font-size:13px;padding:11px 12px;line-height:1.5;min-height:42px;color:var(--workspace-ink)}
+main .report-form :is(input,select,textarea):focus{outline:2px solid #ab173627;outline-offset:1px;border-color:#bc7185;background:#fff}
+main .report-form input:is([type=checkbox],[type=radio]){width:17px;height:17px;min-height:17px;padding:0;accent-color:var(--workspace-red)}
+main .modal-actions{padding-top:18px;border-top:1px solid var(--workspace-line);gap:10px}
+main .task-project-heading{background:#fff;border:1px solid var(--workspace-line);border-left:4px solid var(--workspace-red);border-radius:13px;padding:20px 24px}
+main .reference-welcome h1{color:var(--workspace-ink);font-family:Manrope,sans-serif;letter-spacing:-1px}
+main .reference-dashboard :is(.dashboard-card,.metric){border-radius:16px;border-color:var(--workspace-line);box-shadow:0 5px 22px #102a4304}
+@media(max-width:1100px){.module-layout{grid-template-columns:200px minmax(0,1fr);gap:20px}}
+@media(max-width:800px){.module-layout{grid-template-columns:minmax(0,1fr);gap:18px}.module-navigation{position:static;padding:14px;border-radius:14px}.module-navigation-label{padding:0 4px 12px}.module-navigation .segments{display:flex;overflow-x:auto;flex-wrap:nowrap;max-width:100%;gap:6px}.module-navigation .segments button{width:auto;flex:0 0 auto;white-space:nowrap;padding:10px 13px}.module-content{gap:18px}main .page-heading{flex-wrap:wrap;padding-bottom:20px}main .page-heading h1{font-size:26px}main :is(.table-tools,.panel-title){padding:18px}main :is(.report-form,.modal-body){padding:20px}main .report-form :is(input,select,textarea){font-size:16px}}
+@media(prefers-reduced-motion:reduce){.module-navigation .segments button{transition:none}}

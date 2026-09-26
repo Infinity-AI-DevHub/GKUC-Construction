@@ -244,6 +244,13 @@ async function createHrTables() {
     CONSTRAINT fk_employee_user FOREIGN KEY(user_id) REFERENCES users(id)
   ) ENGINE=InnoDB`);
   await addColumn('employees', 'weekly_rate', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('employees', 'birth_date', 'DATE NULL');
+  await addColumn('employees', 'nic_number', 'VARCHAR(40) NULL');
+  await addColumn('employees', 'additional_phone_1', 'VARCHAR(40) NULL');
+  await addColumn('employees', 'additional_phone_2', 'VARCHAR(40) NULL');
+  await addColumn('employees', 'residential_address', 'VARCHAR(1000) NULL');
+  await addColumn('employees', 'permanent_address', 'VARCHAR(1000) NULL');
+  if (!(await columnIsNullable('employees', 'join_date'))) await query('ALTER TABLE employees MODIFY join_date DATE NULL');
   await addColumn('employees', 'pay_basis', "ENUM('Monthly salary','Weekly rate','Daily rate') NOT NULL DEFAULT 'Monthly salary'");
   await addColumn('employees', 'pay_frequency', "ENUM('Daily','Weekly','Monthly') NOT NULL DEFAULT 'Monthly'");
   const hadPayrollCategory = await columnExists('employees', 'payroll_category');

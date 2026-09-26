@@ -45,19 +45,27 @@ export function PanelTitle({ title, action, onClick }) {
 }
 
 export function Page({ title, subtitle, action, children, onAction }) {
+  const sections = React.Children.toArray(children);
+  const navigation = title !== 'Tasks' && sections.find(child => React.isValidElement(child) && child.type === Tabs);
   return <>
     <div className="page-heading">
       <div><h1>{title}</h1><p>{subtitle}</p></div>
       {action && onAction && <button className="primary" onClick={onAction}><Plus size={17} />{action}</button>}
     </div>
-    {children}
+    {navigation ? <div className="module-layout">
+      <aside className="module-navigation" aria-label={`${title} sections`}>
+        <div className="module-navigation-label">{title} workspace</div>
+        {navigation}
+      </aside>
+      <div className="module-content">{sections.filter(child => child !== navigation)}</div>
+    </div> : children}
   </>;
 }
 
 /** Sub-navigation inside a module, using the same segmented control as the task filters. */
 export function Tabs({ tabs, active, onChange }) {
   return <div className="toolbar"><div className="segments">
-    {tabs.map(tab => <button className={active === tab ? 'active' : ''} onClick={() => onChange(tab)} key={tab}>{tab}</button>)}
+    {tabs.map(tab => <button type="button" aria-pressed={active === tab} className={active === tab ? 'active' : ''} onClick={() => onChange(tab)} key={tab}>{tab}</button>)}
   </div></div>;
 }
 

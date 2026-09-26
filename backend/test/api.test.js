@@ -60,6 +60,38 @@ const call = async (token, method, path, body) => {
   return { status: response.status, body: response.status === 204 ? null : await response.json() };
 };
 
+test('employee needs only name and code and personal details remain editable', async () => {
+  const owner = await login();
+  const created = await call(owner, 'POST', '/employees', { name:'Personal Test', code:'PERSONAL-TEST' });
+  assert.equal(created.status,201);
+  const id = created.body.id;
+  const details = {birthDate:'1995-04-12',nicNumber:'951234567V',additionalPhone1:'0711111111',additionalPhone2:'0722222222',residentialAddress:'Current home',permanentAddress:'Permanent home'};
+  const updated = await call(owner,'PATCH',`/employees/${id}`,details);
+  assert.equal(updated.status,200);
+  for (const key of Object.keys(details).filter(key=>key!=='birthDate')) assert.equal(updated.body[key],details[key]);
+  const cleared = await call(owner,'PATCH',`/employees/${id}`,{birthDate:null,nicNumber:''});
+  assert.equal(cleared.status,200);
+  assert.equal(cleared.body.birthDate,null);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
+});
+
+test('creating system access creates or links an employee without duplicating their profile', async () => {
+  const owner = await login();
+  const roles = await call(owner, 'GET', '/users/roles');
+  const role = roles.body[0];
+  const created = await call(owner, 'POST', '/users', { name: 'Profile Link Test', email: 'profile.link.test@gkuc.lk', password: 'TempPass2026!', roleId: role.id });
+  assert.equal(created.status, 201);
+  const [employees] = await admin.query(`SELECT * FROM ${testDatabase}.employees WHERE user_id=?`, [created.body.id]);
+  assert.equal(employees.length, 1);
+  assert.equal(Number(employees[0].basic_salary), 0);
+  assert.equal(Number(employees[0].epf_eligible), 0);
+  const linkedAgain = await call(owner, 'POST', '/users', { name: 'Second Access', email: 'second.access@gkuc.lk', password: 'TempPass2026!', roleId: role.id, employeeId: employees[0].id });
+  assert.equal(linkedAgain.status, 409);
+  await admin.query(`DELETE FROM ${testDatabase}.audit_log WHERE entity_id=? AND entity='employee'`, [employees[0].id]).catch(() => {});
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`, [employees[0].id]);
+  await admin.query(`DELETE FROM ${testDatabase}.users WHERE id=?`, [created.body.id]);
+});
+
 function testPdf(lines) {
   const stream = `BT /F1 12 Tf 45 750 Td ${lines.map((line, index) => `${index ? '0 -18 Td ' : ''}(${line.replace(/[\\()]/g, '\\$&')}) Tj`).join('\n')} ET`;
   const objects = [

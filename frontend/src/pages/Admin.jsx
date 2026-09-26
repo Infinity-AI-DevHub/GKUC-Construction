@@ -181,13 +181,20 @@ function AuditLog() {
 
 function UserForm({ close, reload }) {
   const [roles, setRoles] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  useEffect(() => { api('/users/employee-options').then(setEmployees).catch(() => setEmployees([])); }, []);
   useEffect(() => { api('/users/roles').then(setRoles).catch(() => setRoles([])); }, []);
   return <FormModal title="Add user" close={close} label="Create user" onSubmit={async values => {
     await post('/users', {
-      name: values.name, email: values.email, password: values.password, roleId: Number(values.roleId)
+      name: values.name, email: values.email, password: values.password, roleId: Number(values.roleId),
+      ...(values.employeeId ? { employeeId: Number(values.employeeId) } : {})
     });
     await reload();
   }}>
+    <p className="form-note wide">Creates system access and an employee profile. Select an existing employee to avoid creating another profile. For a new employee, HR should complete their personal details and pay settings in People before payroll.</p>
+    <SelectField name="employeeId" label="Employee profile" required={false} wide options={[
+      ['', 'Create a new profile (or match the same email)'], ...employees.map(employee => [employee.id, `${employee.name} — ${employee.code}`])
+    ]} />
     <Field name="name" label="Full name" />
     <Field name="email" label="Email" type="email" />
     <TemporaryPasswordField />

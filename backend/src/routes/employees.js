@@ -13,11 +13,17 @@ const employeeSchema = z.object({
   code: z.string().min(2).max(40),
   name: z.string().min(2).max(120),
   departmentId: z.number().int().positive().optional(),
-  designation: z.string().min(2).max(120),
+  designation: z.string().max(120).default(''),
   workerType: z.enum(['Office', 'Site']).default('Site'),
   phone: z.string().max(40).optional(),
   email: z.string().email().optional().or(z.literal('')),
-  joinDate: isoDate,
+  joinDate: isoDate.nullable().optional(),
+  birthDate: isoDate.nullable().optional(),
+  nicNumber: z.string().max(40).optional(),
+  additionalPhone1: z.string().max(40).optional(),
+  additionalPhone2: z.string().max(40).optional(),
+  residentialAddress: z.string().max(1000).optional(),
+  permanentAddress: z.string().max(1000).optional(),
   basicSalary: z.number().nonnegative().default(0),
   dailyRate: z.number().nonnegative().default(0),
   weeklyRate: z.number().nonnegative().default(0),
@@ -37,6 +43,8 @@ const employeeSchema = z.object({
 });
 
 const listQuery = `SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,e.join_date joinDate,
+  e.birth_date birthDate,e.nic_number nicNumber,e.additional_phone_1 additionalPhone1,e.additional_phone_2 additionalPhone2,
+  e.residential_address residentialAddress,e.permanent_address permanentAddress,
   e.basic_salary basicSalary,e.daily_rate dailyRate,e.weekly_rate weeklyRate,e.overtime_rate overtimeRate,
   e.pay_basis payBasis,e.pay_frequency payFrequency,e.payroll_category payrollCategory,
   e.payroll_company_id payrollCompanyId,
@@ -282,10 +290,12 @@ router.post('/', auth, permit('hr.manage'), validate(employeeSchema), wrap(async
        pay_basis,pay_frequency,payroll_category,payroll_company_id,compensation_effective_from,epf_eligible,etf_eligible,
        custom_office_ot_rate,custom_site_ot_rate,custom_travel_ot_rate,status,notes)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [body.code, body.name, body.departmentId || null, body.designation, body.workerType, body.phone || null,
-      body.email || null, body.joinDate, body.basicSalary, body.dailyRate, body.weeklyRate, body.overtimeRate,
-      body.payBasis, body.payFrequency, body.payrollCategory, body.payrollCompanyId, body.compensationEffectiveFrom || body.joinDate,
+      body.email || null, body.joinDate || null, body.basicSalary, body.dailyRate, body.weeklyRate, body.overtimeRate,
+      body.payBasis, body.payFrequency, body.payrollCategory, body.payrollCompanyId, body.compensationEffectiveFrom || body.joinDate || null,
       body.epfEligible, body.etfEligible, body.customOfficeOtRate ?? null, body.customSiteOtRate ?? null,
       body.customTravelOtRate ?? null, body.status, body.notes || null]);
+    await query(`UPDATE employees SET birth_date=?,nic_number=?,additional_phone_1=?,additional_phone_2=?,residential_address=?,permanent_address=? WHERE id=?`,
+      [body.birthDate || null,body.nicNumber || null,body.additionalPhone1 || null,body.additionalPhone2 || null,body.residentialAddress || null,body.permanentAddress || null,result.insertId]);
     const row = await getOne(`${listQuery} WHERE e.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'employee', row.id, null, row, req.ip);
     res.status(201).json(row);
@@ -304,6 +314,7 @@ router.patch('/:id', auth, permit('hr.manage'), validate(employeeSchema.partial(
   });
   if (profileError) return res.status(400).json({ error: profileError });
   const columns = {
+    birthDate:'birth_date',nicNumber:'nic_number',additionalPhone1:'additional_phone_1',additionalPhone2:'additional_phone_2',residentialAddress:'residential_address',permanentAddress:'permanent_address',
     departmentId: 'department_id', joinDate: 'join_date', basicSalary: 'basic_salary',
     dailyRate: 'daily_rate', weeklyRate: 'weekly_rate', overtimeRate: 'overtime_rate', workerType: 'worker_type',
     payBasis: 'pay_basis', payFrequency: 'pay_frequency', payrollCategory: 'payroll_category', payrollCompanyId: 'payroll_company_id',

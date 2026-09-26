@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFields.jsx';
 import { ArrowDownToLine, Check, Clock3, PencilLine, Search, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
 import { api, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { allowedTabs, Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
@@ -585,6 +586,7 @@ function Departments({ data }) {
 function EmployeeForm({ data, companies, companyId, close, reload }) {
   return <FormModal title="Add employee" close={close} label="Add employee" onSubmit={async values => {
     await post('/employees', {
+      ...personalDetails(values),
       code: values.code,
       name: values.name,
       departmentId: values.departmentId ? Number(values.departmentId) : undefined,
@@ -592,7 +594,7 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
       workerType: values.workerType,
       phone: values.phone || undefined,
       email: values.email || undefined,
-      joinDate: values.joinDate,
+      joinDate: values.joinDate || null,
       basicSalary: Number(values.basicSalary || 0),
       dailyRate: Number(values.dailyRate || 0),
       weeklyRate: Number(values.weeklyRate || 0),
@@ -601,7 +603,7 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
       payFrequency: values.payFrequency,
       payrollCategory: values.payrollCategory,
       payrollCompanyId: Number(values.payrollCompanyId),
-      compensationEffectiveFrom: values.compensationEffectiveFrom,
+      compensationEffectiveFrom: values.compensationEffectiveFrom || undefined,
       epfEligible: values.epfEligible === 'true',
       etfEligible: values.etfEligible === 'true'
     });
@@ -609,22 +611,23 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
   }}>
     <Field name="code" label="Employee code" defaultValue={`EMP-${String(data.employees.length + 1).padStart(4, '0')}`} />
     <Field name="name" label="Full name" />
-    <SelectField name="departmentId" label="Department" options={data.departments.map(department => [department.id, department.name])} />
-    <Field name="designation" label="Designation / trade" />
-    <SelectField name="workerType" label="Employee type" options={[["Office", "Office employee"], ["Site", "Site worker"]]} />
+    <EmployeePersonalFields />
+    <SelectField name="departmentId" label="Department" required={false} options={[["", "Not recorded"], ...data.departments.map(department => [department.id, department.name])]} />
+    <Field name="designation" label="Designation / trade" required={false} />
+    <SelectField required={false} name="workerType" label="Employee type" options={[["Office", "Office employee"], ["Site", "Site worker"]]} />
     <Field name="phone" label="Phone" required={false} />
     <Field name="email" label="Email" type="email" required={false} />
-    <Field name="joinDate" label="Join date" type="date" defaultValue={todayInput()} />
-    <SelectField name="payrollCompanyId" label="Salary paid by" options={companies.map(row => [row.id, row.name])} defaultValue={companyId} />
-    <SelectField name="payBasis" label="Pay basis" options={['Monthly salary', 'Weekly rate', 'Daily rate']} defaultValue="Monthly salary" />
-    <SelectField name="payFrequency" label="Payment frequency" options={['Daily', 'Weekly', 'Monthly']} defaultValue="Monthly" />
-    <SelectField name="payrollCategory" label="Payroll category" options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} defaultValue="Site labourer" />
-    <Field name="compensationEffectiveFrom" label="Compensation effective from" type="date" defaultValue={todayInput()} />
-    <Field name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue="0" />
+    <Field required={false} name="joinDate" label="Join date" type="date" defaultValue={todayInput()} />
+    <SelectField required={false} name="payrollCompanyId" label="Salary paid by" options={companies.map(row => [row.id, row.name])} defaultValue={companyId} />
+    <SelectField required={false} name="payBasis" label="Pay basis" options={['Monthly salary', 'Weekly rate', 'Daily rate']} defaultValue="Monthly salary" />
+    <SelectField required={false} name="payFrequency" label="Payment frequency" options={['Daily', 'Weekly', 'Monthly']} defaultValue="Monthly" />
+    <SelectField required={false} name="payrollCategory" label="Payroll category" options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} defaultValue="Site labourer" />
+    <Field required={false} name="compensationEffectiveFrom" label="Compensation effective from" type="date" defaultValue={todayInput()} />
+    <Field required={false} name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue="0" />
     <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" required={false} />
     <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" required={false} />
-    <SelectField name="epfEligible" label="EPF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
-    <SelectField name="etfEligible" label="ETF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
+    <SelectField required={false} name="epfEligible" label="EPF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
+    <SelectField required={false} name="etfEligible" label="ETF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
     <Field name="overtimeRate" label="Legacy/custom OT rate (LKR/h)" type="number" min="0" defaultValue="0" required={false} />
   </FormModal>;
 }

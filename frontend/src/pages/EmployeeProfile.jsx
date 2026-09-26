@@ -4,6 +4,7 @@ import { ArrowLeft, BriefcaseBusiness, CalendarDays, CheckCircle2, ClipboardChec
 import { api, inputDate, patch, rupees, shortDate, slug } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Row, SelectField, Table, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
+import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFields.jsx';
 import AttendanceCorrection from './AttendanceCorrection.jsx';
 
 function RateRing({ value, label }) {
@@ -111,8 +112,14 @@ export default function EmployeeProfile({ employeeId, close, canManage, canCorre
             onClick={() => setEditing(true)}><PencilLine size={16} /></button> : <UserRound size={20} />}
         </div>
         <dl className="employee-details">
-          <div><dt><CalendarDays size={14} />Joined</dt><dd>{shortDate(employee.joinDate)}</dd></div>
+          <div><dt><CalendarDays size={14} />Joined</dt><dd>{employee.joinDate ? shortDate(employee.joinDate) : 'Not recorded'}</dd></div>
           <div><dt><Phone size={14} />Phone</dt><dd>{employee.phone || 'Not recorded'}</dd></div>
+          <div><dt>Birth date</dt><dd>{employee.birthDate ? shortDate(employee.birthDate) : 'Not recorded'}</dd></div>
+          <div><dt>NIC number</dt><dd>{employee.nicNumber || 'Not recorded'}</dd></div>
+          <div><dt>Additional phone 1</dt><dd>{employee.additionalPhone1 || 'Not recorded'}</dd></div>
+          <div><dt>Additional phone 2</dt><dd>{employee.additionalPhone2 || 'Not recorded'}</dd></div>
+          <div><dt>Residential address</dt><dd>{employee.residentialAddress || 'Not recorded'}</dd></div>
+          <div><dt>Permanent address</dt><dd>{employee.permanentAddress || 'Not recorded'}</dd></div>
           <div><dt><Mail size={14} />Email</dt><dd>{employee.email || 'Not recorded'}</dd></div>
           <div><dt><BriefcaseBusiness size={14} />Department</dt><dd>{employee.department || 'Not assigned'}</dd></div>
           <div><dt><UserRound size={14} />Employee type</dt><dd>{employee.workerType} employee</dd></div>
@@ -195,21 +202,22 @@ function PersonalDetailsForm({ employee, departments, companies, close, reload }
   const optionalNumber = value => value === '' ? null : Number(value);
   return <FormModal title={`Edit ${employee.name}`} close={close} label="Save employee details" wide onSubmit={async values => {
     await patch(`/employees/${employee.id}`, {
+      ...personalDetails(values),
       code: values.code.trim(),
       name: values.name.trim(),
-      departmentId: Number(values.departmentId),
+      departmentId: values.departmentId ? Number(values.departmentId) : undefined,
       designation: values.designation.trim(),
       workerType: values.workerType,
       phone: values.phone.trim(),
       email: values.email.trim(),
-      joinDate: values.joinDate,
+      joinDate: values.joinDate || null,
       status: values.status,
       notes: values.notes.trim(),
       payrollCompanyId: Number(values.payrollCompanyId),
       payBasis: values.payBasis,
       payFrequency: values.payFrequency,
       payrollCategory: values.payrollCategory,
-      compensationEffectiveFrom: values.compensationEffectiveFrom || values.joinDate,
+      compensationEffectiveFrom: values.compensationEffectiveFrom || values.joinDate || undefined,
       basicSalary: number(values.basicSalary),
       weeklyRate: number(values.weeklyRate),
       dailyRate: number(values.dailyRate),
@@ -224,29 +232,30 @@ function PersonalDetailsForm({ employee, departments, companies, close, reload }
   }}>
     <Field name="code" label="Employee code" defaultValue={employee.code} />
     <Field name="name" label="Full name" defaultValue={employee.name} />
-    <SelectField name="departmentId" label="Department" defaultValue={employee.departmentId}
-      options={departments.map(department => [department.id, department.name])} />
-    <Field name="designation" label="Designation / trade" defaultValue={employee.designation} />
-    <SelectField name="workerType" label="Employee type" defaultValue={employee.workerType}
+    <EmployeePersonalFields employee={employee} />
+    <SelectField required={false} name="departmentId" label="Department" defaultValue={employee.departmentId}
+      options={[["", "Not recorded"], ...departments.map(department => [department.id, department.name])]} />
+    <Field required={false} name="designation" label="Designation / trade" defaultValue={employee.designation} />
+    <SelectField required={false} name="workerType" label="Employee type" defaultValue={employee.workerType}
       options={[["Office", "Office employee"], ["Site", "Site worker"]]} />
-    <SelectField name="status" label="Employment status" defaultValue={employee.status}
+    <SelectField required={false} name="status" label="Employment status" defaultValue={employee.status}
       options={['Active', 'On leave', 'Suspended', 'Left']} />
     <Field name="phone" label="Phone" defaultValue={employee.phone || ''} required={false} />
     <Field name="email" label="Email" type="email" defaultValue={employee.email || ''} required={false} />
-    <Field name="joinDate" label="Join date" type="date" defaultValue={inputDate(employee.joinDate)} />
-    <SelectField name="payrollCompanyId" label="Salary paid by" defaultValue={employee.payrollCompanyId || 1}
+    <Field required={false} name="joinDate" label="Join date" type="date" defaultValue={inputDate(employee.joinDate)} />
+    <SelectField required={false} name="payrollCompanyId" label="Salary paid by" defaultValue={employee.payrollCompanyId || 1}
       options={companies.map(company => [company.id, company.name])} />
-    <SelectField name="payBasis" label="Pay basis" defaultValue={employee.payBasis}
+    <SelectField required={false} name="payBasis" label="Pay basis" defaultValue={employee.payBasis}
       options={['Monthly salary', 'Weekly rate', 'Daily rate']} />
-    <SelectField name="payFrequency" label="Payment frequency" defaultValue={employee.payFrequency}
+    <SelectField required={false} name="payFrequency" label="Payment frequency" defaultValue={employee.payFrequency}
       options={['Daily', 'Weekly', 'Monthly']} />
-    <SelectField name="payrollCategory" label="Payroll category" defaultValue={employee.payrollCategory}
+    <SelectField required={false} name="payrollCategory" label="Payroll category" defaultValue={employee.payrollCategory}
       options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} />
-    <Field name="compensationEffectiveFrom" label="Compensation effective from" type="date"
+    <Field required={false} name="compensationEffectiveFrom" label="Compensation effective from" type="date"
       defaultValue={inputDate(employee.compensationEffectiveFrom || employee.joinDate)} />
-    <Field name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue={employee.basicSalary || 0} />
-    <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" defaultValue={employee.weeklyRate || 0} />
-    <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" defaultValue={employee.dailyRate || 0} />
+    <Field required={false} name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue={employee.basicSalary || 0} />
+    <Field required={false} name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" defaultValue={employee.weeklyRate || 0} />
+    <Field required={false} name="dailyRate" label="Daily rate (LKR)" type="number" min="0" defaultValue={employee.dailyRate || 0} />
     <Field name="overtimeRate" label="Legacy/custom OT rate (LKR/h)" type="number" min="0" defaultValue={employee.overtimeRate || 0} required={false} />
     <Field name="customOfficeOtRate" label="Office OT override (LKR/h)" type="number" min="0"
       defaultValue={employee.customOfficeOtRate ?? ''} required={false} />
@@ -254,9 +263,9 @@ function PersonalDetailsForm({ employee, departments, companies, close, reload }
       defaultValue={employee.customSiteOtRate ?? ''} required={false} />
     <Field name="customTravelOtRate" label="Travel OT override (LKR/h)" type="number" min="0"
       defaultValue={employee.customTravelOtRate ?? ''} required={false} />
-    <SelectField name="epfEligible" label="EPF eligible" defaultValue={String(Boolean(employee.epfEligible))}
+    <SelectField required={false} name="epfEligible" label="EPF eligible" defaultValue={String(Boolean(employee.epfEligible))}
       options={[[false, 'No'], [true, 'Yes']]} />
-    <SelectField name="etfEligible" label="ETF eligible" defaultValue={String(Boolean(employee.etfEligible))}
+    <SelectField required={false} name="etfEligible" label="ETF eligible" defaultValue={String(Boolean(employee.etfEligible))}
       options={[[false, 'No'], [true, 'Yes']]} />
     <TextArea name="notes" label="HR notes" defaultValue={employee.notes || ''} required={false} rows={3} />
   </FormModal>;

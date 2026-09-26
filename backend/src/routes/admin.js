@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, getOne, hashPassword, pool, query } from '../db.js';
+import { audit, getOne, hashPassword, pool, query, transaction } from '../db.js';
 import { auth, permissionsFor, permit, validate, wrap } from '../lib/http.js';
 import { PRIVILEGED_KEYS } from '../lib/permissions.js';
 import { strongPassword } from '../lib/passwords.js';
@@ -195,19 +195,44 @@ router.post('/document-design/preview', auth, permit('admin.users'), wrap(async 
 router.get('/users/roles', auth, permit('admin.users', 'admin.roles'), wrap(async (_req, res) =>
   res.json(await query('SELECT id,name,description FROM roles ORDER BY is_system DESC, name'))));
 
+router.get('/users/employee-options', auth, permit('admin.users'), wrap(async (_req, res) =>
+  res.json(await query("SELECT id,code,name,email FROM employees WHERE user_id IS NULL AND status='Active' ORDER BY name"))));
+
 router.post('/users', auth, permit('admin.users'), validate(z.object({
   name: z.string().min(2).max(120),
   email: z.string().email(),
   password: strongPassword,
-  roleId: z.number().int().positive()
+  roleId: z.number().int().positive(),
+  employeeId: z.number().int().positive().optional()
 })), wrap(async (req, res) => {
   const body = req.body;
   const role = await getOne('SELECT id,name FROM roles WHERE id=?', [body.roleId]);
   if (!role) return res.status(400).json({ error: 'Unknown role' });
-  const result = await query('INSERT INTO users (name,email,password_hash,role,role_id) VALUES (?,?,?,?,?)',
-    [body.name, body.email.toLowerCase(), hashPassword(body.password), role.name, role.id]);
-  const row = await getOne('SELECT id,name,email,role,active FROM users WHERE id=?', [result.insertId]);
-  await audit(pool, req.user.id, 'CREATE', 'user', row.id, null, row, req.ip);
+  const row = await transaction(async connection => {
+    const [matches] = await connection.query(body.employeeId
+      ? 'SELECT id,user_id FROM employees WHERE id=? FOR UPDATE'
+      : 'SELECT id,user_id FROM employees WHERE LOWER(email)=? FOR UPDATE',
+    [body.employeeId || body.email.toLowerCase()]);
+    if ((body.employeeId && !matches.length) || matches.length > 1 || matches.some(employee => employee.user_id)) {
+      throw Object.assign(new Error('This employee is missing, already has system access, or has duplicate profiles. Please check the employee record before creating the account.'), { status: 409 });
+    }
+    const [result] = await connection.query('INSERT INTO users (name,email,password_hash,role,role_id) VALUES (?,?,?,?,?)',
+      [body.name, body.email.toLowerCase(), hashPassword(body.password), role.name, role.id]);
+    let employeeId = matches[0]?.id;
+    if (employeeId) {
+      await connection.query('UPDATE employees SET user_id=? WHERE id=?', [result.insertId, employeeId]);
+    } else {
+      const [employee] = await connection.query(`INSERT INTO employees
+        (code,name,email,user_id,designation,join_date,worker_type,payroll_category)
+        VALUES (?,?,?,?,?,CURDATE(),'Office','Office employee')`,
+      [`USR-${result.insertId}`, body.name, body.email.toLowerCase(), result.insertId, role.name]);
+      employeeId = employee.insertId;
+      await audit(connection, req.user.id, 'CREATE', 'employee', employeeId, null, { name: body.name, userId: result.insertId }, req.ip);
+    }
+    const row = { id: result.insertId, name: body.name, email: body.email.toLowerCase(), role: role.name, active: 1, employeeId };
+    await audit(connection, req.user.id, 'CREATE', 'user', row.id, null, row, req.ip);
+    return row;
+  });
   res.status(201).json(row);
 }));
 

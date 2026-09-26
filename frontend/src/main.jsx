@@ -5,6 +5,7 @@ import './styles.css';
 import './theme.css';
 import './reference.css';
 import './responsive.css';
+import './workspace.css';
 
 import { announceDataChanged, api, post, setUploadLimit, slug, token } from './api.js';
 import { Modal } from './ui.jsx';
