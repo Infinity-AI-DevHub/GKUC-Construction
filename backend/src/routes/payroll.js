@@ -4,6 +4,7 @@ import { audit, getOne, nextReference, pool, query, transaction } from '../db.js
 import { auth, permit, permissionsFor, validate, wrap } from '../lib/http.js';
 import { PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES, calculatePayslip, payProfileError } from '../lib/payroll-policy.js';
 import {rulesFor,calculateTransport,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
+import { contributionEligibility, DEFAULT_STATUTORY_RULES } from '../lib/statutory-eligibility.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -57,6 +58,10 @@ const policySchema = z.object({
   etfEmployerRate: percent,
   epfBasis: z.literal('Basic earnings').default('Basic earnings'),
   etfBasis: z.literal('Basic earnings').default('Basic earnings'),
+  statutoryRules: z.object({
+    permanentOnly: z.boolean(), minimumMonthlySalary: z.number().nonnegative(),
+    weeklyWeeksPerMonth: z.number().positive(), dailyDaysPerMonth: z.number().positive()
+  }).default(DEFAULT_STATUTORY_RULES),
   hrRules:z.object({normalStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),normalEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),otInterval:z.number().positive().max(4),minimumOt:z.number().nonnegative().max(24),maxDailyOt:z.number().positive().max(24),transportDivisor:z.number().positive().max(366),fullTransportDays:z.number().int().min(0).max(366).nullable(),fullTransportComparison:z.enum(['At least','More than']),longDistanceKm:z.number().nonnegative(),longDistancePayment:z.number().nonnegative(),mileageRate:z.number().nonnegative(),fixedTravelPayment:z.number().nonnegative(),allowMileageAndFixed:z.boolean(),countLeaveForTransport:z.boolean(),countAbsenceForTransport:z.boolean(),separateApproval:z.boolean().default(false)}).refine(r=>r.normalEnd>r.normalStart,'Normal shift end must be after its start').default(INITIAL_HR_RULES)
 });
 
@@ -65,7 +70,7 @@ const policySelect = `SELECT p.id,p.company_id companyId,c.name company,p.effect
   p.driver_ot_rate driverOtRate,p.supervisor_site_ot_rate supervisorSiteOtRate,
   p.supervisor_travel_ot_rate supervisorTravelOtRate,p.epf_employee_rate epfEmployeeRate,
   p.epf_employer_rate epfEmployerRate,p.etf_employer_rate etfEmployerRate,
-  p.epf_basis epfBasis,p.etf_basis etfBasis,p.hr_rules hrRules,u.name createdBy,p.created_at createdAt
+  p.epf_basis epfBasis,p.etf_basis etfBasis,p.hr_rules hrRules,p.statutory_rules statutoryRules,u.name createdBy,p.created_at createdAt
   FROM payroll_policies p JOIN companies c ON c.id=p.company_id LEFT JOIN users u ON u.id=p.created_by`;
 
 /**
@@ -110,6 +115,7 @@ router.post('/settings/policies', auth, permit("hr.settings"), validate(policySc
       body.driverOtRate, body.supervisorSiteOtRate, body.supervisorTravelOtRate, body.epfEmployeeRate,
       body.epfEmployerRate, body.etfEmployerRate, body.epfBasis, body.etfBasis, req.user.id]);
     await query('UPDATE payroll_policies SET hr_rules=? WHERE id=?',[JSON.stringify(body.hrRules),result.insertId]);
+    await query('UPDATE payroll_policies SET statutory_rules=? WHERE id=?',[JSON.stringify(body.statutoryRules),result.insertId]);
     const row = await getOne(`${policySelect} WHERE p.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'payroll_policy', row.id, null, row, req.ip);
     res.status(201).json(row);
@@ -156,7 +162,7 @@ const payProfileSchema = z.object({
   payBasis: z.enum(PAY_BASES), payFrequency: z.enum(PAY_FREQUENCIES),
   payrollCategory: z.enum(PAYROLL_CATEGORIES), basicSalary: z.number().nonnegative(),
   weeklyRate: z.number().nonnegative(), dailyRate: z.number().nonnegative(),
-  compensationEffectiveFrom: isoDate, epfEligible: z.boolean(), etfEligible: z.boolean(),
+  compensationEffectiveFrom: isoDate, epfEligible: z.boolean(), etfEligible: z.boolean(), contributionStartDate: isoDate.nullable().optional(),
   customOfficeOtRate: z.number().nonnegative().nullable().optional(),
   customSiteOtRate: z.number().nonnegative().nullable().optional(),
   customTravelOtRate: z.number().nonnegative().nullable().optional()
@@ -175,6 +181,7 @@ router.patch('/settings/employees/:id', auth, permit("hr.settings"), validate(pa
     body.dailyRate, body.compensationEffectiveFrom, body.epfEligible, body.etfEligible,
     body.customOfficeOtRate ?? null, body.customSiteOtRate ?? null, body.customTravelOtRate ?? null, before.id]);
   if(body.allowanceEligibility)await query('UPDATE employees SET allowance_eligibility=? WHERE id=?',[JSON.stringify(body.allowanceEligibility),before.id]);
+  if(body.contributionStartDate !== undefined)await query('UPDATE employees SET contribution_start_date=? WHERE id=?',[body.contributionStartDate || null,before.id]);
   const after = await getOne('SELECT * FROM employees WHERE id=?', [before.id]);
   await audit(pool, req.user.id, 'UPDATE', 'employee_pay_profile', before.id, before, after, req.ip);
   res.json({ id: before.id });
@@ -227,7 +234,7 @@ export async function generatePayroll(req, res) {
   if (!policy) return res.status(409).json({ error: 'Configure a payroll policy for this period first' });
 
   const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,
-      e.epf_eligible,e.etf_eligible,e.allowance_eligibility,
+      e.epf_eligible,e.etf_eligible,e.contribution_start_date,e.join_date,e.employment_type,e.allowance_eligibility,
       (SELECT COUNT(*) FROM attendance a WHERE (a.employee_id=e.id OR a.employee_name=e.name)
         AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip')) days_present,
       (SELECT COUNT(*) FROM attendance a WHERE (a.employee_id=e.id OR a.employee_name=e.name)
@@ -260,6 +267,11 @@ export async function generatePayroll(req, res) {
   [...Array.from({ length: 11 }, () => [periodStart, periodEnd]).flat(), periodEnd, companyId, payFrequency, periodEnd]);
 
   if (!employees.length) return res.status(409).json({ error: `No active ${payFrequency.toLowerCase()}-paid employees fall inside this period` });
+  for (const row of employees) {
+    const eligibility = contributionEligibility(row, policy, periodEnd);
+    row.epf_eligible = eligibility.epf;
+    row.etf_eligible = eligibility.etf;
+  }
   const covered=await getOne(`SELECT ps.employee_id FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1`,[...employees.map(e=>e.id),periodEnd,periodStart]);
   if(covered)return res.status(409).json({error:'An employee is already included in another payroll run for these dates. Changing payment frequency must not pay the same period twice.'});
 

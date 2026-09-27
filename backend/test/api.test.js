@@ -329,9 +329,11 @@ test('employee needs only name and code and personal details remain editable', a
   const eligible=await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Paid',fromDate:'2027-02-28',toDate:'2027-02-28',reason:'Six month anniversary test'});
   assert.equal(eligible.status,201);
   await call(owner,'PATCH',`/employees/leave/${eligible.body.id}`,{status:'Rejected'});
-  const leave = await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Unpaid',fromDate:'2027-01-01',toDate:'2027-01-14',reason:'Annual leave test'});
+  const earlyUnpaid = await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Unpaid',fromDate:'2027-01-01',toDate:'2027-01-01',reason:'Waiting period test'});
+  assert.equal(earlyUnpaid.status,409);
+  const leave = await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Unpaid',fromDate:'2027-03-01',toDate:'2027-03-05',reason:'Monthly leave test'});
   assert.equal(leave.status,201);
-  const excess=await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Paid',fromDate:'2027-02-01',toDate:'2027-02-01',reason:'Over allowance test'});
+  const excess=await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Paid',fromDate:'2027-03-06',toDate:'2027-03-06',reason:'Over monthly allowance test'});
   assert.equal(excess.status,409);
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
 });
@@ -607,6 +609,9 @@ test('project coordination, subcontract rates and site stock custody stay linked
   const subcontractor=await call(owner,'POST','/qs/subcontractors',{name:`Waterproofing Test ${Date.now()}`,trade:'Waterproofing',
     contactType:'Company',contact:'Site Foreman',phone:'0770000000',address:'Homagama',businessId:'PV-TEST-100'});
   assert.equal(subcontractor.status,201);
+  assert.equal((await call(owner,'POST','/qs/subcontractor-rates',{projectId,subcontractorId:subcontractor.body.id,
+    workItem:'Membrane installation',unit:'m2',rate:850,agreedOn:today()})).status,409);
+  assert.equal((await call(owner,'POST',`/projects/${projectId}/award`,{awardDate:today(),reference:'AWARD-QA-100'})).status,201);
   const rate=await call(owner,'POST','/qs/subcontractor-rates',{projectId,subcontractorId:subcontractor.body.id,
     workItem:'Membrane installation',unit:'m2',rate:850,agreedOn:today()});
   assert.equal(rate.status,201);
@@ -2624,4 +2629,63 @@ test('a document is found by the reference printed on it', async () => {
   }
   assert.equal(found.length, 1, 'the hyphenated reference should find the document');
   assert.equal(found[0].filename, 'delivery-note.txt');
+});
+
+test('salary bank account is HR-only and new employees start statutory contributions from employment', async () => {
+  const hr = await login('hr@gkuc.lk');
+  const site = await login('supervisor@gkuc.lk');
+  const joined = shift(-20);
+  const created = await call(hr, 'POST', '/employees', { code: 'BANK-STAT-QA', name: 'Bank Stat QA', joinDate: joined });
+  assert.equal(created.status, 201);
+  assert.equal(Boolean(created.body.epfEligible), true);
+  assert.equal(Boolean(created.body.etfEligible), true);
+  assert.equal(String(created.body.contributionStartDate).slice(0, 10), joined);
+  const id = created.body.id;
+  const account = { bankName: 'Test Bank', branchName: 'Main Branch', accountNumber: '123456789012', accountHolderName: 'Bank Stat QA' };
+  assert.equal((await call(site, 'GET', `/employees/${id}/bank-account`)).status, 403);
+  assert.equal((await call(site, 'PUT', `/employees/${id}/bank-account`, account)).status, 403);
+  assert.equal((await call(hr, 'PUT', `/employees/${id}/bank-account`, account)).status, 200);
+  assert.equal((await call(hr, 'GET', `/employees/${id}/bank-account`)).body.accountNumber, account.accountNumber);
+  const general = await call(site, 'GET', `/employees/${id}`);
+  if (general.status === 200) assert.equal(general.body.accountNumber, undefined);
+});
+
+test('applicant CV screening scores and shortlisting gate interviews', async () => {
+  const hr = await login('hr@gkuc.lk');
+  const site = await login('supervisor@gkuc.lk');
+  const applicant = await call(hr,'POST','/hiring/applicants',{name:'Screening QA',email:'screening.qa@gkuc.lk',position:'Site engineer'});
+  assert.equal(applicant.status,201);
+  const id = applicant.body.id;
+  assert.equal((await call(hr,'GET',`/hiring/${id}`)).body.status,'Applicant');
+  assert.equal((await call(site,'GET',`/hiring/${id}`)).status,403);
+  const interview={scheduledAt:'2027-04-01T10:00',interviewer:'HR test'};
+  assert.equal((await call(hr,'POST',`/hiring/${id}/interviews`,interview)).status,409);
+  assert.equal((await call(hr,'PATCH',`/hiring/${id}`,{status:'Selected'})).status,409);
+  const screen=await call(hr,'PATCH',`/hiring/${id}/screening`,{experience:4,qualifications:5,roleFit:3,notes:'Relevant project and safety experience.',decision:'Shortlisted'});
+  assert.equal(screen.status,200);
+  assert.equal(screen.body.scores.total,12);
+  assert.equal((await call(hr,'POST',`/hiring/${id}/interviews`,interview)).status,201);
+  await admin.query(`DELETE FROM ${testDatabase}.hiring_candidates WHERE id=?`,[id]);
+});
+
+test('HR leave policy and individual entitlements enforce yearly, monthly and waiting-period rules',async()=>{
+  const owner=await login(),site=await login('supervisor@gkuc.lk');
+  const policy={effectiveFrom:'2035-01-01',annualDefault:10,casualDefault:3,monthlyLimit:2,waitingMonths:3,allowUnpaidDuringWait:false};
+  assert.equal((await call(site,'POST','/employees/leave/settings',policy)).status,403);
+  assert.equal((await call(owner,'POST','/employees/leave/settings',policy)).status,201);
+  const created=await call(owner,'POST','/employees',{code:'LEAVE-POLICY-QA',name:'Leave Policy QA',joinDate:'2035-01-01'});
+  assert.equal(created.status,201);
+  const id=created.body.id;
+  assert.equal(Number((await call(owner,'GET',`/employees/${id}/leave-entitlement`)).body.annual),14);
+  assert.equal((await call(site,'PUT',`/employees/${id}/leave-entitlement`,{annual:4,casual:1})).status,403);
+  assert.equal((await call(owner,'PUT',`/employees/${id}/leave-entitlement`,{annual:4,casual:1})).status,200);
+  const request=(fromDate,toDate,paymentType='Paid',leaveType='Annual')=>call(owner,'POST',`/employees/${id}/leave`,{leaveType,paymentType,fromDate,toDate,reason:'Policy check'});
+  assert.equal((await request('2035-02-01','2035-02-01','Unpaid')).status,409);
+  assert.equal((await request('2035-04-01','2035-04-02')).status,201);
+  assert.equal((await request('2035-04-03','2035-04-03')).status,409);
+  assert.equal((await request('2035-05-01','2035-05-02')).status,201);
+  assert.equal((await request('2035-06-01','2035-06-01')).status,409);
+  assert.equal((await request('2035-06-01','2035-06-01','Paid','Casual')).status,201);
+  assert.equal((await request('2035-06-02','2035-06-02','Paid','Casual')).status,409);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
 });

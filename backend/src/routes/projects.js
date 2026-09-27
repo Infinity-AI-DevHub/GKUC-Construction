@@ -5,6 +5,7 @@ import { auth, permit, validate, wrap } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
 import { resolveProjectManager } from '../lib/project-manager.js';
 import { withTaskAssignees } from '../lib/task-assignees.js';
+import { projectAwardState } from '../lib/project-award.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -71,10 +72,25 @@ router.get('/reminder-users', auth, permit('projects.manage'), wrap(async (_req,
   res.json(await query(`SELECT id,name,role,email FROM users WHERE active=1 ORDER BY name`));
 }));
 
+router.post('/:id/award', auth, permit('projects.manage'), validate(z.object({
+  awardDate: isoDate, reference: z.string().trim().min(2).max(120), notes: z.string().max(1000).optional()
+})), wrap(async (req, res) => {
+  const project = await getOne('SELECT id FROM projects WHERE id=? AND active=1', [req.params.id]);
+  if (!project) return res.status(404).json({ error: 'Active project not found.' });
+  const existing = await projectAwardState(project.id);
+  if (existing.formalAward) return res.status(409).json({ error: 'Formal award is already recorded. Do not create a second award record.' });
+  const body = req.body;
+  await query('INSERT INTO project_awards (project_id,award_date,reference,notes,recorded_by) VALUES (?,?,?,?,?)',
+    [project.id,body.awardDate,body.reference,body.notes || null,req.user.id]);
+  await audit(pool,req.user.id,'AWARD','project',project.id,null,body,req.ip);
+  res.status(201).json(await projectAwardState(project.id));
+}));
+
 router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
   const project = await getOne(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode
     FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.id=?`, [req.params.id]);
   if (!project) return res.status(404).json({ error: 'Project not found' });
+  const award = await projectAwardState(project.id);
   const [milestones, documents, team, tasks, expenses, incomes, boqs, reports, quotations,
     invoices, purchaseOrders, costBreakdown, expenseLedger, incomeLedger, attendanceLedger,
     materialUsage, equipmentUsage, supplierInvoices, costItems, variationLedger, updates, subcontractRates] = await Promise.all([
@@ -141,6 +157,7 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
   ]);
   res.json({
     ...project,
+    award,
     milestones,
     documents,
     team,

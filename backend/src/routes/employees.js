@@ -8,6 +8,7 @@ import {suggestOvertime,rulesFor,minutes,intervalsOverlap} from '../lib/hr-payro
 import { OVERTIME_TYPES, PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES,
   payProfileError, resolveOvertimeRate } from '../lib/payroll-policy.js';
 import { employeeLetterHtml, letterDue, letterMilestone, LETTER_TYPES } from '../lib/employee-letters.js';
+import { addCalendarMonths } from '../lib/leave-policy.js';
 import { sendDocument } from '../lib/document-pdf.js';
 
 const router = Router();
@@ -19,6 +20,7 @@ const employeeSchema = z.object({
   departmentId: z.number().int().positive().optional(),
   designation: z.string().max(120).default(''),
   workerType: z.enum(['Office', 'Site']).default('Site'),
+  employmentType: z.enum(['Permanent','Probation','Temporary','Casual','Contract']).default('Permanent'),
   phone: z.string().max(40).optional(),
   email: z.string().email().optional().or(z.literal('')),
   joinDate: isoDate.nullable().optional(),
@@ -37,8 +39,9 @@ const employeeSchema = z.object({
   payrollCategory: z.enum(PAYROLL_CATEGORIES).default('Site labourer'),
   payrollCompanyId: z.number().int().positive().default(1),
   compensationEffectiveFrom: isoDate.optional(),
-  epfEligible: z.boolean().default(false),
-  etfEligible: z.boolean().default(false),
+  epfEligible: z.boolean().default(true),
+  etfEligible: z.boolean().default(true),
+  contributionStartDate: isoDate.nullable().optional(),
   customOfficeOtRate: z.number().nonnegative().nullable().optional(),
   customSiteOtRate: z.number().nonnegative().nullable().optional(),
   customTravelOtRate: z.number().nonnegative().nullable().optional(),
@@ -50,9 +53,11 @@ const listQuery = `SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.sta
   e.birth_date birthDate,e.nic_number nicNumber,e.additional_phone_1 additionalPhone1,e.additional_phone_2 additionalPhone2,
   e.residential_address residentialAddress,e.permanent_address permanentAddress,e.job_description jobDescription,e.allowance_eligibility allowanceEligibility,
   e.basic_salary basicSalary,e.daily_rate dailyRate,e.weekly_rate weeklyRate,e.overtime_rate overtimeRate,
-  e.pay_basis payBasis,e.pay_frequency payFrequency,e.payroll_category payrollCategory,
+  e.pay_basis payBasis,e.pay_frequency payFrequency,e.payroll_category payrollCategory,e.employment_type employmentType,
   e.payroll_company_id payrollCompanyId,
   e.compensation_effective_from compensationEffectiveFrom,e.epf_eligible epfEligible,e.etf_eligible etfEligible,
+  e.contribution_start_date contributionStartDate,
+  e.annual_leave_entitlement annualLeaveEntitlement,e.casual_leave_entitlement casualLeaveEntitlement,
   e.custom_office_ot_rate customOfficeOtRate,e.custom_site_ot_rate customSiteOtRate,e.custom_travel_ot_rate customTravelOtRate,
   e.department_id departmentId,d.name department,
   e.notes,e.photo_url photoUrl,e.biometric_id biometricId,e.worker_type workerType,e.current_project_id currentProjectId,cp.name currentProject
@@ -68,7 +73,7 @@ const listQuery = `SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.sta
  * without them rather than a different, second endpoint to keep in step.
  */
 const PAY_FIELDS = ['basicSalary', 'dailyRate', 'weeklyRate', 'overtimeRate', 'payBasis', 'payFrequency',
-  'payrollCategory', 'payrollCompanyId', 'compensationEffectiveFrom', 'epfEligible', 'etfEligible',
+  'payrollCategory', 'payrollCompanyId', 'compensationEffectiveFrom', 'epfEligible', 'etfEligible', 'contributionStartDate',
   'customOfficeOtRate', 'customSiteOtRate', 'customTravelOtRate'];
 const seesPay = req => ['hr.payroll', 'hr.manage'].some(key => req.user.permissions.includes(key));
 const withoutPay = row => {
@@ -77,6 +82,66 @@ const withoutPay = row => {
   return copy;
 };
 const forViewer = (req, rows) => (seesPay(req) ? rows : (Array.isArray(rows) ? rows.map(withoutPay) : withoutPay(rows)));
+
+const leavePolicyFor = async date => getOne(`SELECT * FROM leave_policies WHERE effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1`, [date]);
+router.get('/leave/settings', auth, permit('hr.leave','hr.manage'), wrap(async (_req,res) => {
+  const policies = await query('SELECT * FROM leave_policies ORDER BY effective_from DESC,id DESC');
+  res.json({ policies, active: policies.find(row => String(row.effective_from).slice(0,10) <= today()) || null });
+}));
+router.post('/leave/settings', auth, permit('hr.manage'), validate(z.object({
+  effectiveFrom: isoDate, annualDefault: z.number().min(0).max(365), casualDefault: z.number().min(0).max(365),
+  monthlyLimit: z.number().min(1).max(31), waitingMonths: z.number().int().min(0).max(60),
+  allowUnpaidDuringWait: z.boolean()
+})), wrap(async (req,res) => {
+  const b=req.body;
+  try {
+    const result=await query(`INSERT INTO leave_policies
+      (effective_from,annual_default,casual_default,monthly_limit,waiting_months,allow_unpaid_during_wait,created_by)
+      VALUES (?,?,?,?,?,?,?)`,[b.effectiveFrom,b.annualDefault,b.casualDefault,b.monthlyLimit,b.waitingMonths,b.allowUnpaidDuringWait,req.user.id]);
+    await audit(pool,req.user.id,'CREATE','leave_policy',result.insertId,null,b,req.ip);
+    res.status(201).json({id:result.insertId});
+  } catch(error) { if(error.code==='ER_DUP_ENTRY') return res.status(409).json({error:'A leave policy already starts on this date. Choose a different effective date.'}); throw error; }
+}));
+router.get('/:id/leave-entitlement',auth,permit('hr.leave','hr.manage'),wrap(async(req,res)=>{
+  const row=await getOne('SELECT id,annual_leave_entitlement annual,casual_leave_entitlement casual FROM employees WHERE id=?',[req.params.id]);
+  if(!row)return res.status(404).json({error:'Employee not found.'});
+  res.json(row);
+}));
+router.put('/:id/leave-entitlement',auth,permit('hr.manage'),validate(z.object({annual:z.number().min(0).max(365),casual:z.number().min(0).max(365)})),wrap(async(req,res)=>{
+  const before=await getOne('SELECT annual_leave_entitlement annual,casual_leave_entitlement casual FROM employees WHERE id=?',[req.params.id]);
+  if(!before)return res.status(404).json({error:'Employee not found.'});
+  await query('UPDATE employees SET annual_leave_entitlement=?,casual_leave_entitlement=? WHERE id=?',[req.body.annual,req.body.casual,req.params.id]);
+  await audit(pool,req.user.id,'UPDATE','leave_entitlement',req.params.id,before,req.body,req.ip);
+  res.json({id:Number(req.params.id),...req.body});
+}));
+
+/* Banking details have their own HR-only route; they never travel with a general profile. */
+const bankAccountSchema = z.object({
+  bankName: z.string().trim().min(2).max(140),
+  branchName: z.string().trim().min(2).max(140),
+  accountNumber: z.string().trim().regex(/^[A-Za-z0-9 /-]{4,80}$/, 'Enter a valid account number (4–80 letters or digits).'),
+  accountHolderName: z.string().trim().min(2).max(180)
+});
+router.get('/:id/bank-account', auth, permit('hr.payroll','hr.manage'), wrap(async (req, res) => {
+  const employee = await getOne('SELECT id FROM employees WHERE id=?', [req.params.id]);
+  if (!employee) return res.status(404).json({ error: 'Employee not found.' });
+  const account = await getOne(`SELECT bank_name bankName,branch_name branchName,account_number accountNumber,
+    account_holder_name accountHolderName,updated_at updatedAt FROM employee_bank_accounts WHERE employee_id=?`, [req.params.id]);
+  res.json(account || null);
+}));
+router.put('/:id/bank-account', auth, permit('hr.manage'), validate(bankAccountSchema), wrap(async (req, res) => {
+  const employee = await getOne('SELECT id FROM employees WHERE id=?', [req.params.id]);
+  if (!employee) return res.status(404).json({ error: 'Employee not found.' });
+  const before = await getOne('SELECT bank_name,branch_name,account_number,account_holder_name FROM employee_bank_accounts WHERE employee_id=?', [req.params.id]);
+  const b = req.body;
+  await query(`INSERT INTO employee_bank_accounts (employee_id,bank_name,branch_name,account_number,account_holder_name,updated_by)
+    VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE bank_name=VALUES(bank_name),branch_name=VALUES(branch_name),
+    account_number=VALUES(account_number),account_holder_name=VALUES(account_holder_name),updated_by=VALUES(updated_by)`,
+  [req.params.id,b.bankName,b.branchName,b.accountNumber,b.accountHolderName,req.user.id]);
+  await audit(pool, req.user.id, before ? 'UPDATE' : 'CREATE', 'employee_bank_account', employee.id,
+    before && { ...before, account_number: 'REDACTED' }, { bank_name: b.bankName, branch_name: b.branchName, account_number: 'REDACTED', account_holder_name: b.accountHolderName }, req.ip);
+  res.json({ saved: true });
+}));
 
 /* Departments */
 router.get('/departments', auth, permit('hr.view','hr.manage'), wrap(async (_req, res) => res.json(await query(`SELECT d.id,d.name,d.description,
@@ -374,6 +439,9 @@ router.post('/', auth, permit('hr.manage'), validate(employeeSchema), wrap(async
       body.customTravelOtRate ?? null, body.status, body.notes || null]);
     await query(`UPDATE employees SET birth_date=?,nic_number=?,additional_phone_1=?,additional_phone_2=?,residential_address=?,permanent_address=? WHERE id=?`,
       [body.birthDate || null,body.nicNumber || null,body.additionalPhone1 || null,body.additionalPhone2 || null,body.residentialAddress || null,body.permanentAddress || null,result.insertId]);
+    const leavePolicy=await leavePolicyFor(today());
+    await query('UPDATE employees SET contribution_start_date=?,employment_type=?,annual_leave_entitlement=?,casual_leave_entitlement=? WHERE id=?',
+      [body.contributionStartDate || body.joinDate || null, body.employmentType,leavePolicy?.annual_default??14,leavePolicy?.casual_default??7,result.insertId]);
     const row = await getOne(`${listQuery} WHERE e.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'employee', row.id, null, row, req.ip);
     res.status(201).json(row);
@@ -427,8 +495,8 @@ router.patch('/:id', auth, permit('hr.manage'), validate(employeeSchema.partial(
     birthDate:'birth_date',nicNumber:'nic_number',additionalPhone1:'additional_phone_1',additionalPhone2:'additional_phone_2',residentialAddress:'residential_address',permanentAddress:'permanent_address',
     departmentId: 'department_id', joinDate: 'join_date', basicSalary: 'basic_salary',
     dailyRate: 'daily_rate', weeklyRate: 'weekly_rate', overtimeRate: 'overtime_rate', workerType: 'worker_type',
-    payBasis: 'pay_basis', payFrequency: 'pay_frequency', payrollCategory: 'payroll_category', payrollCompanyId: 'payroll_company_id',
-    compensationEffectiveFrom: 'compensation_effective_from', epfEligible: 'epf_eligible', etfEligible: 'etf_eligible',
+    payBasis: 'pay_basis', payFrequency: 'pay_frequency', payrollCategory: 'payroll_category', payrollCompanyId: 'payroll_company_id', employmentType: 'employment_type',
+    compensationEffectiveFrom: 'compensation_effective_from', epfEligible: 'epf_eligible', etfEligible: 'etf_eligible', contributionStartDate: 'contribution_start_date',
     customOfficeOtRate: 'custom_office_ot_rate', customSiteOtRate: 'custom_site_ot_rate', customTravelOtRate: 'custom_travel_ot_rate'
   };
   const entries = Object.entries(req.body);
@@ -473,16 +541,23 @@ router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.obje
   return transaction(async connection => {
   const query = async (sql,params) => (await connection.query(sql,params))[0];
   const getOne = async (sql,params) => (await query(sql,params))[0];
-  const employee = await getOne("SELECT id,DATE_FORMAT(DATE_ADD(join_date,INTERVAL 6 MONTH),'%Y-%m-%d') paidEligibleFrom FROM employees WHERE id=? FOR UPDATE",[req.params.id]);
+  const employee = await getOne("SELECT id,join_date,annual_leave_entitlement annual,casual_leave_entitlement casual FROM employees WHERE id=? FOR UPDATE",[req.params.id]);
   if(!employee) return res.status(404).json({error:'Employee not found. Please select an existing employee.'});
   const body = req.body;
+  const policy = await leavePolicyFor(body.fromDate);
+  if (!policy) return res.status(409).json({error:'HR must configure a leave policy for this date before recording leave.'});
+  const eligibleFrom = employee.join_date ? addCalendarMonths(employee.join_date,policy.waiting_months) : null;
   const paymentType = body.paymentType || (body.leaveType==='Unpaid'?'Unpaid':'Paid');
-  if(paymentType==='Paid' && !employee.paidEligibleFrom) return res.status(409).json({error:'Record the employee’s actual employment start date in their profile before requesting paid leave. Registration date is not their employment start date.'});
-  if(paymentType==='Paid' && body.fromDate<employee.paidEligibleFrom) return res.status(409).json({error:`This employee has less than six months of employment and is not eligible for paid leave. Paid leave is available from ${employee.paidEligibleFrom}. Choose unpaid leave or correct the employment start date.`});
+  if(!eligibleFrom) return res.status(409).json({error:'Record the employee’s actual employment start date before requesting leave.'});
+  if(body.fromDate<eligibleFrom && (paymentType==='Paid'||!policy.allow_unpaid_during_wait)) return res.status(409).json({error:`This employee is in the ${policy.waiting_months}-month leave waiting period until ${eligibleFrom}. ${policy.allow_unpaid_during_wait?'Only unpaid leave is allowed now.':'Neither paid nor unpaid leave is allowed under the active HR policy.'}`});
   const days = Math.max(1, Math.round((new Date(body.toDate) - new Date(body.fromDate)) / 86400000) + 1);
   if (body.fromDate.slice(0,4) !== body.toDate.slice(0,4)) return res.status(400).json({error:'Please record leave crossing New Year as two requests, one for each year.'});
-  const used = await getOne(`SELECT COALESCE(SUM(days),0) days FROM leave_requests WHERE employee_id=? AND status!='Rejected' AND YEAR(from_date)=?`,[req.params.id,body.fromDate.slice(0,4)]);
-  if (Number(used.days)+days>14) return res.status(409).json({error:`This employee has ${Math.max(0,14-Number(used.days))} leave day(s) remaining this year. The annual allowance is 14 days, including paid and unpaid leave.`});
+  if (body.fromDate.slice(0,7) !== body.toDate.slice(0,7)) return res.status(400).json({error:'Record leave crossing a month boundary as two requests so each month’s limit can be checked.'});
+  const entitlement = body.leaveType==='Casual' ? Number(employee.casual) : Number(employee.annual);
+  const used = await getOne(`SELECT COALESCE(SUM(days),0) days FROM leave_requests WHERE employee_id=? AND status!='Rejected' AND YEAR(from_date)=? AND ${body.leaveType==='Casual'?"leave_type='Casual'":"leave_type<>'Casual'"}`,[req.params.id,body.fromDate.slice(0,4)]);
+  if (Number(used.days)+days>entitlement) return res.status(409).json({error:`This employee has ${Math.max(0,entitlement-Number(used.days))} ${body.leaveType==='Casual'?'casual':'annual'} leave day(s) remaining this year. HR can edit the employee’s entitlement in their profile.`});
+  const monthly=await getOne(`SELECT COALESCE(SUM(days),0) days FROM leave_requests WHERE employee_id=? AND status!='Rejected' AND DATE_FORMAT(from_date,'%Y-%m')=?`,[req.params.id,body.fromDate.slice(0,7)]);
+  if(Number(monthly.days)+days>Number(policy.monthly_limit))return res.status(409).json({error:`The monthly leave limit is ${policy.monthly_limit} day(s). This employee has ${Math.max(0,Number(policy.monthly_limit)-Number(monthly.days))} day(s) available in ${body.fromDate.slice(0,7)}. Split or shorten the request, or ask HR to update the leave policy.`});
   const overlap = await getOne("SELECT id FROM leave_requests WHERE employee_id=? AND status!='Rejected' AND from_date<=? AND to_date>=?",[req.params.id,body.toDate,body.fromDate]);
   if (overlap) return res.status(409).json({error:'This employee already has leave recorded for these dates. Please check the leave register.'});
   const result = await query('INSERT INTO leave_requests (employee_id,leave_type,from_date,to_date,days,reason) VALUES (?,?,?,?,?,?)',
@@ -499,9 +574,12 @@ router.patch('/leave/:id', auth, permit('hr.manage', 'hr.leave'), validate(z.obj
   const before = await getOne('SELECT * FROM leave_requests WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Leave request not found' });
   if(before.status==='Rejected' && req.body.status!=='Rejected') return res.status(409).json({error:'Please create a new leave request instead of reopening a rejected request, so the annual allowance can be checked again.'});
-  if(req.body.status==='Approved' && before.payment_type==='Paid') {
-    const eligibility=await getOne('SELECT (join_date IS NOT NULL AND DATE_ADD(join_date,INTERVAL 6 MONTH)<=?) eligible FROM employees WHERE id=?',[before.from_date,before.employee_id]);
-    if(!eligibility?.eligible) return res.status(409).json({error:'This employee is not eligible for paid leave on the requested start date. Check their employment start date; paid leave requires six months of employment.'});
+  if(req.body.status==='Approved') {
+    const fromDate=before.from_date instanceof Date?before.from_date.toISOString().slice(0,10):String(before.from_date).slice(0,10);
+    const policy=await leavePolicyFor(fromDate);
+    const eligibility=await getOne('SELECT join_date FROM employees WHERE id=?',[before.employee_id]);
+    const eligibleFrom=eligibility?.join_date&&policy ? addCalendarMonths(eligibility.join_date,policy.waiting_months) : null;
+    if(!eligibleFrom || (fromDate<eligibleFrom && (before.payment_type==='Paid'||!policy.allow_unpaid_during_wait))) return res.status(409).json({error:'This request does not meet the active leave waiting-period rule. Review the employee start date and HR policy before approving.'});
   }
   await query('UPDATE leave_requests SET status=?,decided_by=?,decided_at=NOW() WHERE id=?', [req.body.status, req.user.id, req.params.id]);
   if (req.body.status === 'Approved') await query("UPDATE employees SET status='On leave' WHERE id=?", [before.employee_id]);

@@ -84,6 +84,45 @@ function EmployeeLetters({ employee, companies }) {
   </section>;
 }
 
+function EmployeeBankAccount({ employeeId, canManage }) {
+  const [account, setAccount] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [error, setError] = useState('');
+  const load = () => api(`/employees/${employeeId}/bank-account`).then(row => { setAccount(row); setError(''); })
+    .catch(failure => setError(failure.message));
+  useEffect(() => { load(); }, [employeeId]);
+  return <section className="employee-panel employee-wide-panel">
+    <div className="employee-section-title"><div><span>HR · confidential payroll information</span><h2>Salary bank account</h2></div>
+      {canManage && <button className="icon-btn" type="button" aria-label="Edit salary bank account" onClick={() => setEditing(true)}><PencilLine size={16}/></button>}</div>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {account ? <dl className="employee-details">
+      <div><dt>Bank</dt><dd>{account.bankName}</dd></div><div><dt>Branch</dt><dd>{account.branchName}</dd></div>
+      <div><dt>Account holder</dt><dd>{account.accountHolderName}</dd></div>
+      <div><dt>Account number</dt><dd>•••• {account.accountNumber.slice(-4)}</dd></div>
+    </dl> : <p className="empty-state">No salary bank account recorded. HR can add it here; it is not part of the job description.</p>}
+    {editing && <FormModal title="Salary bank account" close={() => setEditing(false)} label="Save bank details"
+      onSubmit={async values => { await api(`/employees/${employeeId}/bank-account`, { method: 'PUT', body: JSON.stringify(values) }); await load(); }}>
+      <Field name="bankName" label="Bank name" defaultValue={account?.bankName || ''} />
+      <Field name="branchName" label="Branch" defaultValue={account?.branchName || ''} />
+      <Field name="accountHolderName" label="Account-holder name" defaultValue={account?.accountHolderName || ''} />
+      <Field name="accountNumber" label="Account number" defaultValue={account?.accountNumber || ''} />
+      <p className="form-note wide">Only authorised HR and payroll users can view these details. Check the account with the employee before paying salary.</p>
+    </FormModal>}
+  </section>;
+}
+
+function LeaveEntitlement({ employeeId, canManage }) {
+  const [entitlement,setEntitlement]=useState(null),[editing,setEditing]=useState(false),[error,setError]=useState('');
+  const load=()=>api(`/employees/${employeeId}/leave-entitlement`).then(setEntitlement).catch(e=>setError(e.message));
+  useEffect(()=>{load();},[employeeId]);
+  return <section className="employee-panel employee-wide-panel"><div className="employee-section-title"><div><span>HR leave administration</span><h2>Individual leave entitlement</h2></div>{canManage&&<button className="icon-btn" aria-label="Edit leave entitlement" onClick={()=>setEditing(true)}><PencilLine size={16}/></button>}</div>
+    {error&&<p className="form-error" role="alert">{error}</p>}
+    {entitlement&&<dl className="employee-details"><div><dt>Annual / other leave</dt><dd>{entitlement.annual} days per year</dd></div><div><dt>Casual leave</dt><dd>{entitlement.casual} days per year</dd></div></dl>}
+    <p className="form-note">Monthly limits and waiting-period rules come from HR leave settings. Changes to this employee's entitlement are audited.</p>
+    {editing&&<FormModal title="Edit leave entitlement" close={()=>setEditing(false)} label="Save entitlement" onSubmit={async v=>{await api(`/employees/${employeeId}/leave-entitlement`,{method:'PUT',body:JSON.stringify({annual:Number(v.annual),casual:Number(v.casual)})});await load();}}><Field name="annual" label="Annual / other leave days per year" type="number" min="0" max="365" step="0.5" defaultValue={entitlement?.annual??14}/><Field name="casual" label="Casual leave days per year" type="number" min="0" max="365" step="0.5" defaultValue={entitlement?.casual??7}/></FormModal>}
+  </section>;
+}
+
 function TrendBars({ points }) {
   const shown = points.slice(-12);
   return <div className="people-trend" aria-label="Monthly attendance trend">
@@ -117,7 +156,7 @@ function ReviewRadar({ review }) {
   </div>;
 }
 
-export default function EmployeeProfile({ employeeId, close, canManage, canConduct, canAssets, canCorrect, projects = [], departments = [], companies = [], reloadPeople }) {
+export default function EmployeeProfile({ employeeId, close, canManage, canPayroll, canConduct, canAssets, canCorrect, projects = [], departments = [], companies = [], reloadPeople }) {
   const [employee, setEmployee] = useState(null);
   const [error, setError] = useState('');
   const [correcting, setCorrecting] = useState(null);
@@ -206,12 +245,14 @@ export default function EmployeeProfile({ employeeId, close, canManage, canCondu
           <div><dt><Mail size={14} />Email</dt><dd>{employee.email || 'Not recorded'}</dd></div>
           <div><dt><BriefcaseBusiness size={14} />Department</dt><dd>{employee.department || 'Not assigned'}</dd></div>
           <div><dt><UserRound size={14} />Employee type</dt><dd>{employee.workerType} employee</dd></div>
+          <div><dt>Employment classification</dt><dd>{employee.employmentType || 'Permanent'}</dd></div>
+          {employee.contributionStartDate !== undefined && <div><dt>Contribution start date</dt><dd>{employee.contributionStartDate ? shortDate(employee.contributionStartDate) : 'Employment start date'}</dd></div>}
           {employee.payBasis !== undefined && <div><dt>Pay arrangement</dt><dd>{employee.payBasis} · {employee.payFrequency}</dd></div>}
           {employee.payrollCategory !== undefined && <div><dt>Overtime policy</dt><dd>{employee.payrollCategory}</dd></div>}
           {employee.basicSalary !== undefined && <div><dt>Monthly basic</dt><dd>{rupees(employee.basicSalary)}</dd></div>}
           {employee.weeklyRate !== undefined && Number(employee.weeklyRate) > 0 && <div><dt>Weekly rate</dt><dd>{rupees(employee.weeklyRate)}</dd></div>}
           {employee.dailyRate !== undefined && <div><dt>Daily rate</dt><dd>{rupees(employee.dailyRate)}</dd></div>}
-          {employee.epfEligible !== undefined && <div><dt>Statutory eligibility</dt><dd>EPF {employee.epfEligible ? 'eligible' : 'not eligible'} · ETF {employee.etfEligible ? 'eligible' : 'not eligible'}</dd></div>}
+          {employee.epfEligible !== undefined && <div><dt>Contribution switches</dt><dd>EPF {employee.epfEligible ? 'enabled' : 'disabled'} · ETF {employee.etfEligible ? 'enabled' : 'disabled'} (GKUC policy is checked at payroll)</dd></div>}
         </dl>
         {employee.notes && <p className="employee-notes">{employee.notes}</p>}
         {editing && <PersonalDetailsForm employee={employee} departments={departments} companies={companies}
@@ -276,6 +317,8 @@ export default function EmployeeProfile({ employeeId, close, canManage, canCondu
     {(canManage||canAssets)&&<EmployeeAssets employeeId={employee.id} canEdit={canAssets}/>}
     {canConduct && <ConductHistory employeeId={employee.id} />}
     {canManage && <EmployeeLetters employee={employee} companies={companies} />}
+    {(canManage || canPayroll) && <EmployeeBankAccount employeeId={employee.id} canManage={canManage} />}
+    {canManage && <LeaveEntitlement employeeId={employee.id} canManage={canManage} />}
     <section className="employee-panel employee-wide-panel employee-documents">
       <Attachments ownerType="employee" ownerId={employee.id} title="Employee documents"
         canUpload={canManage} canDelete={canManage} withCategory withExpiry />
@@ -312,7 +355,9 @@ function PersonalDetailsForm({ employee, departments, companies, close, reload }
       customSiteOtRate: optionalNumber(values.customSiteOtRate),
       customTravelOtRate: optionalNumber(values.customTravelOtRate),
       epfEligible: values.epfEligible === 'true',
-      etfEligible: values.etfEligible === 'true'
+      etfEligible: values.etfEligible === 'true',
+      contributionStartDate: values.contributionStartDate || null,
+      employmentType: values.employmentType
     });
     await reload();
   }}>
@@ -324,6 +369,8 @@ function PersonalDetailsForm({ employee, departments, companies, close, reload }
     <Field required={false} name="designation" label="Designation / trade" defaultValue={employee.designation} />
     <SelectField required={false} name="workerType" label="Employee type" defaultValue={employee.workerType}
       options={[["Office", "Office employee"], ["Site", "Site worker"]]} />
+    <SelectField required={false} name="employmentType" label="Employment classification" defaultValue={employee.employmentType || 'Permanent'}
+      options={['Permanent','Probation','Temporary','Casual','Contract']} />
     <SelectField required={false} name="status" label="Employment status" defaultValue={employee.status}
       options={['Active', 'On leave', 'Suspended', 'Left']} />
     <Field name="phone" label="Phone" defaultValue={employee.phone || ''} required={false} />
@@ -353,6 +400,8 @@ function PersonalDetailsForm({ employee, departments, companies, close, reload }
       options={[[false, 'No'], [true, 'Yes']]} />
     <SelectField required={false} name="etfEligible" label="ETF eligible" defaultValue={String(Boolean(employee.etfEligible))}
       options={[[false, 'No'], [true, 'Yes']]} />
+    <Field required={false} name="contributionStartDate" label="EPF / ETF contributions start on" type="date"
+      defaultValue={inputDate(employee.contributionStartDate || employee.joinDate)} />
     <TextArea name="notes" label="HR notes" defaultValue={employee.notes || ''} required={false} rows={3} />
   </FormModal>;
 }

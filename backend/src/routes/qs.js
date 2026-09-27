@@ -9,6 +9,7 @@ import { commitmentsDocument, documentContext, quotationDocument } from '../lib/
 import { sendDocument } from '../lib/document-pdf.js';
 import { notify } from '../alerts.js';
 import { resolveProjectManager } from '../lib/project-manager.js';
+import { projectAwardState } from '../lib/project-award.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -1518,6 +1519,7 @@ router.post('/subcontractor-rates',auth,permit('subcontractors.manage'),validate
   const [project,sub]=await Promise.all([getOne('SELECT id FROM projects WHERE id=? AND active=1',[b.projectId]),
     getOne('SELECT id FROM subcontractors WHERE id=? AND active=1',[b.subcontractorId])]);
   if(!project||!sub)return res.status(404).json({error:'Project or subcontractor not found'});
+  if (!(await projectAwardState(b.projectId)).confirmed) return res.status(409).json({ error: 'Confirm the client quotation or record the formal project award before agreeing subcontractor project rates.' });
   try{const result=await query(`INSERT INTO subcontractor_project_rates
     (project_id,subcontractor_id,work_item,unit,rate,agreed_on,valid_until,notes,created_by) VALUES (?,?,?,?,?,?,?,?,?)`,
     [b.projectId,b.subcontractorId,b.workItem,b.unit,b.rate,b.agreedOn||null,b.validUntil||null,b.notes||null,req.user.id]);
@@ -1545,6 +1547,7 @@ router.post('/subcontractor-bills', auth, permit('subcontractors.manage'), valid
   dueDate: isoDate.optional()
 })), wrap(async (req, res) => {
   const body = req.body;
+  if (!(await projectAwardState(body.projectId))?.confirmed) return res.status(409).json({ error: 'Confirm the client quotation or record the formal project award before recording a subcontractor bill.' });
   try {
     const id = await transaction(async connection => {
       const [result] = await connection.execute(`INSERT INTO subcontractor_bills

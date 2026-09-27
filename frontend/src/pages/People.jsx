@@ -25,6 +25,7 @@ const TABS = [
   ['Biometric import', ['hr.attendance']],
   ['Leave', ['hr.view', 'hr.leave']],
   ['Leave register', ['hr.view', 'hr.leave']],
+  ['Leave settings', ['hr.manage']],
   ['Overtime', ['hr.payroll']],
   ['Payroll', ['hr.payroll']],
   ['Payroll Inputs',['hr.payroll']],
@@ -71,7 +72,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     Departments: can.hr && 'Add department'
   };
 
-  if (employeeId) return <EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} canConduct={can.conduct} canAssets={can.assets}
+  if (employeeId) return <EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} canPayroll={can.payroll} canConduct={can.conduct} canAssets={can.assets}
     canCorrect={can.attendance || can.hrImport} projects={allProjects} departments={data.departments}
     companies={companies} reloadPeople={reload} />;
 
@@ -89,6 +90,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     {tab === 'Leave register' && <LeaveRegister />}
     {tab === 'Biometric import' && <BiometricImport data={data} projects={allProjects} reload={reload} can={can} />}
     {tab === 'Leave' && <Leave can={can} />}
+    {tab === 'Leave settings' && <LeaveSettings />}
     {tab === 'Overtime' && <Overtime can={can} />}
     {tab === 'Payroll' && <Payroll can={can} companyId={companyId} />}
     {tab === 'Payroll settings' && <PayrollSettings data={data} reload={reload} companies={companies} companyId={companyId} company={company} />}
@@ -285,11 +287,16 @@ function PolicyForm({ companyId, policy, close, reload }) {
       supervisorSiteOtRate: Number(values.supervisorSiteOtRate), supervisorTravelOtRate: Number(values.supervisorTravelOtRate),
       epfEmployeeRate: Number(values.epfEmployeeRate), epfEmployerRate: Number(values.epfEmployerRate),
       etfEmployerRate: Number(values.etfEmployerRate), epfBasis: 'Basic earnings', etfBasis: 'Basic earnings',
-      hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),maxDailyOt:Number(values.maxDailyOt),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'}
+      hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),maxDailyOt:Number(values.maxDailyOt),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'},
+      statutoryRules:{permanentOnly:values.permanentOnly==='true',minimumMonthlySalary:Number(values.minimumMonthlySalary),weeklyWeeksPerMonth:Number(values.weeklyWeeksPerMonth),dailyDaysPerMonth:Number(values.dailyDaysPerMonth)}
     });
     await reload();
   }}>
     <Field name="effectiveFrom" label="Effective from" type="date" defaultValue={todayInput()} />
+    <SelectField name="permanentOnly" label="GKUC EPF / ETF policy — permanent employees only" options={[[true,'Yes'],[false,'No']]} defaultValue={String((typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.permanentOnly ?? true)} />
+    <Field name="minimumMonthlySalary" label="Minimum monthly-equivalent basic salary (LKR)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.minimumMonthlySalary ?? 30000} />
+    <Field name="weeklyWeeksPerMonth" label="Weeks per month for weekly-rate comparison" type="number" min="0.01" step="0.000001" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.weeklyWeeksPerMonth ?? 52/12} />
+    <Field name="dailyDaysPerMonth" label="Days per month for daily-rate comparison" type="number" min="0.01" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.dailyDaysPerMonth ?? 25} />
     {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],otInterval:['OT rounding interval (hours, rounded down)',0.5,'number'],minimumOt:['Minimum payable OT (hours)',0.5,'number'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number'],transportDivisor:['Monthly transport proration divisor (days)',25,'number'],fullTransportDays:['Full transport threshold — confirm with HR','', 'number'],longDistanceKm:['Long-distance threshold (km, greater than)',50,'number'],longDistancePayment:['Long-distance allowance per qualifying claim (LKR)',500,'number'],mileageRate:['Motorcycle mileage rate (LKR/km)',17,'number'],fixedTravelPayment:['Fixed office-travel payment (LKR)',300,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} required={name!=='fullTransportDays'} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
     <SelectField name="fullTransportComparison" label="Full transport threshold comparison" options={['At least','More than']} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.fullTransportComparison||'At least'}/>
     {['allowMileageAndFixed','countLeaveForTransport','countAbsenceForTransport'].map(name=><SelectField key={name} name={name} label={{allowMileageAndFixed:'Allow mileage and fixed travel together',countLeaveForTransport:'Count leave days for transport',countAbsenceForTransport:'Count absent days for transport'}[name]} options={[[false,'No'],[true,'Yes']]} defaultValue={String((typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]||false)}/>)}
@@ -302,7 +309,7 @@ function PolicyForm({ companyId, policy, close, reload }) {
     <Field name="epfEmployeeRate" label="EPF employee rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.epfEmployeeRate ?? 0} />
     <Field name="epfEmployerRate" label="EPF employer rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.epfEmployerRate ?? 0} />
     <Field name="etfEmployerRate" label="ETF employer rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.etfEmployerRate ?? 0} />
-    <p className="form-note wide">EPF and ETF use basic earnings only, after unpaid leave. Overtime, allowances and reimbursements are excluded. Eligibility is set separately for each employee in their compensation profile.</p>
+    <p className="form-note wide">These are GKUC's configurable payroll rules. Eligibility requires the selected employment classification, monthly-equivalent basic salary threshold, contribution start date and the employee's EPF/ETF switches. Changing rules creates a new effective-dated policy; approved salary sheets stay unchanged.</p>
     <p className="form-note wide">Saving creates a new dated policy. Previously recorded overtime and completed salary sheets keep their original rates.</p>
   </FormModal>;
 }
@@ -315,6 +322,7 @@ function PayProfileForm({ employee, companies, close, reload }) {
       basicSalary: Number(values.basicSalary), weeklyRate: Number(values.weeklyRate), dailyRate: Number(values.dailyRate),
       compensationEffectiveFrom: values.compensationEffectiveFrom,
       epfEligible: values.epfEligible === 'true', etfEligible: values.etfEligible === 'true',
+      contributionStartDate: values.contributionStartDate || null,
       customOfficeOtRate: values.customOfficeOtRate === '' ? null : Number(values.customOfficeOtRate),
       customSiteOtRate: values.customSiteOtRate === '' ? null : Number(values.customSiteOtRate),
       customTravelOtRate: values.customTravelOtRate === '' ? null : Number(values.customTravelOtRate),
@@ -333,6 +341,8 @@ function PayProfileForm({ employee, companies, close, reload }) {
     <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" step="0.01" defaultValue={employee.dailyRate || 0} />
     <SelectField name="epfEligible" label="EPF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue={String(Boolean(employee.epfEligible))} />
     <SelectField name="etfEligible" label="ETF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue={String(Boolean(employee.etfEligible))} />
+    <Field name="contributionStartDate" label="EPF / ETF contributions start on" type="date" required={false} defaultValue={inputDate(employee.contributionStartDate || employee.joinDate)} />
+    <p className="form-note wide">GKUC's active policy also checks permanent status, the monthly-equivalent salary threshold and this contribution start date. Change those rules in Payroll settings when the company policy changes.</p>
     <Field name="customOfficeOtRate" label="Custom office OT (optional)" type="number" min="0" step="0.01" required={false} defaultValue={employee.customOfficeOtRate ?? ''} />
     <Field name="customSiteOtRate" label="Custom site OT (optional)" type="number" min="0" step="0.01" required={false} defaultValue={employee.customSiteOtRate ?? ''} />
     <Field name="customTravelOtRate" label="Custom travel OT (optional)" type="number" min="0" step="0.01" required={false} defaultValue={employee.customTravelOtRate ?? ''} />
@@ -651,7 +661,9 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
       payrollCompanyId: Number(values.payrollCompanyId),
       compensationEffectiveFrom: values.compensationEffectiveFrom || undefined,
       epfEligible: values.epfEligible === 'true',
-      etfEligible: values.etfEligible === 'true'
+      etfEligible: values.etfEligible === 'true',
+      contributionStartDate: values.contributionStartDate || values.joinDate || null,
+      employmentType: values.employmentType
     });
     await reload();
   }}>
@@ -661,6 +673,7 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
     <SelectField name="departmentId" label="Department" required={false} options={[["", "Not recorded"], ...data.departments.map(department => [department.id, department.name])]} />
     <Field name="designation" label="Designation / trade" required={false} />
     <SelectField required={false} name="workerType" label="Employee type" options={[["Office", "Office employee"], ["Site", "Site worker"]]} />
+    <SelectField required={false} name="employmentType" label="Employment classification" options={['Permanent','Probation','Temporary','Casual','Contract']} defaultValue="Permanent" />
     <Field name="phone" label="Phone" required={false} />
     <Field name="email" label="Email" type="email" required={false} />
     <Field required={false} name="joinDate" label="Employment start date" type="date" />
@@ -673,8 +686,9 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
     <Field required={false} name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue="0" />
     <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" required={false} />
     <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" required={false} />
-    <SelectField required={false} name="epfEligible" label="EPF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
-    <SelectField required={false} name="etfEligible" label="ETF eligible" options={[[false, 'No'], [true, 'Yes']]} defaultValue="false" />
+    <SelectField required={false} name="epfEligible" label="EPF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue="true" />
+    <SelectField required={false} name="etfEligible" label="ETF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue="true" />
+    <Field required={false} name="contributionStartDate" label="EPF / ETF contributions start on" type="date" />
     <Field name="overtimeRate" label="Legacy/custom OT rate (LKR/h)" type="number" min="0" defaultValue="0" required={false} />
   </FormModal>;
 }
@@ -708,6 +722,23 @@ function AttendanceForm({ data, close, reload }) {
   </FormModal>;
 }
 
+function LeaveSettings(){
+  const [settings,setSettings]=useState(null),[editing,setEditing]=useState(false),[error,setError]=useState('');
+  const load=()=>api('/employees/leave/settings').then(setSettings).catch(e=>setError(e.message));
+  useEffect(()=>{load();},[]);
+  const p=settings?.active;
+  return <section className="panel"><div className="panel-title"><h2>Leave policy</h2><button className="primary" onClick={()=>setEditing(true)}>Create dated policy</button></div>
+    {error&&<p className="form-error" role="alert">{error}</p>}
+    <p className="form-note">The active policy applies by leave start date. Employee-specific annual and casual entitlements can be edited in each employee profile.</p>
+    {p&&<div className="attendance-summary"><div className="summary"><div><strong>{p.annual_default}</strong><span>Annual default for new employees</span></div></div><div className="summary"><div><strong>{p.casual_default}</strong><span>Casual default for new employees</span></div></div><div className="summary"><div><strong>{p.monthly_limit}</strong><span>Maximum days in one month</span></div></div><div className="summary"><div><strong>{p.waiting_months} months</strong><span>Leave waiting period</span></div></div></div>}
+    {p&&<p className="form-note">Unpaid leave during waiting period: {p.allow_unpaid_during_wait?'Allowed':'Blocked'} · Effective from {shortDate(p.effective_from)}</p>}
+    {editing&&<FormModal title="Create leave policy" close={()=>setEditing(false)} label="Save dated policy" onSubmit={async v=>{await post('/employees/leave/settings',{effectiveFrom:v.effectiveFrom,annualDefault:Number(v.annualDefault),casualDefault:Number(v.casualDefault),monthlyLimit:Number(v.monthlyLimit),waitingMonths:Number(v.waitingMonths),allowUnpaidDuringWait:v.allowUnpaidDuringWait==='true'});await load();}}>
+      <Field name="effectiveFrom" label="Effective from" type="date" defaultValue={todayInput()}/><Field name="annualDefault" label="Annual default (days)" type="number" min="0" max="365" step="0.5" defaultValue={p?.annual_default??14}/><Field name="casualDefault" label="Casual default (days)" type="number" min="0" max="365" step="0.5" defaultValue={p?.casual_default??7}/><Field name="monthlyLimit" label="Maximum leave days per month" type="number" min="1" max="31" step="0.5" defaultValue={p?.monthly_limit??5}/><Field name="waitingMonths" label="Waiting period after start (months)" type="number" min="0" max="60" defaultValue={p?.waiting_months??6}/><SelectField name="allowUnpaidDuringWait" label="Allow unpaid leave during waiting period" options={[[false,'No'],[true,'Yes']]} defaultValue={String(Boolean(p?.allow_unpaid_during_wait))}/>
+      <p className="form-note wide">The monthly cap counts paid and unpaid leave. Annual/other and casual leave have separate annual entitlements. Save a future effective date to change policy later.</p>
+    </FormModal>}
+  </section>;
+}
+
 function LeaveForm({ data, close, reload }) {
   const [employeeId,setEmployeeId]=useState(String(data.employees[0]?.id || ''));
   const [fromDate,setFromDate]=useState(todayInput());
@@ -722,6 +753,8 @@ function LeaveForm({ data, close, reload }) {
   }
   const eligible=eligibleFrom && fromDate>=eligibleFrom;
   const leaveTypes = useOptions('leave.type');
+  const [policy,setPolicy]=useState(null);
+  useEffect(()=>{api('/employees/leave/settings').then(value=>setPolicy(value.active)).catch(()=>{});},[]);
   return <FormModal title="Record leave" close={close} label="Save leave request" onSubmit={async values => {
     await post(`/employees/${values.employeeId}/leave`, {
       leaveType: values.leaveType,
@@ -734,9 +767,9 @@ function LeaveForm({ data, close, reload }) {
   }}>
     <label>Employee<select name="employeeId" required value={employeeId} onChange={event=>setEmployeeId(event.target.value)}>{data.employees.map(employee=><option key={employee.id} value={employee.id}>{employee.name}</option>)}</select></label>
     <SelectField name="leaveType" label="Leave type" options={leaveTypes} />
-    {!eligible && <p className="form-note wide" role="alert">{start ? `This employee has less than six months of employment on the leave start date and is not eligible for paid leave. Eligible from ${shortDate(eligibleFrom)}. Choose unpaid leave.` : 'Employment start date is not recorded. Update the employee profile before requesting paid leave. Unpaid leave can still be recorded.'}</p>}
+    {!eligible && <p className="form-note wide" role="alert">{start ? `This employee is still in the leave waiting period. Paid leave is available from ${shortDate(eligibleFrom)}. ${policy?.allow_unpaid_during_wait?'Unpaid leave may be requested.':'Unpaid leave is also blocked by the active policy.'}` : 'Employment start date is not recorded. Update the employee profile before requesting leave.'}</p>}
     <SelectField name="paymentType" label="Leave payment" options={['Paid','Unpaid']} />
-    <p className="form-note wide">Annual allowance: 14 calendar days. Paid and unpaid requests count toward this allowance. Approved unpaid leave is deducted in payroll.</p>
+    <p className="form-note wide">Annual/other entitlement: {employee?.annualLeaveEntitlement??policy?.annual_default??14} days · Casual entitlement: {employee?.casualLeaveEntitlement??policy?.casual_default??7} days · Monthly maximum: {policy?.monthly_limit??5} days. Paid and unpaid requests count. Approved unpaid leave is deducted in payroll.</p>
     <label>From<input name="fromDate" type="date" required value={fromDate} onChange={event=>setFromDate(event.target.value)} /></label>
     <Field name="toDate" label="To" type="date" defaultValue={todayInput()} />
     <TextArea name="reason" label="Reason" />

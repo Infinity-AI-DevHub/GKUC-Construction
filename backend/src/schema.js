@@ -154,6 +154,16 @@ async function createCoreTables() {
     start_date DATE NULL, end_date DATE NULL, active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_project_progress CHECK(progress BETWEEN 0 AND 100)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS project_awards (
+    project_id BIGINT UNSIGNED PRIMARY KEY,
+    award_date DATE NOT NULL,
+    reference VARCHAR(120) NOT NULL,
+    notes VARCHAR(1000) NULL,
+    recorded_by BIGINT UNSIGNED NOT NULL,
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_project_award_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_project_award_user FOREIGN KEY(recorded_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS tasks (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, title VARCHAR(220) NOT NULL, project_id BIGINT UNSIGNED NOT NULL, assignee VARCHAR(120) NOT NULL,
     due VARCHAR(100) NOT NULL, priority ENUM('Low','Medium','High') NOT NULL, status ENUM('Not started','In progress','Blocked','Completed','Approved') NOT NULL,
@@ -295,6 +305,11 @@ async function createHrTables() {
     CONSTRAINT fk_candidate_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
     CONSTRAINT fk_candidate_author FOREIGN KEY(created_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await query("ALTER TABLE hiring_candidates MODIFY status ENUM('Applicant','Screening','Shortlisted','Interviewing','Selected','Dropped','Hired') NOT NULL DEFAULT 'Applicant'");
+  await addColumn('hiring_candidates','screening_scores','JSON NULL');
+  await addColumn('hiring_candidates','screening_notes','TEXT NULL');
+  await addColumn('hiring_candidates','screened_by','BIGINT UNSIGNED NULL');
+  await addColumn('hiring_candidates','screened_at','DATETIME NULL');
   await query(`CREATE TABLE IF NOT EXISTS hiring_interviews (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,candidate_id BIGINT UNSIGNED NOT NULL,
     scheduled_at DATETIME NOT NULL,interviewer VARCHAR(120) NOT NULL,location VARCHAR(300) NULL,
@@ -323,6 +338,20 @@ async function createHrTables() {
   await addColumn('employees', 'compensation_effective_from', 'DATE NULL');
   await addColumn('employees', 'epf_eligible', 'BOOLEAN NOT NULL DEFAULT FALSE');
   await addColumn('employees', 'etf_eligible', 'BOOLEAN NOT NULL DEFAULT FALSE');
+  await addColumn('employees', 'contribution_start_date', 'DATE NULL');
+  await addColumn('employees', 'employment_type', "ENUM('Permanent','Probation','Temporary','Casual','Contract') NOT NULL DEFAULT 'Permanent'");
+  await addColumn('payroll_policies', 'statutory_rules', 'JSON NULL');
+  await query(`CREATE TABLE IF NOT EXISTS employee_bank_accounts (
+    employee_id BIGINT UNSIGNED PRIMARY KEY,
+    bank_name VARCHAR(140) NOT NULL,
+    branch_name VARCHAR(140) NOT NULL,
+    account_number VARCHAR(80) NOT NULL,
+    account_holder_name VARCHAR(180) NOT NULL,
+    updated_by BIGINT UNSIGNED NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_employee_bank_employee FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+    CONSTRAINT fk_employee_bank_user FOREIGN KEY(updated_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await addColumn('employees', 'custom_office_ot_rate', 'DECIMAL(10,2) NULL');
   await addColumn('employees', 'custom_site_ot_rate', 'DECIMAL(10,2) NULL');
   await addColumn('employees', 'custom_travel_ot_rate', 'DECIMAL(10,2) NULL');
@@ -1788,6 +1817,20 @@ async function createReceivableTables() {
    */
   await addColumn('employees', 'annual_leave_entitlement', 'DECIMAL(5,1) NOT NULL DEFAULT 14');
   await addColumn('employees', 'casual_leave_entitlement', 'DECIMAL(5,1) NOT NULL DEFAULT 7');
+  await query(`CREATE TABLE IF NOT EXISTS leave_policies (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    effective_from DATE NOT NULL UNIQUE,
+    annual_default DECIMAL(5,1) NOT NULL DEFAULT 14,
+    casual_default DECIMAL(5,1) NOT NULL DEFAULT 7,
+    monthly_limit DECIMAL(5,1) NOT NULL DEFAULT 5,
+    waiting_months TINYINT UNSIGNED NOT NULL DEFAULT 6,
+    allow_unpaid_during_wait BOOLEAN NOT NULL DEFAULT FALSE,
+    created_by BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_leave_policy_user FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`INSERT INTO leave_policies (effective_from) SELECT '2000-01-01'
+    WHERE NOT EXISTS (SELECT 1 FROM leave_policies)`);
 }
 
 async function createDriveTables() {
