@@ -9,6 +9,7 @@ import Attachments from '../Attachments.jsx';
 import ProjectGallery from '../ProjectGallery.jsx';
 import ProjectReports from './ProjectReports.jsx';
 import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
+import { RecordScopeProvider, RecordScopeBadge } from '../record-scope.jsx';
 
 const TABS = ['Command centre', 'Activity & issues', 'Reports', 'Programme', 'Commercial', 'Subcontractors', 'Team', 'Gallery', 'Documents', 'Close-out'];
 const TAB_GROUPS = [
@@ -33,7 +34,8 @@ export default function ProjectDetail({ projectId, data, close, reload, can, nav
   if (error) return <div className="project-workspace-state"><AlertTriangle /><h2>Project unavailable</h2><p>{error}</p><button className="secondary" onClick={close}>Back to projects</button></div>;
   if (!project) return <div className="project-workspace-state"><span className="workspace-loader" /><h2>Preparing project workspace</h2><p>Gathering programme, commercial and site records…</p></div>;
 
-  return <div className="project-workspace">
+  return <RecordScopeProvider scope={{ kind: 'company', name: project.company }}><div className="project-workspace">
+    <RecordScopeBadge />
     <ProjectHero project={project} close={close} />
     <ProjectMetrics project={project} />
     <div className="project-workspace-tabs"><Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} /></div>
@@ -62,7 +64,7 @@ export default function ProjectDetail({ projectId, data, close, reload, can, nav
       await post(`/projects/${project.id}/authorise-work`, { notes: values.notes || undefined });
       await refresh();
     }}><p className="form-note wide">Confirm the accepted quotation or formal award and the first recorded client payment before releasing the delivery team to start work.</p><TextArea name="notes" label="Authorisation notes" required={false} /></FormModal>}
-  </div>;
+  </div></RecordScopeProvider>;
 }
 
 function ProjectActivity({project,can,refresh,onAdd,onEditTask}){

@@ -181,7 +181,7 @@ router.get('/cost-control/options', auth, permit('qs.view','qs.boq','finance.vie
   res.json({ tasks, employees, vehicles, reserves, fuel, quotationItems, fuelFloats });
 }));
 
-router.get('/cost-control/review-queue', auth, permit('finance.view','finance.manage'), wrap(async (req, res) => {
+router.get('/cost-control/review-queue', auth, permit('finance.view','finance.manage','finance.costReview'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId);
   if (!Number.isInteger(companyId) || companyId < 1) return res.status(400).json({ error:'Choose a company.' });
   res.json(await query(`SELECT s.id,s.project_id projectId,p.name project,s.work_date workDate,s.status,
@@ -191,7 +191,7 @@ router.get('/cost-control/review-queue', auth, permit('finance.view','finance.ma
     WHERE p.company_id=? GROUP BY s.id ORDER BY (s.status='Submitted') DESC,s.work_date DESC,s.id DESC LIMIT 200`, [companyId]));
 }));
 
-router.get('/cost-control/daily-sheets/:id', auth, permit('qs.view','qs.boq','finance.view','finance.manage'), wrap(async (req, res) => {
+router.get('/cost-control/daily-sheets/:id', auth, permit('qs.view','qs.boq','qs.costControl','finance.view','finance.manage','finance.costReview'), wrap(async (req, res) => {
   const sheet = await getOne(`SELECT s.*,p.name project,p.company_id companyId,u.name submittedBy,r.name reviewedBy
     FROM daily_cost_sheets s JOIN projects p ON p.id=s.project_id
     JOIN users u ON u.id=s.submitted_by LEFT JOIN users r ON r.id=s.reviewed_by WHERE s.id=?`, [req.params.id]);

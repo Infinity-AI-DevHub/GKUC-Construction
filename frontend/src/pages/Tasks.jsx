@@ -17,6 +17,12 @@ export default function Tasks({ data, reload, can }) {
   const [saving, setSaving] = useState(null);
   const [error, setError] = useState('');
 
+  useEffect(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('record'));
+    if (!id || !data.tasks.some(task => Number(task.id) === id)) return;
+    api(`/tasks/${id}`).then(setDetail).catch(failure => setError(failure.message));
+  }, []);
+
   const shown = data.tasks.filter(task => filter === 'All' || task.status === filter);
 
   const groups = [...new Map(shown.map(task => [task.projectId ?? task.project, {id:task.projectId ?? task.project,name:task.project}])).values()];

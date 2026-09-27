@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Landmark, TriangleAlert, Wallet } from 'lucide-react';
 import { api, openDocument, post, rupees, shortDate, slug, todayInput } from './api.js';
 import {
@@ -26,10 +26,16 @@ export function ClientInvoices({ data, can, companyId }) {
   const [raising, setRaising] = useState(false);
   const [receipting, setReceipting] = useState(null);
   const [selected, setSelected] = useState(null);
+  const openedFromLink = useRef(false);
   const [error, setError] = useState('');
 
   const load = () => Promise.all([
-    api(`/receivables/invoices?companyId=${companyId}`).then(setInvoices).catch(() => setInvoices([])),
+    api(`/receivables/invoices?companyId=${companyId}`).then(rows => {
+      setInvoices(rows);
+      const id = Number(new URLSearchParams(window.location.search).get('record'));
+      const invoice = rows.find(row => Number(row.id) === id);
+      if (!openedFromLink.current && id && invoice) { openedFromLink.current = true; setSelected(invoice); }
+    }).catch(() => setInvoices([])),
     api(`/receivables/ageing?companyId=${companyId}`).then(setAgeing).catch(() => setAgeing(null)),
     api(`/receivables/accepted-quotations?companyId=${companyId}`).then(setAcceptedQuotes).catch(() => setAcceptedQuotes([])),
     api(`/receivables/quotation-plans?companyId=${companyId}`).then(setBillingPlans).catch(() => setBillingPlans([]))

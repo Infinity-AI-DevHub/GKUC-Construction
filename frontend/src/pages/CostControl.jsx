@@ -14,9 +14,12 @@ function Money({ value, signed = false }) {
 }
 
 export default function CostControl({ projects, can }) {
-  const [projectId, setProjectId] = useState(projects[0]?.id || '');
+  const [projectId, setProjectId] = useState(() => {
+    const requested = Number(new URLSearchParams(window.location.search).get('project'));
+    return projects.some(project => Number(project.id) === requested) ? requested : projects[0]?.id || '';
+  });
   const [data, setData] = useState(null);
-  const [open, setOpen] = useState('');
+  const [open, setOpen] = useState(() => Number(new URLSearchParams(window.location.search).get('record')) || '');
   const [forecastItem, setForecastItem] = useState(null);
   const [rework, setRework] = useState(null);
   const [error, setError] = useState('');

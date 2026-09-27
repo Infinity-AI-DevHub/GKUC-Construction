@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { RecordScopeProvider } from '../record-scope.jsx';
 import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFields.jsx';
 import Hiring from './Hiring.jsx';
 import Insurance from './Insurance.jsx';
@@ -44,7 +45,7 @@ export default function People({ data, allData, reload, can, companies, companyI
   /* Offering a tab the server will refuse only sends somebody into an error they can do
      nothing about, so each is shown against the permissions it actually needs. */
   const tabs = allowedTabs(TABS, can);
-  const [tab, setTab] = useState(tabs[0]);
+  const [tab, setTab] = useState(() => tabs.find(section => slug(section) === window.location.pathname.split('/')[2]) || tabs[0]);
   const [open, setOpen] = useState('');
   const allProjects = allData?.projects || data.projects;
   const employeeFromPath = () => Number(window.location.pathname.match(/^\/people\/(\d+)\/?$/)?.[1]) || null;
@@ -77,11 +78,11 @@ export default function People({ data, allData, reload, can, companies, companyI
     Departments: can.hr && 'Add department'
   };
 
-  if (employeeId) return <EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} canPayroll={can.payroll} canConduct={can.conduct} canAssets={can.assets}
+  if (employeeId) return <RecordScopeProvider scope={{ kind: 'shared' }}><EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} canPayroll={can.payroll} canConduct={can.conduct} canAssets={can.assets}
     canCorrect={can.attendance || can.hrImport} projects={allProjects} departments={data.departments}
-    companies={companies} reloadPeople={reload} />;
+    companies={companies} reloadPeople={reload} /></RecordScopeProvider>;
 
-  return <Page title="People" subtitle="Employee records, live workforce presence, leave and overtime."
+  return <RecordScopeProvider scope={['Payroll', 'Payroll settings', 'Payroll Inputs'].includes(tab) ? { kind: 'company', name: company?.name || 'the selected company', id: companyId } : { kind: 'shared' }}><Page title="People" subtitle="Employee records, live workforce presence, leave and overtime."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={tabs} active={tab} onChange={setTab} groups={TAB_GROUPS} />
 
@@ -109,7 +110,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     {open === 'Payroll' && <PayrollForm companyId={companyId} company={company} close={() => setOpen('')} reload={reload} />}
     {open === 'Performance' && <ReviewForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Departments' && <DepartmentForm close={() => setOpen('')} reload={reload} />}
-  </Page>;
+  </Page></RecordScopeProvider>;
 }
 
 const EMPLOYEE_COLUMNS = ['Employee', 'Type', 'Department', 'Designation', 'Basic salary', 'Daily rate', 'Status'];

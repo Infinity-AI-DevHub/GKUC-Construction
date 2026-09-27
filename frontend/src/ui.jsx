@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronRight, Plus, X } from 'lucide-react';
 import { initials, onDataChanged, slug } from './api.js';
 import './workflow.css';
+import { RecordScopeBadge, showScopeSaved, useRecordScope } from './record-scope.jsx';
 
 /**
  * Loads a panel's own list, and loads it again whenever anything in the system changes.
@@ -50,7 +51,7 @@ export function Page({ title, subtitle, action, children, onAction }) {
   const navigation = title !== 'Tasks' && sections.find(child => React.isValidElement(child) && child.type === Tabs);
   return <>
     <div className="page-heading">
-      <div><h1>{title}</h1><p>{subtitle}</p></div>
+      <div><h1>{title}</h1><p>{subtitle}</p><RecordScopeBadge /></div>
       {action && onAction && <button className="primary" onClick={onAction}><Plus size={17} />{action}</button>}
     </div>
     {navigation ? <div className="module-layout">
@@ -99,10 +100,10 @@ export const allowedTabs = (tabs, can) => tabs
   .filter(([, keys]) => !keys || !keys.length || keys.some(key => can.has(key)))
   .map(([name]) => name);
 
-export function Modal({ title, close, children, wide = false }) {
+export function Modal({ title, close, children, wide = false, scope }) {
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
     <div className={wide ? 'modal modal-wide' : 'modal'} role="dialog" aria-modal="true" aria-label={title}>
-      <div className="modal-title"><h2>{title}</h2><button className="icon-btn" onClick={close}><X size={18} /></button></div>
+      <div className="modal-title"><div className="modal-title-context"><h2>{title}</h2><RecordScopeBadge scope={scope} compact /></div><button className="icon-btn" onClick={close}><X size={18} /></button></div>
       <div className="modal-content">{children}</div>
     </div>
   </div>;
@@ -181,7 +182,7 @@ export function Table({ columns, template, children, title, tools, empty = 'Noth
    * so every cell in a column is measured against the same content.
    */
   return <section className="table-panel">
-    {(title || tools) && <div className="table-tools"><h2>{title}</h2>{tools}</div>}
+    {(title || tools) && <div className="table-tools"><div className="table-tools-context"><h2>{title}</h2><RecordScopeBadge compact /></div>{tools}</div>}
     <div className="table-grid" style={{ gridTemplateColumns: template }}>
       <div className="table-head" style={{ gridTemplateColumns: template }}>
         {columns.map(column => <span key={column}>{column}</span>)}
@@ -201,7 +202,8 @@ export function Row({ template, children, onClick }) {
  * Wraps a create/edit form in a modal and handles the submit lifecycle, so each module
  * describes only its fields and the request to send.
  */
-export function FormModal({ title, close, label, onSubmit, children, wide = false }) {
+export function FormModal({ title, close, label, onSubmit, children, wide = false, scope }) {
+  const recordScope = useRecordScope(scope);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const submit = async event => {
@@ -212,13 +214,14 @@ export function FormModal({ title, close, label, onSubmit, children, wide = fals
     try {
       await onSubmit(Object.fromEntries(form.entries()), form);
       close();
+      showScopeSaved(recordScope);
     } catch (failure) {
       setError(failure.message);
     } finally {
       setBusy(false);
     }
   };
-  return <Modal title={title} close={close} wide={wide}>
+  return <Modal title={title} close={close} wide={wide} scope={scope}>
     <EntityForm onSubmit={submit} error={error}>
       {children}
       <FormButtons close={close} label={label} busy={busy} />
@@ -227,7 +230,8 @@ export function FormModal({ title, close, label, onSubmit, children, wide = fals
 }
 
 /** Long, consequential records get room to breathe and a separate review before writing. */
-export function WorkflowForm({ title, close, label, onSubmit, children, summary = [], reviewContent = null }) {
+export function WorkflowForm({ title, close, label, onSubmit, children, summary = [], reviewContent = null, scope }) {
+  const recordScope = useRecordScope(scope);
   const formRef = useRef(null);
   const pageRef = useRef(null);
   const [review, setReview] = useState(false);
@@ -259,19 +263,19 @@ export function WorkflowForm({ title, close, label, onSubmit, children, summary 
   };
   const save = async () => {
     setBusy(true); setError('');
-    try { const form = new FormData(formRef.current); await onSubmit(Object.fromEntries(form.entries()), form); close(); }
+    try { const form = new FormData(formRef.current); await onSubmit(Object.fromEntries(form.entries()), form); close(); showScopeSaved(recordScope); }
     catch (failure) { setError(failure.message); }
     finally { setBusy(false); }
   };
   return <div className="workflow-page" role="region" aria-label={title} ref={pageRef}>
-    <header className="workflow-header"><div><span>GKUC SiteOps · guided entry</span><h1>{title}</h1></div><button type="button" className="secondary" onClick={requestClose}>Close and return</button></header>
+    <header className="workflow-header"><div><span>GKUC SiteOps · guided entry</span><h1>{title}</h1><RecordScopeBadge scope={scope} /></div><button type="button" className="secondary" onClick={requestClose}>Close and return</button></header>
     <div className="workflow-progress" aria-label="Workflow progress"><span className={!review ? 'current' : 'done'}>1 · Complete details</span><span className={review ? 'current' : ''}>2 · Review and confirm</span></div>
     <div className="workflow-layout"><div className="workflow-main">
       <form ref={formRef} className={`report-form workflow-editor${review ? ' is-reviewing' : ''}`} onSubmit={prepare} onInput={() => { setDirty(true); setValues(displayValues()); }} onChange={() => { setDirty(true); setValues(displayValues()); }}>
         {children}
         <div className="form-actions wide"><button type="button" className="secondary" onClick={requestClose}>Cancel</button><button className="primary" type="submit">Review details <ChevronRight size={16} /></button></div>
       </form>
-      {review && <section className="workflow-review"><span className="section-kicker">Final check</span><h2>Review before saving</h2><p>Nothing has been saved yet. Check the details below, then confirm. Use “Edit details” to correct anything.</p>
+      {review && <section className="workflow-review"><span className="section-kicker">Final check</span><h2>Review before saving</h2><RecordScopeBadge scope={scope} /><p>Nothing has been saved yet. Check the details below, then confirm. Use “Edit details” to correct anything.</p>
         <dl>{reviewFields().map((item, index) => <div key={`${item.name}-${index}`}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
         {reviewContent && <div className="workflow-review-content">{reviewContent}</div>}
         {summary.length > 0 && <div className="workflow-review-summary">{summary.map(([name, value]) => <div key={name}><span>{name}</span><strong>{value || '—'}</strong></div>)}</div>}

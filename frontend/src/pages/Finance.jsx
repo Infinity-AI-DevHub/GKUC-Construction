@@ -7,6 +7,7 @@ import { Bonds, ClientInvoices, PettyCash } from '../Receivables.jsx';
 import FinanceReports from './FinanceReports.jsx';
 import Cheques from './Cheques.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
+import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS = ['Financial reports','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Categories'];
 const TAB_GROUPS = [
@@ -45,7 +46,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
 
   const refresh = async () => { await load(); await reload(); };
 
-  return <Page title="Finance" subtitle={`Project costs, payments and profitability for ${company?.name || 'the selected company'}.`}
+  return <RecordScopeProvider scope={{ kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Finance" subtitle={`Project costs, payments and profitability for ${company?.name || 'the selected company'}.`}
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} />
 
@@ -68,11 +69,11 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {open === 'Income' && <IncomeForm data={data} close={() => setOpen('')} reload={refresh} />}
     {open === 'Supplier invoices' && <InvoiceForm companyId={companyId} close={() => setOpen('')} reload={refresh} />}
     {open === 'Categories' && <CategoryForm close={() => setOpen('')} reload={refresh} />}
-  </Page>;
+  </Page></RecordScopeProvider>;
 }
 
 function DailyCostReview({ companyId, can }) {
-  const [rows,setRows]=useState([]),[selected,setSelected]=useState(null),[error,setError]=useState('');
+  const [rows,setRows]=useState([]),[selected,setSelected]=useState(() => Number(new URLSearchParams(window.location.search).get('record')) || null),[error,setError]=useState('');
   const load=()=>api(`/boq/cost-control/review-queue?companyId=${companyId}`).then(setRows).catch(failure=>setError(failure.message));
   useEffect(()=>{setRows([]);setError('');load();},[companyId]);
   const template='120px minmax(160px,1.3fr) 120px 70px 130px 130px 115px 90px';

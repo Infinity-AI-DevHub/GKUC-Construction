@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { Check, PackageCheck } from 'lucide-react';
 import { api, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS = ['Stock', 'Movements', 'Purchase requests', 'Orders', 'Suppliers'];
 
 /** PID 2.6 and 2.7 — stock the stores actually hold, and the purchasing trail behind it. */
-export default function Materials({ data, reload, can, companyId }) {
+export default function Materials({ data, reload, can, companyId, company }) {
   const [tab, setTab] = useState(TABS[0]);
   const [open, setOpen] = useState('');
 
@@ -18,7 +19,7 @@ export default function Materials({ data, reload, can, companyId }) {
     Suppliers: can.purchasing && 'Add supplier'
   };
 
-  return <Page title="Materials & purchasing" subtitle="Track receipts, issues, returns, stock levels and the purchase trail behind them."
+  return <RecordScopeProvider scope={['Purchase requests', 'Orders'].includes(tab) ? { kind: 'company', name: company?.name || 'the selected company', id: companyId } : { kind: 'shared' }}><Page title="Materials & purchasing" subtitle="Track receipts, issues, returns, stock levels and the purchase trail behind them."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
@@ -33,7 +34,7 @@ export default function Materials({ data, reload, can, companyId }) {
     {open === 'Purchase requests' && <RequestForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Orders' && <OrderForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Suppliers' && <SupplierForm close={() => setOpen('')} reload={reload} />}
-  </Page>;
+  </Page></RecordScopeProvider>;
 }
 
 const STOCK_COLUMNS = ['Material', 'Kind', 'Store', 'In stock', 'Minimum', 'Stock value', 'Status'];

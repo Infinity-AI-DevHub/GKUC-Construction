@@ -4,6 +4,7 @@ import { api, openRecord, patch, post, rupees, shortDate, slug, todayInput } fro
 import { allowedTabs, Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { toSvg } from '../qr.js';
 import { useOptions } from '../options.js';
+import { RecordScopeProvider } from '../record-scope.jsx';
 
 /* Fleet is two registers under one roof: the transport office's vehicles, and the store's
    tools. Each tab names what the server will accept for it — see allowedTabs. */
@@ -24,7 +25,7 @@ function QrCodeImage({ value }) {
 }
 
 /** PID 2.8 and 2.9 — vehicles with their compliance dates, and equipment with its whereabouts. */
-export default function Fleet({ data, reload, can, companyId }) {
+export default function Fleet({ data, reload, can, companyId, company }) {
   const tabs = allowedTabs(TABS, can);
   const [tab, setTab] = useState(tabs[0]);
   const [open, setOpen] = useState('');
@@ -39,7 +40,7 @@ export default function Fleet({ data, reload, can, companyId }) {
     Equipment: can.lending && 'Add equipment'
   };
 
-  return <Page title="Fleet & equipment" subtitle="Keep vehicles available, assigned, maintained, and compliant."
+  return <RecordScopeProvider scope={tab === 'Fuel & service' ? { kind: 'company', name: company?.name || 'the selected company', id: companyId } : { kind: 'shared' }}><Page title="Fleet & equipment" subtitle="Keep vehicles available, assigned, maintained, and compliant."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <FleetPulse vehicles={vehicles} />
     <Tabs tabs={tabs} active={tab} onChange={setTab} />
@@ -53,7 +54,7 @@ export default function Fleet({ data, reload, can, companyId }) {
     {open === 'Compliance' && <DocumentForm data={fleetData} close={() => setOpen('')} reload={reload} />}
     {open === 'Fuel & service' && <FuelForm data={fleetData} close={() => setOpen('')} reload={reload} />}
     {open === 'Equipment' && <EquipmentForm close={() => setOpen('')} reload={reload} />}
-  </Page>;
+  </Page></RecordScopeProvider>;
 }
 
 function FleetPulse({vehicles}){
