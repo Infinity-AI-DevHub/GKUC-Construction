@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, BriefcaseBusiness, CalendarDays, CheckCircle2, ClipboardCheck,
   Clock3, Mail, MapPin, PencilLine, Phone, ShieldCheck, Star, TrendingUp, UserRound } from 'lucide-react';
-import { api, inputDate, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { api, inputDate, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Row, SelectField, Table, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFields.jsx';
@@ -33,6 +33,53 @@ function ConductHistory({employeeId}) {
       {kind==='Good rating' && <SelectField name="rating" label="Rating (optional)" required={false} options={[["","No star rating"],[1,'1 / 5'],[2,'2 / 5'],[3,'3 / 5'],[4,'4 / 5'],[5,'5 / 5']]} />}
       <TextArea name="description" label="Description" rows={5} />
       <p className="form-note wide">HR-only history. This records an observation and does not automatically change salary or performance-review scores.</p>
+    </FormModal>}
+  </section>;
+}
+
+function EmployeeLetters({ employee, companies }) {
+  const [letters, setLetters] = useState([]);
+  const [issuing, setIssuing] = useState(null);
+  const [selectedCompanyId, setSelectedCompanyId] = useState(String(employee.payrollCompanyId || 1));
+  const [error, setError] = useState('');
+  const load = () => api(`/employees/${employee.id}/letters`).then(rows => { setLetters(rows); setError(''); })
+    .catch(failure => setError(failure.message));
+  useEffect(() => { load(); }, [employee.id]);
+  const options = companies.filter(company => company.active !== false);
+  return <section className="employee-panel employee-wide-panel">
+    <div className="employee-section-title"><div><span>HR record · confidential</span><h2>Employment milestone letters</h2></div><Mail size={20} /></div>
+    <p className="form-note">Milestones use the actual employment start date. HR reviews and issues each letter; reaching a milestone does not issue it automatically.</p>
+    {!employee.joinDate && <p className="form-error" role="alert">Record the employment start date in Personal details to calculate these milestones.</p>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <Table columns={['Letter', 'Milestone', 'Status', 'Issued by', 'Action']}
+      template="minmax(190px,1.4fr) 140px 140px minmax(140px,1fr) 180px" empty="Loading employment letters…">
+      {letters.map(letter => <Row key={letter.type} template="minmax(190px,1.4fr) 140px 140px minmax(140px,1fr) 180px">
+        <strong>{letter.label}</strong><span>{letter.milestoneDate ? shortDate(letter.milestoneDate) : 'Start date missing'}</span>
+        <Badge tone={letter.issued ? 'active' : letter.due ? 'pending' : 'draft'}>
+          {letter.issued ? `Issued ${shortDate(letter.issuedOn)}` : letter.due ? 'Due for HR review' : 'Not due'}
+        </Badge>
+        <span>{letter.issuedBy || '—'}{letter.company && <small>{letter.company}</small>}</span>
+        <span className="row-actions">{letter.issued
+          ? <button type="button" className="status-button" onClick={() => openDocument(`/employees/${employee.id}/letters/${letter.type}/document`)}>View / PDF</button>
+          : letter.due ? <button type="button" className="status-button" onClick={() => {
+            setSelectedCompanyId(String(employee.payrollCompanyId || 1));
+            setIssuing({ type: letter.type, label: letter.label });
+          }}>Review & issue</button>
+            : <span>—</span>}</span>
+      </Row>)}
+    </Table>
+    {issuing && <FormModal title={`Issue ${issuing.label}`} close={() => setIssuing(null)} label="Issue letter"
+      onSubmit={async values => { await post(`/employees/${employee.id}/letters`, { type: issuing.type, companyId: Number(values.companyId) }); await load(); }}>
+      <label>Issuing GKUC company
+        <select name="companyId" value={selectedCompanyId} onChange={event => setSelectedCompanyId(event.target.value)} required>
+          {options.map(company => <option key={company.id} value={company.id}>{company.name}</option>)}
+        </select>
+      </label>
+      <div className="wide"><button type="button" className="secondary"
+        onClick={() => openDocument(`/employees/${employee.id}/letters/${issuing.type}/document?companyId=${selectedCompanyId}`)}>
+        Preview letter before issuing
+      </button></div>
+      <p className="form-note wide">Issuing confirms the statement in this letter. The PDF and company details are saved as an unchangeable copy; check the employee’s name, start date and designation first.</p>
     </FormModal>}
   </section>;
 }
@@ -228,6 +275,7 @@ export default function EmployeeProfile({ employeeId, close, canManage, canCondu
 
     {(canManage||canAssets)&&<EmployeeAssets employeeId={employee.id} canEdit={canAssets}/>}
     {canConduct && <ConductHistory employeeId={employee.id} />}
+    {canManage && <EmployeeLetters employee={employee} companies={companies} />}
     <section className="employee-panel employee-wide-panel employee-documents">
       <Attachments ownerType="employee" ownerId={employee.id} title="Employee documents"
         canUpload={canManage} canDelete={canManage} withCategory withExpiry />

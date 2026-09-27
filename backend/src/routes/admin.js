@@ -20,6 +20,7 @@ router.get('/users', auth, permit('admin.users'), wrap(async (_req, res) =>
  * anyone signed in, because documents render from it; changed only by an administrator.
  */
 const COMPANY = `SELECT c.id,c.code,c.name,
+  c.registration_number registrationNumber,
   COALESCE(NULLIF(c.address,''),CASE WHEN c.id=1 THEN s.address END,'') address,
   COALESCE(NULLIF(c.telephone,''),CASE WHEN c.id=1 THEN s.telephone END,'') telephone,
   COALESCE(NULLIF(c.email,''),CASE WHEN c.id=1 THEN s.email END,'') email,
@@ -40,6 +41,7 @@ router.put('/company', auth, permit("admin.company"), validate(z.object({
   address: z.string().max(400).default(''),
   telephone: z.string().max(120).default(''),
   email: z.string().email().or(z.literal('')).default(''),
+  registrationNumber: z.string().trim().max(80).default(''),
   tin: z.string().max(40).default(''),
   vatNumber: z.string().max(40).default(''),
   bankDetails: z.string().max(400).default(''),
@@ -49,9 +51,9 @@ router.put('/company', auth, permit("admin.company"), validate(z.object({
   const companyId=Number(req.query.companyId)||1;
   const before = await getOne(COMPANY,[companyId]);
   if(!before) return res.status(404).json({error:'Company not found'});
-  await query(`UPDATE companies SET name=?,address=?,telephone=?,email=?,tin=?,vat_number=?,
+  await query(`UPDATE companies SET name=?,address=?,telephone=?,email=?,registration_number=?,tin=?,vat_number=?,
       bank_details=?,default_vat_rate=? WHERE id=?`,
-  [body.name, body.address, body.telephone, body.email, body.tin, body.vatNumber,
+  [body.name, body.address, body.telephone, body.email, body.registrationNumber, body.tin, body.vatNumber,
     body.bankDetails, body.vatPercent,companyId]);
   if(companyId===1) await query(`UPDATE company_settings SET name=?,address=?,telephone=?,email=?,tin=?,vat_number=?,
       bank_details=?,vat_percent=?,updated_by=? WHERE id=1`,

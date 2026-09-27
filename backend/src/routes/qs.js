@@ -16,7 +16,7 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const quotationVisibility = z.object({
   company: z.object({
     logo: z.boolean(), name: z.boolean(), address: z.boolean(), telephone: z.boolean(),
-    email: z.boolean(), tin: z.boolean(), vatNumber: z.boolean(), svatNumber: z.boolean(),
+    email: z.boolean(), registrationNumber: z.boolean().optional(), tin: z.boolean(), vatNumber: z.boolean(), svatNumber: z.boolean(),
     bankDetails: z.boolean()
   }).strict(),
   client: z.object({
@@ -45,6 +45,7 @@ async function quotationIdentity(companyId, clientId, fallbackName = '') {
   if (!company) return null;
   return {
     company: { name: company.name, address: company.address, telephone: company.telephone,
+      registrationNumber: company.registrationNumber,
       email: company.email, tin: company.tin, vatNumber: company.vatNumber, svatNumber: company.svatNumber,
       bankDetails: company.bankDetails },
     client: client || { name: fallbackName }

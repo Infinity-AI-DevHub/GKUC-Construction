@@ -200,6 +200,7 @@ function letterhead(company, heading, reference, date, design = DEFAULT_DESIGN, 
       ...(visibility.address === false ? [] : lines(company.address)),
       visibility.telephone !== false && company.telephone ? `Telephone: ${escape(company.telephone)}` : '',
       visibility.email !== false && company.email ? escape(company.email) : '',
+      visibility.registrationNumber !== false && company.registrationNumber ? `Business Reg. No: ${escape(company.registrationNumber)}` : '',
       visibility.tin !== false && company.tin ? `TIN: ${escape(company.tin)}` : '',
       visibility.vatNumber !== false && company.vatNumber ? `VAT Reg. No: ${escape(company.vatNumber)}` : '',
       visibility.svatNumber !== false && company.svatNumber ? `SVAT No: ${escape(company.svatNumber)}` : ''
@@ -664,6 +665,7 @@ export function commitmentsDocument({ company, tender, commitments, totals, asAt
 export async function documentContext(getOne, companyId = 1) {
   const [company, settings] = await Promise.all([
     getOne(`SELECT c.name,
+      c.registration_number registrationNumber,
       COALESCE(NULLIF(c.address,''),CASE WHEN c.id=1 THEN s.address END,'') address,
       COALESCE(NULLIF(c.telephone,''),CASE WHEN c.id=1 THEN s.telephone END,'') telephone,
       COALESCE(NULLIF(c.email,''),CASE WHEN c.id=1 THEN s.email END,'') email,

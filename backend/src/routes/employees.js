@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, getOne, pool, query, transaction } from '../db.js';
+import { audit, getOne, pool, query, today, transaction } from '../db.js';
 import { auth, can, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
 import {offboardingChecklist} from '../lib/offboarding.js';
 import {suggestOvertime,rulesFor,minutes,intervalsOverlap} from '../lib/hr-payroll-rules.js';
 import { OVERTIME_TYPES, PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES,
   payProfileError, resolveOvertimeRate } from '../lib/payroll-policy.js';
+import { employeeLetterHtml, letterDue, letterMilestone, LETTER_TYPES } from '../lib/employee-letters.js';
+import { sendDocument } from '../lib/document-pdf.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -280,6 +282,80 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
   res.json({ ...employee, biometricIds: biometricIds.map(row => row.code), leave, overtime, documents, attendance,
     projects: [...projectWork.values()], tasks, reports, reviews, monthlyTrend,
     attendanceStats, workStats: { tasks: tasks.length, completedTasks, reports: reports.length, averagePerformance } });
+}));
+
+const letterEmployee = id => getOne(`SELECT e.id,e.code,e.name,e.designation,e.join_date joinDate,
+  e.payroll_company_id companyId FROM employees e WHERE e.id=?`, [id]);
+const letterCompany = id => getOne(`SELECT id,name,address,telephone,registration_number registrationNumber
+  FROM companies WHERE id=? AND active=1`, [id]);
+
+router.get('/:id/letters', auth, permit('hr.manage'), wrap(async (req, res) => {
+  const employee = await letterEmployee(req.params.id);
+  if (!employee) return res.status(404).json({ error: 'Employee not found.' });
+  const issued = await query(`SELECT l.id,l.letter_type letterType,l.milestone_date milestoneDate,
+    l.issued_on issuedOn,l.company_id companyId,c.name company,u.name issuedBy
+    FROM employee_letters l JOIN companies c ON c.id=l.company_id JOIN users u ON u.id=l.issued_by
+    WHERE l.employee_id=?`, [employee.id]);
+  res.json(Object.entries(LETTER_TYPES).map(([type, label]) => {
+    const record = issued.find(row => row.letterType === label);
+    const milestoneDate = letterMilestone(employee.joinDate, type);
+    return { type, label, milestoneDate, due: letterDue(employee.joinDate, type, today()),
+      issued: Boolean(record), issuedOn: record?.issuedOn || null, issuedBy: record?.issuedBy || null,
+      company: record?.company || null, companyId: record?.companyId || null };
+  }));
+}));
+
+router.post('/:id/letters', auth, permit('hr.manage'), validate(z.object({
+  type: z.enum(['probation', 'one-year']), companyId: z.number().int().positive()
+})), wrap(async (req, res) => {
+  const employee = await letterEmployee(req.params.id);
+  if (!employee) return res.status(404).json({ error: 'Employee not found.' });
+  const { type, companyId } = req.body;
+  const milestone = letterMilestone(employee.joinDate, type);
+  if (!milestone) return res.status(400).json({ error: 'Record the employee’s actual employment start date before issuing this letter.' });
+  if (!letterDue(employee.joinDate, type, today()))
+    return res.status(400).json({ error: `This letter cannot be issued before ${milestone}. Check the employee’s start date if it is incorrect.` });
+  const company = await letterCompany(companyId);
+  if (!company) return res.status(400).json({ error: 'Choose an active GKUC company to issue this letter.' });
+  const existing = await getOne('SELECT id FROM employee_letters WHERE employee_id=? AND letter_type=?', [employee.id, LETTER_TYPES[type]]);
+  if (existing) return res.status(409).json({ error: 'This letter has already been issued. Open the issued copy in the employee profile.' });
+  const issuedOn = today();
+  const html = employeeLetterHtml({ employee, company, type, milestone, issuedOn, signer: req.user.name });
+  let id;
+  try {
+    id = await transaction(async connection => {
+      const [result] = await connection.execute(`INSERT INTO employee_letters
+        (employee_id,company_id,letter_type,milestone_date,issued_on,issued_by,html_snapshot)
+        VALUES (?,?,?,?,?,?,?)`, [employee.id, company.id, LETTER_TYPES[type], milestone, issuedOn, req.user.id, html]);
+      await audit(connection, req.user.id, 'ISSUE', 'employee_letter', result.insertId, null,
+        { employeeId: employee.id, companyId: company.id, type: LETTER_TYPES[type], milestone, issuedOn }, req.ip);
+      return result.insertId;
+    });
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This letter was just issued by another HR user. Refresh the employee profile.' });
+    throw error;
+  }
+  res.status(201).json({ id, type, issuedOn, company: company.name });
+}));
+
+router.get('/:id/letters/:type/document', auth, permit('hr.manage'), wrap(async (req, res) => {
+  const type = req.params.type;
+  if (!LETTER_TYPES[type]) return res.status(404).json({ error: 'Unknown employee letter.' });
+  const employee = await letterEmployee(req.params.id);
+  if (!employee) return res.status(404).json({ error: 'Employee not found.' });
+  const record = await getOne(`SELECT html_snapshot html FROM employee_letters
+    WHERE employee_id=? AND letter_type=?`, [employee.id, LETTER_TYPES[type]]);
+  let html = record?.html;
+  if (!html) {
+    const milestone = letterMilestone(employee.joinDate, type);
+    if (!milestone) return res.status(400).json({ error: 'Record the employee’s employment start date before previewing a letter.' });
+    if (!letterDue(employee.joinDate, type, today()))
+      return res.status(400).json({ error: `This letter is not due until ${milestone}.` });
+    const company = await letterCompany(Number(req.query.companyId) || employee.companyId || 1);
+    if (!company) return res.status(400).json({ error: 'Choose an active GKUC company for this letter.' });
+    html = employeeLetterHtml({ employee, company, type, milestone, issuedOn: today(), signer: req.user.name, draft: true });
+  }
+  return sendDocument(req, res, html, `${employee.code}-${type}-letter.pdf`);
 }));
 
 router.post('/', auth, permit('hr.manage'), validate(employeeSchema), wrap(async (req, res) => {

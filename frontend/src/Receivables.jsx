@@ -142,22 +142,24 @@ function InvoicePayments({ invoice, close, onPayment, canRecord }) {
   const [error, setError] = useState('');
   useEffect(() => { api(`/receivables/invoices/${invoice.id}`).then(setDetail).catch(failure => setError(failure.message)); }, [invoice.id]);
   return <Modal title={`${invoice.reference} — payments`} close={close} wide>
+    <div className="invoice-payments-dialog">
     {error && <p className="form-error">{error}</p>}
     <div className="attendance-summary">
       <Summary label="Invoice amount" value={rupees(invoice.netPayable)} icon={Wallet} />
       <Summary label="Received" value={rupees(invoice.paidAmount)} icon={Landmark} />
       <Summary label="Still due" value={invoice.status === 'Draft' ? 'Not issued' : rupees(invoice.outstanding)} icon={TriangleAlert} />
     </div>
-    <h3>Payment history</h3>
-    {!detail ? <p>Loading payments…</p> : detail.receipts.length ? <div className="table-wrap"><table>
+    <div className="invoice-payments-history"><div className="invoice-payments-history-heading"><h3>Payment history</h3><span>{detail ? `${detail.receipts.length} recorded` : 'Loading'}</span></div>
+    {!detail ? <p className="invoice-payments-empty">Loading payments…</p> : detail.receipts.length ? <div className="table-wrap"><table>
       <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th><th>Receipt</th></tr></thead>
       <tbody>{detail.receipts.map(receipt => <tr key={receipt.id}>
         <td>{shortDate(receipt.receivedDate)}</td><td>{receipt.method}</td>
         <td>{receipt.reference || '—'}</td><td>{rupees(receipt.amount)}</td>
         <td><button className="status-button" onClick={() => openDocument(`/receivables/receipts/${receipt.id}/document`)}>View / PDF</button></td>
       </tr>)}</tbody>
-    </table></div> : <p>No payments recorded yet.</p>}
+    </table></div> : <p className="invoice-payments-empty">No payments recorded yet. Once this invoice is issued and a payment is received, it will appear here.</p>}</div>
     {canRecord && invoice.status !== 'Draft' && invoice.status !== 'Paid' && <button className="primary" onClick={onPayment}>Record another payment</button>}
+    </div>
   </Modal>;
 }
 

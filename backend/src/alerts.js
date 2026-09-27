@@ -2,6 +2,7 @@ import { pool, query, spendSql, today, transaction } from './db.js';
 import { dispatchQueued, dispatch } from './lib/channels.js';
 import { publish } from './lib/realtime.js';
 import { upcomingBirthday, BIRTHDAY_REMINDER_DAYS } from './lib/birthdays.js';
+import { letterMilestone, letterReminderStage, LETTER_TYPES } from './lib/employee-letters.js';
 import { insuranceReminderDate } from './lib/insurance-reminders.js';
 
 /**
@@ -453,10 +454,37 @@ export async function runBirthdayReminderScan(stamp = today()) {
   return count;
 }
 
+export async function runEmployeeLetterReminderScan(stamp = today()) {
+  const rows = await query(`SELECT e.id,e.name,e.code,e.join_date joinDate,l.letter_type letterType
+    FROM employees e LEFT JOIN employee_letters l ON l.employee_id=e.id
+    WHERE e.join_date IS NOT NULL AND e.status IN ('Active','On leave')`);
+  const issued = new Set(rows.filter(row => row.letterType).map(row => `${row.id}:${row.letterType}`));
+  const employees = [...new Map(rows.map(row => [row.id, row])).values()];
+  let count = 0;
+  for (const row of employees) {
+    for (const [type, label] of Object.entries(LETTER_TYPES)) {
+      if (issued.has(`${row.id}:${label}`)) continue;
+      const milestone = letterMilestone(row.joinDate, type);
+      const stage = letterReminderStage(milestone, stamp);
+      if (!stage) continue;
+      const id = await raise({
+        key: `employee-letter:${row.id}:${type}:${stage}:${stamp}`,
+        audience: 'hr.manage', severity: stage === 'overdue' ? 'Warning' : 'Info',
+        title: `${label} ${stage === 'upcoming' ? 'due in 7 days' : stage === 'overdue' ? 'overdue' : 'due today'} — ${row.name}`,
+        message: `${row.name} (${row.code}) reaches this milestone on ${milestone}. Review the employee profile and issue the letter if appropriate.`,
+        referenceType: 'employee', referenceId: row.id
+      });
+      if (id) count++;
+    }
+  }
+  return count;
+}
+
 /** Scans every tracked deadline and threshold and queues notifications for anything at risk. */
 export async function runAlertScan() {
   await runTaskReminderScan();
   await runBirthdayReminderScan();
+  await runEmployeeLetterReminderScan();
   await runInsuranceReminderScan();
   const stamp = today();
   const alerts = [];

@@ -4,6 +4,7 @@ const documentPaths = [
   /^\/boq\/\d+\/document$/,
   /^\/receivables\/invoices\/\d+\/document$/,
   /^\/receivables\/receipts\/\d+\/document$/,
+  /^\/employees\/\d+\/letters\/(?:probation|one-year)\/document$/,
   /^\/qs\/tenders\/(?:\d+|blank)\/commitments\/document$/
 ];
 
