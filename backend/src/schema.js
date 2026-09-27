@@ -34,6 +34,27 @@ async function addIndex(table, name, definition) {
   await query(`ALTER TABLE ${table} ADD ${definition}`);
 }
 
+/* Earlier site issues stored the material ID in the expense source link instead of the
+ * stock-movement ID. Repair only unambiguous matches; never alter the booked amount. */
+async function reconcileStockExpenseOrigins() {
+  const legacy = await query(`SELECT e.id,e.project_id,e.reference,e.origin_id
+    FROM expenses e LEFT JOIN stock_movements current_movement
+      ON current_movement.id=CAST(e.origin_id AS UNSIGNED)
+      AND current_movement.movement_type='Issue'
+      AND current_movement.project_id=e.project_id
+      AND current_movement.reference=e.reference
+    WHERE e.origin_type='stock_movement' AND e.origin_id REGEXP '^[0-9]+$'
+      AND current_movement.id IS NULL`);
+  for (const expense of legacy) {
+    const matches = await query(`SELECT id FROM stock_movements
+      WHERE material_id=? AND movement_type='Issue' AND project_id=? AND reference=?
+      LIMIT 2`, [Number(expense.origin_id), expense.project_id, expense.reference]);
+    if (matches.length !== 1) continue;
+    await query(`UPDATE expenses SET origin_id=? WHERE id=? AND origin_id=?`,
+      [String(matches[0].id), expense.id, expense.origin_id]);
+  }
+}
+
 async function dropIndex(table, name) {
   if (!await indexExists(table, name)) return;
   await query(`ALTER TABLE ${table} DROP INDEX ${name}`);
@@ -1651,6 +1672,9 @@ async function createReceivableTables() {
   await query(`UPDATE client_invoices SET document_type='Invoice'
     WHERE tax_treatment='Exempt' AND document_type='Tax Invoice'`);
   await addColumn('incomes', 'company_id', 'TINYINT UNSIGNED NULL');
+  await addColumn('incomes', 'origin_type', 'VARCHAR(60) NULL');
+  await addColumn('incomes', 'origin_id', 'VARCHAR(60) NULL');
+  await addIndex('incomes', 'uq_income_origin', 'UNIQUE INDEX uq_income_origin(origin_type,origin_id)');
   if (!(await columnIsNullable('incomes', 'project_id')))
     await query('ALTER TABLE incomes MODIFY project_id BIGINT UNSIGNED NULL');
   await query(`UPDATE incomes i JOIN projects p ON p.id=i.project_id
@@ -3057,6 +3081,7 @@ export async function migrate() {
   await migrateExistingInstalls();
   await createConstructionOperationsTables();
   await createFleetHistoryTables();
+  await reconcileStockExpenseOrigins();
   await createClientDirectory();
   await createIncomingLetterTable();
   await createProjectManagerLinks();

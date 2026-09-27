@@ -7,6 +7,7 @@ import { Bonds, ClientInvoices, PettyCash } from '../Receivables.jsx';
 import FinanceReports from './FinanceReports.jsx';
 import Cheques from './Cheques.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
+import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS = ['Financial reports','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Categories'];
 const TAB_GROUPS = [
@@ -45,7 +46,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
 
   const refresh = async () => { await load(); await reload(); };
 
-  return <Page title="Finance" subtitle={`Project costs, payments and profitability for ${company?.name || 'the selected company'}.`}
+  return <RecordScopeProvider scope={{ kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Finance" subtitle={`Project costs, payments and profitability for ${company?.name || 'the selected company'}.`}
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} />
 
@@ -68,16 +69,16 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {open === 'Income' && <IncomeForm data={data} close={() => setOpen('')} reload={refresh} />}
     {open === 'Supplier invoices' && <InvoiceForm companyId={companyId} close={() => setOpen('')} reload={refresh} />}
     {open === 'Categories' && <CategoryForm close={() => setOpen('')} reload={refresh} />}
-  </Page>;
+  </Page></RecordScopeProvider>;
 }
 
 function DailyCostReview({ companyId, can }) {
-  const [rows,setRows]=useState([]),[selected,setSelected]=useState(null),[error,setError]=useState('');
+  const [rows,setRows]=useState([]),[selected,setSelected]=useState(() => Number(new URLSearchParams(window.location.search).get('record')) || null),[error,setError]=useState('');
   const load=()=>api(`/boq/cost-control/review-queue?companyId=${companyId}`).then(setRows).catch(failure=>setError(failure.message));
   useEffect(()=>{setRows([]);setError('');load();},[companyId]);
   const template='120px minmax(160px,1.3fr) 120px 70px 130px 130px 115px 90px';
   return <>{error && <p className="form-error">{error}</p>}<div className="attendance-summary"><Summary label="Awaiting review" value={rows.filter(row=>row.status==='Submitted').length} icon={Wallet}/><Summary label="Approved sheets" value={rows.filter(row=>row.status==='Approved').length} icon={CircleDollarSign}/></div>
-    <Table title="QS daily cost submissions" columns={['Date','Project','Submitted by','Lines','Site cost','Quoted recovery','Status','']} template={template} empty="No daily cost sheets have been submitted for this company.">{rows.map(row=><Row template={template} key={row.id}><span>{shortDate(row.workDate)}</span><strong>{row.project}</strong><span>{row.submittedBy}</span><span>{row.lineCount}</span><strong>{rupees(row.totalCost)}</strong><span>{rupees(row.quotedRecovery)}</span><Badge tone={row.status==='Approved'?'on-track':row.status==='Returned'?'at-risk':'watch'}>{row.status}</Badge><button className="status-button" onClick={()=>setSelected(row.id)}>{can.costReview&&row.status==='Submitted'?'Review':'View'}</button></Row>)}</Table>
+    <Table title="QS daily cost submissions" columns={['Date','Project','Submitted by','Lines','Site cost','Quoted recovery','Status','']} template={template} empty="No daily cost sheets await review for this company. QS must submit a sheet for a completed project task before Finance can review it." emptyAction={can.costControl ? () => window.location.assign('/quantity-surveying/cost-control') : undefined} emptyActionLabel="Open QS cost control">{rows.map(row=><Row template={template} key={row.id}><span>{shortDate(row.workDate)}</span><strong>{row.project}</strong><span>{row.submittedBy}</span><span>{row.lineCount}</span><strong>{rupees(row.totalCost)}</strong><span>{rupees(row.quotedRecovery)}</span><Badge tone={row.status==='Approved'?'on-track':row.status==='Returned'?'at-risk':'watch'}>{row.status}</Badge><button className="status-button" onClick={()=>setSelected(row.id)}>{can.costReview&&row.status==='Submitted'?'Review':'View'}</button></Row>)}</Table>
     {selected && <DailySheetDetail id={selected} close={()=>setSelected(null)} review={can.costReview} reload={load} />}
   </>;
 }
@@ -89,7 +90,7 @@ function Bills({data,can,companyId,open,close}){
   return <><div className="attendance-summary"><Summary label="Unpaid bills" value={rows.filter(r=>r.status==='Unpaid').length} icon={Wallet}/>
     <Summary label="Due within 5 days" value={rows.filter(r=>r.status==='Unpaid'&&r.daysUntil>=0&&r.daysUntil<=5).length} icon={CircleDollarSign}/>
     <Summary label="Overdue" value={rows.filter(r=>r.status==='Unpaid'&&r.daysUntil<0).length} icon={TrendingUp}/></div>
-    <Table columns={['Type','Provider / reference','Project','Due','Total','Status','']} template={template} title="Electricity, water and operating bills" empty="No operating bills recorded.">
+    <Table columns={['Type','Provider / reference','Project','Due','Total','Status','']} template={template} title="Electricity, water and operating bills" empty="No operating bills for this company yet. Record a bill when the provider's statement is received." emptyAction={can.finance ? () => document.querySelector('.page-heading .primary')?.click() : undefined} emptyActionLabel="Record a bill">
       {rows.map(r=><Row template={template} key={r.id}><Badge tone={slug(r.billType)}>{r.billType}</Badge><div><strong>{r.provider}</strong><small>{r.reference}</small></div>
         <span>{r.project||'Company office'}</span><span className={r.status==='Unpaid'&&r.daysUntil<0?'overdue':''}>{shortDate(r.dueDate)}</span><strong>{rupees(r.totalAmount)}</strong>
         <Badge tone={slug(r.status)}>{r.status}</Badge>{can.finance&&r.status==='Unpaid'?<button className="status-button" onClick={()=>setPaying(r)}>Pay</button>:<span>—</span>}</Row>)}</Table>
@@ -168,7 +169,10 @@ function Expenses({ companyId }) {
     title="Project expenses" empty="No expenses recorded.">
     {rows.map(row => <Row template={LEDGER_TEMPLATE} key={row.id}>
       <span>{shortDate(row.expenseDate)}</span>
-      <div><strong>{row.description}</strong><small>{row.originType ? 'Posted automatically' : row.reference || 'Manual entry'}</small></div>
+      <div><strong>{row.description}</strong><small>{row.originType ? 'Posted automatically from the source record · do not enter again' : row.reference || 'Manual entry'}</small>
+        {row.originType === 'fuel_record' && <small>Also visible in <a href={`/fleet?section=fuel&record=${row.originId}`}>Fleet fuel record #{row.originId}</a> and Finance petty cash.</small>}
+        {row.originType === 'daily_cost_line' && row.dailySheetId && <small>Also visible in <a href={`/quantity-surveying/cost-control?project=${row.projectId}&record=${row.dailySheetId}`}>QS daily cost sheet #{row.dailySheetId}</a>.</small>}
+        {row.originType === 'stock_movement' && <small>Also visible in <a href="/materials">Materials stock movements</a>. This cost was posted when stock was issued to the site.</small>}</div>
       <span>{row.project}</span>
       <Badge tone={slug(row.source)}>{row.source}</Badge>
       <strong>{rupees(row.amount)}</strong>
@@ -185,7 +189,10 @@ function Income({ companyId }) {
     title="Income received" empty="No income recorded.">
     {rows.map(row => <Row template={LEDGER_TEMPLATE} key={row.id}>
       <span>{shortDate(row.receivedDate)}</span>
-      <div><strong>{row.description}</strong><small>{row.reference || '—'}</small></div>
+      <div><strong>{row.description}</strong><small>{row.reference || '—'}</small>
+        {row.invoiceId&&<small>Also visible in <a href={`/finance/invoices?record=${row.invoiceId}`}>invoice payments and receipts</a>. This income was posted from that receipt.</small>}
+        {row.originType==='received_cheque'&&<small>Also visible in <a href="/finance/cheques">received cheques</a>. This income was posted when the cheque cleared.</small>}
+      </div>
       <span>{row.project}</span>
       <span>{row.method}</span>
       <strong>{rupees(row.amount)}</strong>
@@ -296,6 +303,7 @@ function IncomeForm({ data, close, reload }) {
     });
     await reload();
   }}>
+    <p className="form-note wide">Use this form only for income that is not an invoice payment or received cheque. Record client payments on the invoice and clear cheques in Received cheques; their income appears here automatically.</p>
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
     <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" />
     <Field name="receivedDate" label="Received on" type="date" defaultValue={todayInput()} />

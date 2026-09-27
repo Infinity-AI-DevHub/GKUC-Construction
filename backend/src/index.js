@@ -19,6 +19,7 @@ import { publishChange } from './lib/realtime.js';
 
 import authRoutes from './routes/auth.js';
 import bootstrapRoutes from './routes/bootstrap.js';
+import dashboardQueueRoutes from './routes/dashboard-queue.js';
 import projectRoutes from './routes/projects.js';
 import clientRoutes from './routes/clients.js';
 import taskRoutes from './routes/tasks.js';
@@ -209,6 +210,7 @@ app.post('/api/document-download-tickets', auth, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 app.use('/api/bootstrap', bootstrapRoutes);
+app.use('/api/dashboard', dashboardQueueRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/tasks', taskRoutes);

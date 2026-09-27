@@ -1,11 +1,20 @@
-import React,{useState,useEffect} from 'react';
+import React,{useState,useEffect,useRef} from 'react';
 import {api,post,patch,todayInput,rupees} from '../api.js';
 import {Table,Row,FormModal,WorkflowForm,Field,TextArea,SelectField,Modal} from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import {filterPayrollInput,calculationLabels} from '../payroll-input-display.js';
 export default function PayrollInputs({data}){
   const [records,setRecords]=useState({claims:[],suggestions:[],issues:[]}),[error,setError]=useState(''),[form,setForm]=useState(null),[kind,setKind]=useState('Travel'),[preview,setPreview]=useState(null),[evidence,setEvidence]=useState(null),[filter,setFilter]=useState({employee:'',project:'',date:'',type:'',status:''});
-  const load=()=>api('/payroll/inputs').then(setRecords).catch(e=>setError(e.message));useEffect(()=>{load();},[]);
+  const openedFromLink=useRef(false);
+  const load=()=>api('/payroll/inputs').then(result=>{
+    setRecords(result);
+    const id=Number(new URLSearchParams(window.location.search).get('record'));
+    const claim=result.claims.find(row=>Number(row.id)===id);
+    if(!openedFromLink.current&&id&&claim&&['Draft','Confirmed'].includes(claim.status)){
+      openedFromLink.current=true;
+      setForm({type:'review',...claim});
+    }
+  }).catch(e=>setError(e.message));useEffect(()=>{load();},[]);
   const matches=row=>filterPayrollInput(row,filter);
   return <>
     <div className="panel-title"><h2>Payroll Inputs · HR review</h2><button className="primary" onClick={()=>{setPreview(null);setForm({type:'claim'});}}>Add travel / allowance claim</button></div>

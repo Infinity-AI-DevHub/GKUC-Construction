@@ -8,7 +8,7 @@ import MyWorkToday from '../MyWorkToday.jsx';
  * PID 2.1 — the state of the business at a glance, so managers stop chasing
  * status updates across departments.
  */
-export default function Dashboard({ data, go, user, can, onViewAlerts }) {
+export default function Dashboard({ data, go, user, can, companyId, onViewAlerts }) {
   const openTasks = data.tasks.filter(task => task.status !== 'Completed' && task.status !== 'Approved');
   const present = data.attendance.filter(row => row.state === 'On site' || row.state === 'Late').length;
   const lowStock = data.materials.filter(material => material.state !== 'Available').length;
@@ -30,9 +30,11 @@ export default function Dashboard({ data, go, user, can, onViewAlerts }) {
     .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3));
   const alerts = unread.slice(0, 2);
   const moreAlerts = unread.length - alerts.length;
+  const managementOverview = can.has('projects.view') && can.has('finance.view');
 
   return <div className="reference-dashboard">
-    <MyWorkToday user={user} can={can} go={go} />
+    <MyWorkToday user={user} can={can} go={go} data={data} companyId={companyId} />
+    {managementOverview && <>
     <div className="reference-welcome">
       <div>
         <p>{new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
@@ -150,5 +152,6 @@ export default function Dashboard({ data, go, user, can, onViewAlerts }) {
         </button>}
       </section>
     </div>
+    </>}
   </div>;
 }

@@ -9,6 +9,7 @@ import Attachments from '../Attachments.jsx';
 import ProjectGallery from '../ProjectGallery.jsx';
 import ProjectReports from './ProjectReports.jsx';
 import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
+import { RecordScopeProvider, RecordScopeBadge } from '../record-scope.jsx';
 
 const TABS = ['Command centre', 'Activity & issues', 'Reports', 'Programme', 'Commercial', 'Subcontractors', 'Team', 'Gallery', 'Documents', 'Close-out'];
 const TAB_GROUPS = [
@@ -33,7 +34,8 @@ export default function ProjectDetail({ projectId, data, close, reload, can, nav
   if (error) return <div className="project-workspace-state"><AlertTriangle /><h2>Project unavailable</h2><p>{error}</p><button className="secondary" onClick={close}>Back to projects</button></div>;
   if (!project) return <div className="project-workspace-state"><span className="workspace-loader" /><h2>Preparing project workspace</h2><p>Gathering programme, commercial and site records…</p></div>;
 
-  return <div className="project-workspace">
+  return <RecordScopeProvider scope={{ kind: 'company', name: project.company }}><div className="project-workspace">
+    <RecordScopeBadge />
     <ProjectHero project={project} close={close} />
     <ProjectMetrics project={project} />
     <div className="project-workspace-tabs"><Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} /></div>
@@ -62,7 +64,7 @@ export default function ProjectDetail({ projectId, data, close, reload, can, nav
       await post(`/projects/${project.id}/authorise-work`, { notes: values.notes || undefined });
       await refresh();
     }}><p className="form-note wide">Confirm the accepted quotation or formal award and the first recorded client payment before releasing the delivery team to start work.</p><TextArea name="notes" label="Authorisation notes" required={false} /></FormModal>}
-  </div>;
+  </div></RecordScopeProvider>;
 }
 
 function ProjectActivity({project,can,refresh,onAdd,onEditTask}){
@@ -77,7 +79,7 @@ function ProjectActivity({project,can,refresh,onAdd,onEditTask}){
       {openIssues.length>0&&<div className="project-task-list">{openIssues.slice(0,3).map(row=><div key={row.id}><AlertTriangle size={17}/><div><strong>{row.title}</strong><span>{row.category} · {row.owner||'Unassigned'}</span></div><Badge tone="at-risk">{row.status}</Badge></div>)}</div>}
       <Table columns={['Update / issue','Type','Priority','Owner / due','Status','']} template={t} empty="No project updates yet.">{project.updates.map(row=><Row template={t} key={row.id}><div><strong>{row.title}</strong><small>{row.details}</small><small>{row.author} · {shortDate(row.createdAt)}</small></div><Badge tone={slug(row.kind)}>{row.kind}</Badge><Badge tone={slug(row.priority)}>{row.priority}</Badge><span>{row.owner||'—'}{row.dueDate?` · ${shortDate(row.dueDate)}`:''}</span><Badge tone={slug(row.status)}>{row.status}</Badge>{(can.projects||can.site)&&row.status!=='Resolved'?<button className="status-button" onClick={()=>advance(row)}>{row.status==='Open'?'Start':'Resolve'}</button>:<span>—</span>}</Row>)}</Table>
     </section>
-    <Table columns={['Task','Owner','Due','Priority','Status','']} template={t} title="Project tasks" tools={can.site?<button className="secondary" onClick={()=>onAdd('task')}>Add task</button>:null} empty="No tasks assigned.">{project.tasks.map(task=><Row template={t} key={task.id}><div><strong>{task.title}</strong><small>{task.notes}</small></div><span>{task.assignee}</span><span>{task.due}</span><Badge tone={slug(task.priority)}>{task.priority}</Badge><Badge tone={slug(task.status)}>{task.status}</Badge>{can.site?<div className="row-actions"><button className="status-button" onClick={()=>onEditTask(task)}>Edit</button>{task.status!=='Approved'&&<button className="status-button" onClick={()=>taskStatus(task,task.status==='Blocked'?'In progress':'Completed')}>{task.status==='Blocked'?'Resume':'Complete'}</button>}</div>:<span>—</span>}</Row>)}</Table>
+    <Table columns={['Task','Owner','Due','Priority','Status','']} template={t} title="Project tasks" tools={can.site?<button className="secondary" onClick={()=>onAdd('task')}>Add task</button>:null} empty="No tasks assigned. Add a task to assign work to the project team.">{project.tasks.map(task=><Row template={t} key={task.id}><div><strong>{task.title}</strong><small>{task.notes}</small><small>Also visible in <a href={`/tasks?record=${task.id}`}>Tasks · open record</a></small></div><span>{task.assignee}</span><span>{task.due}</span><Badge tone={slug(task.priority)}>{task.priority}</Badge><Badge tone={slug(task.status)}>{task.status}</Badge>{can.site?<div className="row-actions"><button className="status-button" onClick={()=>onEditTask(task)}>Edit</button>{['Not started','In progress','Blocked','Rejected'].includes(task.status)&&<button className="status-button" onClick={()=>taskStatus(task,task.status==='Blocked'||task.status==='Rejected'?'In progress':'Completed')}>{task.status==='Blocked'||task.status==='Rejected'?'Resume work':'Submit for approval'}</button>}</div>:<span>—</span>}</Row>)}</Table>
   </div>;
 }
 function ProjectUpdateForm({projectId,close,reload}){return <FormModal title="Project update or issue" close={close} label="Post to project" onSubmit={async v=>{await post(`/projects/${projectId}/updates`,{kind:v.kind,title:v.title,details:v.details,category:v.category,status:v.status,priority:v.priority,owner:v.owner||undefined,dueDate:v.dueDate||undefined});await reload();}}><SelectField name="kind" label="Type" options={['Update','Issue']}/><Field name="title" label="Headline" wide/><TextArea name="details" label="Details" rows={4}/><SelectField name="category" label="Category" options={['General','Materials delay','Programme','Safety','Quality','Commercial','Other']}/><SelectField name="status" label="Status" options={['Open','In progress','Resolved']}/><SelectField name="priority" label="Priority" options={['Low','Medium','High']}/><Field name="owner" label="Responsible person" required={false}/><Field name="dueDate" label="Follow-up date" type="date" required={false}/></FormModal>}

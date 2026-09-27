@@ -5,6 +5,7 @@ import { Avatar, Badge, Field, FormModal, WorkflowForm, Page, Progress, Row, Sel
 import ProjectDetail from './ProjectDetail.jsx';
 import ClientDirectory from './ClientDirectory.jsx';
 import { useOptions } from '../options.js';
+import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS = ['Projects', 'Clients', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquiries'];
 const PROJECT_STAGES = ['Not started', 'Mid-way'];
@@ -39,7 +40,7 @@ export default function Projects({ data, reload, can, companyId, company, compan
 
   if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} reload={reload} close={closeProject} navigate={navigate} />;
 
-  return <Page title="Projects" subtitle={`Monitor progress, cost, and site health for ${company?.name || 'the selected company'}.`}
+  return <RecordScopeProvider scope={tab === 'Clients' ? { kind: 'shared' } : { kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Projects" subtitle={`Monitor progress, cost, and site health for ${company?.name || 'the selected company'}.`}
     action={can.projects ? actionFor : null} onAction={() => setOpen(tab)}>
     <Tabs tabs={tabs} active={tab} onChange={next => {
       if (next !== 'Clients' && window.location.pathname.startsWith('/projects/clients/'))
@@ -61,7 +62,7 @@ export default function Projects({ data, reload, can, companyId, company, compan
     {open === 'Milestones' && <MilestoneForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'BOQ & estimates' && <BoqForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Inquiries' && <InquiryForm companyId={companyId} close={() => setOpen('')} reload={reload} />}
-  </Page>;
+  </Page></RecordScopeProvider>;
 }
 
 function ProjectCards({ data, onOpen, onOpenClient }) {
@@ -103,7 +104,8 @@ function Milestones({ data, reload, can }) {
     await reload();
   };
   return <Table columns={MILESTONE_COLUMNS} template={MILESTONE_TEMPLATE} title="Project milestones"
-    empty="No milestones planned yet.">
+    empty="No milestones planned for this company's projects yet. Add a milestone after the project programme is agreed."
+    emptyAction={can.projects ? () => document.querySelector('.page-heading .primary')?.click() : undefined} emptyActionLabel="Add milestone">
     {data.milestones.map(milestone => <Row template={MILESTONE_TEMPLATE} key={milestone.id}>
       <strong>{milestone.title}</strong>
       <span>{milestone.project}</span>

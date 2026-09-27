@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Download, FileText, Plus, Trash2, Upload, ChartNoAxesCombined, Calculator, ClipboardList, ShieldCheck, Users, ChevronRight, Layers } from 'lucide-react';
 import { api, fetchDownload, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
@@ -6,6 +6,7 @@ import BoqImport from '../BoqImport.jsx';
 import BoqChanges from '../BoqChanges.jsx';
 import CostControl from './CostControl.jsx';
 import './quantity-surveying.css';
+import { RecordScopeProvider } from '../record-scope.jsx';
 
 /* The bills already on the system, so this tab shows what exists as well as how to add. */
 function BoqList({ companyId }) {
@@ -43,7 +44,7 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
     Subcontractors: can.subcontractors && 'Add subcontractor'
   };
 
-  return <div className="qs-workspace"><Page title="Quantity Surveying" subtitle={`Commercial workspace · ${company?.name || 'the selected company'}`}
+  return <RecordScopeProvider scope={{ kind: 'company', name: company?.name || 'the selected company', id: companyId }}><div className="qs-workspace"><Page title="Quantity Surveying" subtitle={`Commercial workspace · ${company?.name || 'the selected company'}`}
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <div className="qs-layout">
       <aside className="qs-navigation" aria-label="Quantity surveying sections">
@@ -72,7 +73,7 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
     {open === 'Tenders' && <TenderForm companyId={companyId} company={company} close={() => setOpen('')} reload={reload} />}
     {open === 'Retention' && <RetentionForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Subcontractors' && <SubcontractorForm close={() => setOpen('')} reload={reload} />}
-  </Page></div>;
+  </Page></div></RecordScopeProvider>;
 }
 
 const QUOTE_TEMPLATE = 'minmax(115px,.75fr) minmax(150px,1.2fr) minmax(120px,.9fr) 125px 100px 235px';
@@ -83,9 +84,15 @@ function Quotations({ can, reload, companyId }) {
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState('');
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const openedFromLink = useRef(false);
   const load = () => api(`/qs/quotations?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
   useEffect(()=>{setDetail(null);load();},[companyId]);
+  useEffect(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('record'));
+    if (!id || openedFromLink.current || !rows.some(row => Number(row.id) === id)) return;
+    openedFromLink.current = true; openQuotation(id);
+  }, [rows]);
 
   /* A refused status change has to say so; it used to reject into nothing. */
   const setStatus = async (id, status) => {
@@ -145,7 +152,7 @@ function QuotationTemplates({ close }) {
   const loadNotes = () => api('/qs/quotation-note-templates').then(setNoteRows);
   useEffect(() => { load(); loadNotes(); }, []);
   return <>
-    <Modal title="Quotation templates" close={close} wide>
+    <Modal title="Quotation templates" close={close} wide scope={{ kind: 'shared' }}>
       <div className="quotation-source-switch template-library-switch" role="group" aria-label="Template type">
         <button type="button" className={section === 'notes' ? 'active' : ''} onClick={() => setSection('notes')}>Client notes</button>
         <button type="button" className={section === 'methods' ? 'active' : ''} onClick={() => setSection('methods')}>Descriptions & methods</button>
@@ -173,7 +180,7 @@ function QuotationTemplates({ close }) {
 
 function QuotationNoteTemplateForm({ template, close, reload }) {
   const existing = Boolean(template.id);
-  return <FormModal title={existing ? `Edit ${template.name}` : 'Add note template'} close={close}
+  return <FormModal title={existing ? `Edit ${template.name}` : 'Add note template'} close={close} scope={{ kind: 'shared' }}
     label={existing ? 'Save note template' : 'Add note template'} onSubmit={async values => {
       const body = { name: values.name.trim(), body: values.body.trim() };
       if (existing) await patch(`/qs/quotation-note-templates/${template.id}`, body);
@@ -188,7 +195,7 @@ function QuotationNoteTemplateForm({ template, close, reload }) {
 
 function QuotationTemplateForm({ template, close, reload }) {
   const existing = Boolean(template.id);
-  return <FormModal title={existing ? `Edit ${template.name}` : 'Add quotation template'} close={close}
+  return <FormModal title={existing ? `Edit ${template.name}` : 'Add quotation template'} close={close} scope={{ kind: 'shared' }}
     label={existing ? 'Save template' : 'Add template'} wide onSubmit={async values => {
       const body = { code: values.code.trim(), name: values.name.trim(), category: values.category.trim(),
         description: values.description.trim(), unit: values.unit.trim(), defaultRate: Number(values.defaultRate || 0),
@@ -326,9 +333,9 @@ function Tenders({ can, companyId, company, employees }) {
 
     <Table columns={['Reference', 'Tender', 'Employer', 'Closes', 'Our bid', 'Papers']} template={TENDER_TEMPLATE}
       title="Tenders" empty="No tenders being tracked.">
-      {rows.map(row => <Row template={TENDER_TEMPLATE} key={row.id} onClick={() => setDetailId(row.id)}>
+      {rows.map(row => <Row template={TENDER_TEMPLATE} key={row.id}>
         <div>
-          <strong>{row.reference}</strong>
+          <button type="button" className="task-record-link" onClick={() => setDetailId(row.id)}>{row.reference}</button>
           <small>{row.contractNo || row.procurementMethod}</small>
           {row.sourceFilename && <button className="status-button" onClick={async event => {
             event.stopPropagation();
@@ -1449,7 +1456,7 @@ function ReleaseForm({ retention, close, reload }) {
 }
 
 function SubcontractorForm({ close, reload }) {
-  return <FormModal title="Add subcontractor" close={close} label="Add subcontractor" onSubmit={async values => {
+  return <FormModal title="Add subcontractor" close={close} label="Add subcontractor" scope={{ kind: 'shared' }} onSubmit={async values => {
     await post('/qs/subcontractors', {
       name: values.name, trade: values.trade,
       contact: values.contact || undefined, phone: values.phone || undefined,

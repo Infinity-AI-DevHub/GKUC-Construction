@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { Check, PackageCheck } from 'lucide-react';
 import { api, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS = ['Stock', 'Movements', 'Purchase requests', 'Orders', 'Suppliers'];
 
 /** PID 2.6 and 2.7 — stock the stores actually hold, and the purchasing trail behind it. */
-export default function Materials({ data, reload, can, companyId }) {
+export default function Materials({ data, reload, can, companyId, company }) {
   const [tab, setTab] = useState(TABS[0]);
   const [open, setOpen] = useState('');
 
@@ -18,7 +19,7 @@ export default function Materials({ data, reload, can, companyId }) {
     Suppliers: can.purchasing && 'Add supplier'
   };
 
-  return <Page title="Materials & purchasing" subtitle="Track receipts, issues, returns, stock levels and the purchase trail behind them."
+  return <RecordScopeProvider scope={['Purchase requests', 'Orders'].includes(tab) ? { kind: 'company', name: company?.name || 'the selected company', id: companyId } : { kind: 'shared' }}><Page title="Materials & purchasing" subtitle="Track receipts, issues, returns, stock levels and the purchase trail behind them."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
@@ -33,7 +34,7 @@ export default function Materials({ data, reload, can, companyId }) {
     {open === 'Purchase requests' && <RequestForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Orders' && <OrderForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Suppliers' && <SupplierForm close={() => setOpen('')} reload={reload} />}
-  </Page>;
+  </Page></RecordScopeProvider>;
 }
 
 const STOCK_COLUMNS = ['Material', 'Kind', 'Store', 'In stock', 'Minimum', 'Stock value', 'Status'];
@@ -48,7 +49,7 @@ function Stock({ data, reload, can }) {
       <div><span>Low stock items</span><strong>{low}</strong><small>Require purchasing</small></div>
       <div><span>Healthy stock items</span><strong>{data.materials.length - low}</strong><small>At or above minimum</small></div>
     </div>
-    <p className="invoice-note">For site locations, tool custodians and BOQ quantity exceptions, open the separate Stock locations page. Receipts and issues must be recorded through Movements or handovers.</p>
+    <p className="invoice-note">Also visible in <a href="/stock-locations">Stock locations</a>: site locations, tool custodians and BOQ quantity exceptions. This stock register is shared by both companies. Record receipts and issues once through Movements or handovers; do not create a second item.</p>
     <Table columns={STOCK_COLUMNS} template={STOCK_TEMPLATE} title="Stock overview">
       {data.materials.map(material => <Row template={STOCK_TEMPLATE} key={material.id}>
         <div><strong>{material.name}</strong><small>MAT-{String(material.id).padStart(4, '0')}</small></div>

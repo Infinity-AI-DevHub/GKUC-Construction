@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Check, ChevronRight, Plus, X } from 'lucide-react';
 import { initials, onDataChanged, slug } from './api.js';
 import './workflow.css';
+import { RecordScopeBadge, showScopeSaved, useRecordScope } from './record-scope.jsx';
 
 /**
  * Loads a panel's own list, and loads it again whenever anything in the system changes.
@@ -50,7 +51,7 @@ export function Page({ title, subtitle, action, children, onAction }) {
   const navigation = title !== 'Tasks' && sections.find(child => React.isValidElement(child) && child.type === Tabs);
   return <>
     <div className="page-heading">
-      <div><h1>{title}</h1><p>{subtitle}</p></div>
+      <div><h1>{title}</h1><p>{subtitle}</p><RecordScopeBadge /></div>
       {action && onAction && <button className="primary" onClick={onAction}><Plus size={17} />{action}</button>}
     </div>
     {navigation ? <div className="module-layout">
@@ -99,17 +100,51 @@ export const allowedTabs = (tabs, can) => tabs
   .filter(([, keys]) => !keys || !keys.length || keys.some(key => can.has(key)))
   .map(([name]) => name);
 
-export function Modal({ title, close, children, wide = false }) {
+const FormErrors = createContext({});
+const FieldError = ({ name }) => {
+  const message = useContext(FormErrors)[name];
+  return message ? <span className="field-error" role="alert">{message}</span> : null;
+};
+function focusFormError(form, issues, fallbackRef) {
+  const first = Object.keys(issues)[0];
+  const field = first && form?.elements.namedItem(first);
+  requestAnimationFrame(() => (field?.focus ? field : fallbackRef?.current)?.focus());
+}
+function parseFieldErrors(failure) {
+  return Object.fromEntries(Object.entries(failure.details?.issues?.fieldErrors || {})
+    .filter(([, messages]) => messages?.length).map(([name, messages]) => [name, messages[0]]));
+}
+
+export function Modal({ title, close, children, wide = false, scope }) {
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    const dialog = dialogRef.current;
+    dialog?.querySelector('input,select,textarea,button,[href]')?.focus();
+    const onKeyDown = event => {
+      const overlays = [...document.querySelectorAll('.modal-backdrop')];
+      if (overlays.at(-1) !== dialog?.parentElement) return;
+      if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+      if (event.key !== 'Tab' || !dialog) return;
+      const items = [...dialog.querySelectorAll('button,input,select,textarea,a[href],[tabindex]:not([tabindex="-1"])')]
+        .filter(item => !item.disabled && item.getClientRects().length);
+      if (!items.length) return;
+      if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items.at(-1).focus(); }
+      else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0].focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => { document.removeEventListener('keydown', onKeyDown); previous?.focus?.(); };
+  }, []);
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
-    <div className={wide ? 'modal modal-wide' : 'modal'} role="dialog" aria-modal="true" aria-label={title}>
-      <div className="modal-title"><h2>{title}</h2><button className="icon-btn" onClick={close}><X size={18} /></button></div>
+    <div ref={dialogRef} className={wide ? 'modal modal-wide' : 'modal'} role="dialog" aria-modal="true" aria-label={title}>
+      <div className="modal-title"><div className="modal-title-context"><h2>{title}</h2><RecordScopeBadge scope={scope} compact /></div><button className="icon-btn" onClick={close}><X size={18} /></button></div>
       <div className="modal-content">{children}</div>
     </div>
   </div>;
 }
 
-export function EntityForm({ onSubmit, error, children }) {
-  return <form onSubmit={onSubmit} className="report-form">{children}{error && <p className="form-error">{error}</p>}</form>;
+export function EntityForm({ onSubmit, error, children, fieldErrors = {}, errorRef }) {
+  return <FormErrors.Provider value={fieldErrors}><form onSubmit={onSubmit} className="report-form">{error && <p ref={errorRef} tabIndex={-1} className="form-error" role="alert">{error}</p>}{children}</form></FormErrors.Provider>;
 }
 
 /**
@@ -132,13 +167,13 @@ export const Required = ({ when = true }) => (when
  */
 export function Field({ name, label, type = 'text', wide = false, required = true, defaultValue, step, min, max, placeholder }) {
   return <label className={wide ? 'wide' : ''}>{label}<Required when={required} />
-    <input name={name} type={type} required={required} defaultValue={defaultValue} step={step} min={min} max={max} placeholder={placeholder} />
+    <input name={name} type={type} required={required} defaultValue={defaultValue} step={step} min={min} max={max} placeholder={placeholder} /><FieldError name={name} />
   </label>;
 }
 
 export function TextArea({ name, label, required = true, placeholder, defaultValue, rows }) {
   return <label className="wide">{label}<Required when={required} />
-    <textarea name={name} required={required} placeholder={placeholder} defaultValue={defaultValue} rows={rows} />
+    <textarea name={name} required={required} placeholder={placeholder} defaultValue={defaultValue} rows={rows} /><FieldError name={name} />
   </label>;
 }
 
@@ -149,7 +184,7 @@ export function SelectField({ name, label, options, defaultValue, wide = false, 
         const [value, text] = Array.isArray(option) ? option : [option, option];
         return <option value={value} key={value}>{text}</option>;
       })}
-    </select>
+    </select><FieldError name={name} />
   </label>;
 }
 
@@ -168,7 +203,7 @@ export function EmptyState({ children }) {
  * Table shell used by every list in the product. `columns` drives the header and the
  * grid template, so a new module only supplies its rows.
  */
-export function Table({ columns, template, children, title, tools, empty = 'Nothing recorded yet.' }) {
+export function Table({ columns, template, children, title, tools, empty = 'No records in this view. Check the selected company, project, filters, or date range.', emptyAction, emptyActionLabel }) {
   const rows = React.Children.toArray(children);
   /*
    * The heading and the rows share one grid.
@@ -181,45 +216,56 @@ export function Table({ columns, template, children, title, tools, empty = 'Noth
    * so every cell in a column is measured against the same content.
    */
   return <section className="table-panel">
-    {(title || tools) && <div className="table-tools"><h2>{title}</h2>{tools}</div>}
+    {(title || tools) && <div className="table-tools"><div className="table-tools-context"><h2>{title}</h2><RecordScopeBadge compact /></div>{tools}</div>}
     <div className="table-grid" style={{ gridTemplateColumns: template }}>
       <div className="table-head" style={{ gridTemplateColumns: template }}>
         {columns.map(column => <span key={column}>{column}</span>)}
       </div>
-      {rows.length ? rows : <div className="table-row table-empty"><span>{empty}</span></div>}
+      {rows.length ? rows : <div className="table-row table-empty"><span>{empty}{emptyAction && <button type="button" className="status-button" onClick={emptyAction}>{emptyActionLabel || 'Get started'}</button>}</span></div>}
     </div>
   </section>;
 }
 
-export function Row({ template, children, onClick }) {
+export function Row({ template, children, onClick, id, className = '' }) {
   /* The inline template is the fallback for browsers without subgrid; where subgrid is
      supported the stylesheet overrides it and the parent's columns win. */
-  return <div className="table-row" style={{ gridTemplateColumns: template, cursor: onClick ? 'pointer' : undefined }} onClick={onClick}>{children}</div>;
+  return <div id={id} className={`table-row ${className}`} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
+    style={{ gridTemplateColumns: template, cursor: onClick ? 'pointer' : undefined }} onClick={onClick}
+    onKeyDown={onClick ? event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick(event); } } : undefined}>{children}</div>;
 }
 
 /**
  * Wraps a create/edit form in a modal and handles the submit lifecycle, so each module
  * describes only its fields and the request to send.
  */
-export function FormModal({ title, close, label, onSubmit, children, wide = false }) {
+export function FormModal({ title, close, label, onSubmit, children, wide = false, scope }) {
+  const recordScope = useRecordScope(scope);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
+  const errorRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const submit = async event => {
     event.preventDefault();
+    const formElement = event.currentTarget;
     setBusy(true);
     setError('');
-    const form = new FormData(event.currentTarget);
+    setFieldErrors({});
+    const form = new FormData(formElement);
     try {
       await onSubmit(Object.fromEntries(form.entries()), form);
       close();
+      showScopeSaved(recordScope);
     } catch (failure) {
-      setError(failure.message);
+      const issues = parseFieldErrors(failure);
+      setFieldErrors(issues);
+      setError(Object.keys(issues).length ? 'Please correct the highlighted field, then save again.' : failure.message);
+      focusFormError(formElement, issues, errorRef);
     } finally {
       setBusy(false);
     }
   };
-  return <Modal title={title} close={close} wide={wide}>
-    <EntityForm onSubmit={submit} error={error}>
+  return <Modal title={title} close={close} wide={wide} scope={scope}>
+    <EntityForm onSubmit={submit} error={error} fieldErrors={fieldErrors} errorRef={errorRef}>
       {children}
       <FormButtons close={close} label={label} busy={busy} />
     </EntityForm>
@@ -227,12 +273,15 @@ export function FormModal({ title, close, label, onSubmit, children, wide = fals
 }
 
 /** Long, consequential records get room to breathe and a separate review before writing. */
-export function WorkflowForm({ title, close, label, onSubmit, children, summary = [], reviewContent = null }) {
+export function WorkflowForm({ title, close, label, onSubmit, children, summary = [], reviewContent = null, scope }) {
+  const recordScope = useRecordScope(scope);
   const formRef = useRef(null);
   const pageRef = useRef(null);
   const [review, setReview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
+  const errorRef = useRef(null);
   const [values, setValues] = useState({});
   const [dirty, setDirty] = useState(false);
   useEffect(() => {
@@ -253,32 +302,34 @@ export function WorkflowForm({ title, close, label, onSubmit, children, summary 
     event.preventDefault();
     if (!formRef.current.reportValidity()) return;
     setValues(displayValues());
-    setError('');
+    setError(''); setFieldErrors({});
     setReview(true);
     pageRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const save = async () => {
     setBusy(true); setError('');
-    try { const form = new FormData(formRef.current); await onSubmit(Object.fromEntries(form.entries()), form); close(); }
-    catch (failure) { setError(failure.message); }
+    try { const form = new FormData(formRef.current); await onSubmit(Object.fromEntries(form.entries()), form); close(); showScopeSaved(recordScope); }
+    catch (failure) { const issues = parseFieldErrors(failure); setFieldErrors(issues);
+      setError(Object.keys(issues).length ? 'Please correct the highlighted field, then review again.' : failure.message);
+      setReview(false); focusFormError(formRef.current, issues, errorRef); }
     finally { setBusy(false); }
   };
   return <div className="workflow-page" role="region" aria-label={title} ref={pageRef}>
-    <header className="workflow-header"><div><span>GKUC SiteOps · guided entry</span><h1>{title}</h1></div><button type="button" className="secondary" onClick={requestClose}>Close and return</button></header>
+    <header className="workflow-header"><div><span>GKUC SiteOps · guided entry</span><h1>{title}</h1><RecordScopeBadge scope={scope} /></div><button type="button" className="secondary" onClick={requestClose}>Close and return</button></header>
     <div className="workflow-progress" aria-label="Workflow progress"><span className={!review ? 'current' : 'done'}>1 · Complete details</span><span className={review ? 'current' : ''}>2 · Review and confirm</span></div>
     <div className="workflow-layout"><div className="workflow-main">
-      <form ref={formRef} className={`report-form workflow-editor${review ? ' is-reviewing' : ''}`} onSubmit={prepare} onInput={() => { setDirty(true); setValues(displayValues()); }} onChange={() => { setDirty(true); setValues(displayValues()); }}>
+      <FormErrors.Provider value={fieldErrors}><form ref={formRef} className={`report-form workflow-editor${review ? ' is-reviewing' : ''}`} onSubmit={prepare} onInput={() => { setDirty(true); setValues(displayValues()); }} onChange={() => { setDirty(true); setValues(displayValues()); }}>
+        {!review && error && <p className="form-error wide" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
         {children}
         <div className="form-actions wide"><button type="button" className="secondary" onClick={requestClose}>Cancel</button><button className="primary" type="submit">Review details <ChevronRight size={16} /></button></div>
-      </form>
-      {review && <section className="workflow-review"><span className="section-kicker">Final check</span><h2>Review before saving</h2><p>Nothing has been saved yet. Check the details below, then confirm. Use “Edit details” to correct anything.</p>
+      </form></FormErrors.Provider>
+      {review && <section className="workflow-review"><span className="section-kicker">Final check</span><h2>Review before saving</h2><RecordScopeBadge scope={scope} /><p>Nothing has been saved yet. Check the details below, then confirm. Use “Edit details” to correct anything.</p>
         <dl>{reviewFields().map((item, index) => <div key={`${item.name}-${index}`}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
         {reviewContent && <div className="workflow-review-content">{reviewContent}</div>}
         {summary.length > 0 && <div className="workflow-review-summary">{summary.map(([name, value]) => <div key={name}><span>{name}</span><strong>{value || '—'}</strong></div>)}</div>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="form-actions"><button type="button" className="secondary" onClick={() => { setReview(false); setError(''); }}>Edit details</button><button type="button" className="primary" onClick={save} disabled={busy}><Check size={16} />{busy ? 'Saving…' : label}</button></div>
       </section>}
-      {!review && error && <p className="form-error" role="alert">{error}</p>}
     </div><aside className="workflow-summary" aria-label="Current draft summary"><span className="section-kicker">Your draft</span><h2>{review ? 'Ready to confirm' : 'Summary as you work'}</h2><p>{review ? 'Review every detail before it becomes a saved record.' : 'Complete the sections on the left. You can check everything before saving.'}</p>
       {[...summary, ...Object.entries(values).filter(([name, value]) => value && ['title', 'projectId', 'clientId', 'closingDate', 'periodStart', 'periodEnd', 'dueDate'].includes(name)).map(([name, value]) => [name.replace(/([A-Z])/g, ' $1'), value])].map(([name, value], index) => <div className="workflow-summary-line" key={`${name}-${index}`}><span>{name}</span><strong>{value || '—'}</strong></div>)}
       <div className="workflow-summary-foot">{review ? 'Step 2 of 2 · confirm to save' : 'Step 1 of 2 · nothing saved yet'}</div>

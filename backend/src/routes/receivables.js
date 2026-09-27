@@ -488,10 +488,10 @@ router.post('/receivables/invoices/:id/receipts', auth, permit('finance.invoice'
           [paid, paid >= Number(invoice.net_payable) - 0.001 ? 'Paid' : 'Part paid', invoice.id]);
         /* Money received is income against the project, recorded once and in one place. */
         await connection.execute(
-          `INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,created_by)
-           VALUES (?,?,?,?,?,?,?,?)`,
+          `INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,origin_type,origin_id,created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`,
           [invoice.project_id, invoice.company_id, `${invoice.reference} — ${invoice.title}`, req.body.amount,
-            req.body.receivedDate, req.body.method, req.body.reference || invoice.reference, req.user.id]);
+            req.body.receivedDate, req.body.method, req.body.reference || invoice.reference,'client_receipt',String(created.insertId),req.user.id]);
         return { id: created.insertId, projectId: invoice.project_id, invoiceReference: invoice.reference,
           amount: req.body.amount };
       });
@@ -573,9 +573,10 @@ router.patch('/receivables/cheques/:id',auth,permit('finance.invoice'),validate(
           VALUES (?,?,CURDATE(),'Cheque',?,?)`,[invoice.id,cheque.amount,cheque.cheque_number,req.user.id]);
         receiptId=receipt.insertId;invoiceReference=invoice.reference;
       }
-      await connection.execute(`INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,created_by)
-        VALUES (?,?,?,?,CURDATE(),'Cheque',?,?)`,[cheque.project_id,cheque.company_id,
-          `Cheque cleared — ${cheque.purpose}`,cheque.amount,cheque.cheque_number,req.user.id]);
+      await connection.execute(`INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,origin_type,origin_id,created_by)
+        VALUES (?,?,?,?,CURDATE(),'Cheque',?,?,?,?)`,[cheque.project_id,cheque.company_id,
+          `Cheque cleared — ${cheque.purpose}`,cheque.amount,cheque.cheque_number,
+          receiptId?'client_receipt':'received_cheque',String(receiptId||cheque.id),req.user.id]);
     }
     await connection.execute(`UPDATE received_cheques SET status=?,notes=COALESCE(?,notes),
       deposited_at=CASE WHEN ? IN ('Deposited','Re-deposited') THEN CURDATE() ELSE deposited_at END,

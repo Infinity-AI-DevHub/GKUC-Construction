@@ -31,7 +31,8 @@ const taskPatch = z.object({
   assignee: z.string().min(2).max(120).optional(), assigneeEmployeeId: z.number().int().positive().optional(),
   assigneeEmployeeIds: z.array(z.number().int().positive()).min(1).max(50).optional(),
   due: z.string().min(2).max(100).optional(), dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  priority: z.enum(['Low', 'Medium', 'High']).optional(), status: z.enum(STATUSES).optional(), notes: z.string().max(3000).optional()
+  priority: z.enum(['Low', 'Medium', 'High']).optional(), status: z.enum(STATUSES).optional(),
+  statusReason: z.string().trim().max(2000).optional(), notes: z.string().max(3000).optional()
 });
 const resolveAssignees = async body => {
   if (body.assigneeEmployeeIds) {
@@ -80,12 +81,19 @@ router.get('/reminder-users', auth, permit('site.tasks'), wrap(async (_req,res) 
 router.get('/:id', auth, permit('site.tasks','projects.view'), wrap(async (req, res) => {
   const task = await withProject(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  const [comments, attachments] = await Promise.all([
+  const [comments, attachments, changes] = await Promise.all([
     query(`SELECT c.id,c.comment,c.created_at createdAt,u.name author FROM task_comments c JOIN users u ON u.id=c.user_id
       WHERE c.task_id=? ORDER BY c.id`, [task.id]),
-    listAttachments('task', task.id)
+    listAttachments('task', task.id),
+    query(`SELECT a.before_json beforeValue,a.after_json afterValue,a.created_at changedAt,u.name changedBy
+      FROM audit_logs a LEFT JOIN users u ON u.id=a.user_id WHERE a.entity='task' AND a.entity_id=? ORDER BY a.id DESC LIMIT 50`, [String(task.id)])
   ]);
-  res.json({ ...task, comments, attachments });
+  const parse = value => typeof value === 'string' ? JSON.parse(value) : value || {};
+  const statusHistory = changes.map(change => ({ before: parse(change.beforeValue).status || null,
+    after: parse(change.afterValue).status || null, reason: parse(change.afterValue).statusReason || null,
+    changedAt: change.changedAt, changedBy: change.changedBy || 'System' }))
+    .filter(change => change.after && change.after !== change.before);
+  res.json({ ...task, comments, attachments, statusHistory });
 }));
 
 router.post('/', auth, permit('site.tasks'), validate(taskSchema), wrap(async (req, res) => {
@@ -130,8 +138,20 @@ router.patch('/:id', auth, permit('site.tasks'), validate(taskPatch), wrap(async
   if (req.body.status === 'Approved' && !can(req, 'projects.manage')) {
     return res.status(403).json({ error: 'Only management can approve completed work' });
   }
+  const nextStatus = req.body.status;
+  if (nextStatus === 'Approved' && before.status !== 'Completed')
+    return res.status(400).json({ error: 'Submit this task for approval before approving it.' });
+  if (nextStatus === 'Rejected' && !can(req, 'projects.manage'))
+    return res.status(403).json({ error: 'Only project management can return completed work for correction.' });
+  if (nextStatus === 'Rejected' && before.status !== 'Completed')
+    return res.status(400).json({ error: 'Only work submitted for approval can be returned for correction.' });
+  if ((nextStatus === 'Rejected' || nextStatus === 'Blocked') && !req.body.statusReason?.trim())
+    return res.status(400).json({ error: `Explain why this task is ${nextStatus === 'Rejected' ? 'being returned' : 'blocked'} so the assigned team knows what to correct.` });
+  if (before.status === 'Approved' && nextStatus && nextStatus !== 'Approved')
+    return res.status(400).json({ error: 'Approved work cannot be changed back to an earlier status. Contact a project manager to review the record.' });
   const columns = { projectId: 'project_id', assigneeEmployeeId: 'assignee_employee_id', dueDate: 'due_date' };
   const body = { ...req.body };
+  delete body.statusReason;
   const changingAssignees = Boolean(body.assigneeEmployeeIds || body.assigneeEmployeeId || body.assignee);
   const assignees = changingAssignees ? await resolveAssignees(body) : null;
   if (assignees) { body.assigneeEmployeeId = assignees.assigneeEmployeeId; body.assignee = assignees.assignee; }
@@ -148,10 +168,13 @@ router.patch('/:id', auth, permit('site.tasks'), validate(taskPatch), wrap(async
         for (const employeeId of assignees.ids) await connection.execute(
           'INSERT INTO task_assignees (task_id,employee_id) VALUES (?,?)', [req.params.id, employeeId]);
       }
+      if (nextStatus && nextStatus !== before.status && req.body.statusReason?.trim())
+        await connection.execute('INSERT INTO task_comments (task_id,user_id,comment) VALUES (?,?,?)',
+          [req.params.id, req.user.id, `${nextStatus === 'Rejected' ? 'Returned for correction' : 'Blocked'}: ${req.body.statusReason.trim()}`]);
     });
   }
   const after = await withProject(req.params.id);
-  await audit(pool, req.user.id, 'UPDATE', 'task', after.id, before, after, req.ip);
+  await audit(pool, req.user.id, 'UPDATE', 'task', after.id, before, { ...after, statusReason: req.body.statusReason || null }, req.ip);
   res.json(after);
 }));
 

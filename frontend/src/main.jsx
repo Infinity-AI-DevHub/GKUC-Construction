@@ -51,13 +51,13 @@ const NAV = [
   ['Dashboard', LayoutDashboard, []],
   ['Coordination', Radar, ['projects.view']],
   ['Projects', Building2, ['projects.view']],
-  ['Tasks', ClipboardCheck, ['projects.view']],
-  ['Quantity Surveying', Calculator, ['qs.view']],
+  ['Tasks', ClipboardCheck, ['projects.view', 'site.tasks']],
+  ['Quantity Surveying', Calculator, ['qs.view', 'qs.costControl']],
   ['People', Users, ['hr.view', 'hr.manage', 'hr.attendance', 'hr.leave', 'hr.payroll', 'hr.settings', 'hr.conduct', 'hr.hiring', 'hr.insurance','hr.assets']],
   ['Materials', Warehouse, ['store.view', 'store.manage']],
   ['Stock locations', Warehouse, ['store.view', 'store.manage', 'projects.view']],
   ['Fleet', Truck, ['transport.view', 'transport.manage', 'store.lending']],
-  ['Finance', CircleDollarSign, ['finance.view', 'finance.manage', 'finance.invoice', 'finance.pay']],
+  ['Finance', CircleDollarSign, ['finance.view', 'finance.manage', 'finance.invoice', 'finance.pay', 'finance.costReview']],
   ['Daily reports', FileText, ['projects.view']],
   ['Chat', MessageSquare, ['chat.use']],
   ['Drive', HardDrive, ['drive.use']],
@@ -383,7 +383,12 @@ function App() {
    */
   useEffect(() => {
     if (!user || !data) return;
-    const wanted = pathFor(activePage, activePage === 'Administration' ? adminTab : null);
+    const base = pathFor(activePage, activePage === 'Administration' ? adminTab : null);
+    // Keep record/section deep links intact. The parent navigation still verifies that
+    // the user may open the workspace before any child can read its record identifier.
+    const wanted = ['Finance', 'Quantity Surveying', 'People', 'Projects'].includes(activePage)
+      && window.location.pathname.startsWith(`${pathFor(activePage)}/`)
+      ? window.location.pathname : base;
     if (window.location.pathname !== wanted) window.history.replaceState({}, '', wanted);
   }, [activePage, adminTab, user, data]);
 

@@ -189,7 +189,9 @@ router.post('/:id/drivers',auth,permit('transport.manage'),validate(z.object({
     }
     const [[active]]=await connection.execute(`SELECT id,assigned_on assignedOn FROM vehicle_driver_assignments
       WHERE vehicle_id=? AND ended_on IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE`,[vehicle.id]);
-    if(active&&new Date(b.assignedOn)<new Date(active.assignedOn))
+    // DATE values are calendar days, not instants. Comparing parsed Date objects
+    // can shift the day when the app and database use different time zones.
+    if(active&&b.assignedOn<String(active.assignedOn).slice(0,10))
       throw Object.assign(new Error('The new assignment cannot predate the current assignment'),{status:400});
     if(active)await connection.execute('UPDATE vehicle_driver_assignments SET ended_on=? WHERE id=?',[b.assignedOn,active.id]);
     let assignmentId=null;
@@ -240,8 +242,14 @@ router.post('/:id/documents', auth, permit('transport.manage'), validate(z.objec
 })), wrap(async (req, res) => {
   const body = req.body;
   await transaction(async connection=>{
-    const [[vehicle]]=await connection.execute('SELECT id FROM fleet WHERE id=? FOR UPDATE',[req.params.id]);
+    const [[vehicle]]=await connection.execute('SELECT id,vehicle,registration FROM fleet WHERE id=? FOR UPDATE',[req.params.id]);
     if(!vehicle)throw Object.assign(new Error('Vehicle not found'),{status:404});
+    const renewedOn=body.renewedOn||today();
+    const [[last]]=await connection.execute(`SELECT reference,renewed_on renewedOn,expiry_date expiryDate,cost
+      FROM vehicle_document_renewals WHERE vehicle_id=? AND doc_type=? ORDER BY id DESC LIMIT 1 FOR UPDATE`,[vehicle.id,body.docType]);
+    if(last&&String(last.renewedOn).slice(0,10)===renewedOn&&String(last.expiryDate).slice(0,10)===body.expiryDate
+      &&(last.reference||'')===(body.reference||'')&&Number(last.cost)===Number(body.cost))
+      throw Object.assign(new Error('This renewal is already recorded for this vehicle. Open the existing renewal instead of entering it twice.'),{status:409});
     await connection.execute(`INSERT INTO vehicle_documents (vehicle_id,doc_type,reference,expiry_date,cost) VALUES (?,?,?,?,?)
       ON DUPLICATE KEY UPDATE reference=VALUES(reference),expiry_date=VALUES(expiry_date),cost=VALUES(cost)`,
       [vehicle.id,body.docType,body.reference||null,body.expiryDate,body.cost]);
@@ -249,7 +257,18 @@ router.post('/:id/documents', auth, permit('transport.manage'), validate(z.objec
       [body.expiryDate,vehicle.id,body.docType]);
     const [history]=await connection.execute(`INSERT INTO vehicle_document_renewals
       (vehicle_id,doc_type,reference,renewed_on,expiry_date,cost,recorded_by) VALUES (?,?,?,?,?,?,?)`,
-      [vehicle.id,body.docType,body.reference||null,body.renewedOn||today(),body.expiryDate,body.cost,req.user.id]);
+      [vehicle.id,body.docType,body.reference||null,renewedOn,body.expiryDate,body.cost,req.user.id]);
+    if(body.docType==='Insurance'){
+      const [[policy]]=await connection.execute(`SELECT id FROM hr_insurance WHERE vehicle_id=? AND kind='Vehicle'
+        AND status='Active' ORDER BY id DESC LIMIT 1 FOR UPDATE`,[vehicle.id]);
+      if(policy)await connection.execute(`UPDATE hr_insurance SET policy_number=?,start_date=?,end_date=?,expiry_date=?,premium=? WHERE id=?`,
+        [body.reference||'',renewedOn,body.expiryDate,body.expiryDate,body.cost,policy.id]);
+      else await connection.execute(`INSERT INTO hr_insurance
+        (name,kind,vehicle_id,policy_number,start_date,end_date,expiry_date,premium,reminders,notes,created_by)
+        VALUES (?,'Vehicle',?,?,?,?,? ,?,'[]',?,?)`,
+        [`${vehicle.vehicle} (${vehicle.registration}) insurance`,vehicle.id,body.reference||'',renewedOn,
+          body.expiryDate,body.expiryDate,body.cost,'Recorded from Fleet; HR may add insurer, cover and reminders.',req.user.id]);
+    }
     await audit(connection,req.user.id,'RENEWAL','vehicle_document',history.insertId,null,body,req.ip);
   });
   const row = await getOne('SELECT * FROM vehicle_documents WHERE vehicle_id=? AND doc_type=?', [req.params.id, body.docType]);
