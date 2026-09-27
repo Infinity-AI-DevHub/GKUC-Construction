@@ -49,7 +49,7 @@ function Stock({ data, reload, can }) {
       <div><span>Low stock items</span><strong>{low}</strong><small>Require purchasing</small></div>
       <div><span>Healthy stock items</span><strong>{data.materials.length - low}</strong><small>At or above minimum</small></div>
     </div>
-    <p className="invoice-note">For site locations, tool custodians and BOQ quantity exceptions, open the separate Stock locations page. Receipts and issues must be recorded through Movements or handovers.</p>
+    <p className="invoice-note">Also visible in <a href="/stock-locations">Stock locations</a>: site locations, tool custodians and BOQ quantity exceptions. This stock register is shared by both companies. Record receipts and issues once through Movements or handovers; do not create a second item.</p>
     <Table columns={STOCK_COLUMNS} template={STOCK_TEMPLATE} title="Stock overview">
       {data.materials.map(material => <Row template={STOCK_TEMPLATE} key={material.id}>
         <div><strong>{material.name}</strong><small>MAT-{String(material.id).padStart(4, '0')}</small></div>

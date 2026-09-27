@@ -58,7 +58,7 @@ router.get('/', auth, wrap(async (req, res) => {
      * out has to say who took it, and had the same empty list. Pay is a separate matter and
      * still travels only to the people who maintain it, as in routes/employees.js.
      */
-    gated(['hr.view','hr.manage','hr.attendance','site.attendance','store.lending','projects.manage','enquiries.manage','site.tasks','qs.tender'], () => query(`SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,
+    gated(['hr.view','hr.manage','hr.attendance','site.attendance','store.lending','projects.manage','enquiries.manage','site.tasks','qs.tender'], () => query(`SELECT e.id,e.user_id userId,e.code,e.name,e.designation,e.phone,e.email,e.status,
       ${['hr.payroll', 'hr.manage','hr.settings'].some(key => req.user.permissions.includes(key))
     ? `e.allowance_eligibility allowanceEligibility,e.basic_salary basicSalary,e.daily_rate dailyRate,e.weekly_rate weeklyRate,e.overtime_rate overtimeRate,
        e.pay_basis payBasis,e.pay_frequency payFrequency,e.payroll_category payrollCategory,e.payroll_company_id payrollCompanyId,

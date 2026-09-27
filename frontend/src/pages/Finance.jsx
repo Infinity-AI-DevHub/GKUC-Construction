@@ -169,7 +169,10 @@ function Expenses({ companyId }) {
     title="Project expenses" empty="No expenses recorded.">
     {rows.map(row => <Row template={LEDGER_TEMPLATE} key={row.id}>
       <span>{shortDate(row.expenseDate)}</span>
-      <div><strong>{row.description}</strong><small>{row.originType ? 'Posted automatically' : row.reference || 'Manual entry'}</small></div>
+      <div><strong>{row.description}</strong><small>{row.originType ? 'Posted automatically from the source record · do not enter again' : row.reference || 'Manual entry'}</small>
+        {row.originType === 'fuel_record' && <small>Also visible in <a href={`/fleet?section=fuel&record=${row.originId}`}>Fleet fuel record #{row.originId}</a> and Finance petty cash.</small>}
+        {row.originType === 'daily_cost_line' && row.dailySheetId && <small>Also visible in <a href={`/quantity-surveying/cost-control?project=${row.projectId}&record=${row.dailySheetId}`}>QS daily cost sheet #{row.dailySheetId}</a>.</small>}
+        {row.originType === 'stock_movement' && <small>Also visible in <a href="/materials">Materials stock movements</a>. This cost was posted when stock was issued to the site.</small>}</div>
       <span>{row.project}</span>
       <Badge tone={slug(row.source)}>{row.source}</Badge>
       <strong>{rupees(row.amount)}</strong>
@@ -186,7 +189,10 @@ function Income({ companyId }) {
     title="Income received" empty="No income recorded.">
     {rows.map(row => <Row template={LEDGER_TEMPLATE} key={row.id}>
       <span>{shortDate(row.receivedDate)}</span>
-      <div><strong>{row.description}</strong><small>{row.reference || '—'}</small></div>
+      <div><strong>{row.description}</strong><small>{row.reference || '—'}</small>
+        {row.invoiceId&&<small>Also visible in <a href={`/finance/invoices?record=${row.invoiceId}`}>invoice payments and receipts</a>. This income was posted from that receipt.</small>}
+        {row.originType==='received_cheque'&&<small>Also visible in <a href="/finance/cheques">received cheques</a>. This income was posted when the cheque cleared.</small>}
+      </div>
       <span>{row.project}</span>
       <span>{row.method}</span>
       <strong>{rupees(row.amount)}</strong>
@@ -297,6 +303,7 @@ function IncomeForm({ data, close, reload }) {
     });
     await reload();
   }}>
+    <p className="form-note wide">Use this form only for income that is not an invoice payment or received cheque. Record client payments on the invoice and clear cheques in Received cheques; their income appears here automatically.</p>
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
     <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" />
     <Field name="receivedDate" label="Received on" type="date" defaultValue={todayInput()} />

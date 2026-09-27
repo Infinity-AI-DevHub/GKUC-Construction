@@ -66,7 +66,7 @@ export function ClientInvoices({ data, can, companyId }) {
       {acceptedQuotes.map(quote => {
         const plan = billingPlans.find(item => Number(item.quotationId) === Number(quote.id));
         return <Row key={quote.id} template="minmax(140px,1fr) minmax(180px,1.5fr) 140px minmax(260px,2fr)">
-          <div><strong>{quote.reference}</strong><small>{quote.title}</small></div>
+          <div><strong>{quote.reference}</strong><small>{quote.title}</small><small>Also visible in <a href={`/quantity-surveying/quotations?record=${quote.id}`}>QS quotation #{quote.reference}</a> · source of these invoice terms</small></div>
           <div><strong>{quote.client}</strong><small>{quote.project || 'No project'}</small></div>
           <strong>{rupees(quote.total)}</strong>
           <div className="row-actions">{plan ? plan.terms.map(term => <span key={term.id}>
@@ -87,7 +87,7 @@ export function ClientInvoices({ data, can, companyId }) {
         : null}>
       {invoices.map(invoice => <Row template={INVOICE_TEMPLATE} key={invoice.id}>
         <div><strong>{invoice.reference}</strong><small>{invoice.kind}</small></div>
-        <span>{invoice.project}</span>
+        <span>{invoice.project}{invoice.projectId && <small>Also visible in <a href={`/projects/${invoice.projectId}`}>project commercial record</a></small>}</span>
         <div><strong>{invoice.title}</strong><small>{invoice.documentType || (invoice.taxTreatment === 'Exempt' ? 'Invoice' : 'Tax Invoice')}</small></div>
         <span>{rupees(invoice.netPayable)}</span>
         {/* A draft is not owed by anybody yet, and the totals above exclude it. Showing a
@@ -633,7 +633,7 @@ function FloatLedger({ float, data, can, close, reload }) {
           ? `${entry.vehicle} · ${entry.registration}${entry.project ? ` · ${entry.project}` : ''}`
           : entry.employee
           ? `${entry.employee} · ${entry.employeeCode}${entry.outstandingAdvance > 0 ? ` · ${rupees(entry.outstandingAdvance)} awaiting payroll` : ' · recovered'}`
-          : entry.project || entry.category || '—'}</small></div>
+          : entry.project || entry.category || '—'}</small>{entry.fuelRecordId && <small>Also visible in <a href={`/fleet?section=fuel&record=${entry.fuelRecordId}`}>Fleet fuel record #{entry.fuelRecordId}</a> · source of this spend</small>}</div>
         <Badge tone={slug(entry.kind)}>{entry.kind}</Badge>
         <span>{entry.recordedBy}</span>
         <strong className={Number(entry.amount) < 0 ? 'overdue' : ''}>{rupees(entry.amount)}</strong>

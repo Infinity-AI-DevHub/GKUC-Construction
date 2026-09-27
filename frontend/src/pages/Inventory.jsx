@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS=['Locations','Tool handovers','BOQ usage'];
 const count=rows=>rows.reduce((sum,row)=>sum+Number(row.outstanding||0),0);
@@ -15,7 +16,8 @@ export default function Inventory({data,can}){
   const available=inventory.materials.reduce((sum,m)=>sum+Number(m.stock)*Number(m.unitCost||0),0);
   const openLoans=inventory.loans.filter(l=>Number(l.outstanding)>0);
   const warnings=inventory.siteIssues.filter(needsReview);
-  return <Page title="Stock locations" subtitle="See what remains in the storeroom, what has gone to each site, and who is holding returnable tools.">
+  return <RecordScopeProvider scope={{ kind: 'shared' }}><Page title="Stock locations" subtitle="See what remains in the storeroom, what has gone to each site, and who is holding returnable tools.">
+    <p className="invoice-note">Also visible in <a href="/materials">Materials & purchasing</a>. Both screens use the same shared stock record: make receipts and movements there, and record site use or tool handovers here. Do not add an item twice.</p>
     <div className="inventory-top"><div><span>Store stock value</span><strong>{rupees(available)}</strong><small>Consumables and returnable tools</small></div><div><span>Tools at sites</span><strong>{count(openLoans)}</strong><small>{openLoans.length} open handovers</small></div><div><span>Material plan flags</span><strong>{warnings.length}</strong><small>BOQ or accepted quote quantity needs review</small></div></div>
     <Tabs tabs={TABS} active={tab} onChange={setTab}/>
     {tab==='Locations'&&<><div className="toolbar"><span className="segment-label">Uncounted legacy site balances are estimates until physically checked.</span>{(can.stock||can.reports)&&<span className="row-actions"><button className="secondary" onClick={()=>setCounting(true)}>Count site stock</button><button className="secondary" onClick={()=>setConsuming(true)}>Record material used</button></span>}</div><Locations inventory={inventory}/></>}
@@ -25,7 +27,7 @@ export default function Inventory({data,can}){
     {returning&&<ReturnForm loan={returning} close={()=>setReturning(null)} reload={load}/>}
     {consuming&&<ConsumptionForm materials={inventory.materials.filter(m=>m.stockKind==='Consumable')} projects={data.projects} close={()=>setConsuming(false)} reload={load}/>}
     {counting&&<SiteCountForm materials={inventory.materials.filter(m=>m.stockKind==='Consumable')} projects={data.projects} close={()=>setCounting(false)} reload={load}/>}
-  </Page>;
+  </Page></RecordScopeProvider>;
 }
 
 function Locations({inventory}){

@@ -258,7 +258,7 @@ router.post('/:id/movements', auth, permit('store.manage'), validate(z.object({
           throw Object.assign(new Error('The site cannot return more than its unused balance'),{status:409});
       }
       await connection.execute('UPDATE materials SET stock=? WHERE id=?', [stock, before.id]);
-      await connection.execute(`INSERT INTO stock_movements (material_id,movement_type,quantity,reference,notes,project_id,destination,user_id)
+      const [movement] = await connection.execute(`INSERT INTO stock_movements (material_id,movement_type,quantity,reference,notes,project_id,destination,user_id)
         VALUES (?,?,?,?,?,?,?,?)`, [before.id, body.type, body.quantity, body.reference || '', body.notes || '',
         body.projectId || null, body.destination || null, req.user.id]);
 
@@ -267,7 +267,7 @@ router.post('/:id/movements', auth, permit('store.manage'), validate(z.object({
         await connection.execute(`INSERT INTO expenses (project_id,source,description,amount,expense_date,reference,origin_type,origin_id,created_by)
           VALUES (?,'Material',?,?,CURDATE(),?, 'stock_movement', ?, ?)`,
         [body.projectId, `${before.name} issued to site (${body.quantity} ${before.unit})`,
-          body.quantity * Number(before.unit_cost), body.reference || '', String(before.id), req.user.id]);
+          body.quantity * Number(before.unit_cost), body.reference || '', String(movement.insertId), req.user.id]);
       }
 
       const updated = { ...before, stock };

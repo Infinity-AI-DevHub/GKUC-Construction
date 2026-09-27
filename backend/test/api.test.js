@@ -97,8 +97,10 @@ test('fleet accepts an active registered employee as driver', async () => {
   });
   assert.equal(vehicle.status, 201, JSON.stringify(vehicle.body));
   assert.equal(Number(vehicle.body.driverEmployeeId), Number(employee.body.id));
+  const currentAssignment = (await call(owner, 'GET', `/fleet/${vehicle.body.id}`)).body.drivers[0];
   const handover = await call(owner, 'POST', `/fleet/${vehicle.body.id}/drivers`, {
-    employeeId: employee.body.id, projectId: 1, assignedOn: today(), notes: 'Registered driver regression test'
+    employeeId: employee.body.id, projectId: 1, assignedOn: currentAssignment.assignedOn,
+    notes: 'Registered driver regression test'
   });
   assert.equal(handover.status, 201, JSON.stringify(handover.body));
 });
@@ -219,6 +221,12 @@ test('HR insurance connects to Fleet and sends custom reminders without duplicat
   const options=(await call(hr,'GET','/insurance/options')).body;
   const vehicleId=options.vehicles[0].id;
   const [oldDocs]=await admin.query(`SELECT * FROM ${testDatabase}.vehicle_documents WHERE vehicle_id=? AND doc_type='Insurance'`,[vehicleId]);
+  const fleetOnlyVehicle=await call(owner,'POST','/fleet',{vehicle:'Fleet-only insurance QA',
+    registration:`FLEET-INSURANCE-${Date.now()}`,status:'Available',renewal:'Insurance',dueDate:shift(60),odometer:0});
+  assert.equal(fleetOnlyVehicle.status,201,JSON.stringify(fleetOnlyVehicle.body));
+  const existingPolicies=(await call(hr,'GET','/insurance')).body;
+  const fleetOnly=existingPolicies.find(row=>row.isFleetOnly&&Number(row.vehicle_id)===Number(fleetOnlyVehicle.body.id));
+  assert.ok(fleetOnly,'a Fleet-only policy appears in HR before its details are completed');
   const recordIds=[];
   const stamp=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Colombo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const body={name:'Test site cover',kind:'Work site',projectId:options.projects[0].id,insurer:'Test insurer',startDate:stamp,endDate:shift(60),expiryDate:shift(60),reminders:[{unit:'Date',date:stamp},{unit:'Date',date:stamp}]};
@@ -230,6 +238,8 @@ test('HR insurance connects to Fleet and sends custom reminders without duplicat
     assert.equal((await call(hr,'POST','/insurance',vehicleBody)).status,409);
     const fleet=(await call(hr,'GET',`/fleet/${vehicleId}`)).body;
     assert.ok(fleet.documents.some(doc=>doc.docType==='Insurance'&&doc.reference==='HR-TEST-POLICY'&&doc.expiryDate===body.expiryDate));
+    assert.ok(fleet.renewals.some(doc=>doc.docType==='Insurance'&&doc.reference==='HR-TEST-POLICY'),
+      'HR policy changes appear in the shared Fleet renewal history');
     for(let i=0;i<2;i++)assert.equal((await call(owner,'POST','/notifications/scan',{})).status,200);
     const [[count]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.notifications WHERE dedupe_key LIKE ?`,[`insurance:${site.body.id}:%`]);assert.equal(count.n,1);
     assert.ok((await call(hr,'GET','/notifications')).body.some(n=>n.referenceType==='insurance'&&Number(n.referenceId)===site.body.id));
@@ -583,7 +593,8 @@ test('authenticates and returns database-backed operational data', async () => {
   assert.equal(status, 200);
   assert.equal(body.data.projects.length, 3);
   assert.equal(body.data.tasks.length, 5);
-  assert.equal(body.data.employees.length, 8);
+  assert.ok(body.data.employees.length >= 8, 'seed employees remain available after earlier tests add staff');
+  assert.ok(body.data.employees.some(employee => employee.code === 'ATT-NO-ROLE-QA'));
   assert.equal(body.data.equipment.length, 5);
   assert.equal(body.user.role, 'Managing Director', 'PID v3 §2.1 role names');
   assert.ok(body.user.permissions.length > 30, 'the MD holds every permission');
@@ -658,6 +669,14 @@ test('purchase request, order, goods receipt and stock stay in step', async () =
   const afterIssue = await call(owner, 'GET', '/finance/expenses?projectId=1');
   assert.ok(afterIssue.body.some(expense => expense.originType === 'stock_movement'),
     'issuing it to the site is what charges the site');
+  const secondIssue = await call(store, 'POST', '/materials/1/movements', { type: 'Issue', quantity: 5, projectId: 1, reference: 'SECOND-ISSUE' });
+  assert.equal(secondIssue.status, 201);
+  const [linkedCosts] = await admin.query(`SELECT e.origin_id,sm.material_id,sm.quantity,sm.reference
+    FROM \`${testDatabase}\`.expenses e JOIN \`${testDatabase}\`.stock_movements sm ON sm.id=CAST(e.origin_id AS UNSIGNED)
+    WHERE e.origin_type='stock_movement' AND sm.material_id=1 AND sm.project_id=1 ORDER BY e.id DESC LIMIT 2`);
+  assert.equal(linkedCosts.length, 2, 'each issue has its own linked cost');
+  assert.notEqual(linkedCosts[0].origin_id, linkedCosts[1].origin_id);
+  assert.equal(linkedCosts[0].reference, 'SECOND-ISSUE');
 });
 
 test('issuing stock cannot drive a balance negative', async () => {
@@ -1594,6 +1613,8 @@ test('invoice receipts cannot post twice and preserve the actual payment method'
   const posted = income.filter(row => row.reference === payment.reference);
   assert.equal(posted.length, 1);
   assert.equal(posted[0].method, 'Cash');
+  assert.equal(posted[0].originType, 'client_receipt');
+  assert.equal(Number(posted[0].invoiceId), Number(invoice.body.id));
 });
 
 test('concurrent petty-cash spends cannot overdraw the float or duplicate project cost', async () => {
@@ -1772,7 +1793,8 @@ test('future-dated cheques are reminded and confirmed before settling invoices',
   assert.equal((await call(finance,'PATCH',`/receivables/cheques/${received.body.id}`,{status:'Cleared',notes:'Cleared on statement'})).status,200);
   clientDetail=await call(finance,'GET',`/receivables/invoices/${clientInvoice.body.id}`);
   assert.equal(Number(clientDetail.body.paid_amount),100000);
-  assert.ok((await call(finance,'GET','/finance/income?projectId=1')).body.some(row=>row.reference===received.body.cheque_number));
+  assert.ok((await call(finance,'GET','/finance/income?projectId=1')).body.some(row=>row.reference===received.body.cheque_number
+    && row.originType==='client_receipt'&&Number(row.invoiceId)===Number(clientInvoice.body.id)));
 });
 
 test('finance reporting reconciles company and project scopes', async () => {
@@ -2294,6 +2316,11 @@ test('fleet histories preserve driver handovers, odometer, repairs and renewals'
   assert.equal(handover.status,201);
   assert.equal((await call(owner,'POST',`/fleet/${id}/documents`,{docType:'Insurance',reference:'POL-2027',
     renewedOn:today(),expiryDate:today(),cost:24000})).status,201);
+  const insurance=(await call(owner,'GET','/insurance')).body.find(policy=>Number(policy.vehicle_id)===Number(id)&&policy.status==='Active');
+  assert.ok(insurance&&!insurance.isFleetOnly,'Fleet renewal creates the matching HR policy record');
+  assert.equal(insurance.policy_number,'POL-2027');
+  assert.equal((await call(owner,'POST',`/fleet/${id}/documents`,{docType:'Insurance',reference:'POL-2027',
+    renewedOn:today(),expiryDate:today(),cost:24000})).status,409,'the same renewal cannot be recorded twice');
   assert.equal((await call(owner,'POST',`/fleet/${id}/documents`,{docType:'Revenue licence',reference:'RL-2027',
     renewedOn:today(),expiryDate:today(),cost:4500})).status,201);
   detail=(await call(owner,'GET',`/fleet/${id}`)).body;
@@ -2616,7 +2643,9 @@ test('workforce map distinguishes office presence, site allocation and free work
   assert.equal(created.status, 201);
   assert.equal(created.body.workerType, 'Site');
 
-  const employee = (await call(token, 'GET', '/employees')).body.find(row => row.id !== created.body.id);
+  const employee = (await call(token, 'GET', '/employees')).body.find(row => row.id !== created.body.id
+    && row.status === 'Active' && row.joinDate && String(row.joinDate).slice(0, 10) <= date);
+  assert.ok(employee, 'a current employee with a recorded start date is available for the office check');
   await call(token, 'PATCH', `/employees/${employee.id}`, { workerType: 'Office' });
   const present = await call(token, 'POST', '/attendance', {
     name: employee.name, role: employee.designation, employeeId: employee.id,

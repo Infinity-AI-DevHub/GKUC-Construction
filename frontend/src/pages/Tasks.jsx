@@ -8,9 +8,9 @@ import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
 const FILTERS = ['All', 'Not started', 'In progress', 'Blocked', 'Completed', 'Approved', 'Rejected'];
 const COLUMNS = ['Task', 'Assignee', 'Due', 'Status', 'Next action'];
 const TEMPLATE = 'minmax(220px,2fr) minmax(140px,1fr) 110px 125px minmax(150px,1fr)';
-const nextAction = status => ({ 'Not started': 'Start work', 'In progress': 'Submit for approval',
-  Blocked: 'Resolve blocker', Completed: 'Await manager approval', Approved: 'Approved · no action',
-  Rejected: 'Review feedback and resubmit' })[status] || 'Open task';
+const nextAction = (status, can) => ({ 'Not started': 'Start work', 'In progress': 'Submit for approval',
+  Blocked: 'Resolve blocker', Completed: can?.projects ? 'Approve or return with reason' : 'Await manager approval',
+  Approved: 'Approved · no action', Rejected: 'Review feedback and resubmit' })[status] || 'Open task';
 const day = value => String(value || '').slice(0, 10);
 
 /** PID 2.3 — assigned work with deadlines, so no instruction depends on being remembered. */
@@ -30,10 +30,15 @@ export default function Tasks({ data, reload, can, user }) {
     api(`/tasks/${id}`).then(setDetail).catch(failure => setError(failure.message));
   }, []);
 
+  const myEmployee = data.employees.find(employee => Number(employee.userId) === Number(user?.id));
+  const filterProjects = [...new Map(data.tasks.map(task => [String(task.projectId), {
+    id: task.projectId, name: task.project
+  }])).values()].filter(project => project.id != null);
   const shown = data.tasks.filter(task => {
     const dueDate = day(task.dueDate);
     const overdue = dueDate && dueDate < todayInput() && !['Completed', 'Approved'].includes(task.status);
-    const mineMatch = task.assignees?.some(employee => employee.name?.toLowerCase() === user?.name?.toLowerCase())
+    const mineMatch = (myEmployee && task.assigneeEmployeeIds?.some(id => Number(id) === Number(myEmployee.id)))
+      || task.assignees?.some(employee => employee.name?.toLowerCase() === user?.name?.toLowerCase())
       || task.assignee?.split(',').some(name => name.trim().toLowerCase() === user?.name?.toLowerCase());
     return (filter === 'All' || task.status === filter) && (!mine || mineMatch)
       && (projectFilter === 'all' || String(task.projectId) === projectFilter)
@@ -46,7 +51,7 @@ export default function Tasks({ data, reload, can, user }) {
     <Tabs tabs={FILTERS} active={filter} onChange={setFilter} />
     <div className="task-practical-filters">
       <label><input type="checkbox" checked={mine} onChange={event => setMine(event.target.checked)} /> Assigned to me</label>
-      <label>Project <select value={projectFilter} onChange={event => setProjectFilter(event.target.value)}><option value="all">All projects</option>{data.projects.map(project => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label>
+      <label>Project <select value={projectFilter} onChange={event => setProjectFilter(event.target.value)}><option value="all">All projects</option>{filterProjects.map(project => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label>
       <label>Due date <input type="date" value={dueFilter === 'all' ? '' : dueFilter} onChange={event => setDueFilter(event.target.value || 'all')} /></label>
       <label><input type="checkbox" checked={overdueOnly} onChange={event => setOverdueOnly(event.target.checked)} /> Overdue only</label>
     </div>
@@ -55,12 +60,12 @@ export default function Tasks({ data, reload, can, user }) {
     <div className="task-project-groups">{groups.map(group => <section className="task-project-group" key={group.id}>
       <header className="task-project-heading"><span className="task-project-icon"><FolderKanban size={21}/></span><div><small>Project tasks</small><h2>{group.name}</h2></div><span className="task-project-count">{shown.filter(task => (task.projectId ?? task.project) === group.id).length} {shown.filter(task => (task.projectId ?? task.project) === group.id).length === 1 ? 'task' : 'tasks'}</span></header>
       <Table columns={COLUMNS} template={TEMPLATE} empty="No tasks in this view.">
-      {shown.filter(task => (task.projectId ?? task.project) === group.id).map(task => <Row template={TEMPLATE} key={task.id} onClick={() => openRecord(`/tasks/${task.id}`, setDetail)}>
-        <div><strong>{task.title}</strong><small>{task.priority} priority</small></div>
+      {shown.filter(task => (task.projectId ?? task.project) === group.id).map(task => <Row template={TEMPLATE} key={task.id}>
+        <div><button type="button" className="task-record-link" onClick={() => openRecord(`/tasks/${task.id}`, setDetail)}>{task.title}</button><small>{task.priority} priority</small></div>
         <div className="person"><Avatar name={task.assignee} /><span>{task.assignee}</span></div>
         <span className={task.due === 'Yesterday' ? 'overdue' : ''}>{task.due}</span>
         <Badge tone={slug(task.status)}>{task.status}</Badge>
-        <span className="task-next-action">{nextAction(task.status)}</span>
+        <span className="task-next-action">{nextAction(task.status, can)}</span>
       </Row>)}
     </Table></section>)}</div>
 
@@ -150,7 +155,7 @@ function TaskDetail({ task, close, reload, refresh, can }) {
         <div><span>Status</span><strong>{task.status}</strong></div>
         <div><span>Due</span><strong>{task.due}</strong></div>
       </div>
-      <p className="form-note wide"><strong>Next step:</strong> {nextAction(task.status)}. {task.status === 'Completed' ? 'The assigned work is waiting for project management to approve it or return it with a reason.' : ''}</p>
+      <p className="form-note wide"><strong>Next step:</strong> {nextAction(task.status, can)}. {task.status === 'Completed' ? 'Project management must approve it or return it with a reason.' : ''}</p>
       <p className="form-note wide">Also visible in <a href={`/projects/${task.projectId}`}>{task.project} · project activity</a>. Update this task here or there; both open the same task record.</p>
       {task.notes && <p className="wide" style={{ fontSize: '11px', color: 'var(--muted)', margin: 0 }}>{task.notes}</p>}
 

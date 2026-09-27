@@ -18,6 +18,8 @@ main .page-heading p{font-size:13px;color:var(--workspace-muted);margin-top:8px;
 .task-practical-filters select,.task-practical-filters input[type=date]{border:1px solid #dce4ed;border-radius:8px;padding:8px 10px;background:#fff;color:#102a43;min-height:36px}
 .task-practical-filters input[type=checkbox]{accent-color:#ab1736}
 .task-next-action{font-weight:750;color:#173f64}
+.task-record-link{border:0;background:transparent;padding:0;color:#173f64;font-weight:800;text-align:left;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:3px;cursor:pointer}
+.task-record-link:hover,.task-record-link:focus-visible{text-decoration-color:currentColor}
 .task-status-history{border:1px solid #e1e7ee;border-radius:12px;padding:16px 18px;background:#f8fafc}
 .task-status-history h3{margin:0 0 10px;font-size:14px;color:#102a43}
 .task-status-history ol{margin:0;padding-left:20px;display:grid;gap:10px}
@@ -29,6 +31,8 @@ main .page-heading p{font-size:13px;color:var(--workspace-muted);margin-top:8px;
 .report-definition p{margin:0 0 7px;font-size:12px;line-height:1.6}
 .report-definition small{display:block;color:#597186;font-size:11px}
 .report-kpis article small{display:block;color:#65788b;font-size:10px;line-height:1.4;margin-top:6px}
+.finance-report-filters>button{align-self:end;min-height:38px}
+.table-row.linked-record{background:#fff7e8;box-shadow:inset 3px 0 #bc761d}
 .module-layout{display:grid;grid-template-columns:232px minmax(0,1fr);gap:28px;align-items:start}
 .module-navigation{position:sticky;top:24px;background:#fff;border:1px solid var(--workspace-line);border-radius:18px;padding:20px 10px;box-shadow:0 6px 24px #102a4305;min-width:0}
 .module-navigation{max-height:calc(100vh - 48px);overflow-y:auto;scrollbar-width:thin}

@@ -105,10 +105,10 @@ const FieldError = ({ name }) => {
   const message = useContext(FormErrors)[name];
   return message ? <span className="field-error" role="alert">{message}</span> : null;
 };
-function focusFormError(form, issues, fallback) {
+function focusFormError(form, issues, fallbackRef) {
   const first = Object.keys(issues)[0];
   const field = first && form?.elements.namedItem(first);
-  requestAnimationFrame(() => (field?.focus ? field : fallback)?.focus());
+  requestAnimationFrame(() => (field?.focus ? field : fallbackRef?.current)?.focus());
 }
 function parseFieldErrors(failure) {
   return Object.fromEntries(Object.entries(failure.details?.issues?.fieldErrors || {})
@@ -226,10 +226,10 @@ export function Table({ columns, template, children, title, tools, empty = 'No r
   </section>;
 }
 
-export function Row({ template, children, onClick }) {
+export function Row({ template, children, onClick, id, className = '' }) {
   /* The inline template is the fallback for browsers without subgrid; where subgrid is
      supported the stylesheet overrides it and the parent's columns win. */
-  return <div className="table-row" role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
+  return <div id={id} className={`table-row ${className}`} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
     style={{ gridTemplateColumns: template, cursor: onClick ? 'pointer' : undefined }} onClick={onClick}
     onKeyDown={onClick ? event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick(event); } } : undefined}>{children}</div>;
 }
@@ -259,7 +259,7 @@ export function FormModal({ title, close, label, onSubmit, children, wide = fals
       const issues = parseFieldErrors(failure);
       setFieldErrors(issues);
       setError(Object.keys(issues).length ? 'Please correct the highlighted field, then save again.' : failure.message);
-      focusFormError(formElement, issues, errorRef.current);
+      focusFormError(formElement, issues, errorRef);
     } finally {
       setBusy(false);
     }
@@ -311,7 +311,7 @@ export function WorkflowForm({ title, close, label, onSubmit, children, summary 
     try { const form = new FormData(formRef.current); await onSubmit(Object.fromEntries(form.entries()), form); close(); showScopeSaved(recordScope); }
     catch (failure) { const issues = parseFieldErrors(failure); setFieldErrors(issues);
       setError(Object.keys(issues).length ? 'Please correct the highlighted field, then review again.' : failure.message);
-      setReview(false); focusFormError(formRef.current, issues, errorRef.current); }
+      setReview(false); focusFormError(formRef.current, issues, errorRef); }
     finally { setBusy(false); }
   };
   return <div className="workflow-page" role="region" aria-label={title} ref={pageRef}>

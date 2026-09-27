@@ -27,7 +27,7 @@ function QrCodeImage({ value }) {
 /** PID 2.8 and 2.9 — vehicles with their compliance dates, and equipment with its whereabouts. */
 export default function Fleet({ data, reload, can, companyId, company }) {
   const tabs = allowedTabs(TABS, can);
-  const [tab, setTab] = useState(tabs[0]);
+  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('section') === 'fuel' && tabs.includes('Fuel & service') ? 'Fuel & service' : tabs[0]);
   const [open, setOpen] = useState('');
   const [vehicles,setVehicles]=useState(data.fleet);
   useLiveList(()=>api('/fleet').then(setVehicles).catch(()=>{}));
@@ -68,6 +68,11 @@ function FleetPulse({vehicles}){
 
 function Vehicles({ data, can, reload }) {
   const [detail, setDetail] = useState(null);
+  useEffect(() => {
+    const id=Number(new URLSearchParams(window.location.search).get('record'));
+    if(id&&data.fleet.some(vehicle=>Number(vehicle.id)===id))
+      api(`/fleet/${id}`).then(setDetail).catch(()=>{});
+  }, []);
   return <>
     <div className="fleet-grid">
       {data.fleet.map(vehicle => <article className="fleet-card" key={vehicle.id} onClick={() => openRecord(`/fleet/${vehicle.id}`, setDetail)}>
@@ -97,6 +102,7 @@ function VehicleDetail({ vehicle, data, close, can, refresh }) {
   const fuelMax=Math.max(1,...vehicle.fuel.slice(0,8).map(row=>Number(row.cost)));
   return <Modal title={`${vehicle.vehicle} — ${vehicle.reg}`} close={close} wide>
     <div className="report-form">
+      {vehicle.documents.some(document=>document.docType==='Insurance')&&<p className="form-note wide">Vehicle insurance is one shared record. Renew it here; the same current policy appears in People → Insurance.{can?.has('hr.insurance')&&<> <a href="/people/insurance">Open HR insurance details and reminders</a>.</>}</p>}
       <div className="project-stats wide">
         <div><span>Fuel cost to date</span><strong>{rupees(vehicle.running.fuelCost)}</strong></div>
         <div><span>Maintenance cost</span><strong>{rupees(vehicle.running.maintenanceCost)}</strong></div>
@@ -240,16 +246,19 @@ function FuelAndService({ data }) {
       .then(vehicles => setRows(vehicles.flatMap(vehicle => vehicle.fuel.map(record => ({ ...record, vehicle: vehicle.vehicle, reg: vehicle.reg })))))
       .catch(() => setRows([]));
   }, [data.fleet]);
+  useEffect(() => { const id = new URLSearchParams(window.location.search).get('record');
+    if (id && rows.some(row => String(row.id) === id)) document.getElementById(`fuel-${id}`)?.scrollIntoView({ block: 'center' });
+  }, [rows]);
 
   return <Table columns={['Vehicle', 'Date', 'Litres', 'Cost', 'Odometer', 'Project']} template={template}
     title="Fuel records" empty="No fuel recorded yet.">
-    {rows.map(row => <Row template={template} key={row.id}>
+    {rows.map(row => <Row template={template} key={row.id} id={`fuel-${row.id}`} className={new URLSearchParams(window.location.search).get('record') === String(row.id) ? 'linked-record' : ''}>
       <div><strong>{row.vehicle}</strong><small>{row.reg}</small></div>
       <span>{shortDate(row.fuelDate)}</span>
       <span>{row.litres}</span>
       <span>{rupees(row.cost)}</span>
       <span>{row.odometer}</span>
-      <span>{row.project || '—'}{row.fuelFloat ? <small>Paid from {row.fuelFloat}</small> : null}</span>
+      <span>{row.project || '—'}{row.fuelFloat ? <small>Paid from {row.fuelFloat}</small> : null}<small>Also visible in <a href="/finance/petty-cash">Finance petty cash</a>. This Fleet fuel record is the source; do not enter the spend again.</small></span>
     </Row>)}
   </Table>;
 }
@@ -451,6 +460,7 @@ function FuelForm({ data, vehicle, close, reload }) {
     });
     await reload();
   }}>
+    <p className="form-note wide">Record the fuel purchase once here. The same fuel record appears in <a href="/finance/petty-cash">Finance → Petty cash</a> and project costs; do not create a second expense.</p>
     <SelectField name="vehicleId" label="Vehicle" options={(vehicle?[vehicle]:data.fleet).map(item => [item.id, `${item.vehicle} — ${item.reg}`])} />
     <label>Fuel float <span aria-hidden="true">*</span><select name="fuelFloatId" value={fuelFloatId}
       onChange={event => setFuelFloatId(event.target.value)} required>

@@ -119,14 +119,15 @@ router.get('/expenses', auth, permit('finance.view','finance.manage'), wrap(asyn
   const filters = [];
   const params = [];
   const companyId = companyParam(req);
-  if (companyId) { filters.push('COALESCE(i.company_id,p.company_id)=?'); params.push(companyId); }
+  if (companyId) { filters.push('p.company_id=?'); params.push(companyId); }
   if (req.query.projectId) { filters.push('e.project_id=?'); params.push(req.query.projectId); }
   if (req.query.from) { filters.push('e.expense_date>=?'); params.push(req.query.from); }
   if (req.query.to) { filters.push('e.expense_date<=?'); params.push(req.query.to); }
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   res.json(await query(`SELECT e.id,e.description,e.amount,e.expense_date expenseDate,e.source,e.reference,e.origin_type originType,
-    p.name project,e.project_id projectId,c.name category,u.name recordedBy
+    e.origin_id originId,dcl.sheet_id dailySheetId,p.name project,e.project_id projectId,c.name category,u.name recordedBy
     FROM expenses e JOIN projects p ON p.id=e.project_id LEFT JOIN expense_categories c ON c.id=e.category_id
+    LEFT JOIN daily_cost_lines dcl ON e.origin_type='daily_cost_line' AND dcl.id=CAST(e.origin_id AS UNSIGNED)
     JOIN users u ON u.id=e.created_by ${where} ORDER BY e.expense_date DESC,e.id DESC LIMIT 300`, params));
 }));
 
@@ -156,11 +157,14 @@ router.post('/expenses', auth, permit('finance.manage'), validate(z.object({
 router.get('/income', auth, permit('finance.view','finance.manage'), wrap(async (req, res) => {
   const filters = []; const params = [];
   const companyId = companyParam(req);
-  if (companyId) { filters.push('p.company_id=?'); params.push(companyId); }
+  if (companyId) { filters.push('i.company_id=?'); params.push(companyId); }
   if (req.query.projectId) { filters.push('i.project_id=?'); params.push(req.query.projectId); }
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-  res.json(await query(`SELECT i.id,i.description,i.amount,i.received_date receivedDate,i.method,i.reference,p.name project,i.project_id projectId,u.name recordedBy
-    FROM incomes i LEFT JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=i.created_by ${where}
+  res.json(await query(`SELECT i.id,i.description,i.amount,i.received_date receivedDate,i.method,i.reference,
+    i.origin_type originType,i.origin_id originId,ci.id invoiceId,p.name project,i.project_id projectId,u.name recordedBy
+    FROM incomes i LEFT JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=i.created_by
+    LEFT JOIN client_receipts cr ON i.origin_type='client_receipt' AND cr.id=CAST(i.origin_id AS UNSIGNED)
+    LEFT JOIN client_invoices ci ON ci.id=cr.invoice_id ${where}
     ORDER BY i.received_date DESC,i.id DESC LIMIT 300`, params));
 }));
 

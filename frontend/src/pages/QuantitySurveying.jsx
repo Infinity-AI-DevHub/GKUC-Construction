@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Download, FileText, Plus, Trash2, Upload, ChartNoAxesCombined, Calculator, ClipboardList, ShieldCheck, Users, ChevronRight, Layers } from 'lucide-react';
 import { api, fetchDownload, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
@@ -84,9 +84,15 @@ function Quotations({ can, reload, companyId }) {
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState('');
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const openedFromLink = useRef(false);
   const load = () => api(`/qs/quotations?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
   useEffect(()=>{setDetail(null);load();},[companyId]);
+  useEffect(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('record'));
+    if (!id || openedFromLink.current || !rows.some(row => Number(row.id) === id)) return;
+    openedFromLink.current = true; openQuotation(id);
+  }, [rows]);
 
   /* A refused status change has to say so; it used to reject into nothing. */
   const setStatus = async (id, status) => {
@@ -327,9 +333,9 @@ function Tenders({ can, companyId, company, employees }) {
 
     <Table columns={['Reference', 'Tender', 'Employer', 'Closes', 'Our bid', 'Papers']} template={TENDER_TEMPLATE}
       title="Tenders" empty="No tenders being tracked.">
-      {rows.map(row => <Row template={TENDER_TEMPLATE} key={row.id} onClick={() => setDetailId(row.id)}>
+      {rows.map(row => <Row template={TENDER_TEMPLATE} key={row.id}>
         <div>
-          <strong>{row.reference}</strong>
+          <button type="button" className="task-record-link" onClick={() => setDetailId(row.id)}>{row.reference}</button>
           <small>{row.contractNo || row.procurementMethod}</small>
           {row.sourceFilename && <button className="status-button" onClick={async event => {
             event.stopPropagation();
