@@ -2,9 +2,12 @@ import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import express from 'express';
 import helmet from 'helmet';
 import { query } from './db.js';
+import { auth, tokenHash } from './lib/http.js';
+import { canonicalDocumentDownloadPath } from './lib/document-download-ticket.js';
 import { migrate } from './schema.js';
 import { seedIfEmpty } from './seed.js';
 import { startAlertScheduler } from './alerts.js';
@@ -171,7 +174,7 @@ app.use('/api', rateLimit);
  * same permission-checked endpoints they always used, so this can never become a way to
  * receive data the viewer would have been refused.
  */
-const SILENT = new Set(['auth', 'events', 'bootstrap']);
+const SILENT = new Set(['auth', 'events', 'bootstrap', 'document-download-tickets']);
 app.use('/api', (req, res, next) => {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
   const entity = req.path.split('/').filter(Boolean)[0] || 'data';
@@ -191,6 +194,20 @@ app.get('/api/health', async (_req, res, next) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.post('/api/document-download-tickets', auth, async (req, res, next) => {
+  try {
+    const documentPath = canonicalDocumentDownloadPath(req.body?.path);
+    if (!documentPath) return res.status(400).json({ error: 'Choose a valid PDF document to download.' });
+    const ticket = randomBytes(32).toString('hex');
+    await query('DELETE FROM document_download_tickets WHERE expires_at<DATE_SUB(NOW(),INTERVAL 1 DAY)');
+    await query(`INSERT INTO document_download_tickets(token_hash,session_id,document_path,expires_at)
+      VALUES(?,?,?,DATE_ADD(NOW(),INTERVAL 2 MINUTE))`, [tokenHash(ticket), req.user.sessionId, documentPath]);
+    const url = new URL(`/api${documentPath}`, 'https://siteops.invalid');
+    url.searchParams.set('downloadTicket', ticket);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ url: `${url.pathname}${url.search}` });
+  } catch (error) { next(error); }
+});
 app.use('/api/bootstrap', bootstrapRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/clients', clientRoutes);

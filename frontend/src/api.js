@@ -346,36 +346,56 @@ export const openDocument = async path => {
     tab.document.close();
     const downloadButton = tab.document.querySelector('.bar button');
     if (downloadButton) {
-      // Prepare the authenticated file before the download click. A real link preserves
-      // Safari's user gesture instead of synthesising a click after an awaited fetch.
+      // A blob URL created in the parent tab is not a reliable download in Safari.
+      // Give the browser a real same-origin PDF URL instead. Its short-lived ticket is
+      // bound to this document, the current session, and a single download request.
       const downloadError = tab.document.createElement('span');
       downloadError.setAttribute('role', 'alert');
       downloadError.style.cssText = 'color:#fff;margin:0 16px;max-width:650px;white-space:normal';
       downloadButton.before(downloadError);
+      let downloadAction = downloadButton;
       const prepareDownload = async () => {
-        downloadButton.disabled = true;
-        downloadButton.textContent = 'Preparing PDF…';
+        if (downloadAction.tagName === 'A') {
+          const button = tab.document.createElement('button');
+          button.textContent = 'Preparing another PDF…';
+          downloadAction.replaceWith(button);
+          downloadAction = button;
+        }
+        downloadAction.disabled = true;
+        downloadAction.textContent = 'Preparing PDF…';
         downloadError.textContent = '';
         try {
           const separator = path.includes('?') ? '&' : '?';
-          const url = await fetchDownload(`${path}${separator}download=pdf`, { expectedType: 'application/pdf' });
+          const pdfPath = `${path}${separator}download=pdf`;
+          const { url } = await post('/document-download-tickets', { path: pdfPath });
           const link = tab.document.createElement('a');
           link.href = url;
-          link.download = `${tab.document.title.replace(/[^\w.-]+/g, '-')}.pdf`;
           link.textContent = 'Download PDF';
           link.style.cssText = 'display:inline-block;background:#c6f72b;color:#10243e;padding:10px 16px;border-radius:4px;font:bold 14px sans-serif;text-decoration:none';
-          downloadButton.replaceWith(link);
-          // Keep the URL alive while the preview is open, including repeat downloads.
-          tab.addEventListener('pagehide', () => URL.revokeObjectURL(url), { once: true });
+          // The server sets Content-Disposition: attachment with the proper filename.
+          // Refresh the one-use ticket after a click without interfering with navigation.
+          link.addEventListener('click', () => setTimeout(() => void prepareDownload(), 0));
+          downloadAction.replaceWith(link);
+          downloadAction = link;
         } catch (failure) {
           downloadError.textContent = failure.message;
           notice({ title: 'PDF could not be downloaded', message: failure.message });
-          downloadButton.disabled = false;
-          downloadButton.textContent = 'Retry PDF download';
+          downloadAction.disabled = false;
+          downloadAction.textContent = 'Retry PDF download';
+          downloadAction.onclick = prepareDownload;
         }
       };
       downloadButton.onclick = prepareDownload;
       void prepareDownload();
+      // A colleague may review a long quotation for more than two minutes before
+      // downloading. Keep the one-use URL fresh while its preview remains open.
+      if (window.document) {
+        const refresh = setInterval(() => {
+          if (tab.closed) return clearInterval(refresh);
+          if (downloadAction.tagName === 'A') void prepareDownload();
+        }, 60000);
+        tab.addEventListener('pagehide', () => clearInterval(refresh), { once: true });
+      }
     }
     return true;
   } catch (failure) {

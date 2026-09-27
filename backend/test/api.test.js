@@ -1,6 +1,6 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -655,6 +655,25 @@ test('client directory links projects, quotations, invoices and payments without
   const quotationPdf = Buffer.from(await quotationPdfResponse.arrayBuffer());
   assert.equal(quotationPdf.subarray(0, 5).toString(), '%PDF-');
   assert.ok(quotationPdf.subarray(-1024).toString().includes('%%EOF'));
+  const ticket = await call(owner, 'POST', '/document-download-tickets', {
+    path: `/qs/quotations/${quote.body.id}/document?download=pdf`
+  });
+  assert.equal(ticket.status, 200, JSON.stringify(ticket.body));
+  const tampered = await fetch(`http://127.0.0.1:${port}${ticket.body.url.replace(`/quotations/${quote.body.id}/`, '/quotations/999999/')}`);
+  assert.equal(tampered.status, 401);
+  const ticketedPdfResponse = await fetch(`http://127.0.0.1:${port}${ticket.body.url}`);
+  assert.equal(ticketedPdfResponse.status, 200);
+  assert.match(ticketedPdfResponse.headers.get('content-type'), /^application\/pdf/);
+  assert.match(ticketedPdfResponse.headers.get('content-disposition'), /^attachment;/);
+  const ticketedPdf = Buffer.from(await ticketedPdfResponse.arrayBuffer());
+  assert.equal(ticketedPdf.subarray(0, 5).toString(), '%PDF-');
+  assert.ok(ticketedPdf.subarray(-1024).toString().includes('startxref'));
+  const inspected = spawnSync('pdfinfo', ['-'], { input: ticketedPdf });
+  if (!inspected.error) assert.equal(inspected.status, 0, inspected.stderr.toString());
+  assert.equal((await fetch(`http://127.0.0.1:${port}${ticket.body.url}`)).status, 401);
+  assert.equal((await call(owner, 'POST', '/document-download-tickets', {
+    path: 'https://outside.example/qs/quotations/1/document?download=pdf'
+  })).status, 400);
   const invoiceBody = { projectId: project.body.id, clientId, kind: 'Interim', title: 'Client-linked invoice',
     invoiceDate: today(), deliveryDate: today(), placeOfSupply: 'Project Site Road', paymentMode: 'Cheque',
     taxTreatment: 'Exempt', retentionPercent: 0, advanceRecovery: 0,
@@ -675,6 +694,13 @@ test('client directory links projects, quotations, invoices and payments without
   assert.equal(pdfResponse.status, 200);
   const invoicePdf = Buffer.from(await pdfResponse.arrayBuffer());
   assert.equal(invoicePdf.subarray(0, 5).toString(), '%PDF-');
+  const invoiceTicket = await call(owner, 'POST', '/document-download-tickets', {
+    path: `/receivables/invoices/${invoice.body.id}/document?download=pdf`
+  });
+  assert.equal(invoiceTicket.status, 200);
+  const invoiceTicketResponse = await fetch(`http://127.0.0.1:${port}${invoiceTicket.body.url}`);
+  assert.equal(invoiceTicketResponse.status, 200);
+  assert.equal(Buffer.from(await invoiceTicketResponse.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
   assert.equal((await call(owner, 'POST', `/receivables/invoices/${invoice.body.id}/issue`)).status, 204);
   assert.equal((await call(owner, 'POST', `/receivables/invoices/${invoice.body.id}/receipts`, {
     amount: 500, receivedDate: today(), method: 'Bank transfer', reference: `CLI-${Date.now()}`

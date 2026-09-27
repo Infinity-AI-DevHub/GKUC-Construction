@@ -134,6 +134,17 @@ async function createCoreTables() {
     expires_at DATETIME NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_sessions_user FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE, INDEX idx_sessions_expiry(expires_at)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS document_download_tickets (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    token_hash CHAR(64) NOT NULL UNIQUE,
+    session_id BIGINT UNSIGNED NOT NULL,
+    document_path VARCHAR(700) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    consumed_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_document_ticket_session FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+    INDEX idx_document_ticket_expiry(expires_at)
+  ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS projects (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(180) NOT NULL, client VARCHAR(180) NOT NULL, manager VARCHAR(120) NOT NULL,
     progress TINYINT UNSIGNED NOT NULL DEFAULT 0, budget DECIMAL(15,2) NOT NULL DEFAULT 0, actual DECIMAL(15,2) NOT NULL DEFAULT 0,
