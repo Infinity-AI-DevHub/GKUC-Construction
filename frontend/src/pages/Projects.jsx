@@ -104,7 +104,8 @@ function Milestones({ data, reload, can }) {
     await reload();
   };
   return <Table columns={MILESTONE_COLUMNS} template={MILESTONE_TEMPLATE} title="Project milestones"
-    empty="No milestones planned yet.">
+    empty="No milestones planned for this company's projects yet. Add a milestone after the project programme is agreed."
+    emptyAction={can.projects ? () => document.querySelector('.page-heading .primary')?.click() : undefined} emptyActionLabel="Add milestone">
     {data.milestones.map(milestone => <Row template={MILESTONE_TEMPLATE} key={milestone.id}>
       <strong>{milestone.title}</strong>
       <span>{milestone.project}</span>

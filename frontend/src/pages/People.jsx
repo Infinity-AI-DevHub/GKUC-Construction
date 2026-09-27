@@ -172,7 +172,8 @@ function Payroll({ can, companyId }) {
 
   return <>
     <Table columns={['Reference', 'Frequency', 'From', 'To', 'Employees', 'Net payroll', 'Status', '']} template={PAYROLL_TEMPLATE}
-      title="Payroll runs" empty="No payroll run yet.">
+      title="Payroll runs" empty="No payroll run for this company yet. Check attendance and payroll inputs, then prepare the first run for the correct pay period."
+      emptyAction={can.payroll ? () => window.location.assign('/people/payroll-inputs') : undefined} emptyActionLabel="Review payroll inputs">
       {rows.map(row => <Row template={PAYROLL_TEMPLATE} key={row.id}>
         <strong>{row.reference}</strong>
         <Badge tone="pending">{row.payFrequency}</Badge>

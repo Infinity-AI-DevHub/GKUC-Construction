@@ -10,6 +10,37 @@ const metric = (label, value, raw = null) => ({ label, value, raw });
 const table = (columns, rows) => ({ columns, rows });
 const report = (id, title, category, narrative, metrics, visual, schedule) =>
   ({ id, title, category, narrative, metrics, visual, ...schedule });
+const REPORT_DEFINITIONS = {
+  executive: 'Income is posted money received; cost is recorded expenses incurred. Profit is income less cost. Receivables are issued invoice balances, not cash.',
+  'profit-loss': 'Revenue and expenses come from posted ledger entries in the selected date range; draft quotations and unpaid invoices are not cash income.',
+  'project-profitability': 'Project income received minus project expenses incurred. Quoted or invoiced amounts are not counted as received income.',
+  'budget-actual': 'Approved project budget compared with expenses already recorded; this is not a remaining cash balance.',
+  'cash-flow': 'Money received and expenses paid or posted by month within the selected reporting period.',
+  revenue: 'Income received and recorded in the ledger, not the value quoted or merely invoiced.',
+  expenses: 'Costs incurred and posted to the expense ledger, grouped by source category.',
+  receivables: 'Issued client invoice value less payments recorded against those invoices. Unpaid balances are not cash received.',
+  payables: 'Supplier invoice value less payments recorded. Outstanding balances are obligations, not costs paid today.',
+  procurement: 'Purchase-order commitments, including orders not yet invoiced or paid.',
+  payroll: 'Processed payroll runs and employer cost for the payroll periods shown; net pay differs from total employer cost.',
+  'petty-cash': 'Float funding and spending movements; a fuel spend or salary advance is not a second independent expense.',
+  retention: 'Amounts held on contracts less amounts released; held retention is not yet cash received.',
+  tax: 'VAT and deductions on issued invoices; VAT is calculated from invoice lines, not from quotation totals.',
+  bonds: 'Live bond exposure, held margins and commission; exposure is not the same as cash expense.',
+  forecast: 'Projected final cost compared with the approved baseline, using QS item forecasts and costs already incurred.',
+  unexpected: 'Recorded costs outside planned BOQ items or explicitly marked unexpected.',
+  variations: 'Approved and pending contract changes shown separately; pending value is not yet approved income.',
+  'payment-methods': 'Recorded money-in and money-out entries grouped by how payment moved.',
+  'monthly-trend': 'Recorded income and cost grouped by transaction month; quoted and unpaid invoice values are excluded from cash in.'
+};
+const METRIC_DEFINITIONS = {
+  Income: 'Money received and posted', Revenue: 'Posted income', Cost: 'Expense incurred', Expenses: 'Expense incurred',
+  Profit: 'Income less cost', Loss: 'Cost above income', 'Net result': 'Income less cost',
+  Certified: 'Issued invoice value', Collected: 'Client payments received', Outstanding: 'Unpaid invoice balance',
+  'Approved budget': 'Approved project allowance', 'Actual cost': 'Posted project expenses',
+  'Net payroll': 'Employee take-home amount', 'Employer cost': 'Pay plus employer contributions',
+  'VAT': 'Tax on issued invoices', 'Income received': 'Cash or payments recorded',
+  'Forecast': 'Expected final project cost', 'Committed': 'Purchase orders not cancelled'
+};
 const monthKey = date => String(date || '').slice(0, 7) || 'Unspecified';
 const group = (rows, key, valueKey = 'amount') => Object.values(rows.reduce((out, row) => {
   const label = typeof key === 'function' ? key(row) : row[key] || 'Uncategorised';
@@ -116,6 +147,9 @@ export default function FinanceReports({ projects, companyId, company }) {
   const [data, setData] = useState(null);
   const [selectedId, setSelectedId] = useState('executive');
   const [query, setQuery] = useState('');
+  const [savedScopes, setSavedScopes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(`gkuc:report-scopes:${companyId}`) || '[]'); } catch { return []; }
+  });
   useEffect(() => {
     const params = new URLSearchParams({ companyId: String(companyId), projectId: scope });
     if (from) params.set('from', from);
@@ -124,7 +158,18 @@ export default function FinanceReports({ projects, companyId, company }) {
     api(`/finance/reporting?${params}`).then(setData).catch(() => setData({ projects: [], scope: { projectId: scope } }));
   }, [companyId, scope, from, to]);
 
-  useEffect(() => { setScope('all'); }, [companyId]);
+  useEffect(() => { setScope('all'); setFrom(''); setTo('');
+    try { setSavedScopes(JSON.parse(localStorage.getItem(`gkuc:report-scopes:${companyId}`) || '[]')); }
+    catch { setSavedScopes([]); }
+  }, [companyId]);
+  const saveScope = () => {
+    const name = window.prompt('Name this report view (for example, Monthly construction review)');
+    if (!name?.trim()) return;
+    const next = [...savedScopes.filter(item => item.name !== name.trim()), { name: name.trim(), scope, from, to, reportId: selectedId }];
+    localStorage.setItem(`gkuc:report-scopes:${companyId}`, JSON.stringify(next)); setSavedScopes(next);
+  };
+  const useSavedScope = name => { const item = savedScopes.find(value => value.name === name); if (!item) return;
+    setScope(item.scope); setFrom(item.from); setTo(item.to); setSelectedId(item.reportId); };
   const reports = useMemo(() => data ? buildReports(data) : [], [data]);
   const selected = reports.find(row => row.id === selectedId) || reports[0];
   const visible = reports.filter(row => `${row.title} ${row.category}`.toLowerCase().includes(query.toLowerCase()));
@@ -142,13 +187,16 @@ export default function FinanceReports({ projects, companyId, company }) {
       <label>Scope<select aria-label="Financial report scope" value={scope} onChange={event => setScope(event.target.value)}><option value="all">All {company?.name || 'company'}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
       <label>From<input aria-label="Report from date" type="date" value={from} onChange={event => setFrom(event.target.value)} /></label>
       <label>To<input aria-label="Report to date" type="date" value={to} onChange={event => setTo(event.target.value)} /></label>
+      <label>Saved views<select aria-label="Saved report views" value="" onChange={event => useSavedScope(event.target.value)}><option value="">Choose a saved view…</option>{savedScopes.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label>
+      <button type="button" className="secondary" onClick={saveScope}>Save this view</button>
     </section>
     {!selected ? <p className="empty-state">Preparing reconciled financial reports…</p> : <div className="industrial-reports finance-report-centre">
       <aside className="report-library"><div className="report-library-head"><span>{reports.length} live reports</span><h2>Financial reports</h2><label><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Find a report" /></label></div><nav>{visible.map(item => <button className={selected.id === item.id ? 'active' : ''} onClick={() => setSelectedId(item.id)} key={item.id}><FileText size={15} /><span><strong>{item.title}</strong><small>{item.category}</small></span></button>)}</nav></aside>
       <section className="report-canvas">
         <header><div><span>{selected.category} report</span><h1>{selected.title}</h1><p>{scope === 'all' ? `All ${company?.name || 'company'}` : projects.find(project => String(project.id) === scope)?.name} · live ledger data</p></div><button className="secondary" onClick={download}><Download size={15} />Export table</button></header>
+        <section className="report-definition"><strong>How to read this report</strong><p>{REPORT_DEFINITIONS[selected.id]}</p><small>Date basis: {from || 'all available dates'} to {to || 'latest recorded date'}. Figures are limited to {scope === 'all' ? company?.name || 'this company' : projects.find(project => String(project.id) === scope)?.name || 'the selected project'}.</small></section>
         <article className={`report-narrative ${selected.metrics[2]?.raw < 0 ? 'loss' : 'profit'}`}><BarChart3 size={22} /><div><strong>Management interpretation</strong><p>{selected.narrative}</p></div></article>
-        <div className="report-kpis">{selected.metrics.map((row, index) => <article key={row.label}><span>{row.label}</span><strong>{row.value}</strong>{index === 2 && row.raw < 0 ? <TrendingDown /> : <TrendingUp />}</article>)}</div>
+        <div className="report-kpis">{selected.metrics.map((row, index) => <article key={row.label}><span>{row.label}</span><strong>{row.value}</strong><small>{METRIC_DEFINITIONS[row.label] || REPORT_DEFINITIONS[selected.id]}</small>{index === 2 && row.raw < 0 ? <TrendingDown /> : <TrendingUp />}</article>)}</div>
         <section className="report-visual-panel"><div><span>Visual analysis</span><h2>Financial performance view</h2></div><ReportVisual rows={selected.visual} /></section>
         <section className="report-table-panel"><div><span>Supporting schedule</span><h2>Detailed financial records</h2></div><div className="report-table-scroll"><table><thead><tr>{selected.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{selected.rows.map((row, index) => <tr key={index}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell ?? '—'}</td>)}</tr>)}{!selected.rows.length && <tr><td colSpan={selected.columns.length}>No records fall inside this report scope yet.</td></tr>}</tbody></table></div></section>
       </section>

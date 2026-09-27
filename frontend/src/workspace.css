@@ -11,6 +11,24 @@ main .page-heading p{font-size:13px;color:var(--workspace-muted);margin-top:8px;
 .table-tools-context{display:flex;align-items:center;flex-wrap:wrap;gap:10px;min-width:0}
 .workflow-header .record-scope-badge{margin-top:11px}
 .workflow-review>.record-scope-badge{margin:4px 0 15px}
+.field-error{display:block;margin-top:5px;color:#a51635;font-weight:700;font-size:11px;line-height:1.5}
+.report-form label:has(.field-error) :is(input,select,textarea){border-color:#b8193d;background:#fff8f9}
+.task-practical-filters{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:15px 18px;margin:0 0 15px;background:#fff;border:1px solid #e1e7ee;border-radius:14px}
+.task-practical-filters label{display:flex;align-items:center;gap:8px;color:#40596f;font-size:12px;font-weight:700}
+.task-practical-filters select,.task-practical-filters input[type=date]{border:1px solid #dce4ed;border-radius:8px;padding:8px 10px;background:#fff;color:#102a43;min-height:36px}
+.task-practical-filters input[type=checkbox]{accent-color:#ab1736}
+.task-next-action{font-weight:750;color:#173f64}
+.task-status-history{border:1px solid #e1e7ee;border-radius:12px;padding:16px 18px;background:#f8fafc}
+.task-status-history h3{margin:0 0 10px;font-size:14px;color:#102a43}
+.task-status-history ol{margin:0;padding-left:20px;display:grid;gap:10px}
+.task-status-history li span{display:block;color:#65788b;font-size:11px}
+.task-status-history li p{margin:3px 0;color:#40596f;font-size:12px}
+.table-row[role=button]:focus-visible{outline:2px solid #ab1736;outline-offset:-2px;background:#fff6f8}
+.report-definition{margin:18px 0;padding:16px 18px;border:1px solid #d8e5f0;border-left:4px solid #173f64;border-radius:10px;background:#f6f9fc;color:#40596f}
+.report-definition strong{display:block;color:#102a43;font-size:13px;margin-bottom:5px}
+.report-definition p{margin:0 0 7px;font-size:12px;line-height:1.6}
+.report-definition small{display:block;color:#597186;font-size:11px}
+.report-kpis article small{display:block;color:#65788b;font-size:10px;line-height:1.4;margin-top:6px}
 .module-layout{display:grid;grid-template-columns:232px minmax(0,1fr);gap:28px;align-items:start}
 .module-navigation{position:sticky;top:24px;background:#fff;border:1px solid var(--workspace-line);border-radius:18px;padding:20px 10px;box-shadow:0 6px 24px #102a4305;min-width:0}
 .module-navigation{max-height:calc(100vh - 48px);overflow-y:auto;scrollbar-width:thin}
