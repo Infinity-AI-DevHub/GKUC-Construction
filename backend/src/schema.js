@@ -164,6 +164,14 @@ async function createCoreTables() {
     CONSTRAINT fk_project_award_project FOREIGN KEY(project_id) REFERENCES projects(id),
     CONSTRAINT fk_project_award_user FOREIGN KEY(recorded_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS project_work_authorisations (
+    project_id BIGINT UNSIGNED PRIMARY KEY,
+    authorised_by BIGINT UNSIGNED NOT NULL,
+    authorised_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    notes VARCHAR(1000) NULL,
+    CONSTRAINT fk_work_auth_project FOREIGN KEY(project_id) REFERENCES projects(id),
+    CONSTRAINT fk_work_auth_user FOREIGN KEY(authorised_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS tasks (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, title VARCHAR(220) NOT NULL, project_id BIGINT UNSIGNED NOT NULL, assignee VARCHAR(120) NOT NULL,
     due VARCHAR(100) NOT NULL, priority ENUM('Low','Medium','High') NOT NULL, status ENUM('Not started','In progress','Blocked','Completed','Approved') NOT NULL,
@@ -842,7 +850,7 @@ async function createAttachmentTables() {
     CONSTRAINT fk_upload_user FOREIGN KEY(uploaded_by) REFERENCES users(id),
     INDEX idx_attachment_owner(owner_type,owner_id), INDEX idx_attachment_expiry(expiry_date)
   ) ENGINE=InnoDB`);
-  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim') NOT NULL");
+  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter') NOT NULL");
 }
 
 /** 2.2 payroll and performance, and PID section 3 step 1 (customer inquiry). */
@@ -1235,6 +1243,33 @@ async function createCommunicationTable() {
     'CONSTRAINT fk_communication_project FOREIGN KEY(project_id) REFERENCES projects(id)');
   await addForeignKey('client_communications', 'fk_communication_user',
     'CONSTRAINT fk_communication_user FOREIGN KEY(logged_by) REFERENCES users(id)');
+}
+
+async function createIncomingLetterTable() {
+  await query(`CREATE TABLE IF NOT EXISTS incoming_letters (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    received_date DATE NOT NULL,
+    sender VARCHAR(180) NOT NULL,
+    sender_address VARCHAR(500) NULL,
+    letter_reference VARCHAR(120) NULL,
+    subject VARCHAR(240) NOT NULL,
+    description TEXT NULL,
+    document_type ENUM('Letter','Bank statement','Other') NOT NULL DEFAULT 'Letter',
+    client_id BIGINT UNSIGNED NULL,
+    project_id BIGINT UNSIGNED NULL,
+    assigned_employee_id BIGINT UNSIGNED NULL,
+    assigned_department VARCHAR(120) NULL,
+    status ENUM('Received','Assigned','In progress','Responded','Closed') NOT NULL DEFAULT 'Received',
+    logged_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_letter_received (received_date), INDEX idx_letter_status (status),
+    INDEX idx_letter_client (client_id), INDEX idx_letter_project (project_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  await addForeignKey('incoming_letters','fk_letter_client','CONSTRAINT fk_letter_client FOREIGN KEY(client_id) REFERENCES clients(id)');
+  await addForeignKey('incoming_letters','fk_letter_project','CONSTRAINT fk_letter_project FOREIGN KEY(project_id) REFERENCES projects(id)');
+  await addForeignKey('incoming_letters','fk_letter_employee','CONSTRAINT fk_letter_employee FOREIGN KEY(assigned_employee_id) REFERENCES employees(id)');
+  await addForeignKey('incoming_letters','fk_letter_user','CONSTRAINT fk_letter_user FOREIGN KEY(logged_by) REFERENCES users(id)');
 }
 
 async function createMethodTables() {
@@ -3023,6 +3058,7 @@ export async function migrate() {
   await createConstructionOperationsTables();
   await createFleetHistoryTables();
   await createClientDirectory();
+  await createIncomingLetterTable();
   await createProjectManagerLinks();
   await addColumn('payroll_policies','hr_rules','JSON NULL');
   await modifyColumn('attendance','source',"VARCHAR(50) NOT NULL DEFAULT 'Manual'");
@@ -3040,6 +3076,7 @@ export async function migrate() {
     FOREIGN KEY(employee_id) REFERENCES employees(id),FOREIGN KEY(project_id) REFERENCES projects(id),
     FOREIGN KEY(policy_id) REFERENCES payroll_policies(id),FOREIGN KEY(created_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await modifyColumn('hr_payroll_claims','kind',"ENUM('Travel','Mileage','Special duty','Machine/operator','Supervisor site charge') NOT NULL");
   await addColumn('payslip_components','claim_id','BIGINT UNSIGNED NULL');
   await addIndex('payslip_components','uq_paid_claim','UNIQUE KEY uq_paid_claim(claim_id)');
   await query(`CREATE TABLE IF NOT EXISTS payroll_project_allocations (

@@ -41,6 +41,21 @@ router.get('/analytics', auth, permit('hr.attendance','hr.manage'), wrap(async (
       FROM attendance WHERE work_date BETWEEN ? AND ? ORDER BY work_date`, [start, end])
   ]);
   const active = employees.length;
+  const activeIds = new Set(employees.map(employee => Number(employee.id)));
+  const idsByName = new Map();
+  for (const employee of employees) {
+    const matches = idsByName.get(employee.name) || [];
+    matches.push(Number(employee.id));
+    idsByName.set(employee.name, matches);
+  }
+  const activeEmployeeId = record => {
+    if (record.employeeId != null) {
+      const id = Number(record.employeeId);
+      return activeIds.has(id) ? id : null;
+    }
+    const matches = idsByName.get(record.name) || [];
+    return matches.length === 1 ? matches[0] : null;
+  };
   const dayRows = new Map();
   for (const record of records) {
     const day = String(record.workDate).slice(0, 10);
@@ -49,7 +64,7 @@ router.get('/analytics', auth, permit('hr.attendance','hr.manage'), wrap(async (
   }
   const series = length => Array.from({ length }, (_, index) => dateShift(end, index - length + 1)).map(day => {
     const rows = dayRows.get(day) || [];
-    const present = new Set(rows.filter(row => attended(row.state)).map(row => row.employeeId || row.name)).size;
+    const present = new Set(rows.filter(row => attended(row.state)).map(activeEmployeeId).filter(id => id !== null)).size;
     return { day, present, absent: Math.max(0, active - present), rate: percentage(present, active) };
   });
   const weekly = series(7);
@@ -80,8 +95,8 @@ router.get('/analytics', auth, permit('hr.attendance','hr.manage'), wrap(async (
 }));
 
 router.post('/', auth, permit('hr.attendance'), validate(z.object({
-  name: z.string().min(2).max(120),
-  role: z.string().min(2).max(100),
+  name: z.string().max(120).optional(),
+  role: z.string().max(100).optional(),
   projectId: z.number().int().positive().nullable().optional(),
   workLocation: z.enum(['Office', 'Site']).default('Site'),
   employeeId: z.number().int().positive().optional(),
@@ -104,7 +119,7 @@ router.post('/', auth, permit('hr.attendance'), validate(z.object({
     const state = body.state === 'On site' && checkIn > LATE_AFTER ? 'Late' : body.state;
     const projectId = body.workLocation === 'Office' ? null : body.projectId;
     const result = await query(`INSERT INTO attendance (employee_name,role,project_id,work_location,employee_id,work_date,check_in,check_out,state,confirmed_by,source)
-      VALUES (?,?,?,?,?,?,?,?,?,?,'Manual')`, [body.name, body.role, projectId, body.workLocation, body.employeeId || null, body.date, checkIn, checkOut, state, req.user.id]);
+      VALUES (?,?,?,?,?,?,?,?,?,?,'Manual')`, [employee.name, employee.designation?.trim() || 'Employee', projectId, body.workLocation, body.employeeId, body.date, checkIn, checkOut, state, req.user.id]);
     await query('UPDATE attendance SET employee_name=?,source=?,source_notes=? WHERE id=?',[employee.name,body.informationSource,body.sourceNotes,result.insertId]);
     const row = await getOne(`${select} WHERE a.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'attendance', row.id, null, row, req.ip);

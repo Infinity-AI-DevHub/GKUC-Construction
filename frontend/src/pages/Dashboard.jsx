@@ -2,6 +2,7 @@ import React from 'react';
 import { AlertTriangle, Boxes, CheckCircle2, ChevronRight, FileText, Truck } from 'lucide-react';
 import { Avatar, Badge, PanelTitle } from '../ui.jsx';
 import { daysUntil, money, slug } from '../api.js';
+import MyWorkToday from '../MyWorkToday.jsx';
 
 /**
  * PID 2.1 — the state of the business at a glance, so managers stop chasing
@@ -31,6 +32,7 @@ export default function Dashboard({ data, go, user, can, onViewAlerts }) {
   const moreAlerts = unread.length - alerts.length;
 
   return <div className="reference-dashboard">
+    <MyWorkToday user={user} can={can} go={go} />
     <div className="reference-welcome">
       <div>
         <p>{new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}</p>

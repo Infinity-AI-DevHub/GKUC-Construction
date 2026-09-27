@@ -1,4 +1,4 @@
-export const INITIAL_HR_RULES={normalStart:'07:30',normalEnd:'16:30',otInterval:0.5,minimumOt:0.5,maxDailyOt:6,transportDivisor:25,fullTransportDays:null,fullTransportComparison:'At least',longDistanceKm:50,longDistancePayment:500,mileageRate:17,fixedTravelPayment:300,allowMileageAndFixed:false,countLeaveForTransport:false,countAbsenceForTransport:false,separateApproval:false};
+export const INITIAL_HR_RULES={normalStart:'07:30',normalEnd:'16:30',otInterval:0.5,minimumOt:0.5,maxDailyOt:6,transportDivisor:25,fullTransportDays:null,fullTransportComparison:'At least',longDistanceKm:50,longDistancePayment:500,supervisorSiteCharge:500,mileageRate:17,fixedTravelPayment:300,allowMileageAndFixed:false,countLeaveForTransport:false,countAbsenceForTransport:false,separateApproval:false};
 export const cents=n=>Math.round((Number(n)+Number.EPSILON)*100)/100;
 export const minutes=time=>{const [h,m]=String(time).split(':').map(Number);return h*60+m;};
 export function rulesFor(policy){return {...INITIAL_HR_RULES,...(typeof policy.hr_rules==='string'?JSON.parse(policy.hr_rules):policy.hr_rules||{})};}

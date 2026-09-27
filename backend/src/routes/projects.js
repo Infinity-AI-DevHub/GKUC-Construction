@@ -86,11 +86,38 @@ router.post('/:id/award', auth, permit('projects.manage'), validate(z.object({
   res.status(201).json(await projectAwardState(project.id));
 }));
 
+router.post('/:id/authorise-work', auth, permit('projects.manage'), validate(z.object({ notes: z.string().trim().max(1000).optional() })), wrap(async (req, res) => {
+  const project = await getOne('SELECT id FROM projects WHERE id=? AND active=1', [req.params.id]);
+  if (!project) return res.status(404).json({ error: 'Active project not found.' });
+  if (!(await projectAwardState(project.id)).confirmed)
+    return res.status(409).json({ error: 'Accept the client quotation or record a formal award before authorising work.' });
+  const received = await getOne(`SELECT COALESCE(SUM(paid_amount),0) amount FROM client_invoices
+    WHERE project_id=? AND status NOT IN ('Draft','Cancelled')`, [project.id]);
+  if (Number(received.amount) <= 0)
+    return res.status(409).json({ error: 'Record a client payment against an issued invoice before authorising work.' });
+  if (await getOne('SELECT project_id FROM project_work_authorisations WHERE project_id=?', [project.id]))
+    return res.status(409).json({ error: 'Work has already been authorised for this project.' });
+  await query('INSERT INTO project_work_authorisations (project_id,authorised_by,notes) VALUES (?,?,?)',
+    [project.id,req.user.id,req.body.notes || null]);
+  await audit(pool,req.user.id,'AUTHORISE_WORK','project',project.id,null,req.body,req.ip);
+  res.status(201).json({ projectId: project.id, authorised: true });
+}));
+
 router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
   const project = await getOne(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode
     FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.id=?`, [req.params.id]);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   const award = await projectAwardState(project.id);
+  const [billingPlans, paymentTotals, costSheetTotals, workAuthorisation] = await Promise.all([
+    query(`SELECT b.id,COUNT(t.id) termCount,COUNT(t.invoice_id) invoicedTerms
+      FROM quotation_billing_plans b LEFT JOIN quotation_billing_terms t ON t.plan_id=b.id
+      WHERE b.project_id=? GROUP BY b.id ORDER BY b.id DESC LIMIT 1`, [project.id]),
+    getOne(`SELECT COUNT(*) invoiceCount,COALESCE(SUM(paid_amount),0) received
+      FROM client_invoices WHERE project_id=? AND status NOT IN ('Draft','Cancelled')`, [project.id]),
+    query(`SELECT status,COUNT(*) count FROM daily_cost_sheets WHERE project_id=? GROUP BY status`, [project.id]),
+    getOne(`SELECT a.authorised_at authorisedAt,a.notes,u.name authorisedBy FROM project_work_authorisations a
+      JOIN users u ON u.id=a.authorised_by WHERE a.project_id=?`, [project.id])
+  ]);
   const [milestones, documents, team, tasks, expenses, incomes, boqs, reports, quotations,
     invoices, purchaseOrders, costBreakdown, expenseLedger, incomeLedger, attendanceLedger,
     materialUsage, equipmentUsage, supplierInvoices, costItems, variationLedger, updates, subcontractRates] = await Promise.all([
@@ -158,6 +185,8 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
   res.json({
     ...project,
     award,
+    lifecycle: { billingPlan: billingPlans[0] || null, payment: paymentTotals,
+      dailyCosts: costSheetTotals, workAuthorisation: workAuthorisation || null },
     milestones,
     documents,
     team,

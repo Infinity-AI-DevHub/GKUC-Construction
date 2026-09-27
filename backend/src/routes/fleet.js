@@ -115,7 +115,7 @@ router.post('/', auth, permit('transport.manage'), validate(fleetSchema), wrap(a
     const id=await transaction(async connection=>{
       let driver=body.driver||null;
       if(body.driverEmployeeId){
-        const [[employee]]=await connection.execute('SELECT name FROM employees WHERE id=? AND active=1',[body.driverEmployeeId]);
+        const [[employee]]=await connection.execute("SELECT name FROM employees WHERE id=? AND status='Active'",[body.driverEmployeeId]);
         if(!employee)throw Object.assign(new Error('Assigned driver is not an active employee'),{status:400});
         driver=employee.name;
       }
@@ -178,7 +178,7 @@ router.post('/:id/drivers',auth,permit('transport.manage'),validate(z.object({
     if(!vehicle)throw Object.assign(new Error('Vehicle not found'),{status:404});
     let name=b.driverName||null;
     if(b.employeeId){
-      const [[employee]]=await connection.execute('SELECT name FROM employees WHERE id=? AND active=1',[b.employeeId]);
+      const [[employee]]=await connection.execute("SELECT name FROM employees WHERE id=? AND status='Active'",[b.employeeId]);
       if(!employee)throw Object.assign(new Error('Driver is not an active employee'),{status:400});
       name=employee.name;
     }

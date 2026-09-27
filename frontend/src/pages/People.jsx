@@ -5,7 +5,7 @@ import Insurance from './Insurance.jsx';
 import PayrollInputs from './PayrollInputs.jsx';
 import { ArrowDownToLine, Check, Clock3, PencilLine, Search, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
 import { api, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { allowedTabs, Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { allowedTabs, Avatar, Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import BiometricImport from './BiometricImport.jsx';
 import { useOptions } from '../options.js';
@@ -32,6 +32,11 @@ const TABS = [
   ['Payroll settings', ['hr.settings']],
   ['Performance', ['hr.payroll', 'hr.manage']],
   ['Departments', ['hr.view', 'hr.manage']]
+];
+const TAB_GROUPS = [
+  { label: 'Team', tabs: ['Employees', 'Hiring', 'Insurance', 'Performance', 'Departments'] },
+  { label: 'Time & availability', tabs: ['Workforce map', 'Attendance', 'Attendance register', 'Biometric import', 'Leave', 'Leave register', 'Leave settings'] },
+  { label: 'Pay', tabs: ['Overtime', 'Payroll', 'Payroll Inputs', 'Payroll settings'] }
 ];
 
 /** PID 2.2 — one record per employee covering profile, attendance, leave and overtime. */
@@ -78,7 +83,7 @@ export default function People({ data, allData, reload, can, companies, companyI
 
   return <Page title="People" subtitle="Employee records, live workforce presence, leave and overtime."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
-    <Tabs tabs={tabs} active={tab} onChange={setTab} />
+    <Tabs tabs={tabs} active={tab} onChange={setTab} groups={TAB_GROUPS} />
 
     {tab === 'Employees' && <Employees data={data} can={can} onOpen={openEmployee} focusRequest={employeeSearchRequest} />}
     {tab === 'Hiring' && <Hiring companies={companies} companyId={companyId} reload={reload} />}
@@ -287,7 +292,7 @@ function PolicyForm({ companyId, policy, close, reload }) {
       supervisorSiteOtRate: Number(values.supervisorSiteOtRate), supervisorTravelOtRate: Number(values.supervisorTravelOtRate),
       epfEmployeeRate: Number(values.epfEmployeeRate), epfEmployerRate: Number(values.epfEmployerRate),
       etfEmployerRate: Number(values.etfEmployerRate), epfBasis: 'Basic earnings', etfBasis: 'Basic earnings',
-      hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),maxDailyOt:Number(values.maxDailyOt),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'},
+      hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),maxDailyOt:Number(values.maxDailyOt),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),supervisorSiteCharge:Number(values.supervisorSiteCharge),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'},
       statutoryRules:{permanentOnly:values.permanentOnly==='true',minimumMonthlySalary:Number(values.minimumMonthlySalary),weeklyWeeksPerMonth:Number(values.weeklyWeeksPerMonth),dailyDaysPerMonth:Number(values.dailyDaysPerMonth)}
     });
     await reload();
@@ -298,6 +303,7 @@ function PolicyForm({ companyId, policy, close, reload }) {
     <Field name="weeklyWeeksPerMonth" label="Weeks per month for weekly-rate comparison" type="number" min="0.01" step="0.000001" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.weeklyWeeksPerMonth ?? 52/12} />
     <Field name="dailyDaysPerMonth" label="Days per month for daily-rate comparison" type="number" min="0.01" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.dailyDaysPerMonth ?? 25} />
     {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],otInterval:['OT rounding interval (hours, rounded down)',0.5,'number'],minimumOt:['Minimum payable OT (hours)',0.5,'number'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number'],transportDivisor:['Monthly transport proration divisor (days)',25,'number'],fullTransportDays:['Full transport threshold — confirm with HR','', 'number'],longDistanceKm:['Long-distance threshold (km, greater than)',50,'number'],longDistancePayment:['Long-distance allowance per qualifying claim (LKR)',500,'number'],mileageRate:['Motorcycle mileage rate (LKR/km)',17,'number'],fixedTravelPayment:['Fixed office-travel payment (LKR)',300,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} required={name!=='fullTransportDays'} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
+    <Field name="supervisorSiteCharge" label="HR-approved supervisor site charge (LKR per day)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.supervisorSiteCharge ?? 500} />
     <SelectField name="fullTransportComparison" label="Full transport threshold comparison" options={['At least','More than']} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.fullTransportComparison||'At least'}/>
     {['allowMileageAndFixed','countLeaveForTransport','countAbsenceForTransport'].map(name=><SelectField key={name} name={name} label={{allowMileageAndFixed:'Allow mileage and fixed travel together',countLeaveForTransport:'Count leave days for transport',countAbsenceForTransport:'Count absent days for transport'}[name]} options={[[false,'No'],[true,'Yes']]} defaultValue={String((typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]||false)}/>)}
     <Field name="officeOtRate" label="Office OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.officeOtRate ?? 225} />
@@ -451,19 +457,21 @@ function Performance() {
 function PayrollForm({ companyId, company, close, reload }) {
   const first = new Date();
   first.setDate(1);
-  return <FormModal title="Run payroll" close={close} label="Build draft run" onSubmit={async values => {
+  return <WorkflowForm title="Prepare payroll run" close={close} label="Build draft run" summary={[["Company", company?.name || 'Selected company'], ['Run stage', 'Draft only — review before approval']]} onSubmit={async values => {
     await post('/payroll', { companyId, periodStart: values.periodStart, periodEnd: values.periodEnd, payFrequency: values.payFrequency });
     await reload();
   }}>
+    <div className="qs-form-section wide"><span>01</span><div><h3>Pay period</h3><p>Choose the date range and employees to include.</p></div></div>
     <p className="form-note wide">This salary run belongs to <strong>{company?.name}</strong>.</p>
     <Field name="periodStart" label="Period from" type="date" defaultValue={localDate(first)} />
     <Field name="periodEnd" label="Period to" type="date" defaultValue={todayInput()} />
     <SelectField name="payFrequency" label="Employees to pay" options={[["Daily", "Daily-paid employees"], ["Weekly", "Weekly-paid employees"], ["Monthly", "Monthly-paid employees"]]} defaultValue="Monthly" />
+    <div className="qs-form-section wide"><span>02</span><div><h3>Calculation sources</h3><p>Review the inputs used in this draft.</p></div></div>
     <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
       Only employees assigned to this payment frequency are included. Attendance, approved typed overtime,
       recurring components, statutory eligibility and outstanding salary advances are calculated automatically.
     </p>
-  </FormModal>;
+  </WorkflowForm>;
 }
 
 function ReviewForm({ data, close, reload }) {

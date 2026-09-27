@@ -30,6 +30,71 @@ const communicationSelect = `SELECT c.id,c.inquiry_id inquiryId,c.project_id pro
   FROM client_communications c JOIN users u ON u.id=c.logged_by
   LEFT JOIN inquiries i ON i.id=c.inquiry_id LEFT JOIN projects p ON p.id=c.project_id`;
 
+const letterSelect = `SELECT l.id,l.received_date receivedDate,l.sender,l.sender_address senderAddress,
+  l.letter_reference letterReference,l.subject,l.description,l.document_type documentType,
+  l.client_id clientId,c.name client,l.project_id projectId,p.name project,
+  l.assigned_employee_id assignedEmployeeId,e.name assignedEmployee,l.assigned_department assignedDepartment,
+  l.status,l.logged_by loggedById,u.name loggedBy,l.created_at createdAt,l.updated_at updatedAt
+  FROM incoming_letters l LEFT JOIN clients c ON c.id=l.client_id
+  LEFT JOIN projects p ON p.id=l.project_id LEFT JOIN employees e ON e.id=l.assigned_employee_id
+  JOIN users u ON u.id=l.logged_by`;
+const letterInput = z.object({
+  receivedDate: isoDate, sender: z.string().trim().min(2).max(180),
+  senderAddress: z.string().max(500).optional().nullable(), letterReference: z.string().max(120).optional().nullable(),
+  subject: z.string().trim().min(3).max(240), description: z.string().max(5000).optional().nullable(),
+  documentType: z.enum(['Letter','Bank statement','Other']).default('Letter'),
+  clientId: z.number().int().positive().optional().nullable(), projectId: z.number().int().positive().optional().nullable(),
+  assignedEmployeeId: z.number().int().positive().optional().nullable(), assignedDepartment: z.string().max(120).optional().nullable(),
+  status: z.enum(['Received','Assigned','In progress','Responded','Closed']).default('Received')
+});
+
+router.get('/letters/options', auth, permit('enquiries.manage'), wrap(async (_req,res) => {
+  const [clients,projects,employees]=await Promise.all([
+    query('SELECT id,name FROM clients WHERE active=1 ORDER BY name'),
+    query('SELECT id,name,client_id clientId FROM projects WHERE active=1 ORDER BY name'),
+    query("SELECT id,name FROM employees WHERE status<>'Left' ORDER BY name")
+  ]);
+  res.json({clients,projects,employees});
+}));
+
+router.get('/letters', auth, permit('enquiries.manage'), wrap(async (req,res) => {
+  const filters=[]; const params=[];
+  if (req.query.status) { filters.push('l.status=?'); params.push(req.query.status); }
+  if (req.query.projectId) { filters.push('l.project_id=?'); params.push(req.query.projectId); }
+  if (req.query.clientId) { filters.push('l.client_id=?'); params.push(req.query.clientId); }
+  res.json(await query(`${letterSelect} ${filters.length?`WHERE ${filters.join(' AND ')}`:''} ORDER BY l.received_date DESC,l.id DESC LIMIT 500`,params));
+}));
+
+router.post('/letters', auth, permit('enquiries.manage'), validate(letterInput), wrap(async (req,res) => {
+  const b=req.body;
+  for (const [table,id,label] of [['clients',b.clientId,'client'],['projects',b.projectId,'project'],['employees',b.assignedEmployeeId,'employee']]) {
+    if (id && !await getOne(`SELECT id FROM ${table} WHERE id=?`,[id])) return res.status(400).json({error:`Choose an existing ${label}.`});
+  }
+  if (b.clientId && b.projectId) {
+    const project=await getOne('SELECT client_id FROM projects WHERE id=?',[b.projectId]);
+    if (project.client_id && Number(project.client_id)!==b.clientId) return res.status(400).json({error:'The selected project belongs to another client. Choose the matching client or leave the project blank.'});
+  }
+  const result=await query(`INSERT INTO incoming_letters
+    (received_date,sender,sender_address,letter_reference,subject,description,document_type,client_id,project_id,assigned_employee_id,assigned_department,status,logged_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,[b.receivedDate,b.sender,b.senderAddress||null,b.letterReference||null,b.subject,b.description||null,b.documentType,b.clientId||null,b.projectId||null,b.assignedEmployeeId||null,b.assignedDepartment||null,b.status,req.user.id]);
+  const row=await getOne(`${letterSelect} WHERE l.id=?`,[result.insertId]);
+  await audit(pool,req.user.id,'CREATE','incoming_letter',row.id,null,row,req.ip);
+  res.status(201).json(row);
+}));
+
+router.patch('/letters/:id', auth, permit('enquiries.manage'), validate(letterInput.partial()), wrap(async (req,res) => {
+  const before=await getOne('SELECT * FROM incoming_letters WHERE id=?',[req.params.id]);
+  if (!before) return res.status(404).json({error:'Incoming letter not found.'});
+  const b=req.body;
+  if (!Object.keys(b).length) return res.status(400).json({error:'Enter a change before saving.'});
+  const fields={receivedDate:'received_date',sender:'sender',senderAddress:'sender_address',letterReference:'letter_reference',subject:'subject',description:'description',documentType:'document_type',clientId:'client_id',projectId:'project_id',assignedEmployeeId:'assigned_employee_id',assignedDepartment:'assigned_department',status:'status'};
+  const changes=Object.entries(b).map(([key,value])=>[fields[key],value]);
+  await query(`UPDATE incoming_letters SET ${changes.map(([column])=>`${column}=?`).join(',')} WHERE id=?`,[...changes.map(([,value])=>value??null),before.id]);
+  const row=await getOne(`${letterSelect} WHERE l.id=?`,[before.id]);
+  await audit(pool,req.user.id,'UPDATE','incoming_letter',row.id,before,row,req.ip);
+  res.json(row);
+}));
+
 /** Everything logged lately, newest first — the coordinator's own record of who said what. */
 router.get('/communications/all', auth, permit('enquiries.manage', 'projects.view'), wrap(async (req, res) => {
   const filters = [];

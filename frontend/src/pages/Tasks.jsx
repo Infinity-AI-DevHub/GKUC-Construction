@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Check, FolderKanban } from 'lucide-react';
 import { api, openRecord, patch, post, slug, todayInput } from '../api.js';
-import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea } from '../ui.jsx';
+import { Avatar, Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Table, Tabs, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
 
@@ -58,7 +58,7 @@ function TaskForm({ data, close, reload }) {
   const [selected, setSelected] = useState([]);
   const [reminders,setReminders]=useState(false),[users,setUsers]=useState([]),[recipients,setRecipients]=useState([]),[userError,setUserError]=useState('');
   useEffect(()=>{api('/tasks/reminder-users').then(setUsers).catch(e=>setUserError(e.message));},[]);
-  return <FormModal title="Create task" close={close} label="Create task" onSubmit={async values => {
+  return <WorkflowForm title="Create task" close={close} label="Create task" summary={[["Assignees", `${selected.length} employee${selected.length === 1 ? '' : 's'}`], ["Reminders", reminders ? `${recipients.length} recipient${recipients.length === 1 ? '' : 's'}` : 'Off']]} reviewContent={<><h3>Assigned team</h3>{selected.map(id=><div key={id}><span>{data.employees.find(employee => Number(employee.id) === Number(id))?.name || `Employee ${id}`}</span></div>)}{reminders&&<><h3>Reminder recipients</h3>{recipients.map(id=><div key={id}><span>{users.find(user => Number(user.id) === Number(id))?.name || `User ${id}`}</span></div>)}</>}</>} onSubmit={async values => {
     if (!selected.length) throw new Error('Select at least one employee for this task.');
     if (reminders && !recipients.length) throw new Error('Choose at least one user to receive reminders.');
     await post('/tasks', {
@@ -74,13 +74,16 @@ function TaskForm({ data, close, reload }) {
     });
     await reload();
   }}>
+    <div className="qs-form-section wide"><span>01</span><div><h3>Task and team</h3><p>Choose the project and people responsible.</p></div></div>
     <Field name="title" label="Task title" wide />
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
     <EmployeeMultiSelect employees={data.employees} selected={selected} onChange={setSelected} />
+    <div className="qs-form-section wide"><span>02</span><div><h3>Deadline and priority</h3><p>Set the date and time the team should see.</p></div></div>
     <Field name="dueDate" label="Deadline date" type="date" defaultValue={todayInput()} />
     <Field name="dueTime" label="Deadline time (Sri Lanka)" type="time" defaultValue="16:00" />
     <SelectField name="priority" label="Priority" options={['Low', 'Medium', 'High']} defaultValue="Medium" />
     <TextArea name="notes" label="Notes" required={false} placeholder="Optional" />
+    <div className="qs-form-section wide"><span>03</span><div><h3>Reminders</h3><p>Notify selected system users on the chosen schedule.</p></div></div>
     <label className="wide"><input type="checkbox" checked={reminders} onChange={event=>setReminders(event.target.checked)}/> Send task reminders</label>
     {reminders && <>
       <Field name="reminderAt" label="First reminder date & time (Sri Lanka)" type="datetime-local" />
@@ -88,7 +91,7 @@ function TaskForm({ data, close, reload }) {
       {userError && <p className="form-error wide">{userError}</p>}
       <fieldset className="project-reminder-users wide"><legend>Reminder recipients</legend><p>Select one or more system users. Reminders stop when the task is completed or approved.</p><div>{users.map(user=><button type="button" key={user.id} className={recipients.includes(user.id)?'selected':''} aria-pressed={recipients.includes(user.id)} onClick={()=>setRecipients(old=>old.includes(user.id)?old.filter(id=>id!==user.id):[...old,user.id])}><span>{recipients.includes(user.id)?'✓':''}</span><strong>{user.name}</strong><small>{user.role}</small></button>)}</div></fieldset>
     </>}
-  </FormModal>;
+  </WorkflowForm>;
 }
 
 /** Task history: the comments and site photos that turn a task into an auditable record. */

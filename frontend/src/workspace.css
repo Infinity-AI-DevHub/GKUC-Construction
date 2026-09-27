@@ -75,5 +75,68 @@ main .reference-dashboard :is(.dashboard-card,.metric){border-radius:16px;border
 .invoice-payments-history-heading span{font-size:12px;font-weight:700;color:#71869a}
 .invoice-payments-empty{margin:0;padding:28px 20px;text-align:center;font-size:13px;line-height:1.6;color:#61778a}
 .invoice-payments-dialog>.primary{justify-self:end}
+/* A readable handoff trail, with its next action beside the evidence for each stage. */
+.project-lifecycle{grid-column:1/-1;padding:24px!important;overflow:visible!important}
+.project-lifecycle .workspace-section-heading{margin-bottom:20px}
+.project-lifecycle-count{font-size:11px;font-weight:800;color:#a91639;background:#faedf1;border:1px solid #efd5dc;border-radius:999px;padding:8px 12px}
+.project-lifecycle-steps{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+.project-lifecycle-step{min-width:0;display:flex;gap:9px;padding:14px 10px 16px;border:1px solid #e0e7ee;border-radius:13px;background:#f9fbfd}
+.project-lifecycle-step.complete{background:#f6f9fc;border-color:#d7e3ed}
+.project-lifecycle-step.active{background:#fff7f8;border-color:#e9bec9}
+.project-lifecycle-marker{display:flex;flex-direction:column;align-items:center;gap:8px;flex:none}
+.project-lifecycle-marker>span{width:26px;height:26px;display:grid;place-items:center;border-radius:50%;background:#e8edf3;color:#526b80;font-size:11px;font-weight:800}
+.project-lifecycle-step.complete .project-lifecycle-marker>span{background:#123653;color:#fff}
+.project-lifecycle-step.active .project-lifecycle-marker>span{background:#a91639;color:#fff}
+.project-lifecycle-marker i{width:1px;flex:1;background:#d9e3ec}
+.project-lifecycle-body{min-width:0;display:flex;flex-direction:column;gap:8px;width:100%}
+.project-lifecycle-top{display:grid;gap:5px}
+.project-lifecycle-top h3{margin:3px 0 0;font:800 12px/1.35 Manrope,sans-serif;color:#102a43}
+.project-lifecycle-state{width:max-content;padding:3px 7px;border-radius:999px;background:#e9eef3;color:#5d7184;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.35px}
+.project-lifecycle-state.complete{background:#e6f3ea;color:#276144}.project-lifecycle-state.active{background:#f9e8ec;color:#a91639}
+.project-lifecycle-status{margin:0;color:#263d52;font-size:11px;line-height:1.4;font-weight:700;overflow-wrap:anywhere}
+.project-lifecycle-meta{display:grid;gap:6px;margin-top:auto;color:#617587;font-size:10px;line-height:1.45;overflow-wrap:anywhere}
+.project-lifecycle-meta strong{display:block;color:#8294a3;font-size:9px;text-transform:uppercase;letter-spacing:.55px}
+.project-lifecycle-link{align-self:flex-start;margin-top:6px;padding:0;border:0;background:transparent;color:#a91639;font-size:10px;font-weight:800;text-align:left;line-height:1.4;cursor:pointer}
+.project-lifecycle-link:hover{text-decoration:underline}
+@media(max-width:1450px){.project-lifecycle-steps{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:850px){.project-lifecycle-steps{grid-template-columns:repeat(2,minmax(0,1fr))}.project-lifecycle{padding:18px!important}}
+@media(max-width:520px){.project-lifecycle-steps{grid-template-columns:1fr}.project-lifecycle-step{padding:15px}.project-lifecycle .workspace-section-heading{align-items:flex-start;flex-direction:column}.project-lifecycle-count{align-self:flex-start}}
 @media(max-width:680px){.modal-backdrop{padding:10px}.modal,.modal.modal-wide{max-width:100%;width:100%;border-radius:16px}.modal-title,.modal-header{min-height:66px;padding:16px 18px}.modal-title h2,.modal-header h2{font-size:17px}.modal-content{padding:19px}.modal-content>.report-form{padding:19px}.invoice-payments-dialog .attendance-summary{grid-template-columns:1fr}.invoice-payments-dialog .summary{min-height:0}.invoice-payments-dialog>.primary{justify-self:stretch}}
 .hiring-pool{padding-bottom:18px}.hiring-pool>.form-note{padding:0 20px}.hiring-pool .panel-title label{display:flex;align-items:center;gap:9px;color:#607487;font-size:12px;font-weight:700}.hiring-pool .panel-title select{min-height:36px;max-width:200px;border:1px solid #dce5ed;border-radius:8px;background:#fff;color:#173650;padding:6px 9px}.hiring-comparison{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;padding:18px}.hiring-comparison article{display:grid;gap:8px;align-content:start;padding:18px;border:1px solid #dce5ed;border-radius:14px;background:#f8fafc}.hiring-comparison h3,.hiring-comparison p{margin:0}.hiring-comparison h3{font:800 15px Manrope,sans-serif;color:#142f49}.hiring-comparison p,.hiring-comparison span{font-size:12px;color:#687f91}.hiring-comparison strong{font:800 24px Manrope,sans-serif;color:#a61637}.hiring-comparison .secondary{justify-self:start}
+
+/* A short role-aware starting point before the existing management dashboard. */
+.my-work-today{margin:0 0 22px;padding:23px;border:1px solid #dce5ee;border-radius:18px;background:linear-gradient(115deg,#fff 55%,#f4f7fb);box-shadow:0 8px 28px #102a4309}
+.my-work-heading h2{margin:4px 0;font:800 22px Manrope,sans-serif;color:#102a43}
+.my-work-heading p{margin:0 0 17px;color:#65788b;font-size:12px}
+.my-work-kicker{color:#ab1736;font-size:10px;letter-spacing:1.3px;text-transform:uppercase;font-weight:800}
+.my-work-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px}
+.my-work-grid button{min-width:0;min-height:150px;padding:17px;border:1px solid #dfe7ee;border-radius:13px;background:#fff;text-align:left;display:grid;align-content:start;gap:7px;color:#102a43;box-shadow:0 4px 12px #102a4305}
+.my-work-grid button:hover{border-color:#bf7889;transform:translateY(-2px);box-shadow:0 12px 22px #102a4314}
+.my-work-grid button:focus-visible{outline:2px solid #ab1736;outline-offset:2px}
+.my-work-grid strong{font:800 14px Manrope,sans-serif}.my-work-grid small{font-size:11px;line-height:1.5;color:#60778a}
+.my-work-icon{width:34px;height:34px;display:grid;place-items:center;border-radius:9px;background:#fbeef1;color:#a91c3c}
+.my-work-open{align-self:end;display:flex;align-items:center;gap:5px;color:#a91c3c;font-size:10px;font-weight:800}
+.workspace-breadcrumb{display:flex;align-items:center;gap:8px;margin:0 0 14px;font-size:11px;color:#6c8193}
+.workspace-breadcrumb button{border:0;background:transparent;padding:3px 0;color:#60778a;font-weight:700}.workspace-breadcrumb button:hover{text-decoration:underline}
+.workspace-breadcrumb strong{color:#102a43;font-weight:800}
+.nav-more-button span{max-width:128px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Flat groups keep the existing tab order and permissions, while making the long lists scannable. */
+.segments:not(.grouped-segments)>.segment-group{display:contents}
+.module-navigation .segments.grouped-segments{display:grid;gap:15px}
+.module-navigation .segment-group{display:grid;gap:3px;min-width:0}
+.segment-group-label{padding:8px 13px 4px;color:#8192a2;font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:800}
+.toolbar .compact-section-picker{display:none}
+.project-workspace-tabs .segments.grouped-segments{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;width:100%}
+.project-workspace-tabs .segment-group{display:flex;flex-wrap:wrap;gap:3px;align-content:start;padding:6px;border:1px solid #dce5ed;border-radius:10px;background:#fff}
+.project-workspace-tabs .segment-group-label{width:100%;padding:2px 7px 5px}
+.project-workspace-tabs .segments.grouped-segments button{flex:1 1 auto;width:auto;white-space:nowrap}
+@media(max-width:1100px){.my-work-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.project-workspace-tabs .segments.grouped-segments{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:800px){.module-navigation .segments.grouped-segments{display:flex;gap:10px}.module-navigation .segment-group{display:flex;align-items:center;gap:3px}.module-navigation .segment-group-label{flex:none;padding:0 5px}.project-workspace-tabs .segments.grouped-segments{display:flex;width:max-content}.project-workspace-tabs .segment-group{flex:none}.my-work-today{padding:18px}}
+@media(max-width:520px){.my-work-grid{grid-template-columns:1fr}.my-work-grid button{min-height:0}.my-work-today{padding:15px}}
+@media(max-width:800px){
+  .module-navigation .segments.grouped-segments,.project-workspace-tabs .segments.grouped-segments{display:none}
+  .toolbar .compact-section-picker{display:grid;gap:6px;width:100%;padding:2px 4px;color:#72869a;font-size:10px;letter-spacing:.8px;text-transform:uppercase;font-weight:800}
+  .compact-section-picker select{width:100%;height:44px;min-width:0;padding:0 12px;border:1px solid #d9e3eb;border-radius:9px;background:#fff;color:#102a43;font-size:14px;letter-spacing:0;text-transform:none;font-weight:750}
+  .project-workspace-tabs .toolbar{width:100%}
+}

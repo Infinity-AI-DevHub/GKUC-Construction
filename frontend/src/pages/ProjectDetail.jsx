@@ -11,14 +11,21 @@ import ProjectReports from './ProjectReports.jsx';
 import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
 
 const TABS = ['Command centre', 'Activity & issues', 'Reports', 'Programme', 'Commercial', 'Subcontractors', 'Team', 'Gallery', 'Documents', 'Close-out'];
+const TAB_GROUPS = [
+  { label: 'Overview', tabs: ['Command centre', 'Reports'] },
+  { label: 'Deliver', tabs: ['Activity & issues', 'Programme', 'Team'] },
+  { label: 'Commercial', tabs: ['Commercial', 'Subcontractors', 'Close-out'] },
+  { label: 'Records', tabs: ['Gallery', 'Documents'] }
+];
 
 /** A project is a workspace, not a form dialog: every operational record converges here. */
-export default function ProjectDetail({ projectId, data, close, reload, can }) {
+export default function ProjectDetail({ projectId, data, close, reload, can, navigate }) {
   const [tab, setTab] = useState(TABS[0]);
   const [project, setProject] = useState(null);
   const [adding, setAdding] = useState('');
   const [editingTask,setEditingTask]=useState(null);
   const [error, setError] = useState('');
+  const [authorising, setAuthorising] = useState(false);
   const load = () => api(`/projects/${projectId}`).then(setProject).catch(failure => setError(failure.message));
   useEffect(() => { load(); }, [projectId]);
   const refresh = async () => { await load(); await reload(); };
@@ -29,8 +36,8 @@ export default function ProjectDetail({ projectId, data, close, reload, can }) {
   return <div className="project-workspace">
     <ProjectHero project={project} close={close} />
     <ProjectMetrics project={project} />
-    <div className="project-workspace-tabs"><Tabs tabs={TABS} active={tab} onChange={setTab} /></div>
-    {tab === 'Command centre' && <CommandCentre project={project} />}
+    <div className="project-workspace-tabs"><Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} /></div>
+    {tab === 'Command centre' && <CommandCentre project={project} can={can} onSection={setTab} navigate={navigate} onAuthorise={() => setAuthorising(true)} />}
     {tab === 'Activity & issues' && <ProjectActivity project={project} can={can} refresh={refresh} onAdd={setAdding} onEditTask={setEditingTask} />}
     {tab === 'Reports' && <ProjectReports project={project} />}
     {tab === 'Programme' && <Programme project={project} can={can} refresh={refresh} onAdd={() => setAdding('milestone')} />}
@@ -51,6 +58,10 @@ export default function ProjectDetail({ projectId, data, close, reload, can }) {
       await post(`/projects/${project.id}/award`, { awardDate: values.awardDate, reference: values.reference, notes: values.notes || undefined });
       await refresh();
     }}><Field name="awardDate" label="Award date" type="date" defaultValue={todayInput()} /><Field name="reference" label="Client award letter / contract reference" /><TextArea name="notes" label="Award evidence or notes" required={false} /><p className="form-note wide">Record this only after receiving formal confirmation from the client. Accepting this project's client quotation in QS also confirms the project.</p></FormModal>}
+    {authorising && <FormModal title="Authorise project work" close={() => setAuthorising(false)} label="Authorise work" onSubmit={async values => {
+      await post(`/projects/${project.id}/authorise-work`, { notes: values.notes || undefined });
+      await refresh();
+    }}><p className="form-note wide">Confirm the accepted quotation or formal award and the first recorded client payment before releasing the delivery team to start work.</p><TextArea name="notes" label="Authorisation notes" required={false} /></FormModal>}
   </div>;
 }
 
@@ -116,12 +127,13 @@ function ProjectMetrics({ project }) {
   return <div className="project-metric-strip">{items.map(([Icon, label, value, detail, tone]) => <article key={label} className={`project-metric ${tone}`}><span><Icon size={20} /></span><div><small>{label}</small><strong>{value}</strong><p>{detail}</p></div></article>)}</div>;
 }
 
-function CommandCentre({ project }) {
+function CommandCentre({ project, can, onSection, navigate, onAuthorise }) {
   const latest = project.reports[0]; const openTasks = project.tasks.filter(task => !['Completed', 'Approved'].includes(task.status));
   const completedMilestones = project.milestones.filter(item => item.status === 'Completed').length;
   const spent = Number(project.finance.expenses || 0); const budget = Number(project.finance.budget || 0);
   const burn = budget ? Math.min(100, Math.round((spent / budget) * 100)) : 0;
   return <div className="project-command-grid">
+    <ProjectLifecycle project={project} can={can} onSection={onSection} navigate={navigate} onAuthorise={onAuthorise} />
     <section className="workspace-surface project-insight-main">
       <SectionHeading kicker="Today on site" title="Daily intelligence" icon={HardHat} />
       {latest ? <><div className="site-insight-lead"><div><strong>{latest.workforce}</strong><span>people on site</span></div><div><strong>{latest.delayHours || 0}h</strong><span>delay recorded</span></div><div><strong>{latest.weather || '—'}</strong><span>weather</span></div></div><blockquote>{latest.workCompleted}</blockquote><p className={latest.issue ? 'insight-alert' : 'insight-clear'}><AlertTriangle size={15} />{latest.issue || 'No site issues were recorded in the latest report.'}</p><footer>Reported by {latest.supervisor} · {shortDate(latest.reportDate)}</footer></> : <EmptyVisual icon={FileText} title="No site report yet" text="The latest report will become the project’s live operational briefing." />}
@@ -131,6 +143,38 @@ function CommandCentre({ project }) {
     <section className="workspace-surface"><SectionHeading kicker="Programme pulse" title="Milestone status" icon={CalendarDays} /><div className="milestone-score"><strong>{completedMilestones}</strong><span>of {project.milestones.length} milestones complete</span></div><Progress value={project.milestones.length ? completedMilestones / project.milestones.length * 100 : 0} /><div className="next-milestones">{project.milestones.filter(item => item.status !== 'Completed').slice(0, 3).map(item => <div key={item.id}><span>{shortDate(item.dueDate)}</span><strong>{item.title}</strong><Badge tone={slug(item.status)}>{item.status}</Badge></div>)}</div></section>
     <ProjectMaterialPulse projectId={project.id} />
   </div>;
+}
+
+function ProjectLifecycle({ project, can, onSection, navigate, onAuthorise }) {
+  const lifecycle = project.lifecycle || {};
+  const latestQuote = project.quotations[0];
+  const accepted = project.award?.acceptedQuotation;
+  const confirmed = Boolean(project.award?.confirmed);
+  const plan = lifecycle.billingPlan;
+  const paid = Number(lifecycle.payment?.received || 0);
+  const authorised = lifecycle.workAuthorisation;
+  const dailyCosts = lifecycle.dailyCosts || [];
+  const pendingCosts = dailyCosts.filter(row => ['Draft', 'Submitted', 'Returned'].includes(row.status)).reduce((sum, row) => sum + Number(row.count), 0);
+  const delivered = project.progress === 100 && project.tasks.every(task => ['Completed', 'Approved'].includes(task.status)) && project.milestones.every(item => item.status === 'Completed');
+  const finalInvoice = project.invoices.find(invoice => invoice.kind === 'Final' && invoice.status !== 'Cancelled');
+  const toQs = section => navigate?.('Quantity Surveying', section);
+  const toFinance = section => navigate?.('Finance', section);
+  const steps = [
+    { title: 'Quotation', owner: 'QS', state: latestQuote ? 'complete' : 'pending', status: latestQuote ? `${latestQuote.reference} · ${latestQuote.status}` : 'Not prepared', next: latestQuote ? 'Review or update quotation' : 'Prepare a client quotation', action: 'Open quotations', run: () => toQs('Quotations'), accessible: can.has('qs.view') },
+    { title: 'Accepted', owner: 'QS / client', state: confirmed ? 'complete' : 'pending', status: accepted ? `${accepted.reference} accepted` : project.award?.formalAward ? 'Formal award recorded' : 'Awaiting client decision', next: confirmed ? 'Pass the agreed value to Finance' : 'Mark quotation accepted or record award', action: 'Review acceptance', run: () => can.has('qs.view') ? toQs('Quotations') : onSection('Subcontractors'), accessible: can.has('qs.view') || can.has('projects.manage') },
+    { title: 'Invoice terms', owner: 'Finance', state: plan ? 'complete' : 'pending', status: plan ? `${plan.invoicedTerms}/${plan.termCount} terms invoiced` : 'No payment plan', next: plan ? 'Issue the next agreed term' : 'Set the invoice schedule', action: 'Open invoice terms', run: () => toFinance('Invoices'), accessible: can.has('finance.view') || can.has('finance.invoice') },
+    { title: 'Payment received', owner: 'Finance', state: paid > 0 ? 'complete' : 'pending', status: paid > 0 ? `${rupees(paid)} received` : 'No payment recorded', next: paid > 0 ? 'Confirm the project can proceed' : 'Record the first client payment', action: 'Open payments', run: () => toFinance('Invoices'), accessible: can.has('finance.view') || can.has('finance.invoice') },
+    { title: 'Work authorised', owner: project.manager || 'Project manager', state: authorised ? 'complete' : 'pending', status: authorised ? `Authorised by ${authorised.authorisedBy}` : paid > 0 && confirmed ? 'Ready for authorisation' : 'Awaiting award and payment', next: authorised ? 'Coordinate site delivery' : paid > 0 && confirmed ? 'Project manager confirms start' : 'Complete acceptance and payment first', action: authorised ? 'Open delivery' : paid > 0 && confirmed && can.projects ? 'Authorise work' : confirmed ? 'Open payments' : 'Review acceptance', run: authorised ? () => onSection('Activity & issues') : paid > 0 && confirmed && can.projects ? onAuthorise : confirmed ? () => toFinance('Invoices') : () => can.has('qs.view') ? toQs('Quotations') : onSection('Subcontractors'), accessible: Boolean(authorised || can.projects || can.has('qs.view') || can.has('finance.view')) },
+    { title: 'Delivery', owner: 'Project team', state: delivered ? 'complete' : authorised ? 'active' : 'pending', status: `${project.progress}% complete${pendingCosts ? ` · ${pendingCosts} daily cost sheet${pendingCosts === 1 ? '' : 's'} need review` : ''}`, next: delivered ? 'Prepare the final account' : authorised ? 'Update tasks, milestones and daily costs' : 'Await work authorisation', action: 'Open delivery', run: () => onSection('Activity & issues'), accessible: true },
+    { title: 'Final account', owner: 'QS / Finance', state: finalInvoice && delivered && Number(finalInvoice.paidAmount) >= Number(finalInvoice.netPayable) ? 'complete' : 'pending', status: finalInvoice ? `${finalInvoice.reference} · ${finalInvoice.status}` : 'Final invoice not issued', next: finalInvoice ? 'Review final invoice and close-out' : 'Reconcile costs and issue final invoice', action: 'Open close-out', run: () => onSection('Close-out'), accessible: true }
+  ];
+  return <section className="workspace-surface project-lifecycle" aria-label="Project lifecycle">
+    <div className="workspace-section-heading"><div><span className="section-kicker">One connected project trail</span><h2>From quotation to final account</h2></div><span className="project-lifecycle-count">{steps.filter(step => step.state === 'complete').length} of {steps.length} stages complete</span></div>
+    <div className="project-lifecycle-steps">{steps.map((step, index) => <article key={step.title} className={`project-lifecycle-step ${step.state}`}>
+      <div className="project-lifecycle-marker"><span>{step.state === 'complete' ? <CheckCircle2 size={17} /> : index + 1}</span><i /></div>
+      <div className="project-lifecycle-body"><div className="project-lifecycle-top"><h3>{step.title}</h3><span className={`project-lifecycle-state ${step.state}`}>{step.state === 'complete' ? 'Complete' : step.state === 'active' ? 'In progress' : 'Pending'}</span></div><p className="project-lifecycle-status">{step.status}</p><div className="project-lifecycle-meta"><span><strong>Owner</strong> {step.owner}</span><span><strong>Next</strong> {step.next}</span></div>{step.accessible && <button type="button" className="project-lifecycle-link" onClick={step.run}>{step.action} <span aria-hidden="true">→</span></button>}</div>
+    </article>)}</div>
+  </section>;
 }
 
 function ProjectMaterialPulse({projectId}) {

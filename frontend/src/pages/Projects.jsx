@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BriefcaseBusiness, Building2, Check, FileText } from 'lucide-react';
 import { api, money, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Avatar, Badge, Field, FormModal, Page, Progress, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { Avatar, Badge, Field, FormModal, WorkflowForm, Page, Progress, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import ProjectDetail from './ProjectDetail.jsx';
 import ClientDirectory from './ClientDirectory.jsx';
 import { useOptions } from '../options.js';
@@ -11,7 +11,7 @@ const PROJECT_STAGES = ['Not started', 'Mid-way'];
 const healthTone = health => (health === 'On track' ? 'on-track' : health === 'At risk' ? 'at-risk' : 'watch');
 
 /** PID 2.4 / 2.5 — projects, their milestones, and the estimates the budget comes from. */
-export default function Projects({ data, reload, can, companyId, company, companies, setCompanyId }) {
+export default function Projects({ data, reload, can, companyId, company, companies, setCompanyId, navigate }) {
   const tabs=TABS.filter(section=>section!=='Clients'||can.has('clients.view'));
   const [selectedTab, setTab] = useState(window.location.pathname.startsWith('/projects/clients/') ? 'Clients' : TABS[0]);
   const tab=tabs.includes(selectedTab)?selectedTab:tabs[0];
@@ -37,7 +37,7 @@ export default function Projects({ data, reload, can, companyId, company, compan
     Variations: null, Inquiries: 'Log inquiry'
   }[tab];
 
-  if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} reload={reload} close={closeProject} />;
+  if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} reload={reload} close={closeProject} navigate={navigate} />;
 
   return <Page title="Projects" subtitle={`Monitor progress, cost, and site health for ${company?.name || 'the selected company'}.`}
     action={can.projects ? actionFor : null} onAction={() => setOpen(tab)}>
@@ -460,7 +460,7 @@ export function BoqForm({ data, close, reload }) {
   const started = line => Boolean(line.category || line.description || line.unit || line.quantity || line.rate);
   const mustComplete = (line, index) => index === 0 || started(line);
 
-  return <FormModal title="Create BOQ" close={close} label="Create BOQ" onSubmit={async values => {
+  return <WorkflowForm title="Create BOQ" close={close} label="Create BOQ" summary={[["Project", data.projects.find(project => String(project.id) === String(projectId))?.name || 'Choose a project'], ["Priced lines", String(lines.filter(started).length)], ["Estimated total", rupees(total)]]} reviewContent={<><h3>Measured items</h3>{lines.filter(started).map((line,index)=><div key={index}><span>{line.category} · {line.description}<small>{line.quantity} {line.unit} × {rupees(line.rate)}</small></span><strong>{rupees(Number(line.quantity)*Number(line.rate))}</strong></div>)}</>} onSubmit={async values => {
     await post('/boq', {
       projectId: Number(values.projectId),
       title: values.title,
@@ -479,10 +479,12 @@ export function BoqForm({ data, close, reload }) {
     });
     await reload();
   }}>
+    <div className="qs-form-section wide"><span>01</span><div><h3>Bill identity</h3><p>Choose the project and name the bill.</p></div></div>
     <label>Project *<select name="projectId" value={projectId} onChange={event=>setProjectId(event.target.value)} required>{data.projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
     <Field name="title" label="BOQ title" />
     {/* Laid out by class rather than inline, so a phone can stack what will not fit:
         the five fixed columns needed 464px inside a 303px dialog. */}
+    <div className="qs-form-section wide"><span>02</span><div><h3>Priced work</h3><p>Add each measured item, quantity and rate.</p></div></div>
     {lines.map((line, index) => <div className="wide boq-line" key={index}>
       <label>Category
         <select value={line.category} required={mustComplete(line, index)}
@@ -508,6 +510,7 @@ export function BoqForm({ data, close, reload }) {
       <button type="button" className="secondary" onClick={() => setLines(current => [...current, { category: '', description: '', unit: '', quantity: '', rate: '' }])}>Add line</button>
       <strong>Estimated total {rupees(total)}</strong>
     </div>
+    <div className="qs-form-section wide"><span>03</span><div><h3>Final notes</h3><p>Add any instructions to accompany this bill.</p></div></div>
     <TextArea name="notes" label="Notes" required={false} placeholder="Optional" />
-  </FormModal>;
+  </WorkflowForm>;
 }

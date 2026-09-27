@@ -4,8 +4,9 @@ import { api, daysUntil, patch, post, rupees, shortDate, slug, todayInput } from
 import { Avatar, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { useOptions } from '../options.js';
 import WorkforceMap from './WorkforceMap.jsx';
+import IncomingLetters from './IncomingLetters.jsx';
 
-const TABS = ['Live sites', 'Workforce assignments', 'Resource availability', 'Enquiries', 'Movement history'];
+const TABS = ['Live sites', 'Workforce assignments', 'Resource availability', 'Enquiries', 'Incoming letters', 'Movement history'];
 
 /**
  * PID v3 §3.5 and §4.3 — the Project Coordinator's screen. GKUC runs two sites at a time,
@@ -31,12 +32,13 @@ export default function Coordination({ data, reload, can }) {
   const refresh = async () => { await load(); await reload(); };
 
   return <Page title="Coordination" subtitle="Both active sites, who is on them, and what moves when plans change.">
-    <Tabs tabs={TABS} active={tab} onChange={setTab} />
+    <Tabs tabs={can.enquiries ? TABS : TABS.filter(item => item !== 'Incoming letters')} active={tab} onChange={setTab} />
 
     {tab === 'Live sites' && <LiveSites board={board} can={can} onReschedule={setRescheduling} />}
     {tab === 'Workforce assignments' && <WorkforceMap canManage={false} canPlan={can.reassign || can.schedule || can.hr || can.hrImport} projects={data.projects} />}
     {tab === 'Resource availability' && <Availability resources={resources} can={can} onMove={setMoving} />}
     {tab === 'Enquiries' && <Enquiries can={can} reload={reload} />}
+    {tab === 'Incoming letters' && <IncomingLetters data={data} can={can} />}
     {tab === 'Movement history' && <MovementHistory />}
 
     {rescheduling && <RescheduleForm site={rescheduling} sites={board?.sites || []}

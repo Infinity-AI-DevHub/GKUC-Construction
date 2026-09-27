@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Landmark, TriangleAlert, Wallet } from 'lucide-react';
 import { api, openDocument, post, rupees, shortDate, slug, todayInput } from './api.js';
 import {
-  Badge, EmptyState, Field, FormModal, Modal, Row, SelectField, Summary, Table, TextArea, useLiveList
+  Badge, EmptyState, Field, FormModal, WorkflowForm, Modal, Row, SelectField, Summary, Table, TextArea, useLiveList
 } from './ui.jsx';
 
 /*
@@ -210,7 +210,11 @@ function BillingPlanForm({ quotations, close, reload }) {
   const total = terms.reduce((sum, term) => sum + (Number(term.percentage) || 0), 0);
   const update = (index, field, value) => setTerms(current => current.map((term, position) =>
     position === index ? { ...term, [field]: value } : term));
-  return <FormModal title="Set quotation billing terms" close={close} label="Save billing plan" wide
+  return <WorkflowForm title="Set quotation billing terms" close={close} label="Save billing plan" summary={[
+    ['Invoice format', documentType], ['Tax treatment', taxTreatment],
+    ['Terms', terms.map(term => `${term.label || 'Unnamed'} ${term.percentage || 0}%`).join(' · ')],
+    ['Total allocated', `${total}%`]
+  ]} reviewContent={<><h3>Agreed invoice schedule</h3>{terms.map((term, index) => <div key={index}><span>{term.label || `Term ${index + 1}`}<small>{term.dueDate || 'Due date not set'}</small></span><strong>{term.percentage || 0}%</strong></div>)}</>}
     onSubmit={async values => {
       if (Math.abs(total - 100) > 0.0001) throw new Error('Invoice terms must add up to exactly 100%.');
       await post('/receivables/quotation-plans', { quotationId: Number(values.quotationId), documentType,
@@ -218,6 +222,7 @@ function BillingPlanForm({ quotations, close, reload }) {
           percentage: Number(term.percentage), dueDate: term.dueDate || undefined })) });
       await reload();
     }}>
+    <div className="qs-form-section wide"><span>01</span><div><h3>Accepted quotation</h3><p>Select the agreed client price and invoice format.</p></div></div>
     <SelectField name="quotationId" label="Accepted quotation" options={quotations.map(quote =>
       [quote.id, `${quote.reference} — ${quote.client} — ${rupees(quote.total)}`])} />
     <label>Invoice format<select value={documentType} onChange={event => {
@@ -227,7 +232,8 @@ function BillingPlanForm({ quotations, close, reload }) {
     {documentType === 'Tax Invoice' && <><label>Tax treatment<select value={taxTreatment} onChange={event => setTaxTreatment(event.target.value)}>
       <option value="Standard">Standard VAT</option><option value="SVAT">SVAT suspended</option></select></label>
       <label>VAT rate (%)<input type="number" min="0" max="100" step="0.01" value={vatRate} onChange={event => setVatRate(event.target.value)} /></label></>}
-    <div className="wide"><h3>Invoice terms</h3><p className="invoice-note">Name each term and set its share of the accepted quotation. Finance creates and issues each invoice when that term is due.</p>
+    <div className="qs-form-section wide"><span>02</span><div><h3>Invoice terms</h3><p>Divide the agreed amount into the terms Finance will issue.</p></div></div>
+    <div className="wide"><p className="invoice-note">Name each term and set its share of the accepted quotation. Finance creates and issues each invoice when that term is due.</p>
       {terms.map((term, index) => <div className="invoice-line" key={index}>
         <input aria-label={`Term ${index + 1} name`} placeholder="Deposit, progress payment, final payment" value={term.label} onChange={event => update(index, 'label', event.target.value)} />
         <input aria-label={`Term ${index + 1} percentage`} type="number" min="0.01" max="100" step="0.01" value={term.percentage} onChange={event => update(index, 'percentage', event.target.value)} />
@@ -239,7 +245,7 @@ function BillingPlanForm({ quotations, close, reload }) {
         { label: `Term ${current.length + 1}`, percentage: '', dueDate: '' }])}>Add another term</button>
       <p className={Math.abs(total - 100) < 0.0001 ? 'invoice-note' : 'form-error'}>Allocated: {total}% of the quotation (must be 100%).</p>
     </div>
-  </FormModal>;
+  </WorkflowForm>;
 }
 
 /*
@@ -312,7 +318,12 @@ function CertificateForm({ data, companyId, close, reload }) {
     return () => { live = false; clearTimeout(timer); };
   }, [signature]);
 
-  return <FormModal title="Create client invoice" close={close} label="Save invoice as draft" wide
+  return <WorkflowForm title="Create client invoice" close={close} label="Save invoice as draft" summary={[
+    ['Client', clients.find(client => String(client.id) === String(clientId))?.name || 'Choose a client'],
+    ['Project', clientProjects.find(project => String(project.id) === String(projectId))?.name || 'Company-level invoice'],
+    ['Format', documentType], ['Line items', String(items.length)],
+    ['Net payable', preview ? rupees(preview.netPayable) : 'Add invoice items to calculate']
+  ]} reviewContent={<><h3>Invoice items</h3>{items.map((item, index) => <div key={index}><span>{item.description}<small>{item.quantity} {item.unit || 'units'} × {rupees(item.rate)}</small></span><strong>{rupees(item.quantity * item.rate)}</strong></div>)}{preview?.workings.map(step => <div key={step.label}><span>{step.label}</span><strong>{rupees(step.amount)}</strong></div>)}</>}
     onSubmit={async values => {
       if (!items.length) throw new Error('Add at least one line with a description and a quantity');
       await post('/receivables/invoices', {
@@ -331,6 +342,7 @@ function CertificateForm({ data, companyId, close, reload }) {
       });
       await reload();
     }}>
+    <div className="qs-form-section wide"><span>01</span><div><h3>Invoice recipient</h3><p>Select the client, project and billing type.</p></div></div>
     <label>Client *<select name="clientId" value={clientId} required onChange={event=>{const chosen=event.target.value;setClientId(chosen);setProjectId('');setLines([{...BLANK_LINE}]);}}>
       <option value="">Choose saved client…</option>{clients.map(client=><option key={client.id} value={client.id}>{client.name}</option>)}
     </select></label>
@@ -349,6 +361,7 @@ function CertificateForm({ data, companyId, close, reload }) {
     <SelectField name="paymentMode" label="Expected payment mode" options={['Bank transfer', 'Cheque', 'Cash', 'Card', 'Other']} />
     <Field name="dueDate" label="Payment due" type="date" required={false} />
 
+    <div className="qs-form-section wide"><span>02</span><div><h3>What is being invoiced</h3><p>Use accepted quotation or BOQ items, or add a manual line.</p></div></div>
     <div className="invoice-lines wide">
       <h3>What is being invoiced</h3>
       {lines.map((line, index) => <div className="invoice-line" key={index}>
@@ -383,6 +396,7 @@ function CertificateForm({ data, companyId, close, reload }) {
         onClick={() => setLines(current => [...current, { ...BLANK_LINE }])}>Add a line</button>
     </div>
 
+    <div className="qs-form-section wide"><span>03</span><div><h3>Tax, retention and payment</h3><p>Review deductions and the calculated net amount.</p></div></div>
     {documentType === 'Tax Invoice' && <label>Tax treatment
       <select value={terms.taxTreatment} onChange={event => setTerm('taxTreatment', event.target.value)}>
         {Object.entries(TAX_LABELS).filter(([value]) => value !== 'Exempt').map(([value, text]) => <option value={value} key={value}>{text}</option>)}
@@ -419,7 +433,7 @@ function CertificateForm({ data, companyId, close, reload }) {
         passes instead, so it is not part of what the client pays.
       </p>}
     </div>}
-  </FormModal>;
+  </WorkflowForm>;
 }
 
 /* ---- bank guarantees ------------------------------------------------------ */
@@ -647,7 +661,7 @@ function EntryForm({ float, employees, close, reload }) {
       options={employees.filter(employee => employee.status !== 'Left').map(employee => [employee.id, `${employee.name} — ${employee.code}`])} />}
     <Field name="category" label="Category" required={false} placeholder="Fuel, refreshments, courier" />
     <Field name="description" label="Description" wide placeholder="Diesel for the site generator" />
-    {float.accountType === 'Salary advance' && <p className="form-note wide">Salary advances are recovered automatically from this employee's next available payroll, with any unpaid balance carried forward.</p>}
+    {float.accountType === 'Salary advance' && <p className="form-note wide">For daily-rate workers and site labourers, the total advanced on one day cannot exceed their daily salary rate. LKR 500 or 1,000 are common amounts, not required amounts. Advances are recovered from the employee's next available payroll, with any unpaid balance carried forward.</p>}
     {float.accountType === 'Fuel' && <p className="form-note wide">For fuel purchased for a vehicle, go to Fleet → Fuel & service → Record fuel. The float will be reduced automatically.</p>}
   </FormModal>;
 }
