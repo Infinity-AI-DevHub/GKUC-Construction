@@ -3,26 +3,28 @@ import assert from 'node:assert/strict';
 import { api, readableError, openDocument } from './api.js';
 import { onNotice } from './notices.js';
 
-test('document preview prepares a native PDF link without an asynchronous synthetic click', async () => {
+test('document preview prepares a one-use server PDF link without an asynchronous synthetic click', async () => {
   const originals = { fetch: globalThis.fetch, window: globalThis.window, sessionStorage: globalThis.sessionStorage };
   let replacement;
-  const button = { before() {}, replaceWith(link) { replacement = link; } };
+  const button = { tagName: 'BUTTON', before() {}, replaceWith(link) { replacement = link; } };
   const tab = { document: { write() {}, open() {}, close() {}, title: 'QUO-2026-0007',
-    querySelector: () => button, createElement: () => ({ style: {}, setAttribute() {} }) },
+    querySelector: () => button, createElement: name => ({ tagName: name.toUpperCase(), style: {}, setAttribute() {}, addEventListener() {} }) },
     addEventListener() {} };
   globalThis.window = { open: () => tab };
   globalThis.sessionStorage = { getItem: () => 'test-token' };
   globalThis.fetch = async (path, options) => {
     assert.equal(options.headers.Authorization, 'Bearer test-token');
-    return new Response(path.includes('download=pdf') ? '%PDF-1.4\n%%EOF' : '<html></html>');
+    if (path === '/api/document-download-tickets') {
+      assert.equal(JSON.parse(options.body).path, '/qs/quotations/7/document?download=pdf');
+      return Response.json({url:'/api/qs/quotations/7/document?download=pdf&downloadTicket=test'});
+    }
+    return new Response('<html></html>');
   };
   try {
-    assert.equal(await openDocument('/qs/quotations/7/print'), true);
+    assert.equal(await openDocument('/qs/quotations/7/document'), true);
     for (let i = 0; i < 20 && !replacement; i++) await new Promise(resolve => setTimeout(resolve, 5));
-    assert.equal(replacement.download, 'QUO-2026-0007.pdf');
-    assert.match(replacement.href, /^blob:/);
+    assert.equal(replacement.href, '/api/qs/quotations/7/document?download=pdf&downloadTicket=test');
     assert.equal(replacement.textContent, 'Download PDF');
-    URL.revokeObjectURL(replacement.href);
   } finally { Object.assign(globalThis, originals); }
 });
 

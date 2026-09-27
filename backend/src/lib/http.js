@@ -3,6 +3,7 @@ import { query,audit,pool } from '../db.js';
 import { isPermission } from './permissions.js';
 import { isValidOption, optionsFor } from './options.js';
 import { touch } from './presence.js';
+import { pathFromTicketRequest } from './document-download-ticket.js';
 
 export const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 export const tokenHash = token => crypto.createHash('sha256').update(token).digest('hex');
@@ -37,12 +38,26 @@ export const IDLE_MINUTES = Number(process.env.SESSION_IDLE_MINUTES || 60);
 
 export const auth = wrap(async (req, res, next) => {
   const token = bearer(req);
-  if (!token) return res.status(401).json({ error: 'Authentication required' });
-  const hash = tokenHash(token);
+  let ticketSessionId = null;
+  if (!token && req.method === 'GET' && req.query.downloadTicket) {
+    const parsed = pathFromTicketRequest(req.originalUrl);
+    if (!parsed.path || !/^[a-f0-9]{64}$/.test(parsed.ticket || ''))
+      return res.status(401).json({ error: 'This PDF download link is invalid. Open the document again.' });
+    // Consume atomically: a link cannot be reused or switched to a different document.
+    const ticketHash = tokenHash(parsed.ticket);
+    const used = await query(`UPDATE document_download_tickets SET consumed_at=NOW()
+      WHERE token_hash=? AND document_path=? AND consumed_at IS NULL AND expires_at>NOW()`, [ticketHash, parsed.path]);
+    if (used.affectedRows !== 1)
+      return res.status(401).json({ error: 'This PDF link has expired or was already used. Open the document again.' });
+    const ticketRow = await query('SELECT session_id FROM document_download_tickets WHERE token_hash=?', [ticketHash]);
+    ticketSessionId = ticketRow[0]?.session_id;
+  }
+  if (!token && !ticketSessionId) return res.status(401).json({ error: 'Authentication required' });
+  const hash = token ? tokenHash(token) : null;
   const rows = await query(
     `SELECT u.id,u.name,u.email,u.role,u.role_id,u.tour_seen_at,s.id session_id,s.last_seen_at
      FROM sessions s JOIN users u ON u.id=s.user_id
-     WHERE s.token_hash=? AND s.expires_at>NOW() AND u.active=1`, [hash]);
+     WHERE ${ticketSessionId ? 's.id' : 's.token_hash'}=? AND s.expires_at>NOW() AND u.active=1`, [ticketSessionId || hash]);
   if (!rows[0]) return res.status(401).json({ error: 'Session expired' });
 
   const session = rows[0];
@@ -61,7 +76,7 @@ export const auth = wrap(async (req, res, next) => {
 
   req.user = {
     id: session.id, name: session.name, email: session.email,
-    role: session.role, role_id: session.role_id,
+    role: session.role, role_id: session.role_id, sessionId: session.session_id,
     /* Null until they have been shown round, which is what triggers the introduction. */
     tourSeenAt: session.tour_seen_at
   };
