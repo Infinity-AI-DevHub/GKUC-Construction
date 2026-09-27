@@ -185,6 +185,69 @@ test('birthday notifications reach HR once and stay hidden from QS',async()=>{
   }
 });
 
+test('company registration and HR milestone letters are issued once with immutable PDFs', async () => {
+  const owner = await login(), hr = await login('hr@gkuc.lk'), qs = await login('qs@gkuc.lk');
+  const original = (await call(owner, 'GET', '/company?companyId=2')).body;
+  const registrationNumber = `GKRM-BR-${Date.now()}`;
+  const companyPayload = { name: original.name, address: original.address, telephone: original.telephone,
+    email: original.email, registrationNumber, tin: original.tin, vatNumber: original.vatNumber,
+    bankDetails: original.bankDetails, vatPercent: Number(original.vatPercent) };
+  let employeeId;
+  try {
+    const saved = await call(owner, 'PUT', '/company?companyId=2', companyPayload);
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.equal(saved.body.registrationNumber, registrationNumber);
+    const [[dates]] = await admin.query(`SELECT DATE_FORMAT(DATE_SUB(CURDATE(),INTERVAL 6 MONTH),'%Y-%m-%d') probation,
+      DATE_FORMAT(DATE_SUB(CURDATE(),INTERVAL 1 YEAR),'%Y-%m-%d') annual FROM ${testDatabase}.companies LIMIT 1`);
+    const employee = await call(hr, 'POST', '/employees', { code: `LETTER-${Date.now()}`, name: 'Letter QA Employee',
+      joinDate: dates.probation, designation: 'Site Engineer', payrollCompanyId: 2 });
+    assert.equal(employee.status, 201, JSON.stringify(employee.body));
+    employeeId = employee.body.id;
+    assert.equal((await call(qs, 'GET', `/employees/${employeeId}/letters`)).status, 403);
+    const first = (await call(hr, 'GET', `/employees/${employeeId}/letters`)).body;
+    assert.equal(first.find(row => row.type === 'probation').due, true);
+    assert.equal(first.find(row => row.type === 'one-year').due, false);
+    assert.equal((await call(hr, 'POST', `/employees/${employeeId}/letters`, { type: 'one-year', companyId: 2 })).status, 400);
+    const preview = await fetch(`${base}/employees/${employeeId}/letters/probation/document?companyId=2`,
+      { headers: { authorization: `Bearer ${hr}` } });
+    assert.equal(preview.status, 200);
+    assert.match(await preview.text(), /DRAFT - NOT ISSUED/);
+    for (let i = 0; i < 2; i++) assert.equal((await call(owner, 'POST', '/notifications/scan', {})).status, 200);
+    const [[noticeCount]] = await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.notifications
+      WHERE dedupe_key LIKE ?`, [`employee-letter:${employeeId}:probation:%`]);
+    assert.equal(noticeCount.n, 1);
+    const issued = await call(hr, 'POST', `/employees/${employeeId}/letters`, { type: 'probation', companyId: 2 });
+    assert.equal(issued.status, 201, JSON.stringify(issued.body));
+    assert.equal((await call(hr, 'POST', `/employees/${employeeId}/letters`, { type: 'probation', companyId: 2 })).status, 409);
+    const issuedPath = `/employees/${employeeId}/letters/probation/document`;
+    const issuedDocument = await fetch(base + issuedPath, { headers: { authorization: `Bearer ${hr}` } });
+    const issuedHtml = await issuedDocument.text();
+    assert.equal(issuedDocument.status, 200);
+    assert.match(issuedHtml, new RegExp(registrationNumber));
+    assert.doesNotMatch(issuedHtml, /DRAFT - NOT ISSUED/);
+    const ticket = await call(hr, 'POST', '/document-download-tickets', { path: `${issuedPath}?download=pdf` });
+    assert.equal(ticket.status, 200, JSON.stringify(ticket.body));
+    const pdf = await fetch(`http://127.0.0.1:${port}${ticket.body.url}`);
+    assert.equal(pdf.status, 200);
+    assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
+    assert.equal((await call(qs, 'GET', issuedPath)).status, 403);
+    assert.equal((await call(hr, 'PATCH', `/employees/${employeeId}`, { name: 'Renamed Later' })).status, 200);
+    const afterEdit = await fetch(base + issuedPath, { headers: { authorization: `Bearer ${hr}` } });
+    assert.equal(await afterEdit.text(), issuedHtml);
+    await admin.query(`UPDATE ${testDatabase}.employees SET join_date=? WHERE id=?`, [dates.annual, employeeId]);
+    assert.equal((await call(hr, 'POST', `/employees/${employeeId}/letters`, { type: 'one-year', companyId: 2 })).status, 201);
+    const records = (await call(hr, 'GET', `/employees/${employeeId}/letters`)).body;
+    assert.equal(records.filter(row => row.issued).length, 2);
+  } finally {
+    if (employeeId) {
+      await admin.query(`DELETE FROM ${testDatabase}.employee_letters WHERE employee_id=?`, [employeeId]);
+      await admin.query(`DELETE FROM ${testDatabase}.notifications WHERE dedupe_key LIKE ?`, [`employee-letter:${employeeId}:%`]);
+      await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`, [employeeId]);
+    }
+    await call(owner, 'PUT', '/company?companyId=2', { ...companyPayload, registrationNumber: original.registrationNumber || '' });
+  }
+});
+
 test('hiring tracks interviews and converts selected candidates once with optional protected access',async()=>{
   const owner=await login();
   const candidate=await call(owner,'POST','/hiring',{name:'Hiring Test Candidate',phone:'0710000000',address:'Test address',email:'hiring.test@gkuc.lk',position:'Engineer'});

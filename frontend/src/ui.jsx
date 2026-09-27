@@ -86,9 +86,9 @@ export const allowedTabs = (tabs, can) => tabs
 
 export function Modal({ title, close, children, wide = false }) {
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
-    <div className={wide ? 'modal modal-wide' : 'modal'}>
+    <div className={wide ? 'modal modal-wide' : 'modal'} role="dialog" aria-modal="true" aria-label={title}>
       <div className="modal-title"><h2>{title}</h2><button className="icon-btn" onClick={close}><X size={18} /></button></div>
-      {children}
+      <div className="modal-content">{children}</div>
     </div>
   </div>;
 }

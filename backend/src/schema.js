@@ -103,11 +103,13 @@ async function createCompaniesTable() {
     name VARCHAR(180) NOT NULL UNIQUE,
     address VARCHAR(400) NOT NULL DEFAULT '', telephone VARCHAR(120) NOT NULL DEFAULT '',
     email VARCHAR(180) NOT NULL DEFAULT '', tin VARCHAR(40) NOT NULL DEFAULT '',
+    registration_number VARCHAR(80) NOT NULL DEFAULT '',
     vat_number VARCHAR(40) NOT NULL DEFAULT '', svat_number VARCHAR(40) NOT NULL DEFAULT '',
     bank_details VARCHAR(400) NOT NULL DEFAULT '', default_vat_rate DECIMAL(5,2) NOT NULL DEFAULT 18,
     active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  await addColumn('companies', 'registration_number', "VARCHAR(80) NOT NULL DEFAULT ''");
   await query(`INSERT IGNORE INTO companies (id,code,name) VALUES
     (1,'GKUC','GKUC Construction'),(2,'GKRM','GKUC Readymix')`);
   /* The supplied Readymix tax-invoice letterhead is the authority for this legal identity.
@@ -254,6 +256,21 @@ async function createHrTables() {
     CONSTRAINT fk_employee_department FOREIGN KEY(department_id) REFERENCES departments(id),
     CONSTRAINT fk_employee_user FOREIGN KEY(user_id) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS employee_letters (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    employee_id BIGINT UNSIGNED NOT NULL,
+    company_id TINYINT UNSIGNED NOT NULL,
+    letter_type ENUM('Probation confirmation','One-year service') NOT NULL,
+    milestone_date DATE NOT NULL,
+    issued_on DATE NOT NULL,
+    issued_by BIGINT UNSIGNED NOT NULL,
+    html_snapshot LONGTEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_employee_letter_type(employee_id,letter_type),
+    CONSTRAINT fk_employee_letter_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
+    CONSTRAINT fk_employee_letter_company FOREIGN KEY(company_id) REFERENCES companies(id),
+    CONSTRAINT fk_employee_letter_issuer FOREIGN KEY(issued_by) REFERENCES users(id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
   await addColumn('employees', 'weekly_rate', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
   await addColumn('employees', 'birth_date', 'DATE NULL');
   await addColumn('employees', 'job_description', 'TEXT NULL');

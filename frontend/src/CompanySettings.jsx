@@ -35,6 +35,7 @@ export default function CompanySettings({ can, companyId }) {
           address: form.get('address') || '',
           telephone: form.get('telephone') || '',
           email: form.get('email') || '',
+          registrationNumber: form.get('registrationNumber') || '',
           tin: form.get('tin') || '',
           vatNumber: form.get('vatNumber') || '',
           bankDetails: form.get('bankDetails') || '',
@@ -71,6 +72,7 @@ export default function CompanySettings({ can, companyId }) {
       <Field name="name" label="Registered name" defaultValue={company.name} />
       <Field name="telephone" label="Telephone" defaultValue={company.telephone} required={false} />
       <Field name="email" label="Email" type="email" defaultValue={company.email} required={false} />
+      <Field name="registrationNumber" label="Business registration number" defaultValue={company.registrationNumber} required={false} />
       <Field name="vatPercent" label="VAT rate (%)" type="number" step="0.01" defaultValue={company.vatPercent} required={false} />
       <Field name="tin" label="TIN" defaultValue={company.tin} required={false} />
       <Field name="vatNumber" label="VAT registration number" defaultValue={company.vatNumber} required={false} />

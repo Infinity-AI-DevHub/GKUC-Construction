@@ -1018,7 +1018,7 @@ function SubcontractQuotationForm({ data, subcontractors, companyId, close, relo
 const QUOTATION_IDENTITY_FIELDS = {
   company: [
     ['logo', 'GKUC logo'], ['name', 'Operating company name'], ['address', 'Address'],
-    ['telephone', 'Telephone'], ['email', 'Email'], ['tin', 'TIN'],
+    ['telephone', 'Telephone'], ['email', 'Email'], ['registrationNumber', 'Business registration number'], ['tin', 'TIN'],
     ['vatNumber', 'VAT registration'], ['svatNumber', 'SVAT registration'],
     ['bankDetails', 'Bank details']
   ],

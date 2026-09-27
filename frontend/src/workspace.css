@@ -42,3 +42,37 @@ main .reference-dashboard :is(.dashboard-card,.metric){border-radius:16px;border
 @media(max-width:1100px){.module-layout{grid-template-columns:200px minmax(0,1fr);gap:20px}}
 @media(max-width:800px){.module-layout{grid-template-columns:minmax(0,1fr);gap:18px}.module-navigation{position:static;padding:14px;border-radius:14px}.module-navigation-label{padding:0 4px 12px}.module-navigation .segments{display:flex;overflow-x:auto;flex-wrap:nowrap;max-width:100%;gap:6px}.module-navigation .segments button{width:auto;flex:0 0 auto;white-space:nowrap;padding:10px 13px}.module-content{gap:18px}main .page-heading{flex-wrap:wrap;padding-bottom:20px}main .page-heading h1{font-size:26px}main :is(.table-tools,.panel-title){padding:18px}main :is(.report-form,.modal-body){padding:20px}main .report-form :is(input,select,textarea){font-size:16px}}
 @media(prefers-reduced-motion:reduce){.module-navigation .segments button{transition:none}}
+
+/* A single surface and spacing system for the shared dialogs across modules. */
+.modal-backdrop{padding:24px;background:rgba(5,19,38,.64);backdrop-filter:blur(7px)}
+.modal{width:min(640px,100%);max-width:calc(100vw - 28px);border:1px solid #dce5ee;border-radius:20px;background:#fff;box-shadow:0 28px 90px rgba(6,24,43,.27);overflow:hidden}
+.modal.modal-wide{width:min(880px,100%)}
+.modal-title{height:auto;min-height:76px;padding:20px 28px;background:linear-gradient(120deg,#f7f9fc,#fff 70%);border-bottom:1px solid #e3eaf1;gap:16px}
+.modal-title h2{margin:0;font:800 20px/1.3 Manrope,sans-serif;letter-spacing:-.035em;color:#102d49;overflow-wrap:anywhere}
+.modal-title>.icon-btn{width:38px;height:38px;flex:none;border:1px solid #dce5ed;border-radius:10px;background:#fff;color:#587085;display:grid;place-items:center}
+.modal-title>.icon-btn:hover{background:#f5e9ed;border-color:#e9c7d0;color:#a51635}
+.modal-header{min-height:72px;padding:20px 28px;background:linear-gradient(120deg,#f7f9fc,#fff 70%);border-bottom:1px solid #e3eaf1}
+.modal-header h2{margin:0;font:800 20px/1.3 Manrope,sans-serif;letter-spacing:-.035em;color:#102d49}
+.modal-close{border:1px solid #dce5ed;border-radius:10px;background:#fff;color:#587085}
+.modal-close:hover{background:#f5e9ed;border-color:#e9c7d0;color:#a51635}
+.modal-content{min-width:0;padding:26px 28px 30px;background:#fff}
+.modal-content:has(>.report-form){padding:0}
+.modal-content>.report-form{padding:26px 28px 30px}
+.modal-content>p:first-child{margin-top:0}
+.modal-content>p:last-child{margin-bottom:0}
+.modal-content>.attendance-summary{margin-top:0}
+.modal-content .form-actions,.modal-content .modal-actions{margin-top:8px}
+.modal-content .table-wrap{max-width:100%;overflow-x:auto}
+.invoice-payments-dialog{display:grid;gap:24px}
+.invoice-payments-dialog .attendance-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0}
+.invoice-payments-dialog .summary{min-width:0;min-height:112px;padding:17px;align-items:flex-start;background:#f7f9fc;border:1px solid #e1e8f0;border-radius:14px;box-shadow:none}
+.invoice-payments-dialog .summary svg{flex:none;width:20px;height:20px;color:#a91639}
+.invoice-payments-dialog .summary strong{font:800 clamp(16px,1.8vw,22px)/1.18 Manrope,sans-serif;color:#102d49;overflow-wrap:anywhere}
+.invoice-payments-dialog .summary span{color:#627689;font-size:12px}
+.invoice-payments-history{border:1px solid #e2e9f0;border-radius:14px;overflow:hidden}
+.invoice-payments-history-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 19px;border-bottom:1px solid #e2e9f0;background:#f9fbfd}
+.invoice-payments-history-heading h3{margin:0;font:800 15px Manrope,sans-serif;color:#143451}
+.invoice-payments-history-heading span{font-size:12px;font-weight:700;color:#71869a}
+.invoice-payments-empty{margin:0;padding:28px 20px;text-align:center;font-size:13px;line-height:1.6;color:#61778a}
+.invoice-payments-dialog>.primary{justify-self:end}
+@media(max-width:680px){.modal-backdrop{padding:10px}.modal,.modal.modal-wide{max-width:100%;width:100%;border-radius:16px}.modal-title,.modal-header{min-height:66px;padding:16px 18px}.modal-title h2,.modal-header h2{font-size:17px}.modal-content{padding:19px}.modal-content>.report-form{padding:19px}.invoice-payments-dialog .attendance-summary{grid-template-columns:1fr}.invoice-payments-dialog .summary{min-height:0}.invoice-payments-dialog>.primary{justify-self:stretch}}
