@@ -424,7 +424,7 @@ function App() {
       overBudget: scopedFinance.filter(row => Number(row.budget) > 0 && Number(row.expenses) > Number(row.budget)).length
     }
   };
-  const shared = { data: scopedData, allData: data, reload, can, user, companies,
+  const shared = { data: scopedData, allData: data, reload, can, user, companies, navigate: goTo,
     companyId: selectedCompanyId, company: selectedCompany, setCompanyId: chooseCompany };
 
   /* Declared above the page map, which now references it: the dashboard's alert card offers
@@ -511,6 +511,10 @@ function App() {
         </div>
       </header>
       <main>
+        {activePage !== 'Dashboard' && <div className="workspace-breadcrumb" aria-label="Current location">
+          <button type="button" onClick={() => goTo('Dashboard')}>My work today</button>
+          <span aria-hidden="true">/</span><strong>{activePage}</strong>
+        </div>}
         <div className="company-scope" aria-label="Active company">
           <div><span>Operating company</span><strong>{selectedCompany?.name || 'GKUC Construction'}</strong></div>
           <div className="company-scope-options">

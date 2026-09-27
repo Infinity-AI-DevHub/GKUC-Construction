@@ -9,10 +9,16 @@ import Cheques from './Cheques.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
 
 const TABS = ['Financial reports','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Categories'];
+const TAB_GROUPS = [
+  { label: 'Overview & review', tabs: ['Financial reports', 'Daily cost review', 'Budget monitoring'] },
+  { label: 'Money in', tabs: ['Invoices', 'Income', 'VAT ledger'] },
+  { label: 'Money out', tabs: ['Bills', 'Supplier invoices', 'Expenses', 'Petty cash', 'Credit cards'] },
+  { label: 'Controls', tabs: ['Cheques', 'Bonds', 'Categories'] }
+];
 
 /** PID 2.10 — costs, payments and profitability in one view, watched continuously. */
 export default function Finance({ data, reload, can, companyId, company }) {
-  const [tab, setTab] = useState(TABS[0]);
+  const [tab, setTab] = useState(() => TABS.find(section => slug(section) === window.location.pathname.split('/')[2]) || TABS[0]);
   const [open, setOpen] = useState('');
   const [summary, setSummary] = useState(null);
 
@@ -41,7 +47,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
 
   return <Page title="Finance" subtitle={`Project costs, payments and profitability for ${company?.name || 'the selected company'}.`}
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
-    <Tabs tabs={TABS} active={tab} onChange={setTab} />
+    <Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} />
 
     {tab === 'Financial reports' && <FinanceReports projects={data.projects} companyId={companyId} company={company} />}
     {tab === 'Budget monitoring' && <BudgetMonitoring summary={summary} />}

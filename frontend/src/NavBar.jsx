@@ -125,11 +125,11 @@ export default function NavBar({ items, activePage, openTasks, onSelect }) {
         type="button"
         className={`nav-more-button${activeIsHidden ? ' active' : ''}`}
         aria-expanded={menuOpen}
-        aria-label={`${overflow.length} more sections`}
-        title="More sections"
+        aria-label={activeIsHidden ? `${activePage}, current section; ${overflow.length} more sections` : `${overflow.length} more sections`}
+        title={activeIsHidden ? `Current section: ${activePage}` : 'More sections'}
         onClick={() => setMenuOpen(open => !open)}
       >
-        <MoreHorizontal size={18} /><span>More</span>
+        <MoreHorizontal size={18} /><span>{activeIsHidden ? activePage : 'More'}</span>
         {overflow.some(([name]) => name === 'Tasks') && openTasks > 0 && <b>{openTasks}</b>}
       </button>
 

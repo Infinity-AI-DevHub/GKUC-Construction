@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronRight, Plus, X } from 'lucide-react';
 import { initials, onDataChanged, slug } from './api.js';
+import './workflow.css';
 
 /**
  * Loads a panel's own list, and loads it again whenever anything in the system changes.
@@ -63,10 +64,24 @@ export function Page({ title, subtitle, action, children, onAction }) {
 }
 
 /** Sub-navigation inside a module, using the same segmented control as the task filters. */
-export function Tabs({ tabs, active, onChange }) {
-  return <div className="toolbar"><div className="segments">
-    {tabs.map(tab => <button type="button" aria-pressed={active === tab} className={active === tab ? 'active' : ''} onClick={() => onChange(tab)} key={tab}>{tab}</button>)}
-  </div></div>;
+export function Tabs({ tabs, active, onChange, groups }) {
+  const sections = groups
+    ? groups.map(group => ({ ...group, tabs: group.tabs.filter(tab => tabs.includes(tab)) })).filter(group => group.tabs.length)
+    : [{ label: null, tabs }];
+  return <div className="toolbar">
+    {groups && <label className="compact-section-picker">Jump to section
+      <select value={active} onChange={event => onChange(event.target.value)}>
+        {sections.map((group, index) => <optgroup label={group.label} key={group.label || index}>
+          {group.tabs.map(tab => <option key={tab} value={tab}>{tab}</option>)}
+        </optgroup>)}
+      </select>
+    </label>}
+    <div className={`segments${groups ? ' grouped-segments' : ''}`}>
+    {sections.map((group, index) => <div className="segment-group" key={group.label || index}>
+      {group.label && <div className="segment-group-label">{group.label}</div>}
+      {group.tabs.map(tab => <button type="button" aria-pressed={active === tab} className={active === tab ? 'active' : ''} onClick={() => onChange(tab)} key={tab}>{tab}</button>)}
+    </div>)}
+    </div></div>;
 }
 
 /**
@@ -209,4 +224,64 @@ export function FormModal({ title, close, label, onSubmit, children, wide = fals
       <FormButtons close={close} label={label} busy={busy} />
     </EntityForm>
   </Modal>;
+}
+
+/** Long, consequential records get room to breathe and a separate review before writing. */
+export function WorkflowForm({ title, close, label, onSubmit, children, summary = [], reviewContent = null }) {
+  const formRef = useRef(null);
+  const pageRef = useRef(null);
+  const [review, setReview] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [values, setValues] = useState({});
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    const original = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = original; };
+  }, []);
+  const collect = () => Object.fromEntries(new FormData(formRef.current).entries());
+  const displayValues = () => Object.fromEntries(Array.from(formRef.current.elements)
+    .filter(element => element.name && element.value)
+    .map(element => [element.name, element.tagName === 'SELECT' ? element.selectedOptions[0]?.textContent : element.value]));
+  const requestClose = () => { if (!dirty || window.confirm('Discard this unsaved draft and return?')) close(); };
+  const reviewFields = () => Array.from(formRef.current.elements).filter(element => element.name && !['submit', 'button', 'hidden'].includes(element.type))
+    .map(element => ({ name: element.name, label: element.closest('label')?.firstChild?.textContent?.trim() || element.name,
+      value: element.tagName === 'SELECT' ? element.selectedOptions[0]?.textContent : element.value }))
+    .filter(item => item.value && item.value.trim());
+  const prepare = event => {
+    event.preventDefault();
+    if (!formRef.current.reportValidity()) return;
+    setValues(displayValues());
+    setError('');
+    setReview(true);
+    pageRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const save = async () => {
+    setBusy(true); setError('');
+    try { const form = new FormData(formRef.current); await onSubmit(Object.fromEntries(form.entries()), form); close(); }
+    catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  };
+  return <div className="workflow-page" role="region" aria-label={title} ref={pageRef}>
+    <header className="workflow-header"><div><span>GKUC SiteOps · guided entry</span><h1>{title}</h1></div><button type="button" className="secondary" onClick={requestClose}>Close and return</button></header>
+    <div className="workflow-progress" aria-label="Workflow progress"><span className={!review ? 'current' : 'done'}>1 · Complete details</span><span className={review ? 'current' : ''}>2 · Review and confirm</span></div>
+    <div className="workflow-layout"><div className="workflow-main">
+      <form ref={formRef} className={`report-form workflow-editor${review ? ' is-reviewing' : ''}`} onSubmit={prepare} onInput={() => { setDirty(true); setValues(displayValues()); }} onChange={() => { setDirty(true); setValues(displayValues()); }}>
+        {children}
+        <div className="form-actions wide"><button type="button" className="secondary" onClick={requestClose}>Cancel</button><button className="primary" type="submit">Review details <ChevronRight size={16} /></button></div>
+      </form>
+      {review && <section className="workflow-review"><span className="section-kicker">Final check</span><h2>Review before saving</h2><p>Nothing has been saved yet. Check the details below, then confirm. Use “Edit details” to correct anything.</p>
+        <dl>{reviewFields().map((item, index) => <div key={`${item.name}-${index}`}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
+        {reviewContent && <div className="workflow-review-content">{reviewContent}</div>}
+        {summary.length > 0 && <div className="workflow-review-summary">{summary.map(([name, value]) => <div key={name}><span>{name}</span><strong>{value || '—'}</strong></div>)}</div>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <div className="form-actions"><button type="button" className="secondary" onClick={() => { setReview(false); setError(''); }}>Edit details</button><button type="button" className="primary" onClick={save} disabled={busy}><Check size={16} />{busy ? 'Saving…' : label}</button></div>
+      </section>}
+      {!review && error && <p className="form-error" role="alert">{error}</p>}
+    </div><aside className="workflow-summary" aria-label="Current draft summary"><span className="section-kicker">Your draft</span><h2>{review ? 'Ready to confirm' : 'Summary as you work'}</h2><p>{review ? 'Review every detail before it becomes a saved record.' : 'Complete the sections on the left. You can check everything before saving.'}</p>
+      {[...summary, ...Object.entries(values).filter(([name, value]) => value && ['title', 'projectId', 'clientId', 'closingDate', 'periodStart', 'periodEnd', 'dueDate'].includes(name)).map(([name, value]) => [name.replace(/([A-Z])/g, ' $1'), value])].map(([name, value], index) => <div className="workflow-summary-line" key={`${name}-${index}`}><span>{name}</span><strong>{value || '—'}</strong></div>)}
+      <div className="workflow-summary-foot">{review ? 'Step 2 of 2 · confirm to save' : 'Step 1 of 2 · nothing saved yet'}</div>
+    </aside></div>
+  </div>;
 }

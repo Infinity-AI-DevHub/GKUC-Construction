@@ -81,8 +81,9 @@ export const api = async (path, options = {}) => {
      the person instead of telling them what happened. */
   const text = await response.text();
   let body = null;
+  let validJson = false;
   if (text) {
-    try { body = JSON.parse(text); } catch { body = null; }
+    try { body = JSON.parse(text); validJson = true; } catch { body = null; }
   }
   if (!response.ok) {
     const message = responseError(response, body);
@@ -92,7 +93,7 @@ export const api = async (path, options = {}) => {
     failure.details = body;
     throw failure;
   }
-  if (body === null && text) {
+  if (!validJson && text) {
     const message = 'The system sent a response that could not be read. Refresh the page and try again; contact your administrator if it continues.';
     reportFailure(path, message);
     throw new Error(message);

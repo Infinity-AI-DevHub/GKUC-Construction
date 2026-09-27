@@ -25,17 +25,17 @@ router.get('/',wrap(async(req,res)=>{
   for(const [key,count] of groups)if(count>1){const [employee_id,work_date]=key.split(':');issues.push({id:key,employee_id:Number(employee_id),work_date,kind:'Duplicate legacy OT',status:'Needs review'});}
   res.json({claims:claims.map(c=>({...c,detail:parse(c.detail),calculation:parse(c.calculation)})),suggestions,issues});
 }));
-const claimSchema=z.object({employeeId:z.number().int().positive(),workDate:date,projectId:z.number().int().positive().nullable().default(null),kind:z.enum(['Travel','Mileage','Special duty','Machine/operator']),departure:time.optional(),arrival:time.optional(),hours:z.number().nonnegative().max(24).default(0),distance:z.number().nonnegative().default(0),distanceType:z.enum(['One way','Return']).default('One way'),foodSupplied:z.boolean().default(false),startOdometer:z.number().nonnegative().optional(),endOdometer:z.number().nonnegative().optional(),approvedKm:z.number().nonnegative().optional(),fixedTravel:z.boolean().default(false),amount:z.number().nonnegative().default(0),source:z.string().trim().min(2).max(120),notes:z.string().max(2000).default(''),preview:z.boolean().default(false)});
+const claimSchema=z.object({employeeId:z.number().int().positive(),workDate:date,projectId:z.number().int().positive().nullable().default(null),kind:z.enum(['Travel','Mileage','Special duty','Machine/operator','Supervisor site charge']),siteChargeReason:z.enum(['Site visit','Labour mobilization','Both']).optional(),departure:time.optional(),arrival:time.optional(),hours:z.number().nonnegative().max(24).default(0),distance:z.number().nonnegative().default(0),distanceType:z.enum(['One way','Return']).default('One way'),foodSupplied:z.boolean().default(false),startOdometer:z.number().nonnegative().optional(),endOdometer:z.number().nonnegative().optional(),approvedKm:z.number().nonnegative().optional(),fixedTravel:z.boolean().default(false),amount:z.number().nonnegative().default(0),source:z.string().trim().min(2).max(120),notes:z.string().max(2000).default(''),preview:z.boolean().default(false)});
 router.post('/',validate(claimSchema),wrap(async(req,res)=>{
   const b=req.body;
   const id=await transaction(async conn=>{
     const q=async(sql,values)=>(await conn.query(sql,values))[0];
     const [employee]=await q('SELECT * FROM employees WHERE id=? FOR UPDATE',[b.employeeId]);if(!employee||employee.status==='Left')throw fail(400,'Select an active employee.');
     const [policy]=await q('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.payroll_company_id,b.workDate]);if(!policy)throw fail(409,'Configure an effective payroll policy before recording this claim.');
-    if(b.projectId){const [project]=await q('SELECT id FROM projects WHERE id=? AND active=1',[b.projectId]);if(!project)throw fail(400,'Choose an active project.');}
+    if(b.projectId){const [project]=await q('SELECT id,company_id FROM projects WHERE id=? AND active=1',[b.projectId]);if(!project)throw fail(400,'Choose an active project.');if(b.kind==='Supervisor site charge'&&Number(project.company_id)!==Number(employee.payroll_company_id))throw fail(400,'This supervisor and project belong to different payroll companies. Ask HR to check the assignment.');}
     const eligibility=parse(employee.allowance_eligibility);
     const key={Travel:'longDistance',Mileage:'motorcycle','Special duty':'specialDuty','Machine/operator':'machine'}[b.kind];
-    if(b.kind!=='Travel'&&!eligibility[key])throw fail(409,'Enable the employee’s applicable allowance eligibility in Payroll settings before recording this claim.');
+    if(b.kind!=='Travel'&&b.kind!=='Supervisor site charge'&&!eligibility[key])throw fail(409,'Enable the employee’s applicable allowance eligibility in Payroll settings before recording this claim.');
     const rules=rulesFor(policy);let calculation;
     if(b.kind==='Travel'){
       if(!b.projectId||!b.departure||!b.arrival||minutes(b.arrival)<=minutes(b.departure))throw fail(400,'Travel needs a project and return time after departure. Split overnight travel into separate dates.');
@@ -46,6 +46,12 @@ router.post('/',validate(claimSchema),wrap(async(req,res)=>{
       calculation={allowance:eligibility.longDistance?calculateLongDistance(b.distance,rules):0,travelHours:b.hours,travelRate:resolveOvertimeRate(employee,'Travel',policy),intervals,qualifies:b.distance>rules.longDistanceKm,threshold:rules.longDistanceKm};
     }else if(b.kind==='Mileage'){
       try{calculation=calculateMileage(b,rules);}catch(e){throw fail(400,e.message);}
+    }else if(b.kind==='Supervisor site charge'){
+      if(employee.payroll_category!=='Supervisor')throw fail(400,'Choose an employee whose payroll category is Supervisor.');
+      if(!b.projectId)throw fail(400,'Choose the site project for this supervisor charge.');
+      if(!b.siteChargeReason)throw fail(400,'Choose whether the supervisor visited the site, mobilized labour, or did both.');
+      if(!b.notes.trim())throw fail(400,'Describe the visit or labour mobilization in the source notes.');
+      calculation={amount:rules.supervisorSiteCharge,reason:b.siteChargeReason,policyId:policy.id};
     }else calculation={amount:b.amount};
     if(b.preview)return {calculation,policyId:policy.id};
     const result=await q('INSERT INTO hr_payroll_claims(employee_id,work_date,project_id,kind,detail,calculation,policy_id,created_by) VALUES(?,?,?,?,?,?,?,?)',[b.employeeId,b.workDate,b.projectId,b.kind,JSON.stringify(b),JSON.stringify(calculation),policy.id,req.user.id]);

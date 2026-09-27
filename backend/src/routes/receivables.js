@@ -783,6 +783,20 @@ router.post('/receivables/petty-cash/:id/entries', auth, permit('finance.manage'
       await transaction(async connection => {
         const [[lockedFloat]]=await connection.execute('SELECT id FROM petty_cash_floats WHERE id=? AND active=1 FOR UPDATE',[req.params.id]);
         if(!lockedFloat)throw fail(404,'That float is no longer active');
+        if(float.account_type==='Salary advance'&&req.body.kind==='Spend'){
+          const [[worker]]=await connection.execute("SELECT id,pay_basis,payroll_category,daily_rate FROM employees WHERE id=? AND status<>'Left' FOR UPDATE",[req.body.employeeId]);
+          if(!worker)throw fail(400,'Choose an active employee receiving this advance.');
+          if(worker.pay_basis==='Daily rate'||worker.payroll_category==='Site labourer'){
+            const dailyRate=Number(worker.daily_rate);
+            if(!Number.isFinite(dailyRate)||dailyRate<=0)throw fail(400,'Set this worker’s daily salary rate in HR payroll settings before recording an advance.');
+            const [[{given}]]=await connection.execute(`SELECT COALESCE(SUM(ABS(pe.amount)),0) given
+              FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
+              WHERE pf.account_type='Salary advance' AND pe.kind='Spend' AND pe.employee_id=? AND pe.entry_date=?`,
+              [worker.id,req.body.entryDate]);
+            const remaining=Math.round((dailyRate-Number(given))*100)/100;
+            if(req.body.amount>remaining+.001)throw fail(400,`This worker’s daily salary rate is LKR ${money(dailyRate)}. LKR ${money(given)} has already been advanced on this date, so no more than LKR ${money(Math.max(0,remaining))} can be given.`);
+          }
+        }
         const [[{balance}]]=await connection.execute('SELECT COALESCE(SUM(amount),0) balance FROM petty_cash_entries WHERE float_id=?',[req.params.id]);
         if(signed<0&&Number(balance)+signed<-.001)throw fail(400,`The float only holds ${money(balance)}. Record a top-up before spending more.`);
         const [entry]=await connection.execute(

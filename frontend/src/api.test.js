@@ -34,6 +34,19 @@ test('validation errors name the field that needs attention', () => {
   } }), /Choose the site for this import/);
 });
 
+test('a valid JSON null response means no saved record, not a malformed response', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSession = globalThis.sessionStorage;
+  globalThis.sessionStorage = { getItem: () => null };
+  globalThis.fetch = async () => Response.json(null);
+  try {
+    assert.equal(await api('/employees/1/bank-account'), null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.sessionStorage = originalSession;
+  }
+});
+
 test('API failures show a plain-language notice even when the caller swallows the error', async () => {
   const originalFetch = globalThis.fetch;
   const originalSession = globalThis.sessionStorage;

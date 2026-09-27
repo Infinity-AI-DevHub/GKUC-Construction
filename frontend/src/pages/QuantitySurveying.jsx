@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Download, FileText, Plus, Trash2, Upload, ChartNoAxesCombined, Calculator, ClipboardList, ShieldCheck, Users, ChevronRight, Layers } from 'lucide-react';
 import { api, fetchDownload, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import BoqImport from '../BoqImport.jsx';
 import BoqChanges from '../BoqChanges.jsx';
 import CostControl from './CostControl.jsx';
@@ -32,7 +32,7 @@ const QS_SECTIONS = {
 
 /** PID v3 §3.3 — one connected thread from first estimate to final account. */
 export default function QuantitySurveying({ data, reload, can, companyId, company }) {
-  const [tab, setTab] = useState(TABS[0]);
+  const [tab, setTab] = useState(() => TABS.find(section => slug(section) === window.location.pathname.split('/')[2]) || TABS[0]);
   const [open, setOpen] = useState('');
 
   const actions = {
@@ -950,7 +950,7 @@ function SubcontractQuotationForm({ data, subcontractors, companyId, close, relo
   const change = (index, field, value) => setLines(current =>
     current.map((line, position) => (position === index ? { ...line, [field]: value } : line)));
 
-  return <FormModal title="Record a subcontractor's quotation" close={close} label="Record quotation" wide
+  return <WorkflowForm title="Record a subcontractor's quotation" close={close} label="Record quotation" summary={[["Priced items",String(lines.filter(line => line.description.trim()).length)],["Quoted total",rupees(total)]]} reviewContent={<><h3>Subcontractor items</h3>{lines.filter(line => line.description.trim()).map((line,index)=><div key={index}><span>{line.description}<small>{line.quantity || 1} {line.unit || 'units'} × {rupees(line.rate || 0)} · discount {rupees(line.discount || 0)}</small></span><strong>{rupees(Math.max(0,Number(line.quantity || 1)*Number(line.rate || 0)-Number(line.discount || 0)))}</strong></div>)}</>}
     onSubmit={async values => {
       await post('/qs/subcontract-quotations', {
         companyId,
@@ -974,6 +974,7 @@ function SubcontractQuotationForm({ data, subcontractors, companyId, close, relo
       });
       await reload();
     }}>
+    <div className="qs-form-section wide"><span>01</span><div><h3>Subcontractor and project</h3><p>Link this quotation to the company and site.</p></div></div>
     <SelectField name="subcontractorId" label="Who quoted"
       options={subcontractors.map(row => [row.id, `${row.name} — ${row.trade}`])} />
     <Field name="theirReference" label="Their quotation number" required={false} placeholder="00243-3" />
@@ -987,6 +988,7 @@ function SubcontractQuotationForm({ data, subcontractors, companyId, close, relo
     <Field name="contactPerson" label="Their contact" required={false} />
     <Field name="contactPhone" label="Telephone" required={false} />
 
+    <div className="qs-form-section wide"><span>02</span><div><h3>Priced items</h3><p>Review each quantity, rate and discount.</p></div></div>
     <div className="wide">
       <h3 className="detail-heading">What they quoted</h3>
       {lines.map((line, index) => <div className="subquote-line" key={index}>
@@ -1008,9 +1010,10 @@ function SubcontractQuotationForm({ data, subcontractors, companyId, close, relo
         <strong>Total {rupees(total)}</strong>
       </div>
     </div>
+    <div className="qs-form-section wide"><span>03</span><div><h3>Supplier notes</h3><p>Record delivery or validity conditions.</p></div></div>
     <TextArea name="notes" label="Anything they noted" required={false}
       placeholder="Price includes transport & unloading" />
-  </FormModal>;
+  </WorkflowForm>;
 }
 
 /* ----------------------------------------------------------------- forms */
@@ -1142,7 +1145,14 @@ function QuotationForm({ data, companyId, close, reload }) {
   };
   const manualSubtotal = lines.reduce((sum, line) => sum + Number(line.quantity || 0) * Number(line.rate || 0)
     * (line.subQuotationId ? 1 + Number(line.subcontractMarkupPercent || 0) / 100 : 1), 0);
-  return <FormModal title="Create client quotation" close={close} label="Create quotation" wide onSubmit={async values => {
+  return <WorkflowForm title="Create client quotation" close={close} label="Create quotation" summary={[
+    ['Client', clients.find(client => String(client.id) === String(clientId))?.name || 'Choose a client'],
+    ['Project', clientProjects.find(project => String(project.id) === String(projectId))?.name || (mode === 'boq' ? 'From selected BOQ' : 'No project selected')],
+    ['Source', mode === 'boq' ? 'Approved BOQ' : 'Manual items'],
+    ['Priced items', mode === 'manual' ? String(lines.length) : 'From selected BOQ'],
+    ['Manual subtotal', mode === 'manual' ? rupees(manualSubtotal) : 'Calculated from BOQ'],
+    ['Bank account', bankAccounts.find(account => String(account.id) === String(bankAccountId))?.name || 'Not selected']
+  ]} reviewContent={mode === 'manual' ? <><h3>Quoted items</h3>{lines.map((line, index) => <div key={index}><span>{line.area || 'Item'} · {line.description || 'Untitled'}<small>{line.quantity || 0} {line.unit || 'units'} × {rupees(line.rate || 0)}</small></span><strong>{rupees(Number(line.quantity || 0) * Number(line.rate || 0) * (line.subQuotationId ? 1 + Number(line.subcontractMarkupPercent || 0) / 100 : 1))}</strong></div>)}</> : <><h3>BOQ source</h3><div><span>{clientBoqs.find(boq => String(boq.id) === String(boqId))?.title || 'Choose a BOQ'}</span><strong>Priced lines copied on save</strong></div></>} onSubmit={async values => {
     if (!identity) throw new Error(identityError || 'Wait for the client and GKUC details to load, then review the quotation information.');
     const common = {
       clientId: Number(clientId), quoteDate: values.quoteDate,
@@ -1253,7 +1263,7 @@ function QuotationForm({ data, companyId, close, reload }) {
         : 'Manual line amounts, markup, VAT and the final total are recalculated by the server.'}
       {' '}If the client accepts a project-linked quotation, the quoted total becomes the project budget.
     </p>
-  </FormModal>;
+  </WorkflowForm>;
 }
 
 /**
@@ -1334,7 +1344,7 @@ function QuotationWording({ quotation, close, reload }) {
 function TenderForm({ companyId, company, close, reload }) {
   const [clients, setClients] = useState([]);
   useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
-  return <FormModal title="Track a tender" close={close} label="Track tender" wide onSubmit={async values => {
+  return <WorkflowForm title="Track a tender" close={close} label="Track tender" summary={[["Bidder", company?.name || 'Selected company']]} onSubmit={async values => {
     await post('/qs/tenders', {
       companyId,
       contractNo: values.contractNo || undefined,
@@ -1363,6 +1373,7 @@ function TenderForm({ companyId, company, close, reload }) {
     });
     await reload();
   }}>
+    <div className="qs-form-section wide"><span>01</span><div><h3>Opportunity</h3><p>Identify the employer, works and bidding entity.</p></div></div>
     <Field name="title" label="Works as named in the bidding document" wide />
     <SelectField name="clientId" label="Employer / client" options={[["", 'Choose saved client…'], ...clients.map(client => [client.id, client.name])]} />
     <Field name="contractNo" label="Employer's contract number" required={false} placeholder="04-03-10-CT008/2026" />
@@ -1376,6 +1387,7 @@ function TenderForm({ companyId, company, close, reload }) {
       placeholder="Chief Engineer's Office (Western South), Colombo 07" />
     <Field name="employerContact" label="Contact" wide required={false} placeholder="Telephone / engineer" />
 
+    <div className="qs-form-section wide"><span>02</span><div><h3>Key dates</h3><p>Check the document window and bid deadline.</p></div></div>
     <Field name="docsFrom" label="Documents on sale from" type="date" required={false} />
     <Field name="docsUntil" label="…until" type="date" required={false} />
     <Field name="documentFee" label="Document fee (LKR)" type="number" min="0" defaultValue="0" required={false} />
@@ -1383,6 +1395,7 @@ function TenderForm({ companyId, company, close, reload }) {
     <Field name="closingTime" label="…at" type="time" defaultValue="10:00" required={false} />
     <Field name="validityDays" label="Bid valid for (days)" type="number" min="1" max="365" defaultValue="91" required={false} />
 
+    <div className="qs-form-section wide"><span>03</span><div><h3>Security and value</h3><p>Review the guarantee, cost and commercial limits.</p></div></div>
     <Field name="securityAmount" label="Bid security (LKR)" type="number" min="0" defaultValue="0" required={false} />
     <SelectField name="securityForm" label="Security form"
       options={['Bank guarantee', 'Insurance bond', 'Cash deposit', 'Not required']} />
@@ -1394,7 +1407,7 @@ function TenderForm({ companyId, company, close, reload }) {
     <Field name="estimatedValue" label="Our estimate (LKR)" type="number" min="0" defaultValue="0" required={false} />
     <Field name="source" label="Where it was advertised" required={false} placeholder="Daily News, e-procurement, invitation" />
     <TextArea name="documentsNote" label="Notes" required={false} placeholder="Optional" />
-  </FormModal>;
+  </WorkflowForm>;
 }
 
 function RetentionForm({ data, close, reload }) {

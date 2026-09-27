@@ -1,6 +1,6 @@
 import {Router} from 'express';
 import {z} from 'zod';
-import {query,getOne,transaction,audit,hashPassword} from '../db.js';
+import {query,getOne,transaction,audit,hashPassword,pool} from '../db.js';
 import {auth,permit,validate,wrap} from '../lib/http.js';
 import {strongPassword} from '../lib/passwords.js';
 
@@ -21,13 +21,33 @@ router.get('/:id',wrap(async(req,res)=>{
 }));
 router.post('/',validate(shape),wrap(async(req,res)=>{
   const b=req.body;
-  const r=await query('INSERT INTO hiring_candidates(name,phone,address,email,position,created_by) VALUES(?,?,?,?,?,?)',[b.name,b.phone,b.address,b.email,b.position,req.user.id]);
+  const r=await query("INSERT INTO hiring_candidates(name,phone,address,email,position,status,created_by) VALUES(?,?,?,?,?,'Shortlisted',?)",[b.name,b.phone,b.address,b.email,b.position,req.user.id]);
   res.status(201).json({id:r.insertId});
+}));
+router.post('/applicants',validate(shape),wrap(async(req,res)=>{
+  const b=req.body;
+  if(b.email && await getOne('SELECT id FROM hiring_candidates WHERE LOWER(email)=LOWER(?) AND status<>\'Dropped\'',[b.email]))
+    return res.status(409).json({error:'An active applicant already uses this email. Open that record rather than adding a duplicate CV.'});
+  const r=await query("INSERT INTO hiring_candidates(name,phone,address,email,position,status,created_by) VALUES(?,?,?,?,?,'Applicant',?)",[b.name,b.phone,b.address,b.email,b.position,req.user.id]);
+  await audit(pool,req.user.id,'CREATE','applicant',r.insertId,null,b,req.ip);
+  res.status(201).json({id:r.insertId});
+}));
+const screening=z.object({experience:z.number().int().min(0).max(5),qualifications:z.number().int().min(0).max(5),roleFit:z.number().int().min(0).max(5),notes:z.string().trim().min(5).max(5000),decision:z.enum(['Screening','Shortlisted','Dropped'])});
+router.patch('/:id/screening',validate(screening),wrap(async(req,res)=>{
+  const before=await getOne('SELECT * FROM hiring_candidates WHERE id=?',[req.params.id]);
+  if(!before)return res.status(404).json({error:'Applicant not found.'});
+  if(!['Applicant','Screening','Shortlisted','Dropped'].includes(before.status))return res.status(409).json({error:'Screening is closed after the interview or hiring decision. Review the interview record instead.'});
+  const b=req.body,scores={experience:b.experience,qualifications:b.qualifications,roleFit:b.roleFit,total:b.experience+b.qualifications+b.roleFit};
+  await query('UPDATE hiring_candidates SET screening_scores=?,screening_notes=?,screened_by=?,screened_at=NOW(),status=? WHERE id=?',
+    [JSON.stringify(scores),b.notes,req.user.id,b.decision,before.id]);
+  await audit(pool,req.user.id,'SCREEN','applicant',before.id,{status:before.status},{scores,notes:b.notes,decision:b.decision},req.ip);
+  res.json({id:before.id,scores,status:b.decision});
 }));
 router.patch('/:id',validate(shape.partial().extend({status:z.enum(['Shortlisted','Interviewing','Selected','Dropped']).optional(),decisionNotes:z.string().max(5000).optional()})),wrap(async(req,res)=>{
   const before=await getOne('SELECT * FROM hiring_candidates WHERE id=?',[req.params.id]);
   if(!before)return res.status(404).json({error:'Candidate not found.'});
   if(before.status==='Hired')return res.status(409).json({error:'This candidate is already an employee. Update their employee profile instead.'});
+  if(['Applicant','Screening'].includes(before.status)&&req.body.status&&!['Dropped'].includes(req.body.status))return res.status(409).json({error:'Review and score the CV, then shortlist the applicant before recording an interview or hiring decision.'});
   const entries=Object.entries(req.body);
   if(entries.length)await query(`UPDATE hiring_candidates SET ${entries.map(([key])=>`${key==='decisionNotes'?'decision_notes':key}=?`).join(',')} WHERE id=?`,[...entries.map(([,v])=>v),before.id]);
   res.json({id:before.id});
@@ -36,7 +56,7 @@ const interview=z.object({scheduledAt:z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}
 router.post('/:id/interviews',validate(interview),wrap(async(req,res)=>{
   const c=await getOne('SELECT id,status FROM hiring_candidates WHERE id=?',[req.params.id]);
   if(!c)return res.status(404).json({error:'Candidate not found.'});
-  if(['Hired','Dropped'].includes(c.status))return res.status(409).json({error:'Reopen a dropped candidate before adding an interview. Hired candidates are managed in Employees.'});
+  if(!['Shortlisted','Interviewing'].includes(c.status))return res.status(409).json({error:'Shortlist the applicant after CV screening before scheduling an interview.'});
   const b=req.body;
   const result=await query('INSERT INTO hiring_interviews(candidate_id,scheduled_at,interviewer,location,status,notes,created_by) VALUES(?,?,?,?,?,?,?)',[c.id,b.scheduledAt.replace('T',' '),b.interviewer,b.location,b.status,b.notes,req.user.id]);
   await query("UPDATE hiring_candidates SET status='Interviewing' WHERE id=? AND status='Shortlisted'",[c.id]);

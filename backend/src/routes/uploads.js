@@ -17,7 +17,8 @@ const WRITERS = {
   employee: 'hr.manage',
   report: 'site.reports',
   vehicle: 'transport.manage',
-  equipment: 'store.lending'
+  equipment: 'store.lending',
+  incoming_letter: 'enquiries.manage'
 };
 
 /**
@@ -34,7 +35,8 @@ const READERS = {
   employee: ['hr.view', 'hr.manage'],
   report: ['site.reports', 'projects.view'],
   vehicle: ['transport.view', 'transport.manage'],
-  equipment: ['store.view', 'store.manage']
+  equipment: ['store.view', 'store.manage'],
+  incoming_letter: ['enquiries.manage']
 };
 
 /*
@@ -49,7 +51,7 @@ const OWNER_TABLES = {
   handover:'employee_asset_handovers',
   candidate:'hiring_candidates',
   task: 'tasks', project: 'projects', employee: 'employees',
-  report: 'daily_reports', vehicle: 'fleet', equipment: 'equipment'
+  report: 'daily_reports', vehicle: 'fleet', equipment: 'equipment', incoming_letter: 'incoming_letters'
 };
 
 const metaSchema = z.object({
