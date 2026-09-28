@@ -78,38 +78,82 @@ function Users({ can, creating, closeCreate }) {
   </>;
 }
 
-const NOTIFICATION_TEMPLATE = '110px minmax(220px,1.4fr) minmax(240px,2fr) 160px 110px';
+const NOTIFICATION_TEMPLATE = '100px minmax(220px,1.5fr) minmax(160px,1fr) 130px 135px';
+const casePath = row => {
+  if(row.referenceType==='alert_case')return `/administration/notifications?case=${row.referenceId}`;
+  if(row.referenceType==='project')return `/projects/${encodeURIComponent(row.referenceId)}`;
+  if(row.referenceType==='employee')return `/people/${encodeURIComponent(row.referenceId)}`;
+  const section={task:'/tasks',fleet:'/fleet/vehicles',vehicle:'/fleet/vehicles',vehicle_document:'/fleet/compliance',
+    material:'/materials',equipment_assignment:'/materials',employee_document:'/people/employees',
+    insurance:'/people/insurance',milestone:'/projects/milestones',supplier_invoice:'/finance/supplier-invoices',
+    operating_bill:'/finance/bills',credit_card_statement:'/finance/credit-cards',client_invoice:'/finance/invoices',
+    invoice:'/finance/invoices',cheque:'/finance/cheques',received_cheque:'/finance/cheques',bond:'/finance/bonds',
+    retention:'/quantity-surveying/retentions',tender:'/quantity-surveying/tenders',
+    subcontract_quotation:'/projects',purchase_request:'/materials'}[row.referenceType];
+  return section ? `${section}?record=${encodeURIComponent(row.referenceId)}` : null;
+};
 
 function Notifications({ can, reload }) {
   const [rows, setRows] = useState([]);
-  const load = () => api('/notifications').then(setRows).catch(() => setRows([]));
+  const [selected, setSelected] = useState(null);
+  const [assignees,setAssignees]=useState([]);
+  const [note,setNote]=useState('');
+  const [evidence,setEvidence]=useState('');
+  const [until,setUntil]=useState('');
+  const [assigneeId,setAssigneeId]=useState('');
+  const [error,setError]=useState('');
+  const load = () => api('/notification-cases').then(setRows).catch(failure => setError(failure.message));
   useLiveList(load);
-
-  /* The bell in the top bar counts the same alerts, but from the bootstrap data rather
-     than from this list — so marking them read here has to refresh that too, or the dot
-     stays lit over a centre that has just been emptied. */
   const refresh = async () => { await load(); await reload?.(); };
-
-  const markRead = async id => { await post(`/notifications/${id}/read`); await refresh(); };
+  const openCase=async row=>{
+    setError('');setNote('');setEvidence('');setUntil('');setAssigneeId('');
+    try {setSelected(await api(`/notification-cases/${row.id}`));
+      setAssignees(await api(`/notification-cases/assignees?caseId=${row.id}`));}
+    catch(failure){setError(failure.message);}
+  };
+  useEffect(()=>{
+    const id=Number(new URLSearchParams(window.location.search).get('case'));
+    if(id&&rows.some(row=>Number(row.id)===id)&&Number(selected?.id)!==id) openCase({id});
+  },[rows]);
+  const act=async(action,extra={})=>{
+    try{setError('');const updated=await post(`/notification-cases/${selected.id}/actions`,{action,note:note.trim(),evidence:evidence.trim(),...extra});
+      setSelected(await api(`/notification-cases/${updated.id}`));setNote('');setEvidence('');setUntil('');await refresh();}
+    catch(failure){setError(failure.message);}
+  };
   const rescan = async () => { await post('/notifications/scan'); await refresh(); };
-  const markAll = async () => { await post('/notifications/read-all'); await refresh(); };
 
   return <>
     <div className="toolbar" style={{ marginBottom: '14px' }}>
-      <button className="secondary" onClick={markAll}>Mark all read</button>
-      {can.manage && <button className="secondary" onClick={rescan}><BellRing size={15} /> Run deadline scan</button>}
+      <p className="form-note">Reading a case does not resolve it. Assign an owner, record the action taken and attach an evidence reference before resolving.</p>
+      {can.has('admin.notifications') && <button className="secondary" onClick={rescan}><BellRing size={15} /> Run deadline scan</button>}
     </div>
-    <Table columns={['Severity', 'Alert', 'Detail', 'Raised', 'Status']} template={NOTIFICATION_TEMPLATE}
+    {error&&<p className="form-error" role="alert">{error}</p>}
+    <Table columns={['Risk', 'Case', 'Owner', 'Response due', 'State']} template={NOTIFICATION_TEMPLATE}
       title="Notification centre" empty="Nothing needs attention.">
       {rows.map(row => <Row template={NOTIFICATION_TEMPLATE} key={row.id}
-        onClick={row.status !== 'Read' ? () => markRead(row.id) : undefined}>
+        onClick={() => openCase(row)}>
         <Badge tone={row.severity === 'Critical' ? 'at-risk' : row.severity === 'Warning' ? 'watch' : 'low'}>{row.severity}</Badge>
-        <strong>{row.title}</strong>
-        <span>{row.message}</span>
-        <span>{new Date(row.createdAt).toLocaleString('en-GB')}</span>
-        <Badge tone={slug(row.status)}>{row.status}</Badge>
+        <div><strong>{row.title}</strong><small>#{row.id} · Seen {row.occurrenceCount} time(s) · {row.message}</small></div>
+        <span>{row.assignedTo||'Unassigned'}</span>
+        <span>{new Date(row.dueAt).toLocaleString('en-GB')}</span>
+        <Badge tone={slug(row.state)}>{row.state}{row.escalatedAt?' · Escalated':''}</Badge>
       </Row>)}
     </Table>
+    {selected&&<section className="table-panel" style={{marginTop:16,padding:20}} aria-label={`Case ${selected.id}`}>
+      <div className="table-tools"><div><h2>Case #{selected.id} · {selected.title}</h2><p>{selected.message}</p></div>
+        <button className="secondary" onClick={()=>setSelected(null)}>Close</button></div>
+      <p><strong>State:</strong> {selected.state} · <strong>Owner:</strong> {selected.assignedTo||'Unassigned'} · <strong>First seen:</strong> {new Date(selected.firstSeenAt).toLocaleString('en-GB')}</p>
+      <p><strong>Response due:</strong> {new Date(selected.dueAt).toLocaleString('en-GB')}{selected.snoozedUntil?` · Snoozed until ${new Date(selected.snoozedUntil).toLocaleString('en-GB')}`:''}</p>
+      {casePath(selected)&&<p><a href={casePath(selected)}>Open affected record →</a></p>}
+      {selected.state!=='Resolved'&&<div className="form-grid">
+        <div className="form-field"><label htmlFor="case-assignee">Assign to</label><select id="case-assignee" value={assigneeId} onChange={event=>setAssigneeId(event.target.value)}><option value="">Myself</option>{assignees.map(user=><option key={user.id} value={user.id}>{user.name}</option>)}</select><button className="secondary" onClick={()=>act('assign',{assigneeId:assigneeId?Number(assigneeId):undefined})}>Assign</button></div>
+        <div className="form-field"><label htmlFor="case-snooze">Snooze until</label><input id="case-snooze" type="datetime-local" value={until} onChange={event=>setUntil(event.target.value)} /><button className="secondary" onClick={()=>act('snooze',{until:until?new Date(until).toISOString():undefined})}>Snooze</button></div>
+        <div className="form-field"><label htmlFor="case-note">Action note / resolution</label><textarea id="case-note" value={note} onChange={event=>setNote(event.target.value)} /></div>
+        <div className="form-field"><label htmlFor="case-evidence">Evidence reference (file link, document number or URL)</label><input id="case-evidence" value={evidence} onChange={event=>setEvidence(event.target.value)} /></div>
+        <div className="toolbar"><button className="secondary" disabled={selected.state!=='New'} onClick={()=>act('acknowledge')}>Acknowledge</button><button className="secondary" disabled={!['Acknowledged','Assigned'].includes(selected.state)} onClick={()=>act('start')}>Start work</button><button className="secondary" disabled={!note.trim()} onClick={()=>act('note')}>Add note</button><button className="primary" disabled={!note.trim()||!evidence.trim()} onClick={()=>act('resolve')}>Resolve with evidence</button></div>
+      </div>}
+      <h3>Case history</h3><div className="activity-list">{selected.events?.map(event=><p key={event.id}><strong>{event.action}</strong> · {event.actor||'System'} · {new Date(event.createdAt).toLocaleString('en-GB')}{event.note?` — ${event.note}`:''}{event.evidence?` · Evidence: ${event.evidence}`:''}</p>)}</div>
+    </section>}
   </>;
 }
 

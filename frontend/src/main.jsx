@@ -367,7 +367,9 @@ function App() {
    * active page from what is currently visible means those cases land on the dashboard
    * instead of a screen that will only ever sit there loading.
    */
-  const activePage = visibleNav.some(([name]) => name === page) ? page : 'Dashboard';
+  /* Every signed-in employee may work an alert case addressed to them, even when they
+     have no Administration permission. Admin itself still gates its other sections. */
+  const activePage = visibleNav.some(([name]) => name === page) || page === 'Administration' ? page : 'Dashboard';
 
   /*
    * Keep the address bar honest.

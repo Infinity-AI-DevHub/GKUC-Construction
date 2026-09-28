@@ -248,6 +248,31 @@ async function createCoreTables() {
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_notification_user FOREIGN KEY(user_id) REFERENCES users(id), INDEX idx_notifications_user(user_id,status)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS alert_cases (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, case_key VARCHAR(190) NOT NULL UNIQUE,
+    user_id BIGINT UNSIGNED NULL, audience VARCHAR(120) NULL,
+    severity ENUM('Info','Warning','Critical') NOT NULL DEFAULT 'Info',
+    title VARCHAR(180) NOT NULL, message VARCHAR(1000) NOT NULL,
+    reference_type VARCHAR(80) NULL, reference_id VARCHAR(80) NULL,
+    state ENUM('New','Acknowledged','Assigned','In progress','Resolved') NOT NULL DEFAULT 'New',
+    assigned_user_id BIGINT UNSIGNED NULL, snoozed_until DATETIME NULL,
+    due_at DATETIME NOT NULL, first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    occurrence_count INT UNSIGNED NOT NULL DEFAULT 1,
+    escalated_at DATETIME NULL, resolved_at DATETIME NULL,
+    resolution_note TEXT NULL, resolution_evidence TEXT NULL,
+    INDEX idx_alert_cases_state(state,due_at), INDEX idx_alert_cases_assignee(assigned_user_id),
+    CONSTRAINT fk_alert_case_user FOREIGN KEY(user_id) REFERENCES users(id),
+    CONSTRAINT fk_alert_case_assignee FOREIGN KEY(assigned_user_id) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS alert_case_events (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, case_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NULL, action VARCHAR(40) NOT NULL, note TEXT NULL,
+    evidence TEXT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_alert_case_events_case(case_id,id),
+    CONSTRAINT fk_alert_case_event_case FOREIGN KEY(case_id) REFERENCES alert_cases(id),
+    CONSTRAINT fk_alert_case_event_user FOREIGN KEY(user_id) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
 }
 
 /** 2.2 Employee Management. */

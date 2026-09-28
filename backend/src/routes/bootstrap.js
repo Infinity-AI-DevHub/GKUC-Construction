@@ -89,13 +89,14 @@ router.get('/', auth, wrap(async (req, res) => {
          hold. See the note in admin.js: `user_id IS NULL OR …` showed everyone everything. */
       const perms = req.user.permissions.length ? req.user.permissions : [''];
       const placeholders = perms.map(() => '?').join(',');
-      return query(
-        `SELECT id,title,message,severity,status,channel,reference_type referenceType,reference_id referenceId,created_at createdAt
-      FROM notifications
-      WHERE (user_id = ? OR (user_id IS NULL AND (audience IS NULL OR audience IN (${placeholders}))))
-      ORDER BY id DESC LIMIT 40`,
-        [req.user.id, ...perms]
-      );
+      return query(`SELECT c.id,c.title,c.message,c.severity,c.state status,
+        c.reference_type referenceType,c.reference_id referenceId,c.first_seen_at createdAt,
+        c.assigned_user_id assignedUserId,c.snoozed_until snoozedUntil,c.due_at dueAt
+        FROM alert_cases c WHERE (c.user_id=? OR c.assigned_user_id=? OR
+          (c.user_id IS NULL AND (c.audience IS NULL OR c.audience IN (${placeholders})))
+          OR ?=1) AND c.state<>'Resolved'
+        ORDER BY (c.snoozed_until>NOW()),FIELD(c.severity,'Critical','Warning','Info'),c.due_at LIMIT 40`,
+        [req.user.id,req.user.id,...perms,Number(perms.includes('admin.notifications'))]);
     })(),
     gated(['finance.view','finance.manage'], () => query(`SELECT p.id projectId,p.company_id companyId,p.name project,p.budget,
       ${spendSql('p')} expenses,

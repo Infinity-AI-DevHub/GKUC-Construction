@@ -26,7 +26,8 @@ export default function Dashboard({ data, go, user, can, companyId, onViewAlerts
    * silently — what does not fit is counted underneath rather than left below the fold.
    */
   const SEVERITY_ORDER = { Critical: 0, Warning: 1, Info: 2 };
-  const unread = [...data.notifications.filter(item => item.status !== 'Read')]
+  const unread = [...data.notifications.filter(item => item.status !== 'Resolved' &&
+    (!item.snoozedUntil || new Date(item.snoozedUntil) <= new Date()))]
     .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3));
   const alerts = unread.slice(0, 2);
   const moreAlerts = unread.length - alerts.length;
