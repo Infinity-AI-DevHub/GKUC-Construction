@@ -308,6 +308,7 @@ function Tenders({ can, companyId, company, employees }) {
   const load = () => api(`/qs/tenders?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
   useEffect(()=>{setDetailId(null);load();},[companyId]);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && rows.some(row => Number(row.id) === id)) setDetailId(id); }, [rows]);
 
   const live = rows.filter(row => OPEN_STATUSES.includes(row.status));
   const awaiting = rows.filter(row => ['Submitted', 'Opened'].includes(row.status));
@@ -689,6 +690,7 @@ function Retention({ can, companyId }) {
   const load = () => api(`/qs/retentions?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
   useEffect(()=>{load();},[companyId]);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && rows.some(row => Number(row.id) === id)) document.getElementById(`retention-${id}`)?.scrollIntoView({ block: 'center' }); }, [rows]);
   const held = rows.reduce((sum, row) => sum + (Number(row.amount) - Number(row.releasedAmount)), 0);
 
   return <>
@@ -701,7 +703,7 @@ function Retention({ can, companyId }) {
     </div>
     <Table columns={['Retention', 'Project', 'Held', 'Release date', 'Status', '']} template={RETENTION_TEMPLATE}
       title="Retention held against projects" empty="No retention recorded.">
-      {rows.map(row => <Row template={RETENTION_TEMPLATE} key={row.id}>
+      {rows.map(row => <Row template={RETENTION_TEMPLATE} key={row.id} id={`retention-${row.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(row.id) ? 'linked-record' : ''}>
         <div><strong>{row.description}</strong><small>{row.percent}%</small></div>
         <span>{row.project}</span>
         <strong>{rupees(Number(row.amount) - Number(row.releasedAmount))}</strong>

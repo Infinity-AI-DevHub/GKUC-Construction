@@ -92,7 +92,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     {tab === 'Payroll Inputs' && <PayrollInputs data={data}/>}
     {tab === 'Workforce map' && <WorkforceMap canManage={can.hr} canPlan={can.hr || can.hrImport} projects={allProjects} />}
     {tab === 'Attendance' && <Attendance data={data} projects={allProjects} reload={reload} can={can} />}
-    {tab === 'Attendance register' && <AttendanceRegister projects={allProjects} canCorrect={can.attendance || can.hrImport} />}
+    {tab === 'Attendance register' && <AttendanceRegister projects={allProjects} canCorrect={can.attendance || can.hrImport || can.hr} />}
     {tab === 'Leave register' && <LeaveRegister />}
     {tab === 'Biometric import' && <BiometricImport data={data} projects={allProjects} reload={reload} can={can} />}
     {tab === 'Leave' && <Leave can={can} />}
@@ -589,17 +589,18 @@ function Leave({ can }) {
   const [rows, setRows] = useState([]);
   const load = () => api('/employees/leave/all').then(setRows).catch(() => setRows([]));
   useLiveList(load);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && rows.some(row => Number(row.id) === id)) document.getElementById(`leave-${id}`)?.scrollIntoView({ block: 'center' }); }, [rows]);
   const decide = async (id, status) => { await patch(`/employees/leave/${id}`, { status }); await load(); };
 
   return <Table columns={LEAVE_COLUMNS} template={LEAVE_TEMPLATE} title="Leave requests" empty="No leave requested.">
-    {rows.map(row => <Row template={LEAVE_TEMPLATE} key={row.id}>
+    {rows.map(row => <Row template={LEAVE_TEMPLATE} key={row.id} id={`leave-${row.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(row.id) ? 'linked-record' : ''}>
       <div><strong>{row.employee}</strong><small>{row.employeeCode}</small></div>
       <span>{row.leaveType}<small>{row.paymentType || (row.leaveType === 'Unpaid' ? 'Unpaid' : 'Paid')}</small></span>
       <span>{shortDate(row.fromDate)}</span>
       <span>{shortDate(row.toDate)}</span>
       <span>{row.days}</span>
       <Badge tone={slug(row.status)}>{row.status}</Badge>
-      {can.payroll && row.status === 'Pending'
+      {can.leave && row.status === 'Pending'
         ? <span className="row-actions">
           <button className="status-button" onClick={() => decide(row.id, 'Approved')}>Approve</button>
           <button className="status-button" onClick={() => decide(row.id, 'Rejected')}>Reject</button>
@@ -616,10 +617,11 @@ function Overtime({ can }) {
   const [rows, setRows] = useState([]);
   const load = () => api('/employees/overtime/all').then(setRows).catch(() => setRows([]));
   useLiveList(load);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && rows.some(row => Number(row.id) === id)) document.getElementById(`overtime-${id}`)?.scrollIntoView({ block: 'center' }); }, [rows]);
   const decide = async (id, status) => { await patch(`/employees/overtime/${id}`, { status }); await load(); };
 
   return <Table columns={OVERTIME_COLUMNS} template={OVERTIME_TEMPLATE} title="Overtime records" empty="No overtime recorded.">
-    {rows.map(row => <Row template={OVERTIME_TEMPLATE} key={row.id}>
+    {rows.map(row => <Row template={OVERTIME_TEMPLATE} key={row.id} id={`overtime-${row.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(row.id) ? 'linked-record' : ''}>
       <div><strong>{row.employee}</strong><small>{row.employeeCode}</small></div>
       <Badge tone="pending">{row.overtimeType}</Badge>
       <span>{row.project || '—'}</span>
@@ -627,7 +629,7 @@ function Overtime({ can }) {
       <span>{row.hours}</span>
       <span>{rupees(row.rate)}</span>
       <Badge tone={slug(row.status)}>{row.status}</Badge>
-      {can.leave && row.status === 'Pending'
+      {can.payroll && row.status === 'Pending'
         ? <button className="status-button" onClick={() => decide(row.id, 'Approved')}>Approve</button>
         : <span>—</span>}
     </Row>)}

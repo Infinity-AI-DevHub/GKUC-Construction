@@ -25,7 +25,7 @@ const select = `SELECT i.id,i.company_id companyId,c.name company,i.reference,i.
  * conversations that won the work stay with the work rather than ending at conversion.
  */
 const communicationSelect = `SELECT c.id,c.inquiry_id inquiryId,c.project_id projectId,c.direction,c.channel,
-  c.contact_person contactPerson,c.summary,c.happened_at happenedAt,c.follow_up_date followUpDate,
+  c.contact_person contactPerson,c.summary,c.happened_at happenedAt,c.follow_up_date followUpDate,c.follow_up_done_at followUpDoneAt,
   u.name loggedBy,i.reference inquiryReference,i.customer_name customer,p.name project
   FROM client_communications c JOIN users u ON u.id=c.logged_by
   LEFT JOIN inquiries i ON i.id=c.inquiry_id LEFT JOIN projects p ON p.id=c.project_id`;
@@ -141,6 +141,17 @@ router.post('/:id/communications', auth, permit('enquiries.manage'), validate(z.
   const row = await getOne(`${communicationSelect} WHERE c.id=?`, [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'client_communication', row.id, null, row, req.ip);
   res.status(201).json(row);
+}));
+
+router.patch('/:id/communications/:communicationId/follow-up', auth, permit('enquiries.manage'), wrap(async (req, res) => {
+  const before = await getOne('SELECT * FROM client_communications WHERE id=? AND inquiry_id=?',
+    [req.params.communicationId, req.params.id]);
+  if (!before) return res.status(404).json({ error: 'Client follow-up not found' });
+  if (!before.follow_up_date) return res.status(409).json({ error: 'This contact has no follow-up to complete' });
+  await query('UPDATE client_communications SET follow_up_done_at=NOW() WHERE id=?', [before.id]);
+  const after = await getOne(`${communicationSelect} WHERE c.id=?`, [before.id]);
+  await audit(pool, req.user.id, 'COMPLETE', 'client_follow_up', before.id, before, after, req.ip);
+  res.json(after);
 }));
 
 router.get('/', auth, permit('enquiries.manage','projects.view'), wrap(async (req, res) => {

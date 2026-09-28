@@ -27,7 +27,11 @@ function QrCodeImage({ value }) {
 /** PID 2.8 and 2.9 — vehicles with their compliance dates, and equipment with its whereabouts. */
 export default function Fleet({ data, reload, can, companyId, company }) {
   const tabs = allowedTabs(TABS, can);
-  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('section') === 'fuel' && tabs.includes('Fuel & service') ? 'Fuel & service' : tabs[0]);
+  const [tab, setTab] = useState(() => {
+    const section = window.location.pathname.split('/')[2];
+    const linked = tabs.find(name => slug(name) === section);
+    return linked || (new URLSearchParams(window.location.search).get('section') === 'fuel' && tabs.includes('Fuel & service') ? 'Fuel & service' : tabs[0]);
+  });
   const [open, setOpen] = useState('');
   const [vehicles,setVehicles]=useState(data.fleet);
   useLiveList(()=>api('/fleet').then(setVehicles).catch(()=>{}));
@@ -224,9 +228,10 @@ const COMPLIANCE_TEMPLATE = 'minmax(180px,1.3fr) 160px minmax(140px,1fr) 130px 1
 function Compliance() {
   const [rows, setRows] = useState([]);
   useLiveList(() => api('/fleet/documents/expiring?days=120').then(setRows).catch(() => setRows([])));
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && rows.some(row => Number(row.id) === id)) document.getElementById(`vehicle-renewal-${id}`)?.scrollIntoView({ block: 'center' }); }, [rows]);
   return <Table columns={COMPLIANCE_COLUMNS} template={COMPLIANCE_TEMPLATE} title="Renewals due"
     empty="Nothing expiring in the next 120 days.">
-    {rows.map(row => <Row template={COMPLIANCE_TEMPLATE} key={row.id}>
+    {rows.map(row => <Row template={COMPLIANCE_TEMPLATE} key={row.id} id={`vehicle-renewal-${row.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(row.id) ? 'linked-record' : ''}>
       <div><strong>{row.vehicle}</strong><small>{row.registration}</small></div>
       <span>{row.docType}</span>
       <span>{row.reference || '—'}</span>

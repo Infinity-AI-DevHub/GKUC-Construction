@@ -1258,6 +1258,8 @@ async function createCommunicationTable() {
     KEY idx_communication_followup (follow_up_date)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  await addColumn('client_communications', 'follow_up_done_at', 'DATETIME NULL');
+
   await addForeignKey('client_communications', 'fk_communication_inquiry',
     'CONSTRAINT fk_communication_inquiry FOREIGN KEY(inquiry_id) REFERENCES inquiries(id)');
   await addForeignKey('client_communications', 'fk_communication_project',

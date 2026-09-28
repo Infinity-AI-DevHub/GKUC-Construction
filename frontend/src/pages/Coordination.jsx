@@ -14,7 +14,7 @@ const TABS = ['Live sites', 'Workforce assignments', 'Resource availability', 'E
  * whole picture on one screen so that decision takes minutes rather than a round of calls.
  */
 export default function Coordination({ data, reload, can }) {
-  const [tab, setTab] = useState(TABS[0]);
+  const [tab, setTab] = useState(() => TABS.find(name => slug(name) === window.location.pathname.split('/')[2]) || TABS[0]);
   const [board, setBoard] = useState(null);
   const [resources, setResources] = useState(null);
   const [rescheduling, setRescheduling] = useState(null);
@@ -234,6 +234,7 @@ function Enquiries({ can, reload }) {
   const [open, setOpen] = useState(null);
   const load = () => api('/inquiries').then(setRows).catch(() => setRows([]));
   useLiveList(load);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id) setOpen(rows.find(row => Number(row.id) === id) || null); }, [rows]);
 
   const setStatus = async (id, status) => { await patch(`/inquiries/${id}`, { status }); await load(); await reload(); };
 
@@ -291,7 +292,11 @@ function ClientHistory({ enquiry, can, close }) {
     } catch (failure) { setError(failure.message); } finally { setBusy(false); }
   };
 
-  const template = '150px 110px minmax(220px,2fr) 130px';
+  const template = '150px 110px minmax(220px,2fr) 180px';
+  const completeFollowUp = async id => {
+    try { await patch(`/inquiries/${enquiry.id}/communications/${id}/follow-up`, {}); await load(); }
+    catch (failure) { setError(failure.message); }
+  };
 
   return <Modal title={`${enquiry.customer} — ${enquiry.reference}`} close={close}>
     <div className="report-form">
@@ -317,8 +322,10 @@ function ClientHistory({ enquiry, can, close }) {
               <span>{entry.summary}</span>
               {entry.contactPerson && <small>with {entry.contactPerson}</small>}
             </div>
-            <span className={entry.followUpDate && daysUntil(entry.followUpDate) < 0 ? 'overdue' : ''}>
+            <span className={entry.followUpDate && !entry.followUpDoneAt && daysUntil(entry.followUpDate) < 0 ? 'overdue' : ''}>
               {entry.followUpDate ? shortDate(entry.followUpDate) : '—'}
+              {entry.followUpDoneAt && <small>Completed</small>}
+              {entry.followUpDate && !entry.followUpDoneAt && can.enquiries && <button type="button" className="status-button" onClick={() => completeFollowUp(entry.id)}>Mark done</button>}
             </span>
           </Row>)}
         </Table>

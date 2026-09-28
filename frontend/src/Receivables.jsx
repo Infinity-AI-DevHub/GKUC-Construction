@@ -454,6 +454,7 @@ export function Bonds({ data, can, companyId }) {
   const load = () => api(`/receivables/bonds?companyId=${companyId}`).then(setBonds).catch(() => setBonds([]));
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && bonds.some(row => Number(row.id) === id)) document.getElementById(`bond-${id}`)?.scrollIntoView({ block: 'center' }); }, [bonds]);
 
   const tone = bond => (bond.status !== 'Live' ? slug(bond.status)
     : Number(bond.daysLeft) < 0 ? 'at-risk'
@@ -465,7 +466,7 @@ export function Bonds({ data, can, companyId }) {
       tools={can.invoice
         ? <button className="secondary" onClick={() => setRecording(true)}>Record a bond</button>
         : null}>
-      {bonds.map(bond => <Row template={BOND_TEMPLATE} key={bond.id}>
+      {bonds.map(bond => <Row template={BOND_TEMPLATE} key={bond.id} id={`bond-${bond.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(bond.id) ? 'linked-record' : ''}>
         <div><strong>{bond.reference}</strong><small>{bond.bond_number || bond.project || '—'}</small></div>
         <span>{bond.kind}</span>
         <span>{bond.beneficiary}</span>

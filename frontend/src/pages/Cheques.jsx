@@ -19,6 +19,7 @@ export default function Cheques({ can, data, companyId }) {
   ]);
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && received.some(row => Number(row.id) === id)) document.getElementById(`received-cheque-${id}`)?.scrollIntoView({ block: 'center' }); }, [received]);
   const pending = rows.filter(row => OPEN.includes(row.status));
   const incomingOpen = received.filter(row => ['On hand','Deposited','Re-deposited'].includes(row.status));
   return <>
@@ -32,11 +33,11 @@ export default function Cheques({ can, data, companyId }) {
     </div>
     <Table columns={['Cheque','Payer / purpose','Project','Cheque date','Amount','Status','Follow-up']} template={TEMPLATE}
       title="Received cheque register" empty="No client cheques received.">
-      {received.map(row=><Row template={TEMPLATE} key={row.id}>
+      {received.map(row=><Row template={TEMPLATE} key={row.id} id={`received-cheque-${row.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(row.id) ? 'linked-record' : ''}>
         <div><strong>{row.chequeNumber}</strong><small>{row.bank}</small></div><div><strong>{row.payer}</strong><small>{row.purpose}</small></div>
         <div><span>{row.project}</span><small>{row.invoiceReference||'Not invoice-linked'}</small></div><span>{shortDate(row.chequeDate)}</span>
         <strong>{rupees(row.amount)}</strong><Badge tone={slug(row.status)}>{row.status}</Badge>
-        {can.invoice&&['On hand','Deposited','Re-deposited'].includes(row.status)?<button className="status-button" onClick={()=>setConfirmingReceived(row)}>{row.status==='On hand'?'Deposit':'Confirm'}</button>:<span>{row.confirmedBy||'—'}</span>}
+        {can.invoice&&['On hand','Deposited','Re-deposited','Returned'].includes(row.status)?<button className="status-button" onClick={()=>setConfirmingReceived(row)}>{row.status==='On hand'?'Deposit':row.status==='Returned'?'Follow up':'Confirm'}</button>:<span>{row.confirmedBy||'—'}</span>}
       </Row>)}
     </Table>
     <div className="cheque-section-heading outgoing"><div><span>Money going out</span><h2>Cheques issued by Finance</h2></div></div>
@@ -87,7 +88,7 @@ function ReceivedChequeForm({ data, companyId, close, reload }) {
 }
 
 function ReceivedStatusForm({ cheque, close, reload }) {
-  const options=cheque.status==='On hand'?['Deposited','Returned','Cancelled']:['Cleared','Returned','Re-deposited','Cancelled'];
+  const options=cheque.status==='On hand'?['Deposited','Returned','Cancelled']:cheque.status==='Returned'?['Re-deposited','Cancelled']:['Cleared','Returned','Re-deposited','Cancelled'];
   return <FormModal title={`Update received cheque ${cheque.chequeNumber}`} close={close} label="Save update" onSubmit={async values=>{
     await patch(`/receivables/cheques/${cheque.id}`,{status:values.status,notes:values.notes||undefined});await reload();
   }}><SelectField name="status" label="What happened" options={options}/><TextArea name="notes" label="Bank or follow-up note" rows={3}/></FormModal>;

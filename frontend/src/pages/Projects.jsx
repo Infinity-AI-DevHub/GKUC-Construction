@@ -98,6 +98,7 @@ const MILESTONE_COLUMNS = ['Milestone', 'Project', 'Due date', 'Status', ''];
 const MILESTONE_TEMPLATE = 'minmax(220px,1.6fr) minmax(160px,1fr) 130px 120px 120px';
 
 function Milestones({ data, reload, can }) {
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id) document.getElementById(`milestone-${id}`)?.scrollIntoView({ block: 'center' }); }, [data.milestones]);
   const advance = async milestone => {
     const next = { Pending: 'In progress', 'In progress': 'Completed', Delayed: 'In progress', Completed: 'Pending' }[milestone.status];
     await patch(`/projects/milestones/${milestone.id}`, { status: next });
@@ -106,7 +107,7 @@ function Milestones({ data, reload, can }) {
   return <Table columns={MILESTONE_COLUMNS} template={MILESTONE_TEMPLATE} title="Project milestones"
     empty="No milestones planned for this company's projects yet. Add a milestone after the project programme is agreed."
     emptyAction={can.projects ? () => document.querySelector('.page-heading .primary')?.click() : undefined} emptyActionLabel="Add milestone">
-    {data.milestones.map(milestone => <Row template={MILESTONE_TEMPLATE} key={milestone.id}>
+    {data.milestones.map(milestone => <Row template={MILESTONE_TEMPLATE} key={milestone.id} id={`milestone-${milestone.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(milestone.id) ? 'linked-record' : ''}>
       <strong>{milestone.title}</strong>
       <span>{milestone.project}</span>
       <span>{shortDate(milestone.dueDate)}</span>

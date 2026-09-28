@@ -54,7 +54,7 @@ const NAV = [
   ['Tasks', ClipboardCheck, ['projects.view', 'site.tasks']],
   ['Quantity Surveying', Calculator, ['qs.view', 'qs.costControl']],
   ['People', Users, ['hr.view', 'hr.manage', 'hr.attendance', 'hr.leave', 'hr.payroll', 'hr.settings', 'hr.conduct', 'hr.hiring', 'hr.insurance','hr.assets']],
-  ['Materials', Warehouse, ['store.view', 'store.manage']],
+  ['Materials', Warehouse, ['store.view', 'store.manage', 'projects.manage']],
   ['Stock locations', Warehouse, ['store.view', 'store.manage', 'projects.view']],
   ['Fleet', Truck, ['transport.view', 'transport.manage', 'store.lending']],
   ['Finance', CircleDollarSign, ['finance.view', 'finance.manage', 'finance.invoice', 'finance.pay', 'finance.costReview']],

@@ -36,6 +36,7 @@ export default function Integrity({ can }) {
 
   useLiveList(load);
   useEffect(() => { load(); }, [status]);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id) setOpen(findings.find(row => Number(row.id) === id) || null); }, [findings]);
 
   const scan = async () => {
     setBusy(true);
