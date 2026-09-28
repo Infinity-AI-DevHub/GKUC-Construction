@@ -19,6 +19,17 @@ const items = Array.from({ length: 90 }, (_, index) => ({
   unit: 'm²', quantity: 2, rate: 1000, amount: 2000
 }));
 
+test('saved small letterhead sizes cannot flatten company and document headings', () => {
+  const html = quotationDocument({ company: { ...company, name: 'GKUC Readymix' }, quotation: {
+    reference: 'QUO-READYMIX-TEST', quoteDate: '2026-09-28', clientName: 'Test Client',
+    subtotal: 2000, total: 2000, title: 'Readymix quotation' }, items: items.slice(0, 1),
+  });
+  assert.match(html, /data-piece="companyName"/);
+  assert.match(html, /data-piece="docTitle"/);
+  assert.match(html, /data-piece=companyName\]\{[^}]*font-size:18px!important/);
+  assert.match(html, /data-piece=docTitle\]\{[^}]*font-size:19px!important/);
+});
+
 test('long quotations and invoices print on A4 with a letterhead on every page', async t => {
   try {
     await access('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
