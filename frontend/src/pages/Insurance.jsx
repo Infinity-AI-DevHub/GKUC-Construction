@@ -7,6 +7,7 @@ export default function Insurance(){
   useLiveList(load);
   useEffect(()=>{api('/insurance/options').then(setOptions).catch(e=>setError(e.message));},[]);
   const open=record=>{setEditing(record);setKind(record.kind||'Work site');setReminders(record.reminders||[]);};
+  useEffect(()=>{const id=Number(new URLSearchParams(window.location.search).get('record'));if(id){const record=records.find(row=>Number(row.id)===id&&!row.isFleetOnly);if(record)open(record);}},[records]);
   return <>
     <div className="panel-title"><h2>Insurance register</h2><button className="primary" onClick={()=>open({})}>Add insurance policy</button></div>
     <p className="form-note">Site cover, employee life insurance and vehicle policies. Vehicle insurance uses Fleet's current document and renewal history; add coverage details and reminders here. Custom reminders are sent to users with HR insurance access.</p>

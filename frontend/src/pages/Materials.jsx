@@ -42,6 +42,7 @@ const STOCK_TEMPLATE = 'minmax(190px,1.4fr) 115px minmax(140px,1fr) 110px 110px 
 
 function Stock({ data, reload, can }) {
   const low = data.materials.filter(material => material.state !== 'Available').length;
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id) document.getElementById(`material-${id}`)?.scrollIntoView({ block: 'center' }); }, [data.materials]);
 
   return <>
     <div className="inventory-top">
@@ -51,7 +52,7 @@ function Stock({ data, reload, can }) {
     </div>
     <p className="invoice-note">Also visible in <a href="/stock-locations">Stock locations</a>: site locations, tool custodians and BOQ quantity exceptions. This stock register is shared by both companies. Record receipts and issues once through Movements or handovers; do not create a second item.</p>
     <Table columns={STOCK_COLUMNS} template={STOCK_TEMPLATE} title="Stock overview">
-      {data.materials.map(material => <Row template={STOCK_TEMPLATE} key={material.id}>
+      {data.materials.map(material => <Row template={STOCK_TEMPLATE} key={material.id} id={`material-${material.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(material.id) ? 'linked-record' : ''}>
         <div><strong>{material.name}</strong><small>MAT-{String(material.id).padStart(4, '0')}</small></div>
         <Badge tone={slug(material.stock_kind||'Consumable')}>{material.stock_kind||'Consumable'}</Badge>
         <span>{material.site}</span>
@@ -90,6 +91,7 @@ function Requests({ reload, can, companyId }) {
   const [detail, setDetail] = useState(null);
   const load = () => api(`/purchasing/requests?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && rows.some(row => Number(row.id) === id)) openRecord(`/purchasing/requests/${id}`, setDetail); }, [rows]);
   const decide = async (id, status) => { await patch(`/purchasing/requests/${id}`, { status }); await load(); await reload(); };
 
   return <>

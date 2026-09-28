@@ -15,6 +15,7 @@ let server;
 let serverOutput = '';
 let admin;
 let testUploadDir;
+let lastOwnerToken;
 
 const today = () => new Date().toISOString().slice(0, 10);
 const shift = days => {
@@ -49,7 +50,9 @@ after(async () => {
 async function login(email = 'owner@gkuc.lk') {
   const response = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: 'GKUC@2026' }) });
   assert.equal(response.status, 200);
-  return (await response.json()).token;
+  const token=(await response.json()).token;
+  if(email==='owner@gkuc.lk')lastOwnerToken=token;
+  return token;
 }
 
 const call = async (token, method, path, body) => {
@@ -1386,6 +1389,41 @@ test('not-started projects notify every selected user on the configured schedule
     reminderDate: today(), reminderFrequency: 'Daily', reminderUserIds: []
   });
   assert.equal(invalid.status, 400);
+});
+
+test('repeated alerts remain one actionable case with access controls and evidence history',async()=>{
+  const owner=lastOwnerToken || await login();
+  const [ownerRow]=await admin.query(`SELECT id FROM ${testDatabase}.users WHERE email='owner@gkuc.lk'`);
+  const inserted=await admin.query(`INSERT INTO ${testDatabase}.client_invoices
+    (company_id,reference,client,title,invoice_date,due_date,gross,net_payable,paid_amount,status,created_by)
+    VALUES (1,?,'Case QA client','Overdue case QA',DATE_SUB(CURDATE(),INTERVAL 12 DAY),
+      DATE_SUB(CURDATE(),INTERVAL 5 DAY),100,100,0,'Issued',?)`,[`CASE-QA-${Date.now()}`,ownerRow[0].id]);
+  const invoiceId=inserted[0].insertId;
+  try{
+    assert.equal((await call(owner,'POST','/notifications/scan')).status,200);
+    const find=rows=>rows.find(row=>row.referenceType==='client_invoice'&&Number(row.referenceId)===invoiceId);
+    const first=find((await call(owner,'GET','/notification-cases')).body);
+    assert.ok(first);
+    await call(owner,'POST','/notifications/scan');
+    const again=find((await call(owner,'GET','/notification-cases')).body);
+    assert.equal(again.id,first.id);
+    assert.equal((await call('', 'GET',`/notification-cases/${first.id}`)).status,401);
+    assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'resolve',note:'Checked'})).status,400);
+    assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'acknowledge'})).status,200);
+    assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'assign'})).status,200);
+    assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'start'})).status,200);
+    assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,
+      {action:'resolve',note:'Client paid outside system; recorded separately',evidence:'BANK-CASE-QA'})).status,200);
+    const detail=(await call(owner,'GET',`/notification-cases/${first.id}`)).body;
+    assert.equal(detail.state,'Resolved');
+    assert.ok(detail.events.some(event=>event.action==='resolve'&&event.evidence==='BANK-CASE-QA'));
+  }finally{
+    await admin.query(`DELETE FROM ${testDatabase}.notifications WHERE reference_type='client_invoice' AND reference_id=?`,[invoiceId]);
+    await admin.query(`DELETE FROM ${testDatabase}.alert_case_events WHERE case_id IN
+      (SELECT id FROM ${testDatabase}.alert_cases WHERE reference_type='client_invoice' AND reference_id=?)`,[invoiceId]);
+    await admin.query(`DELETE FROM ${testDatabase}.alert_cases WHERE reference_type='client_invoice' AND reference_id=?`,[invoiceId]);
+    await admin.query(`DELETE FROM ${testDatabase}.client_invoices WHERE id=?`,[invoiceId]);
+  }
 });
 
 test('approving a BOQ and its variation sets the project budget', async () => {

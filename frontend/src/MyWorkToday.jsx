@@ -4,6 +4,17 @@ import { api, onDataChanged } from './api.js';
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Colombo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const datePart = value => String(value || '').slice(0, 10);
+const waiting = value => {
+  if (!value) return 'Waiting time unknown';
+  const days = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 86400000));
+  return Number.isFinite(days) ? (days === 0 ? 'Added today' : `Waiting ${days} day${days === 1 ? '' : 's'}`) : 'Waiting time unknown';
+};
+const timing = value => {
+  const date = datePart(value);
+  if (!date) return 'No deadline set';
+  const delta = Math.round((new Date(`${date}T12:00:00`).getTime() - new Date(`${today()}T12:00:00`).getTime()) / 86400000);
+  return `${date}${delta < 0 ? ` · ${-delta} day${delta === -1 ? '' : 's'} overdue` : delta === 0 ? ' · today' : ''}`;
+};
 
 export function buildWorkQueues({ data, queue, can, user }) {
   const needsApproval = [], dueToday = [], blocked = [], returned = [];
@@ -13,14 +24,17 @@ export function buildWorkQueues({ data, queue, can, user }) {
     || (task.assignees || []).some(person => String(person.name || '').trim().toLowerCase() === name);
 
   for (const task of data.tasks || []) {
-    const item = { key: `task-${task.id}`, title: task.title, detail: `${task.project} · ${task.due || task.dueDate || ''}`, owner: task.assignee || 'Project team', target: ['Tasks', null, task.id] };
+    const item = { key: `task-${task.id}`, title: task.title, detail: task.project, owner: task.assignee || 'Project team', deadline: task.dueDate, createdAt: task.createdAt, risk: 'Project delivery may be delayed', escalation: 'Project manager', target: ['Tasks', null, task.id] };
     if (task.status === 'Completed' && can.has('projects.manage') && can.has('site.tasks')) needsApproval.push({ ...item, action: 'Approve completed task' });
+    if (task.status === 'Blocked' && ownTask(task)) blocked.push({ ...item, action: 'Resolve blocker', risk: 'Assigned work cannot progress' });
     if ((datePart(task.dueDate) === day || (!task.dueDate && /^today\b/i.test(task.due || '')))
       && !['Approved', 'Completed', 'Rejected'].includes(task.status) && ownTask(task))
       dueToday.push({ ...item, action: 'Open task' });
+    else if (task.dueDate && datePart(task.dueDate) < day && !['Approved', 'Completed', 'Rejected'].includes(task.status) && ownTask(task))
+      dueToday.push({ ...item, action: 'Complete overdue task' });
   }
   for (const sheet of queue.sheets || []) {
-    const base = { key: `sheet-${sheet.id}`, title: `Daily costs · ${sheet.project}`, detail: `${sheet.workDate} · ${sheet.lineCount} cost line${sheet.lineCount === 1 ? '' : 's'}`, owner: 'QS → Finance' };
+    const base = { key: `sheet-${sheet.id}`, title: `Daily costs · ${sheet.project}`, detail: `${sheet.lineCount} cost line${sheet.lineCount === 1 ? '' : 's'}`, owner: sheet.status === 'Returned' ? sheet.submittedByName : 'Finance cost review', deadline: sheet.workDate, createdAt: sheet.createdAt, risk: 'Project cost cannot be posted', escalation: 'Finance management' };
     if (sheet.status === 'Submitted') {
       if (can.has('finance.costReview')) needsApproval.push({ ...base, action: 'Review cost sheet', target: ['Finance', 'Daily cost review', sheet.id] });
       else if (can.has('qs.costControl') && Number(sheet.submittedBy) === Number(user.id))
@@ -31,33 +45,46 @@ export function buildWorkQueues({ data, queue, can, user }) {
   }
   if (can.has('hr.payroll')) for (const claim of queue.claims || []) {
     needsApproval.push({ key: `claim-${claim.id}`, title: `${claim.kind} · ${claim.employee}`,
-      detail: `${claim.workDate} · ${claim.project || 'Office'} · ${claim.status}`,
+      detail: `${claim.project || 'Office'} · ${claim.status}`,
       owner: 'HR payroll', action: claim.status === 'Confirmed' ? 'Approve claim' : 'Review and confirm',
+      deadline: claim.workDate, createdAt: claim.createdAt, risk: 'Claim will not enter payroll', escalation: 'HR management',
       target: ['People', 'Payroll Inputs', claim.id] });
   }
   if (can.has('finance.view') || can.has('finance.invoice')) for (const invoice of queue.invoicesDue || []) {
     dueToday.push({ key: `invoice-${invoice.id}`, title: `${invoice.reference} · ${invoice.client}`,
-      detail: `Client payment due today · LKR ${Number(invoice.outstanding).toLocaleString('en-LK')}`,
-      owner: 'Finance', action: 'Open invoice and payments', target: ['Finance', 'Invoices', invoice.id] });
+      detail: `LKR ${Number(invoice.outstanding).toLocaleString('en-LK')} outstanding`,
+      owner: 'Finance', action: 'Follow up collection', deadline: invoice.dueDate, createdAt: invoice.createdAt,
+      risk: 'Cash collection is overdue', escalation: 'Finance management', target: ['Finance', 'Invoices', invoice.id] });
   }
+  for (const item of queue.work || []) {
+    const card = { ...item, key: `${item.kind}-${item.id}` };
+    if (['purchase-request','leave','overtime','attendance','integrity'].includes(item.kind)) needsApproval.push(card);
+    else if (['purchase-order','low-stock','client-followup','milestone','tender','tender-document','insurance','vehicle-renewal','returned-cheque','retention','bond'].includes(item.kind)) dueToday.push(card);
+  }
+  const urgency = (a, b) => {
+    const left = datePart(a.deadline) || '9999-12-31';
+    const right = datePart(b.deadline) || '9999-12-31';
+    return left.localeCompare(right) || String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+  };
+  for (const group of [needsApproval, dueToday, blocked, returned]) group.sort(urgency);
   return { needsApproval, dueToday, blocked, returned };
 }
 
 const SECTIONS = [
   { key: 'needsApproval', title: 'Needs my approval', icon: ClipboardCheck, empty: 'No approvals waiting for your role.' },
-  { key: 'dueToday', title: 'Due today', icon: CalendarClock, empty: 'No assigned tasks due today.' },
+  { key: 'dueToday', title: 'Due & upcoming', icon: CalendarClock, empty: 'No deadlines or follow-ups need attention.' },
   { key: 'blocked', title: 'Blocked by another team', icon: Handshake, empty: 'Nothing is waiting on another team.' },
   { key: 'returned', title: 'Recently returned for correction', icon: CornerDownLeft, empty: 'No work has been returned to you.' }
 ];
 
 export default function MyWorkToday({ user, can, go, data, companyId }) {
-  const [queue, setQueue] = useState({ sheets: [], claims: [], invoicesDue: [] });
+  const [queue, setQueue] = useState({ sheets: [], claims: [], invoicesDue: [], work: [] });
   const [error, setError] = useState('');
   const load = () => api(`/dashboard/queue?companyId=${companyId}`)
     .then(result => { setQueue(result); setError(''); })
     .catch(failure => setError(failure.message));
   useEffect(() => {
-    setQueue({ sheets: [], claims: [], invoicesDue: [] });
+    setQueue({ sheets: [], claims: [], invoicesDue: [], work: [] });
     load();
     return onDataChanged(load);
   }, [companyId]);
@@ -67,6 +94,7 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
     go(page, tab);
     const params = new URLSearchParams({ record: String(id) });
     if (projectId) params.set('project', String(projectId));
+    if (item.workDate) params.set('workDate', item.workDate);
     window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
   };
 
@@ -80,7 +108,11 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
       return <div className="my-work-queue" key={section.key}>
         <header><span className="my-work-icon"><Icon size={19} /></span><div><h3>{section.title}</h3><small>{items.length} item{items.length === 1 ? '' : 's'}</small></div></header>
         <div className="my-work-queue-items">{items.map(item => <button type="button" key={item.key} onClick={() => open(item)}>
-          <strong>{item.title}</strong><small>{item.detail}</small><span>{item.owner} · {item.action}<ArrowUpRight size={14} /></span>
+          <strong>{item.title}</strong>{item.detail && <small>{item.detail}</small>}
+          <small>Owner: {item.owner} · Deadline: {timing(item.deadline)}</small>
+          <small>{waiting(item.createdAt)} · Escalate to: {item.escalation || 'Team lead'}</small>
+          {item.risk && <small className="my-work-risk">Risk: {item.risk}</small>}
+          <span>{item.action}<ArrowUpRight size={14} /></span>
         </button>)}{!items.length && <p>{section.empty}</p>}</div>
       </div>;
     })}</div>

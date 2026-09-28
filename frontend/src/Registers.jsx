@@ -22,10 +22,11 @@ const MARK_TITLES = { P: 'On site', L: 'Late', V: 'On leave', B: 'Business trip'
  * paper roll has, and the reason it works.
  */
 export function AttendanceRegister({ projects = [], canCorrect = false }) {
-  const [month, setMonth] = useState(monthValue());
+  const [month, setMonth] = useState(() => new URLSearchParams(window.location.search).get('workDate')?.slice(0, 7) || monthValue());
   const [register, setRegister] = useState(null);
   const [error, setError] = useState('');
   const [correcting, setCorrecting] = useState(null);
+  const [linkedOpened, setLinkedOpened] = useState(false);
   const load = async () => setRegister(await api(`/hr/attendance-register?month=${month}`));
 
   useEffect(() => {
@@ -33,6 +34,14 @@ export function AttendanceRegister({ projects = [], canCorrect = false }) {
     load()
       .catch(failure => { setRegister(null); setError(failure.message); });
   }, [month]);
+  useEffect(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('record'));
+    if (!register || !id || !canCorrect || linkedOpened) return;
+    for (const person of register.rows) {
+      const entry = Object.values(person.days).find(day => Number(day?.id) === id);
+      if (entry) { setCorrecting({ ...entry, name: person.name }); setLinkedOpened(true); break; }
+    }
+  }, [register, canCorrect, linkedOpened]);
 
   const days = register ? Array.from({ length: register.period.days }, (_, index) => index + 1) : [];
 

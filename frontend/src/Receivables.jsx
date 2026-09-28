@@ -156,12 +156,12 @@ function InvoicePayments({ invoice, close, onPayment, canRecord }) {
       <Summary label="Still due" value={invoice.status === 'Draft' ? 'Not issued' : rupees(invoice.outstanding)} icon={TriangleAlert} />
     </div>
     <div className="invoice-payments-history"><div className="invoice-payments-history-heading"><h3>Payment history</h3><span>{detail ? `${detail.receipts.length} recorded` : 'Loading'}</span></div>
-    {!detail ? <p className="invoice-payments-empty">Loading payments…</p> : detail.receipts.length ? <div className="table-wrap"><table>
-      <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Amount</th><th>Receipt</th></tr></thead>
+    {!detail ? <p className="invoice-payments-empty">Loading payments…</p> : detail.receipts.length ? <div className="table-wrap"><table className="invoice-payments-table">
+      <thead><tr><th scope="col">Date</th><th scope="col">Method</th><th scope="col">Reference</th><th scope="col">Amount</th><th scope="col">Receipt</th></tr></thead>
       <tbody>{detail.receipts.map(receipt => <tr key={receipt.id}>
         <td>{shortDate(receipt.receivedDate)}</td><td>{receipt.method}</td>
-        <td>{receipt.reference || '—'}</td><td>{rupees(receipt.amount)}</td>
-        <td><button className="status-button" onClick={() => openDocument(`/receivables/receipts/${receipt.id}/document`)}>View / PDF</button></td>
+        <td className="payment-reference">{receipt.reference || '—'}</td><td className="payment-amount"><strong>{rupees(receipt.amount)}</strong></td>
+        <td><button type="button" className="status-button" onClick={() => openDocument(`/receivables/receipts/${receipt.id}/document`)}>View receipt</button></td>
       </tr>)}</tbody>
     </table></div> : <p className="invoice-payments-empty">No payments recorded yet. Once this invoice is issued and a payment is received, it will appear here.</p>}</div>
     {canRecord && invoice.status !== 'Draft' && invoice.status !== 'Paid' && <button className="primary" onClick={onPayment}>Record another payment</button>}
@@ -454,6 +454,7 @@ export function Bonds({ data, can, companyId }) {
   const load = () => api(`/receivables/bonds?companyId=${companyId}`).then(setBonds).catch(() => setBonds([]));
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && bonds.some(row => Number(row.id) === id)) document.getElementById(`bond-${id}`)?.scrollIntoView({ block: 'center' }); }, [bonds]);
 
   const tone = bond => (bond.status !== 'Live' ? slug(bond.status)
     : Number(bond.daysLeft) < 0 ? 'at-risk'
@@ -465,7 +466,7 @@ export function Bonds({ data, can, companyId }) {
       tools={can.invoice
         ? <button className="secondary" onClick={() => setRecording(true)}>Record a bond</button>
         : null}>
-      {bonds.map(bond => <Row template={BOND_TEMPLATE} key={bond.id}>
+      {bonds.map(bond => <Row template={BOND_TEMPLATE} key={bond.id} id={`bond-${bond.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(bond.id) ? 'linked-record' : ''}>
         <div><strong>{bond.reference}</strong><small>{bond.bond_number || bond.project || '—'}</small></div>
         <span>{bond.kind}</span>
         <span>{bond.beneficiary}</span>

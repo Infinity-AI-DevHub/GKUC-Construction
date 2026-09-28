@@ -54,7 +54,7 @@ const NAV = [
   ['Tasks', ClipboardCheck, ['projects.view', 'site.tasks']],
   ['Quantity Surveying', Calculator, ['qs.view', 'qs.costControl']],
   ['People', Users, ['hr.view', 'hr.manage', 'hr.attendance', 'hr.leave', 'hr.payroll', 'hr.settings', 'hr.conduct', 'hr.hiring', 'hr.insurance','hr.assets']],
-  ['Materials', Warehouse, ['store.view', 'store.manage']],
+  ['Materials', Warehouse, ['store.view', 'store.manage', 'projects.manage']],
   ['Stock locations', Warehouse, ['store.view', 'store.manage', 'projects.view']],
   ['Fleet', Truck, ['transport.view', 'transport.manage', 'store.lending']],
   ['Finance', CircleDollarSign, ['finance.view', 'finance.manage', 'finance.invoice', 'finance.pay', 'finance.costReview']],
@@ -367,7 +367,9 @@ function App() {
    * active page from what is currently visible means those cases land on the dashboard
    * instead of a screen that will only ever sit there loading.
    */
-  const activePage = visibleNav.some(([name]) => name === page) ? page : 'Dashboard';
+  /* Every signed-in employee may work an alert case addressed to them, even when they
+     have no Administration permission. Admin itself still gates its other sections. */
+  const activePage = visibleNav.some(([name]) => name === page) || page === 'Administration' ? page : 'Dashboard';
 
   /*
    * Keep the address bar honest.

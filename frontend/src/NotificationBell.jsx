@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
-import { post } from './api.js';
 import { Badge } from './ui.jsx';
 
 const PREVIEW_COUNT = 6;
@@ -22,8 +21,8 @@ export default function NotificationBell({ notifications, reload, onViewAll, pla
   const [open, setOpen] = useState(false);
   const wrap = useRef(null);
 
-  const unread = notifications.filter(item => item.status !== 'Read');
-  const preview = [...unread, ...notifications.filter(item => item.status === 'Read')].slice(0, PREVIEW_COUNT);
+  const openCases = notifications.filter(item => item.status !== 'Resolved' && (!item.snoozedUntil || new Date(item.snoozedUntil) <= new Date()));
+  const preview = openCases.slice(0, PREVIEW_COUNT);
 
   /* Clicking anywhere else, or pressing Escape, closes the dropdown. */
   useEffect(() => {
@@ -38,40 +37,28 @@ export default function NotificationBell({ notifications, reload, onViewAll, pla
     };
   }, [open]);
 
-  const markRead = async alert => {
-    if (alert.status !== 'Read') {
-      await post(`/notifications/${alert.id}/read`);
-      await reload();
-    }
-  };
-
-  const markAll = async () => {
-    await post('/notifications/read-all');
-    await reload();
-  };
-
   const viewAll = () => {
     setOpen(false);
     onViewAll();
   };
 
   return <div className={`bell-wrap ${placement}`} ref={wrap}>
-    <button className="alert-button" aria-label={`${unread.length} open alerts`} aria-expanded={open}
-      title={`${unread.length} open alerts`} onClick={() => setOpen(current => !current)}>
-      <Bell size={18} /><span>Alerts</span>{unread.length > 0 && <i />}
+    <button className="alert-button" aria-label={`${openCases.length} open cases`} aria-expanded={open}
+      title={`${openCases.length} open cases`} onClick={() => setOpen(current => !current)}>
+      <Bell size={18} /><span>Cases</span>{openCases.length > 0 && <i />}
     </button>
 
     {open && <div className="bell-menu">
       <div className="bell-menu-head">
-        <h2>Notifications</h2>
-        {unread.length > 0 && <button onClick={markAll}>Mark all read</button>}
+        <h2>Cases requiring action</h2>
       </div>
 
       <div className="bell-menu-list">
         {preview.map(alert => (
-          <button className={`bell-item ${alert.status === 'Read' ? 'read' : ''}`} key={alert.id} onClick={() => markRead(alert)}>
+          <button className="bell-item" key={alert.id} onClick={viewAll}>
             <Badge tone={severityTone(alert.severity)}>{alert.severity}</Badge>
             <strong>{alert.title}</strong>
+            <small>{alert.status} · Due {new Date(alert.dueAt).toLocaleDateString('en-GB')}</small>
             <small>{when(alert.createdAt)}</small>
             <p>{alert.message}</p>
           </button>
@@ -80,7 +67,7 @@ export default function NotificationBell({ notifications, reload, onViewAll, pla
       </div>
 
       <button className="bell-menu-foot" onClick={viewAll}>
-        View all notifications{notifications.length > PREVIEW_COUNT ? ` (${notifications.length})` : ''}
+        Manage cases{notifications.length > PREVIEW_COUNT ? ` (${notifications.length})` : ''}
       </button>
     </div>}
   </div>;

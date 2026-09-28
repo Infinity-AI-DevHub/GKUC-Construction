@@ -13,8 +13,8 @@ import { insuranceReminderDate } from './lib/insurance-reminders.js';
  * PID 2.13 — the Notification Center. Every deadline and threshold in the system is
  * converted into a proactive alert rather than something a person has to remember to check.
  *
- * Alerts are keyed by `dedupe_key` (which includes the day) so a condition raises exactly
- * one notification per day no matter how often the scan runs.
+ * Scanner alerts have a continuing case key. Delivery notifications remain separate from
+ * case state: reading a message is never treated as resolving the underlying condition.
  */
 
 export const ALERT_WINDOW_DAYS = Number(process.env.ALERT_WINDOW_DAYS || 30);
@@ -32,11 +32,36 @@ export const ALERT_WINDOW_DAYS = Number(process.env.ALERT_WINDOW_DAYS || 30);
  * re-notify and does not re-send.
  */
 const raise = async alert => {
+  const stamp = today();
+  const caseKey = alert.caseKey || (alert.key?.endsWith(`:${stamp}`)
+    ? alert.key.slice(0, -stamp.length - 1) : alert.key);
+  const severity = alert.severity || 'Info';
+  const fallbackHours = severity === 'Critical' ? 24 : severity === 'Warning' ? 72 : 168;
+  const configuredHours = Number(process.env[`ALERT_CASE_${severity.toUpperCase()}_HOURS`]);
+  const slaHours = Number.isFinite(configuredHours) && configuredHours > 0 ? configuredHours : fallbackHours;
+  const [caseInsert] = await pool.execute(`INSERT IGNORE INTO alert_cases
+    (case_key,user_id,audience,severity,title,message,reference_type,reference_id,due_at)
+    VALUES (?,?,?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL ? HOUR))`,
+  [caseKey,alert.userId || null,alert.audience || null,alert.severity || 'Info',alert.title,alert.message,
+    alert.referenceType || null,String(alert.referenceId ?? ''),slaHours]);
+  const freshCase = Boolean(caseInsert.insertId);
+  const existing = freshCase ? {id:caseInsert.insertId,state:'New'} : (await query(
+    'SELECT id,state,resolved_at,snoozed_until FROM alert_cases WHERE case_key=?',[caseKey]))[0];
+  const reopen = !freshCase && existing.state === 'Resolved' && existing.resolved_at
+    && new Date(existing.resolved_at).toISOString().slice(0,10) < stamp;
+  if (!freshCase) await query(`UPDATE alert_cases SET title=?,message=?,severity=?,
+    occurrence_count=occurrence_count+IF(DATE(last_seen_at)<CURDATE(),1,0),last_seen_at=NOW()
+    ${reopen ? ",state='New',resolved_at=NULL,resolution_note=NULL,resolution_evidence=NULL,escalated_at=NULL,due_at=DATE_ADD(NOW(),INTERVAL ? HOUR)" : ''}
+    WHERE id=?`,[alert.title,alert.message,alert.severity || 'Info',...(reopen?[slaHours]:[]),existing.id]);
+  if (freshCase || reopen) await query(`INSERT INTO alert_case_events(case_id,action,note) VALUES (?,?,?)`,
+    [existing.id,freshCase?'Created':'Reopened',freshCase?'Alert first detected':'Condition remains after resolution']);
+  if (!freshCase && !reopen) return null;
   const [result] = await pool.execute(
     `INSERT IGNORE INTO notifications (user_id,audience,channel,severity,title,message,status,reference_type,reference_id,dedupe_key)
      VALUES (?,?,?,?,?,?,'Queued',?,?,?)`,
     [alert.userId || null, alert.audience || null, alert.channel || 'In-app', alert.severity || 'Info',
-      alert.title, alert.message, alert.referenceType || null, String(alert.referenceId ?? ''), alert.key]
+      alert.title, alert.message, alert.referenceType || null, String(alert.referenceId ?? ''),
+      `${caseKey}:case:${existing.id}:${reopen ? stamp : 'new'}`]
   );
   /* Already raised today. Nothing new to announce and nothing new to send. */
   if (!result.insertId) return null;
@@ -511,8 +536,34 @@ export async function runAlertScan() {
     projectStartReminderAlerts(stamp, alerts)
   ]);
   for (const alert of alerts) await raise(alert);
+  await escalateOverdueCases();
   await dispatchQueued().catch(error => console.error('Channel dispatch failed', error));
   return alerts.length;
+}
+
+export async function escalateOverdueCases() {
+  const overdue = await query(`SELECT id,title,severity,assigned_user_id,audience FROM alert_cases
+    WHERE state<>'Resolved' AND due_at<NOW() AND escalated_at IS NULL
+      AND (snoozed_until IS NULL OR snoozed_until<NOW()) LIMIT 100`);
+  for (const item of overdue) {
+    const updated = await query(`UPDATE alert_cases SET escalated_at=NOW() WHERE id=? AND escalated_at IS NULL`,[item.id]);
+    if (!updated.affectedRows) continue;
+    await query(`INSERT INTO alert_case_events(case_id,action,note) VALUES (?,'Escalated',?)`,
+      [item.id,'Response deadline passed']);
+    const title=`Escalated case #${item.id} — ${item.title}`;
+    const message=`Case #${item.id} passed its response deadline. Review ownership and next action.`;
+    const result=await query(`INSERT IGNORE INTO notifications
+      (audience,channel,severity,title,message,status,reference_type,reference_id,dedupe_key)
+      VALUES ('admin.notifications','In-app',?,?,?,'Queued','alert_case',?,?)`,
+    [item.severity,title,message,String(item.id),`case-escalation:${item.id}`]);
+    if(result.insertId){
+      publish('notification',{id:result.insertId,severity:item.severity,title,message,
+        referenceType:'alert_case',referenceId:item.id,createdAt:new Date().toISOString()},
+      {audience:'admin.notifications'});
+      dispatch({id:result.insertId,user_id:null,audience:'admin.notifications',severity:item.severity,title,message})
+        .catch(error=>console.error('Case escalation delivery failed',error));
+    }
+  }
 }
 
 async function chequeAlerts(stamp, alerts) {
@@ -658,7 +709,7 @@ export async function runInsuranceReminderScan(stamp=today()) {
     for(const reminder of reminders){
       const due=insuranceReminderDate(policy.expiry,reminder);
       if(due>stamp)continue;
-      await raise({key:`insurance:${policy.id}:${policy.expiry}:${due}`,audience:'hr.insurance',severity:'Warning',
+      await raise({key:`insurance:${policy.id}:${policy.expiry}:${due}`,caseKey:`insurance:${policy.id}:${policy.expiry}`,audience:'hr.insurance',severity:'Warning',
         title:`Insurance reminder — ${policy.name}`,message:`${policy.kind} policy ${policy.policy_number||policy.name} with ${policy.insurer||'insurer not recorded'} expires on ${policy.expiry}. Reminder scheduled for ${due}. Review renewal or extension.`,referenceType:'insurance',referenceId:policy.id});
     }
   }
@@ -689,6 +740,7 @@ export async function runTaskReminderScan() {
       const [users]=await connection.execute(`SELECT ru.user_id FROM task_reminder_users ru
         JOIN users u ON u.id=ru.user_id WHERE ru.task_id=? AND u.active=1`,[reminder.task_id]);
       for (const recipient of users) await raise({key:`task-reminder:${reminder.task_id}:${recipient.user_id}:${reminder.next_due}`,
+        caseKey:`task-reminder:${reminder.task_id}:${recipient.user_id}`,
         userId:recipient.user_id,severity:'Info',title:`Task reminder — ${reminder.title}`,
         message:`${reminder.project}: ${reminder.title} is ${reminder.status.toLowerCase()}. Deadline: ${reminder.due}.`,
         referenceType:'task',referenceId:reminder.task_id});
