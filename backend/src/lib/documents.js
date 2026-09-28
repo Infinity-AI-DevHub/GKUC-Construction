@@ -55,35 +55,8 @@ const settingsFor = given => ({ ...DEFAULT_DOCUMENT_SETTINGS, ...(given || {}) }
 const BUILDER = 'Built by Infinity AI (Pvt) Ltd, Sri Lanka';
 
 /** Turns a design into the stylesheet the document is drawn with. */
-const cssText = value => String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-  .replace(/\r?\n/g, '\\A ').replace(/[\u0000-\u001f]/g, ' ');
-
-function stylesheet(design, printHeader = {}) {
+function stylesheet(design) {
   const { page, type, table, totals } = design;
-  const identity = printHeader.company || {};
-  const visible = printHeader.visibility || {};
-  const headerElement = id => design.header.elements.find(element => element.id === id);
-  const include = key => visible[key] !== false;
-  const named = headerElement('companyName');
-  const detailed = headerElement('companyDetails');
-  const printedName = named?.show && include('name') ? (named.custom ? named.text : identity.name) : '';
-  const printedDetails = detailed?.show ? (detailed.custom ? detailed.text : [
-      include('address') && identity.address, include('telephone') && identity.telephone,
-      include('email') && identity.email,
-      include('registrationNumber') && identity.registrationNumber && `Business Reg. No: ${identity.registrationNumber}`,
-      include('tin') && identity.tin && `TIN: ${identity.tin}`,
-      include('vatNumber') && identity.vatNumber && `VAT Reg. No: ${identity.vatNumber}`,
-      include('svatNumber') && identity.svatNumber && `SVAT No: ${identity.svatNumber}`
-    ].filter(Boolean).join('\n')) : '';
-  const printLogo = include('logo') && design.logo.show !== false
-    && headerElement('logo')?.show !== false;
-  const printedDocument = [headerElement('docTitle')?.show && (headerElement('docTitle').custom
-    ? headerElement('docTitle').text : printHeader.heading),
-    headerElement('reference')?.show && printHeader.reference && `No: ${printHeader.reference}`,
-    headerElement('docDate')?.show && printHeader.date && `Date: ${longDate(printHeader.date)}`]
-    .filter(Boolean).join('\n');
-  const headerLines = Math.max(printedDetails.split('\n').length, printedDocument.split('\n').length);
-  const printTopMargin = Math.min(195, Math.max(55, Math.ceil(headerLines * 3.2 + 16)));
   return `
   *{box-sizing:border-box}
   /*
@@ -127,6 +100,12 @@ function stylesheet(design, printHeader = {}) {
   .head .piece[data-piece=reference]{grid-area:reference}
   .head .piece[data-piece=docDate]{grid-area:date}
   .head .piece img{max-width:100%;height:auto;max-height:60px;object-fit:contain;display:block}
+  .print-pages{font-size:inherit;border:0;border-spacing:0}
+  .print-pages,.print-pages > thead,.print-pages > tbody,
+  .print-pages > thead > tr,.print-pages > tbody > tr,
+  .print-pages > thead > tr > td,.print-pages > tbody > tr > td{display:block}
+  .print-pages > thead > tr > td,.print-pages > tbody > tr > td{
+    border:0;padding:0;background:transparent;vertical-align:top}
   .parties{display:flex;gap:18px;margin:16px 0 14px;break-inside:avoid}
   .party{flex:1;min-width:0;overflow-wrap:anywhere;border:1px solid ${table.border};border-radius:3px;padding:9px 11px}
   .party h3{margin:0 0 5px;font-size:${(type.size * 0.75).toFixed(1)}px;letter-spacing:1.1px;text-transform:uppercase;opacity:.62}
@@ -173,31 +152,26 @@ function stylesheet(design, printHeader = {}) {
   @media print{
     html,body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .bar{display:none}
-    /* The full flowing letterhead is printed on page one, matching the web design.
-       Compact margin-box identity is reserved for continuation pages. */
+    /* Chromium repeats a table thead on every printed page and reserves its height.
+       The very same full letterhead is used on the first and following pages. */
     .sheet{margin:0;box-shadow:none;width:auto;min-height:0;padding:0;display:block}
-    .head{display:grid;margin-bottom:14px}
+    .print-pages{display:table;width:100%;border:0}
+    .print-pages > thead{display:table-header-group}
+    .print-pages > tbody{display:table-row-group}
+    .print-pages > thead > tr,.print-pages > tbody > tr{display:table-row;break-inside:auto}
+    .print-pages > thead > tr > td,.print-pages > tbody > tr > td{display:table-cell;break-inside:auto}
+    .head{display:grid}
     .watermark{display:none}
+    .sign{margin-top:22px}
+    .foot{margin-top:8px;padding-top:4px}
+    .builder{margin-top:3px}
     thead{display:table-header-group}
     tfoot{display:table-row-group}
     tr,.sign,.words,.parties{break-inside:avoid;page-break-inside:avoid}
     .terms h4{break-after:avoid;page-break-after:avoid}
   }
   @page{size:A4;
-    margin:${printTopMargin}mm ${page.margins.right}mm ${page.margins.bottom}mm ${page.margins.left}mm;
-    @top-left{content:"${cssText(printedName)}";white-space:normal;text-align:left;
-      vertical-align:middle;font:800 14px/1.2 Arial,sans-serif;color:${design.accent};
-      padding-left:${printLogo ? 18 : 0}mm;${printLogo ? "background:url('/brand/gkuc-mark-256.png') left center / 15mm auto no-repeat" : ''}}
-    @top-center{content:"${cssText(printedDetails)}";white-space:pre-wrap;text-align:left;
-      vertical-align:middle;font:8px/1.35 Arial,sans-serif;color:#475569}
-    @top-right{content:"${cssText(printedDocument)}";white-space:pre-wrap;text-align:right;
-      vertical-align:middle;font:800 14px/1.5 Arial,sans-serif;color:${design.accent}}
-  }
-  @page:first{margin:${page.margins.top}mm ${page.margins.right}mm ${page.margins.bottom}mm ${page.margins.left}mm;
-    @top-left{content:none}
-    @top-center{content:none}
-    @top-right{content:none}
-  }
+    margin:${page.margins.top}mm ${page.margins.right}mm ${page.margins.bottom}mm ${page.margins.left}mm}
 `;
 }
 
@@ -315,7 +289,7 @@ function page({ design, company, title, heading, reference, date, blocks, settin
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escape(title)}</title>
-<style>${stylesheet(design, { company, heading, reference, date, visibility: headerVisibility })}</style></head>
+<style>${stylesheet(design)}</style></head>
 <body>
 <div class="bar">
   <span>Check this over, then print or save it as a PDF.</span>
@@ -323,8 +297,8 @@ function page({ design, company, title, heading, reference, date, blocks, settin
 </div>
 <div class="sheet">
   ${watermark}
-  ${blocks.letterhead || ''}
-  ${drawn}
+  <table class="print-pages"><thead><tr><td>${blocks.letterhead || ''}</td></tr></thead>
+    <tbody><tr><td>${drawn}</td></tr></tbody></table>
 </div>
 </body></html>`;
 }
