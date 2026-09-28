@@ -98,6 +98,13 @@ test('long quotations and invoices print on A4 with a letterhead on every page',
       assert.equal(text.split('\f').filter(page => page.trim()).length, pages);
       for (const page of text.split('\f').filter(page => page.trim())) {
         assert.match(page, /GKUC Construction/, 'each printed page repeats the company letterhead');
+        const compact = page.toUpperCase().replace(/\s+/g, '');
+        assert.ok(compact.includes(index === 0 ? 'QUOTATION' : 'INVOICE'),
+          'every page repeats the same document title');
+        assert.ok(page.includes(index === 0 ? 'QUO-LAYOUT-TEST' : 'INV-LAYOUT-TEST'),
+          'every page repeats the document reference');
+        assert.ok(page.includes('Address line 1 with additional company information'),
+          'every page repeats the company details');
       }
       assert.equal((text.match(index === 0 ? /Subtotal/g : /Net payable/g) || []).length, 1,
         'document totals must not repeat on every page');
