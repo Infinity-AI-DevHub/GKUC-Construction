@@ -51,15 +51,16 @@ export default function CompanySettings({ can, companyId }) {
 
   const addBankAccount = async event => {
     event.preventDefault(); setError(''); setMessage('');
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     try {
-      await api('/company-bank-accounts', { method: 'POST', body: JSON.stringify({
+      const saved = await api('/company-bank-accounts', { method: 'POST', body: JSON.stringify({
         companyId, label: form.get('label'), bankName: form.get('bankName'),
         branch: form.get('branch') || undefined, accountName: form.get('accountName'),
         accountNumber: form.get('accountNumber'), swiftCode: form.get('swiftCode') || undefined
       }) });
-      event.currentTarget.reset();
-      setBankAccounts(await api(`/company-bank-accounts?companyId=${companyId}`));
+      setBankAccounts(current => [...current, saved].sort((a, b) => a.label.localeCompare(b.label)));
+      formElement.reset();
       setMessage('Bank account added and available when creating quotations.');
     } catch (failure) { setError(failure.message); }
   };

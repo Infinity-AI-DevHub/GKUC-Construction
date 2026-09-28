@@ -62,7 +62,7 @@ const NAV = [
   ['Chat', MessageSquare, ['chat.use']],
   ['Drive', HardDrive, ['drive.use']],
   ['Reports', ClipboardList, []],
-  ['Administration', ShieldCheck, ['admin.users', 'admin.roles', 'admin.audit', 'admin.lists', 'admin.notifications', 'admin.company','admin.documents','admin.designer']]
+  ['Administration', ShieldCheck, ['admin.users', 'admin.roles', 'admin.audit', 'admin.lists', 'admin.notifications', 'admin.company','admin.documents']]
 ];
 
 /**
@@ -83,7 +83,6 @@ const capabilities = permissions => {
     costReview:any('finance.costReview'),
     companySettings:any('admin.company'),
     documentSettings:any('admin.documents'),
-    designer:any('admin.designer'),
     manage: any('admin.users'),
     roles: any('admin.roles'),
     audit: any('admin.audit'),

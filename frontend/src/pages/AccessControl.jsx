@@ -167,7 +167,8 @@ function DelegationPanel({ person, catalogue, close, reload }) {
   const add = async event => {
     event.preventDefault();
     setError('');
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     try {
       await post(`/access/users/${person.id}/permissions`, {
         permission: form.get('permission'),
@@ -177,7 +178,7 @@ function DelegationPanel({ person, catalogue, close, reload }) {
       });
       await load();
       await reload();
-      event.target.reset();
+      formElement.reset();
     } catch (failure) { setError(failure.message); }
   };
 

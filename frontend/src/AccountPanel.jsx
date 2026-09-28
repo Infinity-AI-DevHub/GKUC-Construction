@@ -20,7 +20,8 @@ export default function AccountPanel({ onDone }) {
     setBusy(true);
     setError('');
     setMessage('');
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     if (form.get('password') !== form.get('confirm')) {
       setError('The new passwords do not match');
       setBusy(false);
@@ -29,7 +30,7 @@ export default function AccountPanel({ onDone }) {
     try {
       await post('/auth/password', { current: form.get('current'), password: form.get('password') });
       setMessage('Password changed. Any other sessions have been signed out.');
-      event.target.reset();
+      formElement.reset();
     } catch (failure) {
       setError(failure.message);
     } finally { setBusy(false); }

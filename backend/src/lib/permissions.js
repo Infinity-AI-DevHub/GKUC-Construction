@@ -16,7 +16,7 @@
  * stays possible; reaching an account that can rewrite the rules is not.
  */
 export const PRIVILEGED_KEYS = [
-  'hr.settings','hr.conduct','finance.costReview','admin.company','admin.documents','admin.designer',
+  'hr.settings','hr.conduct','finance.costReview','admin.company','admin.documents',
   'admin.users', 'admin.roles', 'admin.audit', 'admin.notifications',
   'finance.pay', 'finance.invoice', 'hr.payroll',
   'messages.send', 'qs.boqAmend', 'admin.lists'
@@ -44,7 +44,6 @@ export const PERMISSIONS = [
   { key:'finance.costReview',department:'Finance',label:'Review and approve QS daily cost sheets' },
   { key:'admin.company',department:'Administration',label:'Manage company details and bank accounts' },
   { key:'admin.documents',department:'Administration',label:'Manage invoice and quotation document settings' },
-  { key:'admin.designer',department:'Administration',label:'Design and preview document templates' },
   /* Construction & Coordination */
   { key: 'projects.view', department: 'Construction & Coordination', label: 'View projects and sites' },
   { key: 'projects.manage', department: 'Construction & Coordination', label: 'Create and edit projects' },
@@ -129,7 +128,7 @@ export const FEATURE_PERMISSION_PARENTS = {
   'clients.view':'projects.view','clients.manage':'projects.manage',
   'hr.conduct':'hr.manage','hr.settings':'hr.payroll','qs.templates':'qs.quotation',
   'qs.costControl':'qs.boq','finance.costReview':'finance.manage',
-  'admin.company':'admin.users','admin.documents':'admin.users','admin.designer':'admin.users'
+  'admin.company':'admin.users','admin.documents':'admin.users'
 };
 export const isPermission = key => PERMISSION_KEYS.includes(key);
 

@@ -47,11 +47,7 @@ export default function DocumentSettings({ can }) {
   return <section className="table-panel">
     <div className="table-tools"><h2><FileText size={16} /> Wording on generated documents</h2></div>
     <form className="report-form" onSubmit={submit}>
-      <p className="wide designer-pointer">
-        Colours, typeface, paper size and which blocks appear are set on the
-        <strong> Designer</strong> tab, where you can see the page as you change it.
-        What follows is the wording those documents carry.
-      </p>
+      <p className="wide designer-pointer">The document layout is maintained by the system. Saved colours and styles remain in use; these fields control the standing wording.</p>
 
       <Field name="footerNote" label="Extra footer line (optional)" wide
         defaultValue={settings.footerNote} required={false} />
