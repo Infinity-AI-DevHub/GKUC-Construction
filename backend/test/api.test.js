@@ -61,6 +61,17 @@ const call = async (token, method, path, body) => {
   return { status: response.status, body: response.status === 204 ? null : await response.json() };
 };
 
+test('document designer cannot be opened or changed through the API', async () => {
+  const owner = await login();
+  for (const [method, path] of [['GET', '/document-design'], ['PUT', '/document-design'],
+    ['POST', '/document-design/preview']]) {
+    const response = await fetch(base + path, { method,
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${owner}` },
+      ...(method === 'GET' ? {} : { body: JSON.stringify({ design: {} }) }) });
+    assert.equal(response.status, 404, `${method} ${path} must not be reachable`);
+  }
+});
+
 test('attendance accepts an employee without a designation and ignores non-workforce legacy rows in rates', async () => {
   const hr = await login('hr@gkuc.lk');
   const created = await call(hr, 'POST', '/employees', { code: 'ATT-NO-ROLE-QA', name: 'Attendance No Role QA' });

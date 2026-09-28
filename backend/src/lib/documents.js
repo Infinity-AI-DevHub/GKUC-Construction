@@ -8,10 +8,8 @@ import { DEFAULT_DESIGN, fontStack, normaliseDesign, orderedBlocks, shows } from
  * the system. This produces the document from the record itself, so the quotation, the
  * budget and the project can never quietly disagree.
  *
- * Deliberately HTML rather than a generated PDF: every browser prints to PDF, the page can
- * be checked on screen before it is sent, and it avoids a rendering dependency for what is
- * ultimately a page of text and a table. The print rules below are what make it come out as
- * a clean A4 sheet rather than a screenshot of a web page.
+ * The same HTML powers the on-screen preview and server-generated PDF. Print rules enforce
+ * A4 pages and repeat the letterhead without relying on a client's browser settings.
  */
 
 const escape = value => String(value ?? '')
@@ -57,8 +55,37 @@ const settingsFor = given => ({ ...DEFAULT_DOCUMENT_SETTINGS, ...(given || {}) }
 const BUILDER = 'Built by Infinity AI (Pvt) Ltd, Sri Lanka';
 
 /** Turns a design into the stylesheet the document is drawn with. */
-function stylesheet(design) {
+const cssText = value => String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  .replace(/\r?\n/g, '\\A ').replace(/[\u0000-\u001f]/g, ' ');
+
+function stylesheet(design, printHeader = {}) {
   const { page, type, table, totals } = design;
+  const identity = printHeader.company || {};
+  const visible = printHeader.visibility || {};
+  const headerElement = id => design.header.elements.find(element => element.id === id);
+  const include = key => visible[key] !== false;
+  const named = headerElement('companyName');
+  const detailed = headerElement('companyDetails');
+  const printedDetails = [
+    named?.show && include('name') && (named.custom ? named.text : identity.name),
+    detailed?.show && (detailed.custom ? detailed.text : [
+      include('address') && identity.address, include('telephone') && identity.telephone,
+      include('email') && identity.email,
+      include('registrationNumber') && identity.registrationNumber && `Business Reg. No: ${identity.registrationNumber}`,
+      include('tin') && identity.tin && `TIN: ${identity.tin}`,
+      include('vatNumber') && identity.vatNumber && `VAT Reg. No: ${identity.vatNumber}`,
+      include('svatNumber') && identity.svatNumber && `SVAT No: ${identity.svatNumber}`
+    ].filter(Boolean).join('\n'))
+  ].filter(Boolean).join('\n');
+  const printLogo = include('logo') && design.logo.show !== false
+    && headerElement('logo')?.show !== false;
+  const printedDocument = [headerElement('docTitle')?.show && (headerElement('docTitle').custom
+    ? headerElement('docTitle').text : printHeader.heading),
+    headerElement('reference')?.show && printHeader.reference && `No: ${printHeader.reference}`,
+    headerElement('docDate')?.show && printHeader.date && `Date: ${longDate(printHeader.date)}`]
+    .filter(Boolean).join('\n');
+  const headerLines = Math.max(printedDetails.split('\n').length, printedDocument.split('\n').length);
+  const printTopMargin = Math.min(195, Math.max(55, Math.ceil(headerLines * 3.2 + 16)));
   return `
   *{box-sizing:border-box}
   /*
@@ -73,26 +100,31 @@ function stylesheet(design) {
   *,*::before,*::after{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{margin:0;background:#eef1f3;color:${type.colour};
     font:${type.size}px/1.5 ${fontStack(type.font)}}
-  .sheet{width:${page.size === 'Letter' ? '216mm' : '210mm'};
-    min-height:${page.size === 'Letter' ? '279mm' : '297mm'};
+  .sheet{width:210mm;
+    min-height:297mm;
     margin:16px auto;background:${page.background};
     padding:${page.margins.top}mm ${page.margins.right}mm ${page.margins.bottom}mm ${page.margins.left}mm;
     box-shadow:0 6px 26px rgba(0,0,0,.14);position:relative}
   .watermark{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;
     font-weight:800;letter-spacing:6px;text-transform:uppercase;z-index:0}
   .sheet > *:not(.watermark){position:relative;z-index:1}
-  /* A band placed by coordinate. It appears once and never paginates, so nothing in it
-     can be pushed out of place by content further down the page. */
-  .head{position:relative;margin-bottom:14px}
+  /* The saved palette and typography remain, but the letterhead now grows with its text.
+     Absolute coordinates made long addresses overlap the client and item sections. */
+  .head{display:grid;grid-template-columns:64px minmax(0,1fr) minmax(145px,.7fr);
+    grid-template-areas:'logo name title' 'logo details reference' 'logo details date';
+    column-gap:12px;row-gap:3px;align-items:start;margin-bottom:14px;padding-bottom:10px;
+    break-inside:avoid;page-break-inside:avoid}
   .head.ruled{border-bottom:2px solid ${design.accent}}
-  .head .piece{position:absolute;margin:0}
-  .head .piece img{width:100%;height:100%;object-fit:contain;object-position:left center;display:block}
-  /* Never wrapped: a two-line title drops onto the reference number sitting below it, and
-     the letterhead is a free canvas, so nothing reflows out of its way. Right-aligned
-     overflow runs left into the gap beside the company name. */
-  .head .piece[data-piece="docTitle"]{letter-spacing:3px;text-transform:uppercase;white-space:nowrap}
-  .parties{display:flex;gap:18px;margin:16px 0 14px}
-  .party{flex:1;border:1px solid ${table.border};border-radius:3px;padding:9px 11px}
+  .head .piece{position:static;margin:0;min-width:0;overflow-wrap:anywhere}
+  .head .piece[data-piece=logo]{grid-area:logo}
+  .head .piece[data-piece=companyName]{grid-area:name}
+  .head .piece[data-piece=companyDetails]{grid-area:details}
+  .head .piece[data-piece=docTitle]{grid-area:title;letter-spacing:2px;text-transform:uppercase}
+  .head .piece[data-piece=reference]{grid-area:reference}
+  .head .piece[data-piece=docDate]{grid-area:date}
+  .head .piece img{max-width:100%;height:auto;max-height:60px;object-fit:contain;display:block}
+  .parties{display:flex;gap:18px;margin:16px 0 14px;break-inside:avoid}
+  .party{flex:1;min-width:0;overflow-wrap:anywhere;border:1px solid ${table.border};border-radius:3px;padding:9px 11px}
   .party h3{margin:0 0 5px;font-size:${(type.size * 0.75).toFixed(1)}px;letter-spacing:1.1px;text-transform:uppercase;opacity:.62}
   .party strong{display:block;font-size:${(type.size * 1.04).toFixed(1)}px;margin-bottom:2px}
   .party p{margin:1px 0;font-size:${(type.size * 0.875).toFixed(1)}px;opacity:.85}
@@ -103,7 +135,7 @@ function stylesheet(design) {
   thead th{background:${table.headerBackground};color:${table.headerText};
     font-size:${(table.fontSize * 0.9).toFixed(1)}px;letter-spacing:.6px;text-transform:uppercase;
     padding:${table.padding + 1}px ${table.padding}px;text-align:left;border:1px solid ${table.headerBackground}}
-  tbody td{padding:${table.padding}px;border:1px solid ${table.border};vertical-align:top}
+  tbody td{padding:${table.padding}px;border:1px solid ${table.border};vertical-align:top;overflow-wrap:anywhere}
   tbody tr:nth-child(even) td{background:${table.stripe}}
   .num{text-align:right;white-space:nowrap}
   .ref{width:52px;white-space:nowrap}
@@ -137,14 +169,23 @@ function stylesheet(design) {
   @media print{
     html,body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .bar{display:none}
-    /* The printed page gets its margins from @page, so the sheet itself drops its padding. */
-    .sheet{margin:0;box-shadow:none;width:auto;min-height:0;padding:0}
+    /* Page margin boxes repeat reliably in Chromium's PDF output. */
+    .sheet{margin:0;box-shadow:none;width:auto;min-height:0;padding:0;display:block}
+    .head{display:none}
+    .watermark{display:none}
     thead{display:table-header-group}
-    tr{page-break-inside:avoid}
-    .sign,.words{page-break-inside:avoid}
+    tfoot{display:table-row-group}
+    tr,.sign,.words,.parties{break-inside:avoid;page-break-inside:avoid}
+    .terms h4{break-after:avoid;page-break-after:avoid}
   }
-  @page{size:${page.size};
-    margin:${page.margins.top}mm ${page.margins.right}mm ${page.margins.bottom}mm ${page.margins.left}mm}
+  @page{size:A4;
+    margin:${printTopMargin}mm ${page.margins.right}mm ${page.margins.bottom}mm ${page.margins.left}mm;
+    @top-left{content:"${cssText(printedDetails)}";white-space:pre-wrap;text-align:left;
+      vertical-align:middle;font:8px/1.35 Arial,sans-serif;color:${type.colour};
+      padding-left:${printLogo ? 18 : 0}mm;${printLogo ? "background:url('/brand/gkuc-mark-256.png') left center / 15mm auto no-repeat" : ''}}
+    @top-right{content:"${cssText(printedDocument)}";white-space:pre-wrap;text-align:right;
+      vertical-align:middle;font:bold 10px/1.6 Arial,sans-serif;color:${type.headingColour}}
+  }
 `;
 }
 
@@ -162,9 +203,8 @@ function footer(company, reference, settings) {
 /**
  * The letterhead band.
  *
- * Everything in it is placed by coordinate rather than by flow, because the band appears
- * once at the top of the document and never runs onto a second page — so a position set by
- * dragging stays where it was put. Each piece is marked up for the designer to grab.
+ * The saved palette and text choices are retained, while the pieces now flow in a grid so
+ * a long address expands the band instead of overlapping the next section.
  */
 /*
  * A long document title is shrunk to fit its box rather than allowed to run out of it.
@@ -222,24 +262,23 @@ function letterhead(company, heading, reference, date, design = DEFAULT_DESIGN, 
       ? `height:${element.size}px`
       : `font-size:${size}px;font-weight:${element.weight};line-height:1.35`;
     return `<div class="piece" data-piece="${escape(element.id)}"
-      style="left:${element.x}%;top:${element.y}px;width:${element.width}%;
-        color:${element.colour};text-align:${align};${type}">${body}</div>`;
+      style="color:${element.colour};text-align:${align};${type}">${body}</div>`;
   }).join('\n    ');
 
-  return `<div class="head${header.rule ? ' ruled' : ''}" data-block="letterhead"
-    style="height:${header.height}px">
+  return `<div class="head${header.rule ? ' ruled' : ''}" data-block="letterhead">
     ${pieces}
   </div>`;
 }
 
-/** Wraps a document's blocks in the page, in the order the designer put them. */
-function page({ design, company, title, heading, reference, date, blocks, settings }) {
+/** Wraps saved document sections in reading order; the letterhead always leads. */
+function page({ design, company, title, heading, reference, date, blocks, settings, headerVisibility }) {
   /*
    * Position is applied here rather than baked into each block, so a block does not need to
    * know where in the document it ended up. Space is added above whatever the layout already
    * gives it, which is what makes it useful for nudging one block clear of another.
    */
   const drawn = orderedBlocks(design)
+    .filter(block => block.id !== 'letterhead')
     .map(block => {
       const html = blocks[block.id];
       if (!html) return null;
@@ -264,7 +303,7 @@ function page({ design, company, title, heading, reference, date, blocks, settin
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escape(title)}</title>
-<style>${stylesheet(design)}</style></head>
+<style>${stylesheet(design, { company, heading, reference, date, visibility: headerVisibility })}</style></head>
 <body>
 <div class="bar">
   <span>Check this over, then print or save it as a PDF.</span>
@@ -272,6 +311,7 @@ function page({ design, company, title, heading, reference, date, blocks, settin
 </div>
 <div class="sheet">
   ${watermark}
+  ${blocks.letterhead || ''}
   ${drawn}
 </div>
 </body></html>`;
@@ -401,7 +441,8 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
   };
 
   return page({
-    design, company, blocks, settings,
+    design, company: issuer, blocks, settings, heading: 'Quotation', reference: quotation.reference, date: quotation.quoteDate,
+    headerVisibility: issuerShow,
     title: `${quotation.reference} — ${quotation.clientName || 'Quotation'}`
   });
 }
@@ -458,7 +499,9 @@ export function invoiceDocument({ company, invoice, items, settings: given, desi
     signatures: `<div class="sign" data-block="signatures"><div>For and on behalf of ${escape(company.name)}<br><br>Name &amp; signature</div></div>`,
     footer: footer(company, invoice.reference, settings)
   };
-  return page({ design, company, blocks, settings, title: `${invoice.reference} — ${invoice.client}` });
+  return page({ design, company, blocks, settings, title: `${invoice.reference} — ${invoice.client}`,
+    heading: invoice.documentType || (invoice.taxTreatment === 'Exempt' ? 'Invoice' : 'Tax Invoice'),
+    reference: invoice.reference, date: invoice.invoiceDate });
 }
 
 export function receiptDocument({ company, receipt, settings: given, design: givenDesign }) {
@@ -483,7 +526,8 @@ export function receiptDocument({ company, receipt, settings: given, design: giv
     terms: '', bank: '', signatures: `<div class="sign" data-block="signatures"><div>For and on behalf of ${escape(company.name)}<br><br>Authorized signature</div></div>`,
     footer: footer(company, receiptReference, settings)
   };
-  return page({ design, company, blocks, settings, title: `${receiptReference} — ${receipt.client}` });
+  return page({ design, company, blocks, settings, title: `${receiptReference} — ${receipt.client}`,
+    heading: 'Payment Receipt', reference: receiptReference, date: receipt.receivedDate });
 }
 
 export function boqDocument({ company, boq, items, variations = [], settings: given, design: givenDesign }) {
@@ -589,7 +633,8 @@ export function boqDocument({ company, boq, items, variations = [], settings: gi
     footer: footer(company, boq.reference, settings)
   };
 
-  return page({ design, company, blocks, settings, title: `${boq.reference} — ${boq.title || 'Bill of quantities'}` });
+  return page({ design, company, blocks, settings, title: `${boq.reference} — ${boq.title || 'Bill of quantities'}`,
+    heading: 'Bill of Quantities', reference: boq.reference, date: boq.createdAt });
 }
 
 /**
@@ -658,7 +703,8 @@ export function commitmentsDocument({ company, tender, commitments, totals, asAt
     footer: footer(company, tender?.reference || 'Contract commitments', settings)
   };
 
-  return page({ design, company, blocks, settings, title: `Contract commitments — ${asAt}` });
+  return page({ design, company, blocks, settings, title: `Contract commitments — ${asAt}`,
+    heading: 'Commitments', reference: tender?.reference || 'Declaration', date: asAt });
 }
 
 /** The company identity and presentation settings a document needs, in one call. */

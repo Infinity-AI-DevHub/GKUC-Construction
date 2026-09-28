@@ -276,7 +276,8 @@ function ClientHistory({ enquiry, can, close }) {
   const add = async event => {
     event.preventDefault();
     setBusy(true); setError('');
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     try {
       await post(`/inquiries/${enquiry.id}/communications`, {
         direction: form.get('direction'),
@@ -285,7 +286,7 @@ function ClientHistory({ enquiry, can, close }) {
         summary: form.get('summary'),
         followUpDate: form.get('followUpDate') || undefined
       });
-      event.target.reset();
+      formElement.reset();
       await load();
     } catch (failure) { setError(failure.message); } finally { setBusy(false); }
   };

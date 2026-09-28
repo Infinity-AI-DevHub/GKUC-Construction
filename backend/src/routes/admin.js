@@ -5,8 +5,6 @@ import { auth, permissionsFor, permit, validate, wrap } from '../lib/http.js';
 import { PRIVILEGED_KEYS } from '../lib/permissions.js';
 import { strongPassword } from '../lib/passwords.js';
 import { runAlertScan } from '../alerts.js';
-import { documentContext, quotationDocument } from '../lib/documents.js';
-import { BLOCKS, DEFAULT_DESIGN, FONTS, HEADER_PIECES, normaliseDesign } from '../lib/document-design.js';
 
 
 const router = Router();
@@ -144,54 +142,6 @@ router.put('/document-settings', auth, permit("admin.documents"), validate(z.obj
   const after = await getOne(DOCUMENT_SETTINGS);
   await audit(pool, req.user.id, 'UPDATE', 'document_settings', 1, before, after, req.ip);
   res.json(asBooleans(after));
-}));
-
-/**
- * The visual design of documents, and a live preview of it.
- *
- * The preview renders a made-up quotation rather than a real one: the designer is about
- * layout and colour, and a person arranging a page should not need a real client's figures
- * in front of them to do it — nor should a design change touch a real record.
- */
-router.get('/document-design', auth, permit("admin.designer"), wrap(async (_req, res) => {
-  const row = await getOne('SELECT design FROM document_settings WHERE id=1');
-  const stored = typeof row?.design === 'string'
-    ? (() => { try { return JSON.parse(row.design); } catch { return null; } })()
-    : row?.design;
-  res.json({ design: normaliseDesign(stored), blocks: BLOCKS, pieces: HEADER_PIECES, fonts: FONTS, defaults: DEFAULT_DESIGN });
-}));
-
-router.put('/document-design', auth, permit("admin.designer"), wrap(async (req, res) => {
-  const design = normaliseDesign(req.body?.design);
-  const before = await getOne('SELECT design FROM document_settings WHERE id=1');
-  await query('UPDATE document_settings SET design=?,updated_by=? WHERE id=1',
-    [JSON.stringify(design), req.user.id]);
-  await audit(pool, req.user.id, 'UPDATE', 'document_design', 1, before, design, req.ip);
-  res.json({ design });
-}));
-
-router.post('/document-design/preview', auth, permit("admin.designer"), wrap(async (req, res) => {
-  const design = normaliseDesign(req.body?.design);
-  const context = await documentContext(getOne);
-  res.type('html').send(quotationDocument({
-    ...context,
-    design,
-    quotation: {
-      reference: 'QUO-2026-0001',
-      clientName: 'Provincial Road Development Department',
-      project: 'Improvement of Wasiwewa – Kiridigala Road',
-      title: 'Improvement of Wasiwewa – Kiridigala Road (PRDD/SP/25/01/02)',
-      quoteDate: new Date(), validUntil: null, boqReference: 'BOQ-2026-0001',
-      preparedBy: req.user.name, subtotal: 2_612_400, markupPercent: 10, vatPercent: 18,
-      total: 3_391_299.12, notes: 'Rates hold for the chainage stated above.', terms: null
-    },
-    items: [
-      { reference: '1', description: 'Clearing site before and after using u/sk labour', unit: 'Days', quantity: 6, rate: 2800, amount: 16800 },
-      { reference: '2', description: 'Reducing high side and levelling using motor grader', unit: 'Days', quantity: 4.5, rate: 67532.42, amount: 303895.89 },
-      { reference: '3', description: 'Supplying, spreading, watering and compacting A.B.C', unit: 'm3', quantity: 350, rate: 6282, amount: 2198700 },
-      { reference: '4', description: 'Casting guard stone in 1:2:4 concrete', unit: 'no', quantity: 24, rate: 3971, amount: 95304 }
-    ]
-  }));
 }));
 
 router.get('/users/roles', auth, permit('admin.users', 'admin.roles'), wrap(async (_req, res) =>
