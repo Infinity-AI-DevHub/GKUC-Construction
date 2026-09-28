@@ -327,26 +327,23 @@ export const openAttachment = async id => {
   }
 };
 
-/** Shows the server-rendered PDF itself, so preview and download use one layout engine. */
+/** Shows a same-site PDF URL so Safari can use its native viewer (blob frames go blank). */
 export const openDocument = async path => {
   const tab = window.open('', '_blank');
   if (!tab) { notice(POPUP_BLOCKED); return false; }
   tab.document.write('<p style="font:14px sans-serif;padding:20px">Preparing the document…</p>');
   try {
-    const stored = token.get();
     const separator = path.includes('?') ? '&' : '?';
     const pdfPath = `${path}${separator}download=pdf`;
-    const response = await fetch(`/api${pdfPath}`, {
-      headers: stored ? { Authorization: `Bearer ${stored}` } : {}
-    });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body.error || 'That document could not be produced');
+    const previewPath = `${path}${separator}preview=pdf`;
+    const { url: previewUrl } = await post('/document-download-tickets', { path: previewPath });
+    // Safari leaves embedded PDF frames blank in a document-written tab. A direct,
+    // same-site inline PDF opens in Safari's own viewer, with its native Save control.
+    const agent = window.navigator?.userAgent || '';
+    if (/Safari/i.test(agent) && !/(Chrome|Chromium|CriOS|Edg|OPR)/i.test(agent)) {
+      tab.location.replace(previewUrl);
+      return true;
     }
-    const pdf = await response.blob();
-    if (pdf.type !== 'application/pdf' || pdf.size < 1000)
-      throw new Error('The PDF preview is incomplete. Try opening the document again.');
-    const previewUrl = URL.createObjectURL(pdf);
     tab.document.open();
     tab.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Document preview</title>
       <meta name="viewport" content="width=device-width,initial-scale=1"><style>
@@ -357,11 +354,11 @@ export const openDocument = async path => {
         padding:10px 15px;font:700 14px Arial,sans-serif;text-decoration:none;cursor:pointer}
       iframe{display:block;width:100%;height:calc(100vh - 56px);border:0}
       </style></head><body><div class="toolbar"><span>PDF preview — this is the document that will download.</span>
+      <a href="${previewUrl}" target="_blank" rel="noopener">Open PDF directly</a>
       <button type="button" id="download">Preparing download…</button></div>
       <iframe title="Document PDF preview"></iframe></body></html>`);
     tab.document.close();
     tab.document.querySelector('iframe').src = previewUrl;
-    tab.addEventListener('pagehide', () => URL.revokeObjectURL(previewUrl), { once: true });
     const downloadButton = tab.document.querySelector('#download');
     if (downloadButton) {
       // A blob URL created in the parent tab is not a reliable download in Safari.

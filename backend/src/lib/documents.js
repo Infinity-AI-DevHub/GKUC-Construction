@@ -173,9 +173,10 @@ function stylesheet(design, printHeader = {}) {
   @media print{
     html,body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .bar{display:none}
-    /* Page margin boxes repeat reliably in Chromium's PDF output. */
+    /* The full flowing letterhead is printed on page one, matching the web design.
+       Compact margin-box identity is reserved for continuation pages. */
     .sheet{margin:0;box-shadow:none;width:auto;min-height:0;padding:0;display:block}
-    .head{display:none}
+    .head{display:grid;margin-bottom:14px}
     .watermark{display:none}
     thead{display:table-header-group}
     tfoot{display:table-row-group}
@@ -191,6 +192,11 @@ function stylesheet(design, printHeader = {}) {
       vertical-align:middle;font:8px/1.35 Arial,sans-serif;color:#475569}
     @top-right{content:"${cssText(printedDocument)}";white-space:pre-wrap;text-align:right;
       vertical-align:middle;font:800 14px/1.5 Arial,sans-serif;color:${design.accent}}
+  }
+  @page:first{margin:${page.margins.top}mm ${page.margins.right}mm ${page.margins.bottom}mm ${page.margins.left}mm;
+    @top-left{content:none}
+    @top-center{content:none}
+    @top-right{content:none}
   }
 `;
 }

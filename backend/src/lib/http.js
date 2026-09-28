@@ -43,12 +43,19 @@ export const auth = wrap(async (req, res, next) => {
     const parsed = pathFromTicketRequest(req.originalUrl);
     if (!parsed.path || !/^[a-f0-9]{64}$/.test(parsed.ticket || ''))
       return res.status(401).json({ error: 'This PDF download link is invalid. Open the document again.' });
-    // Consume atomically: a link cannot be reused or switched to a different document.
+    // Downloads are consumed once. A preview may be requested repeatedly by Safari's
+    // PDF viewer, but remains bound to this path, session and short expiry.
     const ticketHash = tokenHash(parsed.ticket);
-    const used = await query(`UPDATE document_download_tickets SET consumed_at=NOW()
-      WHERE token_hash=? AND document_path=? AND consumed_at IS NULL AND expires_at>NOW()`, [ticketHash, parsed.path]);
-    if (used.affectedRows !== 1)
-      return res.status(401).json({ error: 'This PDF link has expired or was already used. Open the document again.' });
+    if (req.query.preview === 'pdf') {
+      const valid = await query(`SELECT id FROM document_download_tickets
+        WHERE token_hash=? AND document_path=? AND consumed_at IS NULL AND expires_at>NOW()`, [ticketHash, parsed.path]);
+      if (!valid.length) return res.status(401).json({ error: 'This PDF preview has expired. Open the document again.' });
+    } else {
+      const used = await query(`UPDATE document_download_tickets SET consumed_at=NOW()
+        WHERE token_hash=? AND document_path=? AND consumed_at IS NULL AND expires_at>NOW()`, [ticketHash, parsed.path]);
+      if (used.affectedRows !== 1)
+        return res.status(401).json({ error: 'This PDF link has expired or was already used. Open the document again.' });
+    }
     const ticketRow = await query('SELECT session_id FROM document_download_tickets WHERE token_hash=?', [ticketHash]);
     ticketSessionId = ticketRow[0]?.session_id;
   }
