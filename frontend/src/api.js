@@ -327,25 +327,42 @@ export const openAttachment = async id => {
   }
 };
 
-/** Renders a generated document (a quotation, a BOQ, a declaration) into a new tab. */
+/** Shows the server-rendered PDF itself, so preview and download use one layout engine. */
 export const openDocument = async path => {
   const tab = window.open('', '_blank');
   if (!tab) { notice(POPUP_BLOCKED); return false; }
   tab.document.write('<p style="font:14px sans-serif;padding:20px">Preparing the document…</p>');
   try {
     const stored = token.get();
-    const response = await fetch(`/api${path}`, {
+    const separator = path.includes('?') ? '&' : '?';
+    const pdfPath = `${path}${separator}download=pdf`;
+    const response = await fetch(`/api${pdfPath}`, {
       headers: stored ? { Authorization: `Bearer ${stored}` } : {}
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw new Error(body.error || 'That document could not be produced');
     }
-    const html = await response.text();
+    const pdf = await response.blob();
+    if (pdf.type !== 'application/pdf' || pdf.size < 1000)
+      throw new Error('The PDF preview is incomplete. Try opening the document again.');
+    const previewUrl = URL.createObjectURL(pdf);
     tab.document.open();
-    tab.document.write(html);
+    tab.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Document preview</title>
+      <meta name="viewport" content="width=device-width,initial-scale=1"><style>
+      *{box-sizing:border-box}body{margin:0;background:#e9eef3;font:14px Arial,sans-serif;color:#183153}
+      .toolbar{height:56px;padding:8px 16px;display:flex;align-items:center;justify-content:space-between;
+        gap:12px;background:#16305c;color:#fff}.toolbar span{font-weight:600}
+      .toolbar button,.toolbar a{border:0;border-radius:6px;background:#c6f72b;color:#10243e;
+        padding:10px 15px;font:700 14px Arial,sans-serif;text-decoration:none;cursor:pointer}
+      iframe{display:block;width:100%;height:calc(100vh - 56px);border:0}
+      </style></head><body><div class="toolbar"><span>PDF preview — this is the document that will download.</span>
+      <button type="button" id="download">Preparing download…</button></div>
+      <iframe title="Document PDF preview"></iframe></body></html>`);
     tab.document.close();
-    const downloadButton = tab.document.querySelector('.bar button');
+    tab.document.querySelector('iframe').src = previewUrl;
+    tab.addEventListener('pagehide', () => URL.revokeObjectURL(previewUrl), { once: true });
+    const downloadButton = tab.document.querySelector('#download');
     if (downloadButton) {
       // A blob URL created in the parent tab is not a reliable download in Safari.
       // Give the browser a real same-origin PDF URL instead. Its short-lived ticket is
@@ -366,8 +383,6 @@ export const openDocument = async path => {
         downloadAction.textContent = 'Preparing PDF…';
         downloadError.textContent = '';
         try {
-          const separator = path.includes('?') ? '&' : '?';
-          const pdfPath = `${path}${separator}download=pdf`;
           const { url } = await post('/document-download-tickets', { path: pdfPath });
           const link = tab.document.createElement('a');
           link.href = url;

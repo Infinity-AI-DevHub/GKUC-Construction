@@ -3,29 +3,40 @@ import assert from 'node:assert/strict';
 import { api, readableError, openDocument } from './api.js';
 import { onNotice } from './notices.js';
 
-test('document preview prepares a one-use server PDF link without an asynchronous synthetic click', async () => {
-  const originals = { fetch: globalThis.fetch, window: globalThis.window, sessionStorage: globalThis.sessionStorage };
+test('document preview displays server PDF and prepares a separate one-use download link', async () => {
+  const originals = { fetch: globalThis.fetch, window: globalThis.window, sessionStorage: globalThis.sessionStorage,
+    createObjectURL: URL.createObjectURL };
   let replacement;
   const button = { tagName: 'BUTTON', before() {}, replaceWith(link) { replacement = link; } };
+  const frame = {};
   const tab = { document: { write() {}, open() {}, close() {}, title: 'QUO-2026-0007',
-    querySelector: () => button, createElement: name => ({ tagName: name.toUpperCase(), style: {}, setAttribute() {}, addEventListener() {} }) },
+    querySelector: selector => selector === 'iframe' ? frame : button,
+    createElement: name => ({ tagName: name.toUpperCase(), style: {}, setAttribute() {}, addEventListener() {} }) },
     addEventListener() {} };
   globalThis.window = { open: () => tab };
   globalThis.sessionStorage = { getItem: () => 'test-token' };
+  globalThis.URL.createObjectURL = () => 'blob:document-preview';
   globalThis.fetch = async (path, options) => {
     assert.equal(options.headers.Authorization, 'Bearer test-token');
     if (path === '/api/document-download-tickets') {
       assert.equal(JSON.parse(options.body).path, '/qs/quotations/7/document?download=pdf');
       return Response.json({url:'/api/qs/quotations/7/document?download=pdf&downloadTicket=test'});
     }
-    return new Response('<html></html>');
+    assert.equal(path, '/api/qs/quotations/7/document?download=pdf');
+    return new Response(new Blob([new Uint8Array(1200)], { type: 'application/pdf' }));
   };
   try {
     assert.equal(await openDocument('/qs/quotations/7/document'), true);
+    assert.equal(frame.src, 'blob:document-preview');
     for (let i = 0; i < 20 && !replacement; i++) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(replacement.href, '/api/qs/quotations/7/document?download=pdf&downloadTicket=test');
     assert.equal(replacement.textContent, 'Download PDF');
-  } finally { Object.assign(globalThis, originals); }
+  } finally {
+    URL.createObjectURL = originals.createObjectURL;
+    globalThis.fetch = originals.fetch;
+    globalThis.window = originals.window;
+    globalThis.sessionStorage = originals.sessionStorage;
+  }
 });
 
 test('validation errors name the field that needs attention', () => {
