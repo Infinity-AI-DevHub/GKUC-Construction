@@ -732,7 +732,7 @@ router.get('/receivables/petty-cash/:id/entries', auth, permit('finance.view', '
   async (req, res, next) => {
     try {
       res.json(await query(`
-        SELECT e.id,e.kind,e.amount,e.entry_date entryDate,e.description,e.category,
+        SELECT e.id,e.kind,e.amount,e.entry_date entryDate,e.description,e.category,e.payee,
                e.employee_id employeeId,emp.name employee,emp.code employeeCode,
                e.fuel_record_id fuelRecordId,fr.vehicle_id vehicleId,v.vehicle vehicle,v.registration registration,
                CASE WHEN f.account_type='Salary advance' AND e.kind='Spend'
@@ -755,6 +755,7 @@ router.post('/receivables/petty-cash/:id/entries', auth, permit('finance.manage'
     amount: z.coerce.number().positive(),
     entryDate: z.string().min(10).max(10),
     description: z.string().trim().min(2).max(300),
+    payee: z.string().trim().max(180).optional(),
     category: z.string().trim().max(60).optional(),
     projectId: z.coerce.number().int().positive().nullable().optional(),
     employeeId: z.coerce.number().int().positive().nullable().optional()
@@ -801,11 +802,11 @@ router.post('/receivables/petty-cash/:id/entries', auth, permit('finance.manage'
         const [[{balance}]]=await connection.execute('SELECT COALESCE(SUM(amount),0) balance FROM petty_cash_entries WHERE float_id=?',[req.params.id]);
         if(signed<0&&Number(balance)+signed<-.001)throw fail(400,`The float only holds ${money(balance)}. Record a top-up before spending more.`);
         const [entry]=await connection.execute(
-          `INSERT INTO petty_cash_entries (float_id,kind,amount,entry_date,description,category,project_id,employee_id,recorded_by)
-           VALUES (?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO petty_cash_entries (float_id,kind,amount,entry_date,description,category,project_id,employee_id,payee,recorded_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`,
           [req.params.id, req.body.kind, signed, req.body.entryDate, req.body.description,
             req.body.category || float.account_type, projectId,
-            req.body.employeeId || null, req.user.id]);
+            req.body.employeeId || null, req.body.payee || null, req.user.id]);
         /* Petty cash spent on a site is a project cost like any other. */
         if (req.body.kind === 'Spend' && float.account_type !== 'Salary advance' && projectId) {
           await connection.execute(

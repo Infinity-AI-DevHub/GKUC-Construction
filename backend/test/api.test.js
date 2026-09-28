@@ -1815,16 +1815,182 @@ test('finance reporting reconciles company and project scopes', async () => {
   assert.equal(company.body.scope.projectId, 'all');
   assert.ok(company.body.projects.length >= 3);
   for (const ledger of ['expenses', 'incomes', 'clientInvoices', 'purchaseOrders', 'supplierInvoices',
-    'pettyCash', 'retentions', 'bonds', 'variations', 'payroll']) assert.ok(Array.isArray(company.body[ledger]), ledger);
+    'pettyCash', 'retentions', 'bonds', 'variations', 'payroll', 'acceptedQuotations', 'approvedVariationsAll']) assert.ok(Array.isArray(company.body[ledger]), ledger);
 
   const project = await call(owner, 'GET', `/finance/reporting?projectId=1&from=${shift(-3650)}&to=${shift(3650)}`);
   assert.equal(project.status, 200);
   assert.equal(project.body.projects.length, 1);
   assert.equal(Number(project.body.projects[0].id), 1);
-  for (const ledger of ['expenses', 'incomes', 'clientInvoices', 'purchaseOrders', 'retentions', 'variations'])
+  for (const ledger of ['expenses', 'incomes', 'clientInvoices', 'purchaseOrders', 'retentions', 'variations', 'acceptedQuotations', 'approvedVariationsAll'])
     assert.ok(project.body[ledger].every(row => Number(row.projectId) === 1), `${ledger} obeys project scope`);
   assert.deepEqual(project.body.payroll, [], 'payroll is not falsely allocated to a project');
   assert.equal((await call(owner, 'GET', '/finance/reporting?projectId=invalid')).status, 400);
+});
+
+test('monthly management pack separates companies and preserves versioned close snapshots', async () => {
+  const owner = await login();
+  const qs = await login('qs@gkuc.lk');
+  const period = today().slice(0, 7);
+  const url = companyId => `/finance/management-accounts?companyId=${companyId}&period=${period}`;
+  assert.equal((await call(qs, 'GET', url(1))).status, 200, 'QS may view company reports when finance.view is delegated');
+  assert.equal((await call(qs, 'POST', '/finance/management-accounts/close', {
+    companyId: 1, period, note: 'Unauthorized period close attempt.'
+  })).status, 403);
+  const initial = await call(owner, 'GET', url(1));
+  assert.equal(initial.status, 200, JSON.stringify(initial.body));
+  assert.equal(initial.body.company.id, 1);
+  assert.ok(initial.body.accrual && initial.body.cash && initial.body.workingCapital && initial.body.wip);
+  const change = await call(owner, 'POST', '/finance/management-accounts/adjustments', {
+    companyId: 1, period, category: 'Revenue', amount: 1250,
+    explanation: 'Accrued approved month end adjustment', reference: 'MGT-REV-001'
+  });
+  assert.equal(change.status, 201, JSON.stringify(change.body));
+  const adjusted = await call(owner, 'GET', url(1));
+  assert.equal(adjusted.body.accrual.result, initial.body.accrual.result + 1250);
+  const otherCompany = await call(owner, 'GET', url(2));
+  assert.equal(otherCompany.status, 200);
+  assert.ok(!otherCompany.body.adjustments.some(row => row.reference === 'MGT-REV-001'));
+  const closed = await call(owner, 'POST', '/finance/management-accounts/close', {
+    companyId: 1, period, note: 'Reviewed source records and management adjustments.'
+  });
+  assert.equal(closed.status, 201, JSON.stringify(closed.body));
+  assert.equal(closed.body.version, 1);
+  assert.equal((await call(owner, 'POST', '/finance/management-accounts/adjustments', {
+    companyId: 1, period, category: 'Cost', amount: 10,
+    explanation: 'Attempted post close adjustment', reference: 'MGT-COST-001'
+  })).status, 409);
+  const snapshot = await call(owner, 'GET', url(1));
+  assert.equal(snapshot.body.close.status, 'Closed');
+  assert.equal(snapshot.body.accrual.result, adjusted.body.accrual.result);
+  const reopened = await call(owner, 'POST', '/finance/management-accounts/reopen', {
+    companyId: 1, period, reason: 'Supplier document arrived after management close.'
+  });
+  assert.equal(reopened.status, 200);
+  const reclosed = await call(owner, 'POST', '/finance/management-accounts/close', {
+    companyId: 1, period, note: 'Reviewed the reopened period and source documents.'
+  });
+  assert.equal(reclosed.status, 201, JSON.stringify(reclosed.body));
+  assert.equal(reclosed.body.version, 2);
+});
+
+test('daily expense register merges direct and petty payments once by company and location', async () => {
+  const owner = await login();
+  const date = today();
+  const suffix = Date.now();
+  const expense = await call(owner,'POST','/finance/expenses',{
+    projectId:1,source:'Overhead',description:`Direct site payment ${suffix}`,
+    amount:345,expenseDate:date,reference:`DIRECT-${suffix}`,payee:'Site vendor',
+    paymentMethod:'Bank transfer',paidDate:date
+  });
+  assert.equal(expense.status,201,JSON.stringify(expense.body));
+  const float = await call(owner,'POST','/receivables/petty-cash',{
+    companyId:1,name:`Daily register float ${suffix}`,accountType:'Office expenses',
+    holderName:'Finance test',projectId:1,ceiling:1000,lowAt:100
+  });
+  assert.equal(float.status,201,JSON.stringify(float.body));
+  const floatId=float.body.id;
+  assert.equal((await call(owner,'POST',`/receivables/petty-cash/${floatId}/entries`,{
+    kind:'Top up',amount:500,entryDate:date,description:'Float funding'
+  })).status,201);
+  const spend=await call(owner,'POST',`/receivables/petty-cash/${floatId}/entries`,{
+    kind:'Spend',amount:120,entryDate:date,description:`Site consumables ${suffix}`,
+    category:'Consumables',payee:'Hardware shop',projectId:1
+  });
+  assert.equal(spend.status,201,JSON.stringify(spend.body));
+  const register=await call(owner,'GET',`/finance/daily-expenses?companyId=1&date=${date}`);
+  assert.equal(register.status,200,JSON.stringify(register.body));
+  const direct=register.body.entries.filter(row=>row.reference===`DIRECT-${suffix}`);
+  const petty=register.body.entries.filter(row=>row.description===`Site consumables ${suffix}`);
+  assert.equal(direct.length,1);
+  assert.equal(petty.length,1,'petty spend and its linked project cost appear as one payment');
+  assert.equal(direct[0].payee,'Site vendor');
+  assert.equal(direct[0].paymentMethod,'Bank transfer');
+  assert.equal(petty[0].payee,'Hardware shop');
+  assert.equal(petty[0].locationType,'Project site');
+  const unverified=await call(owner,'POST','/finance/expenses',{
+    projectId:1,source:'Overhead',description:`Legacy unpaid expense ${suffix}`,
+    amount:55,expenseDate:date,reference:`UNVERIFIED-${suffix}`
+  });
+  assert.equal(unverified.status,201);
+  const beforePayment=await call(owner,'GET',`/finance/daily-expenses?companyId=1&date=${date}`);
+  assert.ok(!beforePayment.body.entries.some(row=>row.reference===`UNVERIFIED-${suffix}`));
+  assert.ok(beforePayment.body.unverifiedManualExpenses >= 1);
+  assert.equal((await call(owner,'PATCH',`/finance/expenses/${unverified.body.id}/payment`,{
+    payee:'Office vendor',paymentMethod:'Bank transfer',paidDate:date
+  })).status,200);
+  const afterPayment=await call(owner,'GET',`/finance/daily-expenses?companyId=1&date=${date}`);
+  assert.equal(afterPayment.body.entries.filter(row=>row.reference===`UNVERIFIED-${suffix}`).length,1);
+  assert.equal((await call(owner,'PATCH',`/finance/expenses/${unverified.body.id}/payment`,{
+    payee:'Office vendor',paymentMethod:'Bank transfer',paidDate:date
+  })).status,409,'the same direct expense cannot be marked paid twice');
+  const officeBody={companyId:1,paymentDate:date,category:'Office supplies',payee:'Stationery shop',
+    paymentMethod:'Bank transfer',description:'Office paper',reference:`OFFICE-${suffix}`,amount:85};
+  assert.equal((await call(owner,'POST','/finance/office-expense-payments',officeBody)).status,201);
+  assert.equal((await call(owner,'POST','/finance/office-expense-payments',officeBody)).status,409);
+  const withOffice=await call(owner,'GET',`/finance/daily-expenses?companyId=1&date=${date}`);
+  const officeRows=withOffice.body.entries.filter(row=>row.reference===`OFFICE-${suffix}`);
+  assert.equal(officeRows.length,1);
+  assert.equal(officeRows[0].locationType,'Office');
+  const other=await call(owner,'GET',`/finance/daily-expenses?companyId=2&date=${date}`);
+  assert.equal(other.status,200);
+  assert.ok(!other.body.entries.some(row=>row.reference===`DIRECT-${suffix}`));
+  assert.equal((await call(owner,'GET',`/finance/daily-expenses?companyId=1&date=wrong`)).status,400);
+});
+
+test('expected outflows schedule source bills once and keep companies separate', async () => {
+  const owner=await login(), due=shift(8), revised=shift(12), suffix=Date.now();
+  const bill=await call(owner,'POST','/finance/bills',{companyId:1,billType:'Electricity',provider:'Utility forecast test',
+    reference:`FORECAST-${suffix}`,billDate:today(),dueDate:due,netAmount:200,taxTreatment:'Exempt',vatRate:0});
+  assert.equal(bill.status,201,JSON.stringify(bill.body));
+  const first=await call(owner,'GET','/finance/expected-outflows?companyId=1');
+  assert.equal(first.status,200,JSON.stringify(first.body));
+  const source=first.body.entries.find(row=>row.sourceType==='Operating bill'&&row.sourceId===bill.body.id);
+  assert.equal(source.amount,200);assert.equal(source.expectedDate,due);
+  const plan={companyId:1,sourceType:'Operating bill',sourceId:bill.body.id,expectedDate:revised,confidence:'Medium',notes:'Awaiting approval'};
+  assert.equal((await call(owner,'POST','/finance/expected-outflows/plans',plan)).status,201);
+  const updated=await call(owner,'GET','/finance/expected-outflows?companyId=1');
+  assert.equal(updated.body.entries.filter(row=>row.sourceType==='Operating bill'&&row.sourceId===bill.body.id).length,1);
+  assert.equal(updated.body.entries.find(row=>row.sourceType==='Operating bill'&&row.sourceId===bill.body.id).expectedDate,revised);
+  assert.equal((await call(owner,'POST','/finance/expected-outflows/plans',{...plan,companyId:2})).status,404);
+  assert.equal((await call(owner,'GET','/finance/expected-outflows?companyId=2')).body.entries.some(row=>row.reference===`FORECAST-${suffix}`),false);
+  const standalone=await call(owner,'POST','/finance/expected-outflows/plans',{companyId:1,payee:'Expected vendor',
+    description:'Planned equipment deposit',amount:350,expectedDate:due,confidence:'Low'});
+  assert.equal(standalone.status,201,JSON.stringify(standalone.body));
+  assert.equal((await call(owner,'PATCH',`/finance/expected-outflows/plans/${standalone.body.id}`,{companyId:1,status:'Paid'})).status,200);
+  assert.equal((await call(owner,'GET','/finance/expected-outflows?companyId=1')).body.entries.some(row=>row.key===`Plan:${standalone.body.id}`),false);
+});
+
+test('cash comparison separates companies, compares periods and requires a balanced verified close', async () => {
+  const owner=await login(),period=today().slice(0,7),reference=`CASH-COMP-${Date.now()}`;
+  const baseline=await call(owner,'GET',`/finance/cash-comparison?companyId=1&period=${period}`);
+  assert.equal(baseline.status,200,JSON.stringify(baseline.body));
+  const opening=1500;
+  const closing=opening+baseline.body.current.movement;
+  const saved=await call(owner,'PUT','/finance/cash-comparison/period',{
+    companyId:1,period,budgetReceipts:5000,budgetPayments:4000,openingBalance:opening,
+    verifiedClosingBalance:closing,reconciliationAdjustment:0,balanceSource:reference
+  });
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  const report=await call(owner,'GET',`/finance/cash-comparison?companyId=1&period=${period}`);
+  assert.equal(report.body.current.reconciliationStatus,'Reconciled');
+  assert.equal(report.body.current.difference,0);
+  assert.equal(report.body.comparison.receiptsVsBudget,report.body.current.receipts-5000);
+  assert.equal(report.body.months.length,12);
+  const other=await call(owner,'GET',`/finance/cash-comparison?companyId=2&period=${period}`);
+  assert.equal(other.status,200);
+  assert.equal(other.body.current.balanceSource,null);
+  assert.equal(other.body.current.reconciliationStatus,'Missing balance');
+  assert.equal((await call(owner,'PUT','/finance/cash-comparison/period',{
+    companyId:1,period,budgetReceipts:null,budgetPayments:null,openingBalance:opening,
+    verifiedClosingBalance:closing+100,reconciliationAdjustment:0,balanceSource:reference
+  })).status,200);
+  const unbalanced=await call(owner,'GET',`/finance/cash-comparison?companyId=1&period=${period}`);
+  assert.equal(unbalanced.body.current.reconciliationStatus,'Difference');
+  assert.equal(unbalanced.body.current.difference,100);
+  assert.equal((await call(owner,'PUT','/finance/cash-comparison/period',{
+    companyId:1,period,budgetReceipts:null,budgetPayments:null,openingBalance:opening,
+    verifiedClosingBalance:closing+100,reconciliationAdjustment:100,balanceSource:reference
+  })).status,400,'a nonzero reconciliation adjustment requires an explanation');
 });
 
 test('two companies share resources while commercial records and totals stay separate', async () => {
@@ -2246,7 +2412,7 @@ test('fleet fuel draws one funded float movement and one project expense without
   assert.equal(vehicle.status, 201);
   const path = `/fleet/${vehicle.body.id}/fuel`;
   const fuel = cost => ({ fuelFloatId: floatId, projectId: 1, fuelDate: today(), litres: 20,
-    cost, odometer: 120 });
+    cost, odometer: 120, vendor: 'Test fuel station' });
   const overdraw = await call(transport, 'POST', path, fuel(16000));
   assert.equal(overdraw.status, 409);
   assert.match(overdraw.body.error, /15,000/);
@@ -2263,6 +2429,10 @@ test('fleet fuel draws one funded float movement and one project expense without
   const expenses = (await call(owner, 'GET', '/finance/expenses?projectId=1')).body;
   assert.equal(expenses.filter(row => row.originType === 'fuel_record' && row.description.includes('Float-linked test truck')).length, 1);
   assert.equal(expenses.filter(row => row.originType === 'petty_cash' && row.description.includes('Float-linked test truck')).length, 0);
+  const daily=(await call(owner,'GET',`/finance/daily-expenses?companyId=1&date=${today()}`)).body;
+  const dailyFuel=daily.entries.filter(row=>row.reference===`Fleet fuel #${saved.body.id}`);
+  assert.equal(dailyFuel.length,1,'Fleet, petty cash and project cost resolve to one daily payment');
+  assert.equal(dailyFuel[0].payee,'Test fuel station');
   assert.equal((await call(transport, 'POST', path, fuel(4000))).status, 409);
   const concurrent = await Promise.all([1, 2].map(() => call(transport, 'POST', path, {
     ...fuel(2000), odometer: 130

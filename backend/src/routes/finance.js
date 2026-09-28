@@ -3,13 +3,267 @@ import { z } from 'zod';
 import { audit, getOne, pool, query, spendSql, transaction } from '../db.js';
 import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { assertUniqueManualEntry } from '../lib/ledger-duplicates.js';
+import { managementPack } from '../lib/management-accounts.js';
+import { cashOutflows } from '../lib/cash-outflows.js';
+import { cashComparison } from '../lib/cash-comparison.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const accountPeriod = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 const companyParam = req => {
   const value = Number(req.query.companyId || 0);
   return Number.isInteger(value) && value > 0 ? value : null;
 };
+
+router.get('/cash-comparison',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{
+  const companyId=companyParam(req),period=String(req.query.period||'');
+  if(!companyId||!accountPeriod.safeParse(period).success)return res.status(400).json({error:'Choose a company and a month in YYYY-MM format.'});
+  const company=await getOne('SELECT id,name FROM companies WHERE id=?',[companyId]);
+  if(!company)return res.status(404).json({error:'Company not found.'});
+  res.json({company,...await cashComparison(companyId,period)});
+}));
+
+router.put('/cash-comparison/period',auth,permit('finance.manage'),validate(z.object({
+  companyId:z.number().int().positive(),period:accountPeriod,
+  budgetReceipts:z.number().nonnegative().nullable(),budgetPayments:z.number().nonnegative().nullable(),
+  openingBalance:z.number().finite().nullable(),verifiedClosingBalance:z.number().finite().nullable(),
+  reconciliationAdjustment:z.number().finite().default(0),adjustmentReason:z.string().trim().max(500).nullable().optional(),
+  balanceSource:z.string().trim().max(300).nullable().optional()
+})),wrap(async(req,res)=>{
+  const b=req.body;
+  if(!await getOne('SELECT id FROM companies WHERE id=?',[b.companyId]))return res.status(404).json({error:'Company not found.'});
+  if(b.reconciliationAdjustment&&!b.adjustmentReason?.trim())return res.status(400).json({error:'Explain any reconciliation adjustment before saving it.'});
+  if(b.verifiedClosingBalance!==null&&!b.balanceSource?.trim())return res.status(400).json({error:'Name the bank statement or cash count used to verify the closing balance.'});
+  const prior=await getOne('SELECT * FROM cash_comparison_periods WHERE company_id=? AND period=?',[b.companyId,b.period]);
+  await query(`INSERT INTO cash_comparison_periods
+    (company_id,period,budget_receipts,budget_payments,opening_balance,verified_closing_balance,
+     reconciliation_adjustment,adjustment_reason,balance_source,updated_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE budget_receipts=VALUES(budget_receipts),
+      budget_payments=VALUES(budget_payments),opening_balance=VALUES(opening_balance),
+      verified_closing_balance=VALUES(verified_closing_balance),reconciliation_adjustment=VALUES(reconciliation_adjustment),
+      adjustment_reason=VALUES(adjustment_reason),balance_source=VALUES(balance_source),updated_by=VALUES(updated_by)`,
+    [b.companyId,b.period,b.budgetReceipts,b.budgetPayments,b.openingBalance,b.verifiedClosingBalance,
+      b.reconciliationAdjustment,b.adjustmentReason||null,b.balanceSource||null,req.user.id]);
+  const after=await getOne('SELECT * FROM cash_comparison_periods WHERE company_id=? AND period=?',[b.companyId,b.period]);
+  await audit(pool,req.user.id,prior?'UPDATE':'CREATE','cash_comparison_period',after.id,prior,after,req.ip);
+  res.json({id:after.id});
+}));
+
+router.get('/expected-outflows',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{
+  const companyId=companyParam(req);
+  if(!companyId)return res.status(400).json({error:'Choose a company to view its expected payments.'});
+  const company=await getOne('SELECT id,name FROM companies WHERE id=?',[companyId]);
+  if(!company)return res.status(404).json({error:'Company not found.'});
+  res.json({company,...await cashOutflows(companyId)});
+}));
+
+router.post('/expected-outflows/plans',auth,permit('finance.manage'),validate(z.object({
+  companyId:z.number().int().positive(),sourceType:z.string().trim().min(2).max(40).nullable().optional(),
+  sourceId:z.number().int().positive().nullable().optional(),projectId:z.number().int().positive().nullable().optional(),
+  payee:z.string().trim().min(2).max(180).nullable().optional(),description:z.string().trim().min(2).max(400).nullable().optional(),
+  amount:z.number().positive().nullable().optional(),expectedDate:isoDate,confidence:z.enum(['High','Medium','Low']),
+  notes:z.string().trim().max(600).nullable().optional()
+})),wrap(async(req,res)=>{
+  const b=req.body,linked=!!b.sourceType;
+  if(linked!==!!b.sourceId)return res.status(400).json({error:'Choose both a source type and its record, or create a standalone planned payment.'});
+  if(!linked&&(!b.payee||!b.description||!b.amount))return res.status(400).json({error:'Enter the payee, purpose and amount for this planned payment.'});
+  if(!await getOne('SELECT id FROM companies WHERE id=?',[b.companyId]))return res.status(404).json({error:'Company not found.'});
+  if(b.projectId&&!await getOne('SELECT id FROM projects WHERE id=? AND company_id=?',[b.projectId,b.companyId]))
+    return res.status(400).json({error:'That project belongs to another company.'});
+  if(linked){
+    const forecast=await cashOutflows(b.companyId);
+    if(!forecast.entries.some(row=>row.sourceType===b.sourceType&&row.sourceId===b.sourceId&&row.sourceType!=='Planned payment'))
+      return res.status(404).json({error:'This open payment record was not found in the selected company. Refresh the forecast and try again.'});
+    if(b.amount||b.payee||b.description)return res.status(400).json({error:'A linked payment uses the amount and payee from its original record. Edit that record to change them.'});
+  }
+  const prior=linked?await getOne('SELECT * FROM cash_outflow_plans WHERE company_id=? AND source_type=? AND source_id=?',[b.companyId,b.sourceType,b.sourceId]):null;
+  if(prior){
+    await query(`UPDATE cash_outflow_plans SET expected_date=?,confidence=?,notes=?,status='Planned' WHERE id=?`,
+      [b.expectedDate,b.confidence,b.notes||null,prior.id]);
+    await audit(pool,req.user.id,'UPDATE','cash_outflow_plan',prior.id,prior,{...b},req.ip);
+    return res.json({id:prior.id});
+  }
+  const result=await query(`INSERT INTO cash_outflow_plans
+    (company_id,source_type,source_id,project_id,payee,description,amount,expected_date,confidence,notes,created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`,[b.companyId,b.sourceType||null,b.sourceId||null,b.projectId||null,
+    b.payee||null,b.description||null,b.amount||null,b.expectedDate,b.confidence,b.notes||null,req.user.id]);
+  await audit(pool,req.user.id,'CREATE','cash_outflow_plan',result.insertId,null,b,req.ip);
+  res.status(201).json({id:result.insertId});
+}));
+
+router.patch('/expected-outflows/plans/:id',auth,permit('finance.manage'),validate(z.object({
+  companyId:z.number().int().positive(),status:z.enum(['Planned','Committed','Paid','Cancelled'])
+})),wrap(async(req,res)=>{
+  const prior=await getOne('SELECT * FROM cash_outflow_plans WHERE id=? AND company_id=?',[req.params.id,req.body.companyId]);
+  if(!prior)return res.status(404).json({error:'Planned payment not found for this company.'});
+  if(prior.source_type&&req.body.status!=='Cancelled')return res.status(400).json({error:'Record payment against the original bill, cheque or invoice. This schedule cannot mark it paid.'});
+  await query('UPDATE cash_outflow_plans SET status=? WHERE id=?',[req.body.status,prior.id]);
+  await audit(pool,req.user.id,'UPDATE','cash_outflow_plan',prior.id,prior,{status:req.body.status},req.ip);
+  res.json({id:prior.id,status:req.body.status});
+}));
+
+router.patch('/expected-outflows/plans/:id/details',auth,permit('finance.manage'),validate(z.object({
+  companyId:z.number().int().positive(),projectId:z.number().int().positive().nullable().optional(),
+  payee:z.string().trim().min(2).max(180),description:z.string().trim().min(2).max(400),amount:z.number().positive(),
+  expectedDate:isoDate,confidence:z.enum(['High','Medium','Low']),notes:z.string().trim().max(600).nullable().optional()
+})),wrap(async(req,res)=>{
+  const b=req.body,prior=await getOne('SELECT * FROM cash_outflow_plans WHERE id=? AND company_id=?',[req.params.id,b.companyId]);
+  if(!prior)return res.status(404).json({error:'Planned payment not found for this company.'});
+  if(prior.source_type||['Paid','Cancelled'].includes(prior.status))return res.status(409).json({error:'Only open standalone planned payments can be edited here. Edit the original record or create a new plan.'});
+  if(b.projectId&&!await getOne('SELECT id FROM projects WHERE id=? AND company_id=?',[b.projectId,b.companyId]))
+    return res.status(400).json({error:'That project belongs to another company.'});
+  await query(`UPDATE cash_outflow_plans SET project_id=?,payee=?,description=?,amount=?,expected_date=?,confidence=?,notes=? WHERE id=?`,
+    [b.projectId||null,b.payee,b.description,b.amount,b.expectedDate,b.confidence,b.notes||null,prior.id]);
+  await audit(pool,req.user.id,'UPDATE','cash_outflow_plan',prior.id,prior,b,req.ip);
+  res.json({id:prior.id});
+}));
+
+router.post('/office-expense-payments',auth,permit('finance.manage'),validate(z.object({
+  companyId:z.number().int().positive(),paymentDate:isoDate,category:z.string().trim().min(2).max(100),
+  payee:z.string().trim().min(2).max(180),paymentMethod:z.enum(['Bank transfer','Card','Cash','Cheque']),
+  description:z.string().trim().min(2).max(400),reference:z.string().trim().min(2).max(120),
+  amount:z.number().positive()
+})),wrap(async(req,res)=>{
+  const b=req.body;
+  if(!await getOne('SELECT id FROM companies WHERE id=?',[b.companyId]))return res.status(404).json({error:'Company not found.'});
+  try{
+    const result=await query(`INSERT INTO office_expense_payments
+      (company_id,payment_date,category,payee,payment_method,description,reference,amount,created_by)
+      VALUES (?,?,?,?,?,?,?,?,?)`,[b.companyId,b.paymentDate,b.category,b.payee,b.paymentMethod,b.description,b.reference,b.amount,req.user.id]);
+    await audit(pool,req.user.id,'CREATE','office_expense_payment',result.insertId,null,b,req.ip);
+    res.status(201).json({id:result.insertId});
+  }catch(error){if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'That office payment reference is already recorded for this company. Open the existing entry instead of entering it twice.'});throw error;}
+}));
+
+router.get('/daily-expenses',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{
+  const companyId=companyParam(req),date=String(req.query.date||'');
+  if(!companyId||!isoDate.safeParse(date).success)return res.status(400).json({error:'Choose a company and a valid day.'});
+  const [company,petty,supplierPayments,bills,direct,office,unverified]=await Promise.all([
+    getOne('SELECT id,name FROM companies WHERE id=?',[companyId]),
+    query(`SELECT pe.id,pe.entry_date date,ABS(pe.amount) amount,pe.description,pe.category,
+      pe.payee,pf.name floatName,pf.account_type accountType,COALESCE(pe.project_id,pf.project_id) projectId,
+      p.name project,pe.fuel_record_id fuelRecordId,fv.vehicle vehicle,fv.registration registration
+      FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
+      LEFT JOIN projects p ON p.id=COALESCE(pe.project_id,pf.project_id)
+      LEFT JOIN fuel_records fr ON fr.id=pe.fuel_record_id LEFT JOIN fleet fv ON fv.id=fr.vehicle_id
+      WHERE pf.company_id=? AND pe.entry_date=? AND pe.kind='Spend' AND pf.account_type<>'Salary advance'`,[companyId,date]),
+    query(`SELECT sp.id,sp.paid_date date,sp.amount,sp.method,sp.reference,si.id invoiceId,
+      si.invoice_no invoiceNo,s.name payee,po.project_id projectId,p.name project
+      FROM supplier_payments sp JOIN supplier_invoices si ON si.id=sp.invoice_id
+      JOIN suppliers s ON s.id=si.supplier_id LEFT JOIN purchase_orders po ON po.id=si.order_id
+      LEFT JOIN projects p ON p.id=po.project_id
+      WHERE si.company_id=? AND sp.paid_date=?`,[companyId,date]),
+    query(`SELECT b.id,b.paid_date date,b.total_amount amount,b.payment_method method,
+      b.payment_reference reference,b.provider payee,b.bill_type category,b.project_id projectId,p.name project
+      FROM operating_bills b LEFT JOIN projects p ON p.id=b.project_id
+      WHERE b.company_id=? AND b.paid_date=? AND b.status='Paid'`,[companyId,date]),
+    query(`SELECT e.id,e.paid_date date,e.amount,e.description,e.source,e.payee,e.payment_method method,
+      e.reference,e.project_id projectId,p.name project,c.name category
+      FROM expenses e JOIN projects p ON p.id=e.project_id LEFT JOIN expense_categories c ON c.id=e.category_id
+      WHERE p.company_id=? AND e.paid_date=? AND e.payment_method IS NOT NULL AND e.origin_type IS NULL`,[companyId,date]),
+    query(`SELECT id,payment_date date,amount,description,category,payee,payment_method method,reference
+      FROM office_expense_payments WHERE company_id=? AND payment_date=?`,[companyId,date]),
+    query(`SELECT COUNT(*) count FROM expenses e JOIN projects p ON p.id=e.project_id
+      WHERE p.company_id=? AND e.expense_date=? AND e.origin_type IS NULL AND e.payment_method IS NULL`,[companyId,date])
+  ]);
+  if(!company)return res.status(404).json({error:'Company not found.'});
+  const location=row=>({locationType:row.projectId?'Project site':'Office',projectId:row.projectId||null,
+    location:row.project||'Head office'});
+  const entries=[
+    ...petty.map(row=>({key:`petty:${row.id}`,source:'Petty cash',sourceId:row.id,date:row.date,
+      ...location(row),category:row.category||row.accountType,payee:row.payee||'Not recorded',
+      paymentMethod:'Petty cash',paymentSource:row.floatName,description:row.description,
+      reference:row.fuelRecordId?`Fleet fuel #${row.fuelRecordId}`:`Petty cash #${row.id}`,
+      amount:Number(row.amount),sourceUrl:row.fuelRecordId?`/fleet?section=fuel&record=${row.fuelRecordId}`:'/finance/petty-cash'})),
+    ...supplierPayments.map(row=>({key:`supplier:${row.id}`,source:'Supplier payment',sourceId:row.id,date:row.date,
+      ...location(row),category:'Supplier / material',payee:row.payee,paymentMethod:row.method,
+      paymentSource:'Supplier invoice',description:`Payment for ${row.invoiceNo}`,
+      reference:row.reference||row.invoiceNo,amount:Number(row.amount),sourceUrl:'/finance/supplier-invoices'})),
+    ...bills.map(row=>({key:`bill:${row.id}`,source:'Operating bill',sourceId:row.id,date:row.date,
+      ...location(row),category:row.category,payee:row.payee,paymentMethod:row.method||'Not recorded',
+      paymentSource:'Bills',description:`Paid ${row.category}`,reference:row.reference||`Bill #${row.id}`,
+      amount:Number(row.amount),sourceUrl:'/finance/bills'})),
+    ...direct.map(row=>({key:`expense:${row.id}`,source:'Direct expense',sourceId:row.id,date:row.date,
+      ...location(row),category:row.category||row.source,payee:row.payee||'Not recorded',
+      paymentMethod:row.method,paymentSource:'Direct payment',description:row.description,
+      reference:row.reference||`Expense #${row.id}`,amount:Number(row.amount),sourceUrl:`/finance/expenses?record=${row.id}`})),
+    ...office.map(row=>({key:`office:${row.id}`,source:'Direct office payment',sourceId:row.id,date:row.date,
+      locationType:'Office',projectId:null,location:'Head office',category:row.category,payee:row.payee,
+      paymentMethod:row.method,paymentSource:'Office payment',description:row.description,
+      reference:row.reference,amount:Number(row.amount),sourceUrl:'/finance/daily-expenses'}))
+  ].sort((a,b)=>a.location.localeCompare(b.location)||a.source.localeCompare(b.source)||a.sourceId-b.sourceId);
+  res.json({company,date,entries,unverifiedManualExpenses:Number(unverified[0].count),
+    total:Math.round(entries.reduce((sum,row)=>sum+row.amount,0)*100)/100,
+    note:'Each recorded payment appears once. Linked Fleet fuel and project-cost rows are not counted a second time. Salary advances, float top-ups and card-statement settlements are not operating expenses. Older manual expenses without payment details are excluded until verified.'});
+}));
+
+router.get('/management-accounts', auth, permit('finance.view','finance.manage'), wrap(async (req,res) => {
+  const companyId=companyParam(req), period=String(req.query.period||'');
+  if (!companyId || !accountPeriod.safeParse(period).success) return res.status(400).json({error:'Choose a company and a month in YYYY-MM format.'});
+  const latest=await getOne(`SELECT id,version,status,snapshot,close_note closeNote,closed_at closedAt,
+    reopen_reason reopenReason FROM management_closes WHERE company_id=? AND period=? ORDER BY version DESC LIMIT 1`,[companyId,period]);
+  const live=await managementPack(companyId,period);
+  if (!live) return res.status(404).json({error:'Company not found.'});
+  res.json({ ...live, close:latest?{id:latest.id,version:latest.version,status:latest.status,
+    closeNote:latest.closeNote,closedAt:latest.closedAt,reopenReason:latest.reopenReason}:null,
+    ...(latest?.status==='Closed'?{...JSON.parse(typeof latest.snapshot==='string'?latest.snapshot:JSON.stringify(latest.snapshot)),
+      close:{id:latest.id,version:latest.version,status:latest.status,closeNote:latest.closeNote,closedAt:latest.closedAt,
+        changedSinceClose:JSON.stringify(live)!==JSON.stringify(typeof latest.snapshot==='string'?JSON.parse(latest.snapshot):latest.snapshot)}}:{}) });
+}));
+
+router.post('/management-accounts/adjustments',auth,permit('finance.manage'),validate(z.object({
+  companyId:z.number().int().positive(),period:accountPeriod,
+  category:z.enum(['Revenue','Cost','WIP','Receivable','Payable']),amount:z.number().finite().refine(value=>value!==0),
+  explanation:z.string().trim().min(10).max(600),reference:z.string().trim().min(2).max(120),
+  projectId:z.number().int().positive().nullable().optional()
+})),wrap(async(req,res)=>{
+  const b=req.body;
+  if(!await getOne('SELECT id FROM companies WHERE id=?',[b.companyId]))return res.status(404).json({error:'Company not found.'});
+  if(b.projectId&&!await getOne('SELECT id FROM projects WHERE id=? AND company_id=?',[b.projectId,b.companyId]))
+    return res.status(400).json({error:'The selected project belongs to another company.'});
+  const close=await getOne(`SELECT status FROM management_closes WHERE company_id=? AND period=? ORDER BY version DESC LIMIT 1`,[b.companyId,b.period]);
+  if(close?.status==='Closed')return res.status(409).json({error:'This month is closed. Reopen it with a reason before adding a management adjustment.'});
+  const result=await query(`INSERT INTO management_adjustments
+    (company_id,period,category,amount,explanation,reference,project_id,created_by) VALUES (?,?,?,?,?,?,?,?)`,
+    [b.companyId,b.period,b.category,b.amount,b.explanation,b.reference,b.projectId||null,req.user.id]);
+  await audit(pool,req.user.id,'CREATE','management_adjustment',result.insertId,null,b,req.ip);
+  res.status(201).json({id:result.insertId});
+}));
+
+router.post('/management-accounts/close',auth,permit('finance.manage'),validate(z.object({
+  companyId:z.number().int().positive(),period:accountPeriod,note:z.string().trim().min(10).max(600)
+})),wrap(async(req,res)=>{
+  const {companyId,period,note}=req.body;
+  const pack=await managementPack(companyId,period);
+  if(!pack)return res.status(404).json({error:'Company not found.'});
+  if(!pack.reconciliation.balanced)return res.status(409).json({error:'The invoice, receipt or payable totals do not reconcile. Review the reconciliation checks before closing this month.'});
+  const result=await transaction(async connection=>{
+    const [rows]=await connection.execute(`SELECT id,version,status FROM management_closes
+      WHERE company_id=? AND period=? ORDER BY version DESC LIMIT 1 FOR UPDATE`,[companyId,period]);
+    if(rows[0]?.status==='Closed')throw Object.assign(new Error('This month is already closed. Reopen it with a reason before closing it again.'),{status:409});
+    const version=(rows[0]?.version||0)+1;
+    const [inserted]=await connection.execute(`INSERT INTO management_closes
+      (company_id,period,version,snapshot,close_note,closed_by) VALUES (?,?,?,?,?,?)`,
+      [companyId,period,version,JSON.stringify(pack),note,req.user.id]);
+    await audit(connection,req.user.id,'PERIOD_CLOSE','management_close',inserted.insertId,null,{companyId,period,version,note},req.ip);
+    return {id:inserted.insertId,version};
+  });
+  res.status(201).json({...result,status:'Closed'});
+}));
+
+router.post('/management-accounts/reopen',auth,permit('finance.manage'),validate(z.object({
+  companyId:z.number().int().positive(),period:accountPeriod,reason:z.string().trim().min(10).max(600)
+})),wrap(async(req,res)=>{
+  const {companyId,period,reason}=req.body;
+  const result=await transaction(async connection=>{
+    const [rows]=await connection.execute(`SELECT id,version,status FROM management_closes
+      WHERE company_id=? AND period=? ORDER BY version DESC LIMIT 1 FOR UPDATE`,[companyId,period]);
+    if(rows[0]?.status!=='Closed')throw Object.assign(new Error('This month is not closed.'),{status:409});
+    await connection.execute(`UPDATE management_closes SET status='Reopened',reopen_reason=?,reopened_by=?,reopened_at=NOW() WHERE id=?`,[reason,req.user.id,rows[0].id]);
+    await audit(connection,req.user.id,'PERIOD_REOPEN','management_close',rows[0].id,rows[0],{reason},req.ip);
+    return {id:rows[0].id,version:rows[0].version};
+  });res.json({...result,status:'Reopened'});
+}));
 
 /* Office and site utilities are payable documents first and expenses only when paid. */
 router.get('/bills', auth, permit('finance.view','finance.manage'), wrap(async (req,res)=>{
@@ -125,6 +379,7 @@ router.get('/expenses', auth, permit('finance.view','finance.manage'), wrap(asyn
   if (req.query.to) { filters.push('e.expense_date<=?'); params.push(req.query.to); }
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   res.json(await query(`SELECT e.id,e.description,e.amount,e.expense_date expenseDate,e.source,e.reference,e.origin_type originType,
+    e.payee,e.payment_method paymentMethod,e.paid_date paidDate,
     e.origin_id originId,dcl.sheet_id dailySheetId,p.name project,e.project_id projectId,c.name category,u.name recordedBy
     FROM expenses e JOIN projects p ON p.id=e.project_id LEFT JOIN expense_categories c ON c.id=e.category_id
     LEFT JOIN daily_cost_lines dcl ON e.origin_type='daily_cost_line' AND dcl.id=CAST(e.origin_id AS UNSIGNED)
@@ -138,20 +393,44 @@ router.post('/expenses', auth, permit('finance.manage'), validate(z.object({
   description: z.string().min(2).max(400),
   amount: z.number().positive(),
   expenseDate: isoDate,
-  reference: z.string().max(120).optional()
+  reference: z.string().max(120).optional(),
+  payee: z.string().trim().max(180).optional(),
+  paymentMethod: z.enum(['Bank transfer','Card','Cash','Cheque']).optional(),
+  paidDate: isoDate.optional()
 })), fromOptions({ source: 'expense.source' }), wrap(async (req, res) => {
   const body = req.body;
+  if(body.paymentMethod&&!body.payee)return res.status(400).json({error:'Enter who was paid for this direct expense.'});
+  if(body.paidDate&&!body.paymentMethod)return res.status(400).json({error:'Choose a payment method when entering a paid date.'});
   const result = await transaction(async connection => {
     await assertUniqueManualEntry(connection, 'expenses', { projectId: body.projectId, reference: body.reference,
       amount: body.amount, date: body.expenseDate, description: body.description });
-    const [inserted] = await connection.execute(`INSERT INTO expenses (project_id,category_id,source,description,amount,expense_date,reference,created_by)
-      VALUES (?,?,?,?,?,?,?,?)`, [body.projectId, body.categoryId || null, body.source, body.description, body.amount,
-      body.expenseDate, body.reference?.trim() || null, req.user.id]);
+    const [inserted] = await connection.execute(`INSERT INTO expenses (project_id,category_id,source,description,amount,expense_date,reference,payee,payment_method,paid_date,created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [body.projectId, body.categoryId || null, body.source, body.description, body.amount,
+      body.expenseDate, body.reference?.trim() || null, body.payee||null,body.paymentMethod||null,
+      body.paymentMethod?(body.paidDate||body.expenseDate):null,req.user.id]);
     return inserted;
   });
   const row = await getOne('SELECT * FROM expenses WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'expense', row.id, null, row, req.ip);
   res.status(201).json(row);
+}));
+
+router.patch('/expenses/:id/payment',auth,permit('finance.manage'),validate(z.object({
+  payee:z.string().trim().min(2).max(180),paymentMethod:z.enum(['Bank transfer','Card','Cash','Cheque']),
+  paidDate:isoDate,reference:z.string().max(120).optional()
+})),wrap(async(req,res)=>{
+  const updated=await transaction(async connection=>{
+    const [[row]]=await connection.execute(`SELECT e.*,p.company_id companyId FROM expenses e
+      JOIN projects p ON p.id=e.project_id WHERE e.id=? FOR UPDATE`,[req.params.id]);
+    if(!row)throw Object.assign(new Error('Expense not found.'),{status:404});
+    if(row.origin_type)throw Object.assign(new Error('This expense comes from another module. Record its payment in the source record, not here.'),{status:409});
+    if(row.payment_method)throw Object.assign(new Error('Payment details are already recorded for this expense.'),{status:409});
+    await connection.execute(`UPDATE expenses SET payee=?,payment_method=?,paid_date=?,reference=COALESCE(?,reference) WHERE id=?`,
+      [req.body.payee,req.body.paymentMethod,req.body.paidDate,req.body.reference||null,row.id]);
+    await audit(connection,req.user.id,'PAYMENT','expense',row.id,row,req.body,req.ip);
+    return row.id;
+  });
+  res.json({id:updated,paymentRecorded:true});
 }));
 
 router.get('/income', auth, permit('finance.view','finance.manage'), wrap(async (req, res) => {
@@ -296,7 +575,7 @@ router.get('/reporting', auth, permit('finance.view','finance.manage'), wrap(asy
 
   const [projects, expenses, incomes, clientInvoices, clientReceipts, purchaseOrders,
     supplierInvoices, supplierPayments, pettyCash, retentions, bonds, variations,
-    boqSummary, forecasts, costItems, payroll] = await Promise.all([
+    boqSummary, forecasts, costItems, payroll, acceptedQuotations, approvedVariationsAll] = await Promise.all([
     query(`SELECT p.id,p.name,p.client,p.site,p.budget,p.progress,p.health,p.stage,p.company_id companyId
       FROM projects p ${projectOnly.where} ORDER BY p.name`, projectOnly.params),
     query(`SELECT e.id,e.project_id projectId,p.name project,e.expense_date date,e.description,
@@ -384,12 +663,24 @@ router.get('/reporting', auth, permit('finance.view','finance.manage'), wrap(asy
           LEFT JOIN payslips ps ON ps.run_id=pr.id
           WHERE ${companyId ? 'pr.company_id=? AND ' : ''}${from || to ? [from && 'pr.period_end>=?', to && 'pr.period_start<=?'].filter(Boolean).join(' AND ') : '1=1'}
           GROUP BY pr.id ORDER BY pr.period_start`, [companyId, from, to].filter(value => value !== null))
-      : Promise.resolve([])
+      : Promise.resolve([]),
+    query(`SELECT q.id,q.project_id projectId,q.reference,q.quote_date date,q.total,q.subtotal,
+      q.markup_percent markupPercent,q.vat_percent vatPercent,q.status
+      FROM quotations_client q JOIN projects p ON p.id=q.project_id
+      WHERE q.status='Accepted' ${companyId ? 'AND p.company_id=?' : ''}
+      ${requestedProject !== null ? 'AND q.project_id=?' : ''}
+      ORDER BY q.quote_date DESC,q.id DESC`,
+      [companyId, requestedProject].filter(value => value !== null)),
+    query(`SELECT v.id,v.project_id projectId,v.reference,v.description,v.amount,v.status
+      FROM variation_orders v JOIN projects p ON p.id=v.project_id
+      WHERE v.status='Approved' ${companyId ? 'AND p.company_id=?' : ''}
+      ${requestedProject !== null ? 'AND v.project_id=?' : ''}
+      ORDER BY v.id`, [companyId, requestedProject].filter(value => value !== null))
   ]);
 
   res.json({ scope: { companyId: companyId || 'all', projectId: requestedProject || 'all', from, to }, projects, expenses, incomes,
     clientInvoices, clientReceipts, purchaseOrders, supplierInvoices, supplierPayments, pettyCash,
-    retentions, bonds, variations, boqSummary, forecasts, costItems, payroll });
+    retentions, bonds, variations, boqSummary, forecasts, costItems, payroll, acceptedQuotations, approvedVariationsAll });
 }));
 
 export default router;

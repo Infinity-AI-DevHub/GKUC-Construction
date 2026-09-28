@@ -8,7 +8,7 @@ const TABS = ['Stock', 'Movements', 'Purchase requests', 'Orders', 'Suppliers'];
 
 /** PID 2.6 and 2.7 — stock the stores actually hold, and the purchasing trail behind it. */
 export default function Materials({ data, reload, can, companyId, company }) {
-  const [tab, setTab] = useState(TABS[0]);
+  const [tab, setTab] = useState(() => TABS.find(section => slug(section) === window.location.pathname.split('/')[2]) || TABS[0]);
   const [open, setOpen] = useState('');
 
   const actions = {
@@ -191,6 +191,7 @@ function Orders({ reload, can, companyId }) {
   const [detail, setDetail] = useState(null);
   const load = () => api(`/purchasing/orders?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && rows.some(row => Number(row.id) === id)) openRecord(`/purchasing/orders/${id}`, setDetail); }, [rows]);
 
   return <>
     <Table columns={ORDER_COLUMNS} template={ORDER_TEMPLATE} title="Purchase orders" empty="No purchase orders issued.">
