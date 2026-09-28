@@ -132,6 +132,41 @@ main .reference-dashboard :is(.dashboard-card,.metric){border-radius:16px;border
 @media(max-width:850px){.project-lifecycle-steps{grid-template-columns:repeat(2,minmax(0,1fr))}.project-lifecycle{padding:18px!important}}
 @media(max-width:520px){.project-lifecycle-steps{grid-template-columns:1fr}.project-lifecycle-step{padding:15px}.project-lifecycle .workspace-section-heading{align-items:flex-start;flex-direction:column}.project-lifecycle-count{align-self:flex-start}}
 @media(max-width:680px){.modal-backdrop{padding:10px}.modal,.modal.modal-wide{max-width:100%;width:100%;border-radius:16px}.modal-title,.modal-header{min-height:66px;padding:16px 18px}.modal-title h2,.modal-header h2{font-size:17px}.modal-content{padding:19px}.modal-content>.report-form{padding:19px}.invoice-payments-dialog .attendance-summary{grid-template-columns:1fr}.invoice-payments-dialog .summary{min-height:0}.invoice-payments-dialog>.primary{justify-self:stretch}}
+
+/* Shared record popups: tables have a deliberate reading rhythm and never squeeze
+   values together. The scroll stays inside the record, not on the whole page. */
+.modal:has(.table-wrap),.modal:has(.table-scroll),.modal:has(.report-table-scroll),.modal:has(.cost-table-scroll){width:min(1020px,calc(100vw - 28px))}
+.modal-body .cost-table-scroll{max-width:100%;min-width:0;overflow-x:auto;overscroll-behavior-x:contain}
+.modal-body .cost-table-scroll>table{width:100%;min-width:720px;border-collapse:separate;border-spacing:0;background:#fff}
+.modal-body .cost-table-scroll>table th{padding:14px 16px;background:#f4f7fa;border-bottom:1px solid #dce6ee;color:#536b7f;font:800 11px/1.35 Manrope,sans-serif;letter-spacing:.06em;text-transform:uppercase;text-align:left;white-space:nowrap}
+.modal-body .cost-table-scroll>table td{padding:16px;border-bottom:1px solid #e8eef3;color:#29465e;font-size:13px;line-height:1.5;vertical-align:middle;overflow-wrap:anywhere}
+.modal-body .cost-table-scroll>table tbody tr:last-child td{border-bottom:0}
+.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll){max-width:100%;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-color:#b9c8d5 #f2f5f8}
+.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll)>table{width:100%;min-width:720px;border-collapse:separate;border-spacing:0;table-layout:auto;background:#fff}
+.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll)>table th{padding:14px 16px;background:#f4f7fa;border-bottom:1px solid #dce6ee;color:#536b7f;font:800 11px/1.35 Manrope,sans-serif;letter-spacing:.06em;text-transform:uppercase;text-align:left;white-space:nowrap;vertical-align:middle}
+.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll)>table td{padding:16px;border-bottom:1px solid #e8eef3;color:#29465e;font-size:13px;line-height:1.5;vertical-align:middle;overflow-wrap:anywhere}
+.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll)>table tbody tr:last-child td{border-bottom:0}
+.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll)>table tbody tr:hover{background:#f8fbfd}
+.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll)>table :is(th,td):last-child{padding-right:20px}
+.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll)>table a{font-weight:700;color:#165d91;text-decoration:none}
+.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll)>table a:hover{text-decoration:underline}
+.modal-content .table-panel{min-width:0;max-width:100%;overflow-x:auto}
+.modal-content .table-panel .table-grid{min-width:max-content}
+.modal-content .table-panel :is(.table-head,.table-row){min-height:48px;align-items:center;column-gap:16px}
+.modal-content .table-panel .table-head{color:#536b7f;background:#f4f7fa;font-weight:800}
+.modal-content .table-panel .table-row{border-bottom:1px solid #e8eef3}
+.invoice-payments-history .table-wrap{margin:0}
+.modal-content .table-wrap>.invoice-payments-table{min-width:780px}
+.invoice-payments-table th:nth-child(1),.invoice-payments-table td:nth-child(1){width:130px;white-space:nowrap}
+.invoice-payments-table th:nth-child(2),.invoice-payments-table td:nth-child(2){width:145px;white-space:nowrap}
+.invoice-payments-table th:nth-child(3),.invoice-payments-table td:nth-child(3){width:230px}
+.invoice-payments-table th:nth-child(4),.invoice-payments-table td:nth-child(4){width:165px;text-align:right;white-space:nowrap}
+.invoice-payments-table th:nth-child(5),.invoice-payments-table td:nth-child(5){width:130px;text-align:right;white-space:nowrap}
+.invoice-payments-table .payment-reference{font-weight:650;overflow-wrap:anywhere}
+.invoice-payments-table .payment-amount strong{font:800 13px Manrope,sans-serif;color:#123451;font-variant-numeric:tabular-nums}
+.invoice-payments-table .status-button{white-space:nowrap;background:#fff;border:1px solid #cbd9e4;color:#17466b;font-weight:750}
+.invoice-payments-table .status-button:hover{background:#ecf4fa;border-color:#9ebbd0}
+@media(max-width:680px){.modal:has(.table-wrap),.modal:has(.table-scroll),.modal:has(.report-table-scroll),.modal:has(.cost-table-scroll){width:100%;max-width:100%}.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll)>table th{padding:12px}.modal-content :is(.table-wrap,.table-scroll,.report-table-scroll,.cost-table-scroll)>table td{padding:13px 12px}}
 .hiring-pool{padding-bottom:18px}.hiring-pool>.form-note{padding:0 20px}.hiring-pool .panel-title label{display:flex;align-items:center;gap:9px;color:#607487;font-size:12px;font-weight:700}.hiring-pool .panel-title select{min-height:36px;max-width:200px;border:1px solid #dce5ed;border-radius:8px;background:#fff;color:#173650;padding:6px 9px}.hiring-comparison{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;padding:18px}.hiring-comparison article{display:grid;gap:8px;align-content:start;padding:18px;border:1px solid #dce5ed;border-radius:14px;background:#f8fafc}.hiring-comparison h3,.hiring-comparison p{margin:0}.hiring-comparison h3{font:800 15px Manrope,sans-serif;color:#142f49}.hiring-comparison p,.hiring-comparison span{font-size:12px;color:#687f91}.hiring-comparison strong{font:800 24px Manrope,sans-serif;color:#a61637}.hiring-comparison .secondary{justify-self:start}
 
 /* A short role-aware starting point before the existing management dashboard. */
