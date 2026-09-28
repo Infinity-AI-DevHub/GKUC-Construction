@@ -78,9 +78,10 @@ export async function renderDocumentPdf(html) {
 }
 
 export async function sendDocument(req, res, html, filename) {
-  if (req.query.download !== 'pdf') return res.type('html').send(html);
+  if (req.query.download !== 'pdf' && req.query.preview !== 'pdf') return res.type('html').send(html);
   const pdf = await renderDocumentPdf(html);
   res.type('application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/[^\w.-]/g, '-')}"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Disposition', `${req.query.preview === 'pdf' ? 'inline' : 'attachment'}; filename="${filename.replace(/[^\w.-]/g, '-')}"`);
   return res.send(pdf);
 }

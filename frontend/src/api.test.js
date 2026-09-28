@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import { api, readableError, openDocument } from './api.js';
 import { onNotice } from './notices.js';
 
-test('document preview displays server PDF and prepares a separate one-use download link', async () => {
-  const originals = { fetch: globalThis.fetch, window: globalThis.window, sessionStorage: globalThis.sessionStorage,
-    createObjectURL: URL.createObjectURL };
+test('document preview uses same-site inline PDF and a separate one-use download link', async () => {
+  const originals = { fetch: globalThis.fetch, window: globalThis.window, sessionStorage: globalThis.sessionStorage };
   let replacement;
   const button = { tagName: 'BUTTON', before() {}, replaceWith(link) { replacement = link; } };
   const frame = {};
@@ -15,28 +14,42 @@ test('document preview displays server PDF and prepares a separate one-use downl
     addEventListener() {} };
   globalThis.window = { open: () => tab };
   globalThis.sessionStorage = { getItem: () => 'test-token' };
-  globalThis.URL.createObjectURL = () => 'blob:document-preview';
+  const requested = [];
   globalThis.fetch = async (path, options) => {
     assert.equal(options.headers.Authorization, 'Bearer test-token');
-    if (path === '/api/document-download-tickets') {
-      assert.equal(JSON.parse(options.body).path, '/qs/quotations/7/document?download=pdf');
-      return Response.json({url:'/api/qs/quotations/7/document?download=pdf&downloadTicket=test'});
-    }
-    assert.equal(path, '/api/qs/quotations/7/document?download=pdf');
-    return new Response(new Blob([new Uint8Array(1200)], { type: 'application/pdf' }));
+    assert.equal(path, '/api/document-download-tickets');
+    const requestedPath = JSON.parse(options.body).path;
+    requested.push(requestedPath);
+    return Response.json({url:`/api${requestedPath}&downloadTicket=test`});
   };
   try {
     assert.equal(await openDocument('/qs/quotations/7/document'), true);
-    assert.equal(frame.src, 'blob:document-preview');
+    assert.equal(frame.src, '/api/qs/quotations/7/document?preview=pdf&downloadTicket=test');
     for (let i = 0; i < 20 && !replacement; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.deepEqual(requested, ['/qs/quotations/7/document?preview=pdf', '/qs/quotations/7/document?download=pdf']);
     assert.equal(replacement.href, '/api/qs/quotations/7/document?download=pdf&downloadTicket=test');
     assert.equal(replacement.textContent, 'Download PDF');
   } finally {
-    URL.createObjectURL = originals.createObjectURL;
     globalThis.fetch = originals.fetch;
     globalThis.window = originals.window;
     globalThis.sessionStorage = originals.sessionStorage;
   }
+});
+
+test('Safari opens the inline PDF directly instead of a blank embedded frame', async () => {
+  const originals = { fetch: globalThis.fetch, window: globalThis.window, sessionStorage: globalThis.sessionStorage };
+  let destination = '';
+  globalThis.window = { navigator: { userAgent: 'Mozilla/5.0 Version/18.0 Safari/605.1.15' },
+    open: () => ({ document: { write() {} }, location: { replace: url => { destination = url; } }, close() {} }) };
+  globalThis.sessionStorage = { getItem: () => 'test-token' };
+  globalThis.fetch = async (_path, options) => {
+    assert.equal(JSON.parse(options.body).path, '/receivables/receipts/9/document?preview=pdf');
+    return Response.json({ url: '/api/receivables/receipts/9/document?preview=pdf&downloadTicket=test' });
+  };
+  try {
+    assert.equal(await openDocument('/receivables/receipts/9/document'), true);
+    assert.equal(destination, '/api/receivables/receipts/9/document?preview=pdf&downloadTicket=test');
+  } finally { Object.assign(globalThis, originals); }
 });
 
 test('validation errors name the field that needs attention', () => {

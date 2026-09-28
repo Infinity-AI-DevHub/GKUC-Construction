@@ -59,7 +59,8 @@ test('quotation, invoice and receipt PDF layouts retain company, type and refere
       }
       const { stdout: content } = await exec('pdftotext', ['-layout', file, '-']);
       assert.match(content, /GKUC Readymix/);
-      assert.match(content, heading);
+      assert.ok(content.toUpperCase().replace(/\s+/g, '').includes(heading.source.toUpperCase().replace(/\s+/g, '')),
+        'printed heading remains readable even with tracked uppercase letters');
       assert.match(content, reference);
     }
   } finally { await rm(temporary, { recursive: true, force: true }); }

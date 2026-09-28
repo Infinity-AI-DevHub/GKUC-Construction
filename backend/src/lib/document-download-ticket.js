@@ -16,8 +16,9 @@ export function canonicalDocumentDownloadPath(value) {
   if (parsed.origin !== 'https://siteops.invalid' || parsed.hash || !documentPaths.some(pattern => pattern.test(parsed.pathname)))
     return null;
   const entries = [...parsed.searchParams.entries()];
-  if (entries.some(([key]) => !['download', 'companyId'].includes(key)) ||
-      parsed.searchParams.getAll('download').length !== 1 || parsed.searchParams.get('download') !== 'pdf' ||
+  if (entries.some(([key]) => !['download', 'preview', 'companyId'].includes(key)) ||
+      Number(parsed.searchParams.getAll('download').length === 1 && parsed.searchParams.get('download') === 'pdf') +
+        Number(parsed.searchParams.getAll('preview').length === 1 && parsed.searchParams.get('preview') === 'pdf') !== 1 ||
       parsed.searchParams.getAll('companyId').length > 1 ||
       (parsed.searchParams.has('companyId') && !/^\d+$/.test(parsed.searchParams.get('companyId')))) return null;
   parsed.searchParams.sort();
