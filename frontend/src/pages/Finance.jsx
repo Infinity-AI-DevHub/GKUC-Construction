@@ -1,19 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
-import { api, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Page, Progress, Row, SelectField, Summary, Table, Tabs, useLiveList } from '../ui.jsx';
 import { useOptions } from '../options.js';
 import { Bonds, ClientInvoices, PettyCash } from '../Receivables.jsx';
 import FinanceReports from './FinanceReports.jsx';
+import ManagementAccounts from './ManagementAccounts.jsx';
+import DailyExpenses from './DailyExpenses.jsx';
+import ExpectedOutflows from './ExpectedOutflows.jsx';
+import CashComparison from './CashComparison.jsx';
 import Cheques from './Cheques.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
-const TABS = ['Financial reports','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Categories'];
+const TABS = ['Financial reports','Management accounts','Cash comparison','Daily expenses','Expected outflows','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Categories'];
 const TAB_GROUPS = [
-  { label: 'Overview & review', tabs: ['Financial reports', 'Daily cost review', 'Budget monitoring'] },
+  { label: 'Overview & review', tabs: ['Financial reports', 'Management accounts', 'Cash comparison', 'Daily expenses', 'Daily cost review', 'Budget monitoring'] },
   { label: 'Money in', tabs: ['Invoices', 'Income', 'VAT ledger'] },
-  { label: 'Money out', tabs: ['Bills', 'Supplier invoices', 'Expenses', 'Petty cash', 'Credit cards'] },
+  { label: 'Money out', tabs: ['Expected outflows', 'Bills', 'Supplier invoices', 'Expenses', 'Petty cash', 'Credit cards'] },
   { label: 'Controls', tabs: ['Cheques', 'Bonds', 'Categories'] }
 ];
 
@@ -29,6 +33,10 @@ export default function Finance({ data, reload, can, companyId, company }) {
 
   const actions = {
     'Financial reports': null,
+    'Management accounts': null,
+    'Cash comparison': null,
+    'Daily expenses': null,
+    'Expected outflows': null,
     'Budget monitoring': null,
     'Daily cost review': null,
     Bills: can.finance&&'Record bill',
@@ -51,6 +59,10 @@ export default function Finance({ data, reload, can, companyId, company }) {
     <Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} />
 
     {tab === 'Financial reports' && <FinanceReports projects={data.projects} companyId={companyId} company={company} />}
+    {tab === 'Management accounts' && <ManagementAccounts projects={data.projects.filter(project => Number(project.companyId) === Number(companyId))} companyId={companyId} company={company} can={can} />}
+    {tab === 'Cash comparison' && <CashComparison companyId={companyId} company={company} can={can} />}
+    {tab === 'Daily expenses' && <DailyExpenses companyId={companyId} company={company} can={can} />}
+    {tab === 'Expected outflows' && <ExpectedOutflows companyId={companyId} company={company} can={can} projects={data.projects} />}
     {tab === 'Budget monitoring' && <BudgetMonitoring summary={summary} />}
     {tab === 'Daily cost review' && <DailyCostReview companyId={companyId} can={can} />}
     {tab === 'Bills' && <Bills data={data} can={can} companyId={companyId} open={open==='Bills'} close={()=>setOpen('')} />}
@@ -60,7 +72,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {tab === 'Cheques' && <Cheques can={can} data={data} companyId={companyId} />}
     {tab === 'Bonds' && <Bonds data={data} can={can} companyId={companyId} />}
     {tab === 'Petty cash' && <PettyCash data={data} can={can} companyId={companyId} />}
-    {tab === 'Expenses' && <Expenses companyId={companyId} />}
+    {tab === 'Expenses' && <Expenses companyId={companyId} can={can} />}
     {tab === 'Income' && <Income companyId={companyId} />}
     {tab === 'Supplier invoices' && <Invoices can={can} refresh={refresh} companyId={companyId} />}
     {tab === 'Categories' && <Categories companyId={companyId} />}
@@ -161,24 +173,28 @@ function BudgetMonitoring({ summary }) {
 
 const LEDGER_TEMPLATE = '120px minmax(200px,1.6fr) minmax(150px,1fr) 130px 130px minmax(130px,1fr)';
 
-function Expenses({ companyId }) {
+function Expenses({ companyId, can }) {
   const [rows, setRows] = useState([]);
-  useLiveList(() => api(`/finance/expenses?companyId=${companyId}`).then(setRows).catch(() => setRows([])));
-  useEffect(() => { api(`/finance/expenses?companyId=${companyId}`).then(setRows).catch(() => setRows([])); }, [companyId]);
-  return <Table columns={['Date', 'Description', 'Project', 'Category', 'Amount', 'Recorded by']} template={LEDGER_TEMPLATE}
+  const [paying,setPaying]=useState(null);
+  const load=()=>api(`/finance/expenses?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
+  useLiveList(load);
+  useEffect(() => { load(); }, [companyId]);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && rows.some(row => Number(row.id) === id)) document.getElementById(`finance-expense-${id}`)?.scrollIntoView({ block: 'center' }); }, [rows]);
+  return <><Table columns={['Date', 'Description', 'Project', 'Category', 'Amount', 'Recorded by']} template={LEDGER_TEMPLATE}
     title="Project expenses" empty="No expenses recorded.">
-    {rows.map(row => <Row template={LEDGER_TEMPLATE} key={row.id}>
+    {rows.map(row => <Row template={LEDGER_TEMPLATE} key={row.id} id={`finance-expense-${row.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(row.id) ? 'report-source-highlight' : ''}>
       <span>{shortDate(row.expenseDate)}</span>
       <div><strong>{row.description}</strong><small>{row.originType ? 'Posted automatically from the source record · do not enter again' : row.reference || 'Manual entry'}</small>
+        {!row.originType && <small>{row.paymentMethod ? `Paid to ${row.payee || 'payee not recorded'} by ${row.paymentMethod} on ${shortDate(row.paidDate)}` : 'Payment details not recorded — excluded from the paid daily register'}</small>}
         {row.originType === 'fuel_record' && <small>Also visible in <a href={`/fleet?section=fuel&record=${row.originId}`}>Fleet fuel record #{row.originId}</a> and Finance petty cash.</small>}
         {row.originType === 'daily_cost_line' && row.dailySheetId && <small>Also visible in <a href={`/quantity-surveying/cost-control?project=${row.projectId}&record=${row.dailySheetId}`}>QS daily cost sheet #{row.dailySheetId}</a>.</small>}
         {row.originType === 'stock_movement' && <small>Also visible in <a href="/materials">Materials stock movements</a>. This cost was posted when stock was issued to the site.</small>}</div>
       <span>{row.project}</span>
       <Badge tone={slug(row.source)}>{row.source}</Badge>
       <strong>{rupees(row.amount)}</strong>
-      <span>{row.recordedBy}</span>
+      <span>{row.recordedBy}{can.finance && !row.originType && !row.paymentMethod && <button type="button" className="status-button" onClick={()=>setPaying(row)}>Record payment</button>}</span>
     </Row>)}
-  </Table>;
+  </Table>{paying && <FormModal title={`Record payment for ${paying.description}`} label="Save payment details" close={()=>setPaying(null)} onSubmit={async values=>{await patch(`/finance/expenses/${paying.id}/payment`,{payee:values.payee,paymentMethod:values.paymentMethod,paidDate:values.paidDate,reference:values.reference||undefined});await load();}}><p>This confirms how the existing expense was paid. It does not create another expense.</p><Field name="payee" label="Paid to" /><SelectField name="paymentMethod" label="Payment method" options={['Bank transfer','Card','Cash','Cheque']} /><Field name="paidDate" label="Date paid" type="date" defaultValue={todayInput()} /><Field name="reference" label="Payment reference" required={false} /></FormModal>}</>;
 }
 
 function Income({ companyId }) {
@@ -275,7 +291,10 @@ function ExpenseForm({ data, close, reload }) {
       description: values.description,
       amount: Number(values.amount),
       expenseDate: values.expenseDate,
-      reference: values.reference || undefined
+      reference: values.reference || undefined,
+      payee: values.payee || undefined,
+      paymentMethod: values.paymentMethod || undefined,
+      paidDate: values.paymentMethod ? (values.paidDate || values.expenseDate) : undefined
     });
     await reload();
   }}>
@@ -285,6 +304,9 @@ function ExpenseForm({ data, close, reload }) {
     <Field name="amount" label="Total cost (LKR)" type="number" step="0.01" min="0.01" />
     <Field name="expenseDate" label="Date" type="date" defaultValue={todayInput()} />
     <Field name="reference" label="Reference" required={false} />
+    <Field name="payee" label="Paid to (for direct payments)" required={false} />
+    <SelectField name="paymentMethod" label="Payment method (leave blank if unpaid)" required={false} options={[["",'Not paid / payment not recorded'],'Bank transfer','Card','Cash','Cheque']} />
+    <Field name="paidDate" label="Payment date (if already paid)" type="date" required={false} />
     <Field name="description" label="Description" wide />
     <p className="invoice-note">Use Bills or Supplier invoices for VAT-bearing documents, Fleet for fuel and repairs, Materials for site issues, and QS for BOQ-linked costs. These all feed the same project ledger.</p>
   </FormModal>;

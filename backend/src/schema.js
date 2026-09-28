@@ -3053,6 +3053,64 @@ export async function migrate() {
   await createPurchasingTables();
   await createAssetTables();
   await createFinanceTables();
+  await addColumn('expenses','payee','VARCHAR(180) NULL');
+  await addColumn('expenses','payment_method','VARCHAR(60) NULL');
+  await addColumn('expenses','paid_date','DATE NULL');
+  await query(`CREATE TABLE IF NOT EXISTS office_expense_payments (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,company_id TINYINT UNSIGNED NOT NULL,
+    payment_date DATE NOT NULL,category VARCHAR(100) NOT NULL,payee VARCHAR(180) NOT NULL,
+    payment_method ENUM('Bank transfer','Card','Cash','Cheque') NOT NULL,
+    description VARCHAR(400) NOT NULL,reference VARCHAR(120) NOT NULL,
+    amount DECIMAL(15,2) NOT NULL,created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(company_id) REFERENCES companies(id),FOREIGN KEY(created_by) REFERENCES users(id),
+    UNIQUE KEY uq_office_payment_reference(company_id,reference),
+    INDEX idx_office_payment_day(company_id,payment_date)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS management_adjustments (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, company_id TINYINT UNSIGNED NOT NULL,
+    period CHAR(7) NOT NULL, category ENUM('Revenue','Cost','WIP','Receivable','Payable') NOT NULL,
+    amount DECIMAL(15,2) NOT NULL, explanation VARCHAR(600) NOT NULL, reference VARCHAR(120) NOT NULL,
+    project_id BIGINT UNSIGNED NULL, created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(company_id) REFERENCES companies(id), FOREIGN KEY(project_id) REFERENCES projects(id),
+    FOREIGN KEY(created_by) REFERENCES users(id), INDEX idx_management_adjustments(company_id,period)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS management_closes (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, company_id TINYINT UNSIGNED NOT NULL,
+    period CHAR(7) NOT NULL, version INT UNSIGNED NOT NULL,
+    status ENUM('Closed','Reopened') NOT NULL DEFAULT 'Closed', snapshot JSON NOT NULL,
+    close_note VARCHAR(600) NOT NULL, closed_by BIGINT UNSIGNED NOT NULL,
+    closed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reopen_reason VARCHAR(600) NULL, reopened_by BIGINT UNSIGNED NULL, reopened_at DATETIME NULL,
+    FOREIGN KEY(company_id) REFERENCES companies(id), FOREIGN KEY(closed_by) REFERENCES users(id),
+    FOREIGN KEY(reopened_by) REFERENCES users(id), UNIQUE KEY uq_management_close_version(company_id,period,version)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS cash_outflow_plans (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, company_id TINYINT UNSIGNED NOT NULL,
+    source_type VARCHAR(40) NULL, source_id BIGINT UNSIGNED NULL,
+    project_id BIGINT UNSIGNED NULL, payee VARCHAR(180) NULL,
+    description VARCHAR(400) NULL, amount DECIMAL(15,2) NULL,
+    expected_date DATE NOT NULL, confidence ENUM('High','Medium','Low') NOT NULL DEFAULT 'Medium',
+    status ENUM('Planned','Committed','Paid','Cancelled') NOT NULL DEFAULT 'Planned',
+    notes VARCHAR(600) NULL, created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(company_id) REFERENCES companies(id), FOREIGN KEY(project_id) REFERENCES projects(id),
+    FOREIGN KEY(created_by) REFERENCES users(id),
+    UNIQUE KEY uq_outflow_source(company_id,source_type,source_id),
+    INDEX idx_outflow_date(company_id,expected_date,status)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS cash_comparison_periods (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    company_id TINYINT UNSIGNED NOT NULL, period CHAR(7) NOT NULL,
+    budget_receipts DECIMAL(15,2) NULL, budget_payments DECIMAL(15,2) NULL,
+    opening_balance DECIMAL(15,2) NULL, verified_closing_balance DECIMAL(15,2) NULL,
+    reconciliation_adjustment DECIMAL(15,2) NOT NULL DEFAULT 0,
+    adjustment_reason VARCHAR(500) NULL, balance_source VARCHAR(300) NULL,
+    updated_by BIGINT UNSIGNED NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY(company_id) REFERENCES companies(id), FOREIGN KEY(updated_by) REFERENCES users(id),
+    UNIQUE KEY uq_cash_comparison_period(company_id,period)
+  ) ENGINE=InnoDB`);
   await createReportDetailTables();
   await createAttachmentTables();
   await createLifecycleTables();
@@ -3073,6 +3131,7 @@ export async function migrate() {
   await createOnboardingColumns();
   await createChatTables();
   await createReceivableTables();
+  await addColumn('petty_cash_entries','payee','VARCHAR(180) NULL');
   await createDailyCostTables();
   await createDriveTables();
   await createIntegrityTables();

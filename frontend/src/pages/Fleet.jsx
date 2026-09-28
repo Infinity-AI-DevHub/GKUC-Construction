@@ -456,6 +456,7 @@ function FuelForm({ data, vehicle, close, reload }) {
       fuelDate: values.fuelDate,
       litres: Number(values.litres),
       cost: Number(values.cost),
+      vendor: values.vendor || undefined,
       odometer: Number(values.odometer)
     });
     await reload();
@@ -473,6 +474,7 @@ function FuelForm({ data, vehicle, close, reload }) {
     <Field name="fuelDate" label="Date" type="date" defaultValue={todayInput()} />
     <Field name="litres" label="Litres" type="number" step="any" min="0" />
     <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" max={selectedFloat ? Number(selectedFloat.balance) : undefined} />
+    <Field name="vendor" label="Fuel station / payee" required={false} placeholder="Where the fuel was bought" />
     <Field name="odometer" label="Odometer" type="number" min={vehicle?.odometer||1} defaultValue={vehicle?.odometer||''} />
   </FormModal>;
 }

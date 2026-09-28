@@ -652,6 +652,7 @@ function EntryForm({ float, employees, close, reload }) {
       amount: Number(values.amount),
       entryDate: values.entryDate,
       description: values.description,
+      payee: values.payee || undefined,
       category: values.category || undefined,
       employeeId: values.employeeId ? Number(values.employeeId) : undefined
     });
@@ -666,6 +667,7 @@ function EntryForm({ float, employees, close, reload }) {
     {float.accountType === 'Salary advance' && kind === 'Spend' && <SelectField name="employeeId" label="Employee receiving the advance"
       options={employees.filter(employee => employee.status !== 'Left').map(employee => [employee.id, `${employee.name} — ${employee.code}`])} />}
     <Field name="category" label="Category" required={false} placeholder="Fuel, refreshments, courier" />
+    {kind === 'Spend' && <Field name="payee" label="Paid to" required={false} placeholder="Supplier, shop or person" />}
     <Field name="description" label="Description" wide placeholder="Diesel for the site generator" />
     {float.accountType === 'Salary advance' && <p className="form-note wide">For daily-rate workers and site labourers, the total advanced on one day cannot exceed their daily salary rate. LKR 500 or 1,000 are common amounts, not required amounts. Advances are recovered from the employee's next available payroll, with any unpaid balance carried forward.</p>}
     {float.accountType === 'Fuel' && <p className="form-note wide">For fuel purchased for a vehicle, go to Fleet → Fuel & service → Record fuel. The float will be reduced automatically.</p>}

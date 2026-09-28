@@ -13,7 +13,7 @@ const report = (id, title, category, narrative, metrics, visual, schedule) =>
 const REPORT_DEFINITIONS = {
   executive: 'Income is posted money received; cost is recorded expenses incurred. Profit is income less cost. Receivables are issued invoice balances, not cash.',
   'profit-loss': 'Revenue and expenses come from posted ledger entries in the selected date range; draft quotations and unpaid invoices are not cash income.',
-  'project-profitability': 'Project income received minus project expenses incurred. Quoted or invoiced amounts are not counted as received income.',
+  'project-profitability': 'Contract value uses the latest accepted quotation before VAT, or the recorded project value if no accepted quotation exists. Approved variations are added separately. Earned revenue is non-advance work invoiced before VAT (a billing-based proxy, not independently measured progress). Actual cost is posted project expense. Open commitments are purchase-order value not yet supplier-invoiced and are shown separately, not added again to actual cost. Forecast to complete is the remaining QS cost forecast above actual cost; where no forecast exists it is unknown, not zero. The period filters apply to invoices, costs and purchase orders; contract and approved variation values are current.',
   'budget-actual': 'Approved project budget compared with expenses already recorded; this is not a remaining cash balance.',
   'cash-flow': 'Money received and expenses paid or posted by month within the selected reporting period.',
   revenue: 'Income received and recorded in the ledger, not the value quoted or merely invoiced.',
@@ -39,7 +39,14 @@ const METRIC_DEFINITIONS = {
   'Approved budget': 'Approved project allowance', 'Actual cost': 'Posted project expenses',
   'Net payroll': 'Employee take-home amount', 'Employer cost': 'Pay plus employer contributions',
   'VAT': 'Tax on issued invoices', 'Income received': 'Cash or payments recorded',
-  'Forecast': 'Expected final project cost', 'Committed': 'Purchase orders not cancelled'
+  'Forecast': 'Expected final project cost', 'Committed': 'Purchase orders not cancelled',
+  'Contract value': 'Latest accepted quotation before VAT, or recorded project value',
+  'Approved variations': 'Approved changes to the contract value',
+  'Invoiced value': 'Work billed before VAT, including advances',
+  'Earned revenue': 'Non-advance work invoiced before VAT; billing-based proxy',
+  'Committed cost': 'Purchase-order value not yet supplier-invoiced',
+  'Forecast to complete': 'QS forecast final cost less cost already posted',
+  'Forecast margin': 'Contract and approved variations less forecast final cost'
 };
 const monthKey = date => String(date || '').slice(0, 7) || 'Unspecified';
 const group = (rows, key, valueKey = 'amount') => Object.values(rows.reduce((out, row) => {
@@ -80,6 +87,28 @@ function buildReports(data) {
     const revenue = total(projectIncomes, 'amount');
     return { project: project.name, budget: n(project.budget), actual, revenue, profit: revenue - actual };
   });
+  const profitability = (data.projects || []).map(project => {
+    const same = row => n(row.projectId) === n(project.id);
+    const quotes = (data.acceptedQuotations || []).filter(same);
+    const contractQuote = quotes[0];
+    const changes = (data.approvedVariationsAll || []).filter(same);
+    const approved = total(changes, 'amount');
+    const contract = contractQuote ? n(contractQuote.subtotal) * (1 + n(contractQuote.markupPercent) / 100) : Math.max(0, n(project.budget) - approved);
+    const bills = invoices.filter(same);
+    const invoiced = total(bills, 'gross');
+    const earned = total(bills.filter(row => row.kind !== 'Advance'), 'gross');
+    const spend = expenses.filter(same);
+    const actual = total(spend, 'amount');
+    const projectOrders = orders.filter(row => same(row) && row.status !== 'Cancelled');
+    const commitments = projectOrders.map(order => ({ ...order, open: Math.max(0, n(order.total) - total(supplierInvoices.filter(invoice => invoice.orderReference === order.reference), 'amount')) })).filter(order => order.open > 0);
+    const committed = total(commitments, 'open');
+    const forecastItems = (data.costItems || []).filter(same);
+    const hasForecast = forecastItems.some(item => item.forecastAmount !== null);
+    const forecastFinal = hasForecast ? Math.max(actual, forecastItems.reduce((sum, item) => sum + Math.max(n(item.actualAmount), item.forecastAmount === null ? n(item.expectedAmount) : n(item.forecastAmount)), 0) + total(spend.filter(item => !item.boqItemId), 'amount')) : null;
+    const toComplete = forecastFinal === null ? null : Math.max(0, forecastFinal - actual);
+    return { project, contract, contractQuote, approved, changes, invoiced, earned, bills, actual, spend, committed, commitments, toComplete,
+      margin: toComplete === null ? null : contract + approved - actual - toComplete };
+  });
   const months = [...new Set([
     ...expenses.map(row => monthKey(row.date)), ...incomes.map(row => monthKey(row.date)),
     ...receipts.map(row => monthKey(row.date)), ...supplierPayments.map(row => monthKey(row.date))
@@ -114,7 +143,7 @@ function buildReports(data) {
   return [
     report('executive', 'Executive financial summary', 'Management', `${scopeName} recorded ${money(income)} of income and ${money(cost)} of cost in the selected period. The resulting position is ${profit >= 0 ? 'a profit' : 'a loss'} of ${money(Math.abs(profit))}, with ${money(outstandingReceivable)} still due from clients.`, [metric('Income', money(income), income), metric('Cost', money(cost), cost), metric(profit >= 0 ? 'Profit' : 'Loss', money(Math.abs(profit)), profit), metric('Cash margin', `${pct(profit, income)}%`, profit)], [{ label: 'Income', value: income, display: money(income) }, { label: 'Cost', value: cost, display: money(cost) }, { label: profit >= 0 ? 'Profit' : 'Loss', value: profit, display: money(Math.abs(profit)) }, { label: 'Receivable', value: outstandingReceivable, display: money(outstandingReceivable) }], table(['Measure', 'Amount'], [['Recorded income', money(income)], ['Recorded cost', money(cost)], ['Net result', money(profit)], ['Client receivables', money(outstandingReceivable)], ['Supplier payables', money(outstandingPayable)]])),
     report('profit-loss', 'Profit and loss statement', 'Performance', `${scopeName} has a ${profit >= 0 ? 'positive' : 'negative'} operating result for this reporting range. This view uses posted income and expense ledgers, so draft invoices are kept separate from earned cash.`, [metric('Revenue', money(income), income), metric('Expenses', money(cost), cost), metric('Net result', money(profit), profit), metric('Margin', `${pct(profit, income)}%`, profit)], group(incomes, 'project').map(row => ({ ...row, display: money(row.value) })), table(['Account', 'Amount'], [['Revenue / other income', money(income)], ...group(expenses, 'source').map(row => [`Less: ${row.label}`, money(row.value)]), ['Net profit / (loss)', money(profit)]])),
-    report('project-profitability', 'Project profitability comparison', 'Performance', `${projectPosition.filter(row => row.profit >= 0).length} of ${projectPosition.length} visible project(s) are profitable on posted income and cost. The comparison exposes sites whose activity is consuming cash faster than it is earning it.`, [metric('Projects', projectPosition.length), metric('Profitable', projectPosition.filter(row => row.profit >= 0).length), metric('Loss-making', projectPosition.filter(row => row.profit < 0).length), metric('Combined result', money(profit), profit)], projectPosition.map(row => ({ label: row.project, value: row.profit, display: money(row.profit) })), table(['Project', 'Income', 'Cost', 'Profit / (loss)', 'Margin'], projectPosition.map(row => [row.project, money(row.revenue), money(row.actual), money(row.profit), `${pct(row.profit, row.revenue)}%`]))),
+    { ...report('project-profitability', 'Project profitability comparison', 'Performance', `${profitability.length} project${profitability.length === 1 ? '' : 's'} in scope. Forecast margin is shown only where QS has recorded a cost forecast; billed work is the available proxy for earned revenue and is not cash received.`, [metric('Contract value', money(total(profitability, 'contract'))), metric('Approved variations', money(total(profitability, 'approved'))), metric('Actual cost', money(total(profitability, 'actual'))), metric('Forecast margin', profitability.every(row => row.margin !== null) ? money(total(profitability, 'margin')) : 'Incomplete')], profitability.map(row => ({ label: row.project.name, value: row.margin ?? row.earned - row.actual, display: row.margin === null ? 'Forecast needed' : money(row.margin) })), table(['Project', 'Contract value', 'Approved variations', 'Invoiced value', 'Earned revenue', 'Committed cost', 'Actual cost', 'Forecast to complete', 'Forecast margin'], profitability.map(row => [row.project.name, money(row.contract), money(row.approved), money(row.invoiced), money(row.earned), money(row.committed), money(row.actual), row.toComplete === null ? 'Not forecast' : money(row.toComplete), row.margin === null ? 'Not forecast' : money(row.margin)]))), details: profitability },
     report('budget-actual', 'Budget versus actual cost', 'Cost control', `${pct(cost, budget)}% of the visible approved project budget has been consumed. ${cost <= budget ? `${money(budget - cost)} remains within the approved envelope.` : `Recorded cost is ${money(cost - budget)} above it.`}`, [metric('Approved budget', money(budget), budget), metric('Actual cost', money(cost), cost), metric(cost <= budget ? 'Available' : 'Overrun', money(Math.abs(budget - cost)), budget - cost), metric('Budget used', `${pct(cost, budget)}%`, cost)], projectPosition.map(row => ({ label: row.project, value: row.actual, display: `${pct(row.actual, row.budget)}% used` })), table(['Project', 'Budget', 'Actual', 'Variance', 'Used'], projectPosition.map(row => [row.project, money(row.budget), money(row.actual), money(row.budget - row.actual), `${pct(row.actual, row.budget)}%`]))),
     report('cash-flow', 'Cash flow movement', 'Cash', `Cash movement across the selected range is ${monthly.reduce((sum, row) => sum + row.net, 0) >= 0 ? 'positive' : 'negative'}. Client receipts are already posted once in the income ledger and are shown against posted operating cash costs by month.`, [metric('Cash in', money(total(monthly, 'cashIn')), total(monthly, 'cashIn')), metric('Cash out', money(total(monthly, 'cashOut')), total(monthly, 'cashOut')), metric('Net movement', money(total(monthly, 'net')), total(monthly, 'net')), metric('Periods', monthly.length)], monthly.map(row => ({ label: row.month, value: row.net, display: money(row.net) })), table(['Month', 'Cash in', 'Cash out', 'Net movement'], monthly.map(row => [row.month, money(row.cashIn), money(row.cashOut), money(row.net)]))),
     report('revenue', 'Revenue and income analysis', 'Revenue', `${money(income)} has been posted across ${incomes.length} income entry or entries. The project and payment-method schedules show where the money came from and how it was received.`, [metric('Income received', money(income), income), metric('Entries', incomes.length), metric('Projects', new Set(incomes.map(row => row.projectId)).size), metric('Average receipt', money(incomes.length ? income / incomes.length : 0))], group(incomes, 'project').map(row => ({ ...row, display: money(row.value) })), table(['Date', 'Project', 'Description', 'Method', 'Amount'], incomes.map(row => [shortDate(row.date), row.project, row.description, row.method, money(row.amount)]))),
@@ -199,6 +228,12 @@ export default function FinanceReports({ projects, companyId, company }) {
         <div className="report-kpis">{selected.metrics.map((row, index) => <article key={row.label}><span>{row.label}</span><strong>{row.value}</strong><small>{METRIC_DEFINITIONS[row.label] || REPORT_DEFINITIONS[selected.id]}</small>{index === 2 && row.raw < 0 ? <TrendingDown /> : <TrendingUp />}</article>)}</div>
         <section className="report-visual-panel"><div><span>Visual analysis</span><h2>Financial performance view</h2></div><ReportVisual rows={selected.visual} /></section>
         <section className="report-table-panel"><div><span>Supporting schedule</span><h2>Detailed financial records</h2></div><div className="report-table-scroll"><table><thead><tr>{selected.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{selected.rows.map((row, index) => <tr key={index}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell ?? '—'}</td>)}</tr>)}{!selected.rows.length && <tr><td colSpan={selected.columns.length}>No records fall inside this report scope yet.</td></tr>}</tbody></table></div></section>
+        {selected.id === 'project-profitability' && <section className="report-table-panel profitability-sources"><div><span>Source records</span><h2>Trace each project figure</h2></div>{selected.details.map(row => <details key={row.project.id}><summary>{row.project.name} · {row.contractQuote ? `Accepted quotation ${row.contractQuote.reference}` : 'Recorded project value'} · {row.toComplete === null ? 'QS forecast needed' : `Forecast margin ${money(row.margin)}`}</summary><div className="profitability-source-grid">
+          <div><strong>Contract and approved changes</strong><p>{row.contractQuote ? <a href={`/quantity-surveying/quotations?record=${row.contractQuote.id}`}>{row.contractQuote.reference} · {money(row.contract)} before VAT</a> : <a href={`/projects/${row.project.id}`}>Project record · {money(row.contract)}</a>}</p>{row.changes.map(change => <p key={change.id}><a href={`/projects/${row.project.id}`}>{change.reference} · {money(change.amount)}</a></p>)}</div>
+          <div><strong>Issued invoices and earned work</strong>{row.bills.length ? row.bills.map(invoice => <p key={invoice.id}><a href={`/finance/invoices?record=${invoice.id}`}>{invoice.reference} · {invoice.kind} · {money(invoice.gross)} before VAT</a>{invoice.kind === 'Advance' && <small> Advance: billed, not earned work</small>}</p>) : <p>No invoices in this period.</p>}</div>
+          <div><strong>Open purchase commitments</strong>{row.commitments.length ? row.commitments.map(order => <p key={order.id}><a href={`/materials/orders?record=${order.id}`}>{order.reference} · {money(order.open)} uninvoiced</a></p>) : <p>No open purchase orders in this period.</p>}</div>
+          <div><strong>Posted actual costs and QS forecast</strong>{row.spend.length ? row.spend.map(expense => <p key={expense.id}><a href={`/finance/expenses?record=${expense.id}`}>{shortDate(expense.date)} · {expense.description} · {money(expense.amount)}</a></p>) : <p>No project expenses in this period.</p>}<p><a href="/quantity-surveying/cost-control">Open QS cost forecasts</a></p></div>
+        </div></details>)}</section>}
       </section>
     </div>}
   </>;

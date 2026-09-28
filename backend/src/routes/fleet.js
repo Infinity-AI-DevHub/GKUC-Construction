@@ -282,6 +282,7 @@ router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
   litres: z.number().positive().max(2000),
   cost: z.number().positive(),
   odometer: z.number().int().positive(),
+  vendor: z.string().trim().max(180).optional(),
   driver: z.string().max(120).optional()
 })), wrap(async (req, res) => {
   const body = req.body;
@@ -307,9 +308,9 @@ router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
       (vehicle_id,project_id,fuel_date,litres,cost,odometer,driver,created_by) VALUES (?,?,?,?,?,?,?,?)`,
       [vehicle.id,projectId,body.fuelDate,body.litres,body.cost,body.odometer,body.driver||vehicle.driver,req.user.id]);
     await connection.execute(`INSERT INTO petty_cash_entries
-      (float_id,kind,amount,entry_date,description,category,project_id,fuel_record_id,recorded_by)
-      VALUES (?,'Spend',?,?,?,'Fuel',?,?,?)`,
-      [fuelFloat.id,-body.cost,body.fuelDate,`Fuel — ${vehicle.vehicle} (${vehicle.registration})`,projectId,result.insertId,req.user.id]);
+      (float_id,kind,amount,entry_date,description,category,project_id,fuel_record_id,payee,recorded_by)
+      VALUES (?,'Spend',?,?,?,'Fuel',?,?,?,?)`,
+      [fuelFloat.id,-body.cost,body.fuelDate,`Fuel — ${vehicle.vehicle} (${vehicle.registration})`,projectId,result.insertId,body.vendor||null,req.user.id]);
     await connection.execute('UPDATE fleet SET odometer=GREATEST(odometer,?) WHERE id=?',[body.odometer,vehicle.id]);
     await connection.execute(`INSERT INTO vehicle_odometer_readings
       (vehicle_id,reading_date,odometer,source,source_id,recorded_by) VALUES (?,?,?,'Fuel',?,?)`,
