@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
-import { quotationDocument, invoiceDocument } from '../src/lib/documents.js';
+import { quotationDocument, invoiceDocument, receiptDocument } from '../src/lib/documents.js';
 import { renderDocumentPdf } from '../src/lib/document-pdf.js';
 
 const exec = promisify(execFile);
@@ -28,6 +28,41 @@ test('saved small letterhead sizes cannot flatten company and document headings'
   assert.match(html, /data-piece="docTitle"/);
   assert.match(html, /data-piece=companyName\]\{[^}]*font-size:18px!important/);
   assert.match(html, /data-piece=docTitle\]\{[^}]*font-size:19px!important/);
+});
+
+test('quotation, invoice and receipt PDF layouts retain company, type and reference', async t => {
+  try {
+    await access('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
+    await exec('pdftotext', ['-v']);
+  } catch { t.skip('Local Chromium and Poppler are needed for document verification'); return; }
+  const readymix = { ...company, name: 'GKUC Readymix', address: 'Plant Road\nGaligamuwa' };
+  const samples = [
+    [quotationDocument({ company: readymix, quotation: { reference: 'QUO-PREVIEW-TEST', quoteDate: '2026-09-28',
+      clientName: 'Test Client', subtotal: 2000, total: 2000, title: 'Sample quote' }, items: items.slice(0, 1) }),
+    /Quotation/, /QUO-PREVIEW-TEST/],
+    [invoiceDocument({ company: readymix, invoice: { reference: 'INV-PREVIEW-TEST', invoiceDate: '2026-09-28',
+      client: 'Test Client', title: 'Sample invoice', gross: 2000, netPayable: 2000, taxTreatment: 'Exempt' },
+    items: items.slice(0, 1) }), /Invoice/, /INV-PREVIEW-TEST/],
+    [receiptDocument({ company: readymix, receipt: { id: 9, receivedDate: '2026-09-28', client: 'Test Client',
+      invoiceReference: 'INV-PREVIEW-TEST', amount: 1000, netPayable: 2000, paidAmount: 1000,
+      method: 'Bank transfer' } }), /Payment Receipt/, /RCPT-2026-00009/]
+  ];
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'gkuc-document-types-'));
+  try {
+    for (const [index, [html, heading, reference]] of samples.entries()) {
+      const pdf = await renderDocumentPdf(html);
+      const file = path.join(temporary, `type-${index}.pdf`);
+      await writeFile(file, pdf);
+      if (process.env.GKUC_LAYOUT_ARTIFACT_DIR) {
+        await mkdir(process.env.GKUC_LAYOUT_ARTIFACT_DIR, { recursive: true });
+        await writeFile(path.join(process.env.GKUC_LAYOUT_ARTIFACT_DIR, `type-${index}.pdf`), pdf);
+      }
+      const { stdout: content } = await exec('pdftotext', ['-layout', file, '-']);
+      assert.match(content, /GKUC Readymix/);
+      assert.match(content, heading);
+      assert.match(content, reference);
+    }
+  } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
 test('long quotations and invoices print on A4 with a letterhead on every page', async t => {
