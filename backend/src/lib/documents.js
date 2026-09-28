@@ -66,17 +66,15 @@ function stylesheet(design, printHeader = {}) {
   const include = key => visible[key] !== false;
   const named = headerElement('companyName');
   const detailed = headerElement('companyDetails');
-  const printedDetails = [
-    named?.show && include('name') && (named.custom ? named.text : identity.name),
-    detailed?.show && (detailed.custom ? detailed.text : [
+  const printedName = named?.show && include('name') ? (named.custom ? named.text : identity.name) : '';
+  const printedDetails = detailed?.show ? (detailed.custom ? detailed.text : [
       include('address') && identity.address, include('telephone') && identity.telephone,
       include('email') && identity.email,
       include('registrationNumber') && identity.registrationNumber && `Business Reg. No: ${identity.registrationNumber}`,
       include('tin') && identity.tin && `TIN: ${identity.tin}`,
       include('vatNumber') && identity.vatNumber && `VAT Reg. No: ${identity.vatNumber}`,
       include('svatNumber') && identity.svatNumber && `SVAT No: ${identity.svatNumber}`
-    ].filter(Boolean).join('\n'))
-  ].filter(Boolean).join('\n');
+    ].filter(Boolean).join('\n')) : '';
   const printLogo = include('logo') && design.logo.show !== false
     && headerElement('logo')?.show !== false;
   const printedDocument = [headerElement('docTitle')?.show && (headerElement('docTitle').custom
@@ -117,9 +115,15 @@ function stylesheet(design, printHeader = {}) {
   .head.ruled{border-bottom:2px solid ${design.accent}}
   .head .piece{position:static;margin:0;min-width:0;overflow-wrap:anywhere}
   .head .piece[data-piece=logo]{grid-area:logo}
-  .head .piece[data-piece=companyName]{grid-area:name}
-  .head .piece[data-piece=companyDetails]{grid-area:details}
-  .head .piece[data-piece=docTitle]{grid-area:title;letter-spacing:2px;text-transform:uppercase}
+  /* Saved document designs may contain tiny legacy sizes. Identity and document type
+     always need to read as headings, regardless of those old per-piece settings. */
+  .head .piece[data-piece=companyName]{grid-area:name;font-size:18px!important;font-weight:800!important;
+    line-height:1.15!important;color:${design.accent}!important}
+  .head .piece[data-piece=companyDetails]{grid-area:details;font-size:10px!important;
+    font-weight:400!important;line-height:1.4!important;color:#475569!important}
+  .head .piece[data-piece=docTitle]{grid-area:title;font-size:19px!important;
+    font-weight:800!important;line-height:1.15!important;color:${design.accent}!important;
+    letter-spacing:2px;text-transform:uppercase}
   .head .piece[data-piece=reference]{grid-area:reference}
   .head .piece[data-piece=docDate]{grid-area:date}
   .head .piece img{max-width:100%;height:auto;max-height:60px;object-fit:contain;display:block}
@@ -180,11 +184,13 @@ function stylesheet(design, printHeader = {}) {
   }
   @page{size:A4;
     margin:${printTopMargin}mm ${page.margins.right}mm ${page.margins.bottom}mm ${page.margins.left}mm;
-    @top-left{content:"${cssText(printedDetails)}";white-space:pre-wrap;text-align:left;
-      vertical-align:middle;font:8px/1.35 Arial,sans-serif;color:${type.colour};
+    @top-left{content:"${cssText(printedName)}";white-space:normal;text-align:left;
+      vertical-align:middle;font:800 14px/1.2 Arial,sans-serif;color:${design.accent};
       padding-left:${printLogo ? 18 : 0}mm;${printLogo ? "background:url('/brand/gkuc-mark-256.png') left center / 15mm auto no-repeat" : ''}}
+    @top-center{content:"${cssText(printedDetails)}";white-space:pre-wrap;text-align:left;
+      vertical-align:middle;font:8px/1.35 Arial,sans-serif;color:#475569}
     @top-right{content:"${cssText(printedDocument)}";white-space:pre-wrap;text-align:right;
-      vertical-align:middle;font:bold 10px/1.6 Arial,sans-serif;color:${type.headingColour}}
+      vertical-align:middle;font:800 14px/1.5 Arial,sans-serif;color:${design.accent}}
   }
 `;
 }
