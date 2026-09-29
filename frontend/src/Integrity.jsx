@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ShieldAlert, TriangleAlert, Check, X, RefreshCw, ChevronDown, Settings2 } from 'lucide-react';
 import { api, post, rupees, shortDate } from './api.js';
 import { useLiveList } from './ui.jsx';
+import Attachments from './Attachments.jsx';
 
 /*
  * What the watch has found.
@@ -28,6 +29,7 @@ export default function Integrity({ can }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [investigators, setInvestigators] = useState([]);
 
   const load = () => Promise.all([
     api(`/integrity/findings?status=${status}`).then(setFindings),
@@ -36,7 +38,8 @@ export default function Integrity({ can }) {
 
   useLiveList(load);
   useEffect(() => { load(); }, [status]);
-  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id) setOpen(findings.find(row => Number(row.id) === id) || null); }, [findings]);
+  useEffect(() => { api('/integrity/investigators').then(setInvestigators).catch(() => {}); }, []);
+  useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && findings.some(row => Number(row.id) === id)) setOpen(id); }, [findings]);
 
   const scan = async () => {
     setBusy(true);
@@ -73,7 +76,7 @@ export default function Integrity({ can }) {
 
     <div className="integrity-filters">
       <div className="segments">
-        {['Open', 'Confirmed', 'Dismissed'].map(one => (
+        {['Open', 'Confirmed', 'Resolved', 'Dismissed'].map(one => (
           <button type="button" key={one} className={status === one ? 'active' : ''}
             onClick={() => setStatus(one)}>{one}</button>
         ))}
@@ -134,8 +137,14 @@ export default function Integrity({ can }) {
                   ))}
                 </dl>
               )}
+              <p><strong>Investigator:</strong> {finding.assignedTo || 'Not assigned'} · <strong>Resolution due:</strong> {finding.resolutionDueAt ? shortDate(finding.resolutionDueAt) : 'Not set'} · <strong>Financial exposure:</strong> {rupees(finding.amount || 0)}</p>
+              {finding.resolutionProof && <p><strong>Resolution proof:</strong> {finding.resolutionProof}</p>}
+              <Attachments ownerType="risk_finding" ownerId={finding.id} title="Evidence files" canUpload canDelete={false} />
+              <FindingComments id={finding.id} />
               {finding.status === 'Open'
-                ? <Review finding={finding} onDone={load} />
+                ? <Review finding={finding} investigators={investigators} onDone={load} />
+                : finding.status === 'Confirmed'
+                  ? <Review finding={finding} investigators={investigators} onDone={load} />
                 : <p className="finding-decided">
                   Marked <b>{finding.status.toLowerCase()}</b> by {finding.reviewedBy} on {shortDate(finding.reviewedAt)}
                   {finding.reviewNote ? ` — “${finding.reviewNote}”` : ''}
@@ -157,8 +166,11 @@ function Score({ label, value, tone, help }) {
   </div>;
 }
 
-function Review({ finding, onDone }) {
+function Review({ finding, investigators, onDone }) {
   const [note, setNote] = useState('');
+  const [assignedUserId, setAssignedUserId] = useState(finding.assignedUserId || '');
+  const [resolutionDueAt, setResolutionDueAt] = useState(finding.resolutionDueAt ? String(finding.resolutionDueAt).slice(0, 16) : '');
+  const [resolutionProof, setResolutionProof] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -166,7 +178,12 @@ function Review({ finding, onDone }) {
     setBusy(true);
     setError('');
     try {
-      await post(`/integrity/findings/${finding.id}/review`, { status, note: note.trim() || undefined });
+      await post(`/integrity/findings/${finding.id}/review`, {
+        status, note: note.trim() || undefined,
+        assignedUserId: assignedUserId ? Number(assignedUserId) : undefined,
+        resolutionDueAt: resolutionDueAt ? new Date(resolutionDueAt).toISOString() : undefined,
+        resolutionProof: resolutionProof.trim() || undefined
+      });
       await onDone();
     } catch (failure) { setError(failure.message); setBusy(false); }
   };
@@ -177,23 +194,51 @@ function Review({ finding, onDone }) {
       <textarea value={note} rows={2} onChange={event => setNote(event.target.value)}
         placeholder="Checked against the delivery note — genuine bulk order for the Kaduwela pour" />
     </label>
+    <label>Assign investigator
+      <select value={assignedUserId} onChange={event => setAssignedUserId(event.target.value)}>
+        <option value="">Choose an employee…</option>
+        {investigators.map(user => <option key={user.id} value={user.id}>{user.name}</option>)}
+      </select>
+    </label>
+    <label>Resolve by <input type="datetime-local" value={resolutionDueAt} onChange={event => setResolutionDueAt(event.target.value)} /></label>
+    {finding.status === 'Confirmed' && <label>Resolution proof
+      <textarea value={resolutionProof} rows={2} onChange={event => setResolutionProof(event.target.value)} placeholder="Describe the correction and attach supporting evidence above" />
+    </label>}
     {error && <p className="form-error">{error}</p>}
     <div className="finding-buttons">
-      <button type="button" className="secondary" disabled={busy} onClick={() => decide('Dismissed')}>
+      {finding.status === 'Open' && <button type="button" className="secondary" disabled={busy} onClick={() => decide('Dismissed')}>
         <X size={15} /> Not a problem
-      </button>
-      <button type="button" className="secondary finding-confirm" disabled={busy}
+      </button>}
+      {finding.status === 'Open' && <button type="button" className="secondary finding-confirm" disabled={busy}
         onClick={() => decide('Confirmed')}>
         <TriangleAlert size={15} /> This is real
-      </button>
-      <button type="button" className="primary" disabled={busy} onClick={() => decide('Resolved')}>
+      </button>}
+      {finding.status === 'Confirmed' && <button type="button" className="primary" disabled={busy} onClick={() => decide('Resolved')}>
         <Check size={15} /> Dealt with
-      </button>
+      </button>}
     </div>
     <p className="finding-hint">
       Saying why matters more than which button. Six months from now the note is the only thing
       that says whether this was checked or just cleared off the list.
     </p>
+  </div>;
+}
+
+function FindingComments({ id }) {
+  const [rows, setRows] = useState([]);
+  const [body, setBody] = useState('');
+  const [error, setError] = useState('');
+  const load = () => api(`/integrity/findings/${id}/comments`).then(setRows).catch(failure => setError(failure.message));
+  useEffect(() => { load(); }, [id]);
+  const add = async () => {
+    try { await post(`/integrity/findings/${id}/comments`, { body }); setBody(''); await load(); }
+    catch (failure) { setError(failure.message); }
+  };
+  return <div className="finding-comments"><strong>Investigation notes</strong>
+    {rows.map(row => <p key={row.id}><b>{row.author}</b> · {shortDate(row.createdAt)} — {row.body}</p>)}
+    <label>Add a note<textarea value={body} onChange={event => setBody(event.target.value)} rows={2} /></label>
+    {error && <p className="form-error">{error}</p>}
+    <button type="button" className="secondary" onClick={add} disabled={!body.trim()}>Add note</button>
   </div>;
 }
 

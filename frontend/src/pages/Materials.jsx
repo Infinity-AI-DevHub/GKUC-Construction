@@ -3,6 +3,8 @@ import { Check, PackageCheck } from 'lucide-react';
 import { api, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
+import WorkflowChecklist from '../WorkflowChecklist.jsx';
+import { requestSteps, orderSteps } from '../purchasing-workflow.js';
 
 const TABS = ['Stock', 'Movements', 'Purchase requests', 'Orders', 'Suppliers'];
 
@@ -27,7 +29,7 @@ export default function Materials({ data, reload, can, companyId, company }) {
     {tab === 'Movements' && <Movements />}
     {tab === 'Purchase requests' && <Requests reload={reload} can={can} companyId={companyId} />}
     {tab === 'Orders' && <Orders reload={reload} can={can} companyId={companyId} />}
-    {tab === 'Suppliers' && <Suppliers />}
+    {tab === 'Suppliers' && <Suppliers can={can} />}
 
     {open === 'Stock' && <MaterialForm close={() => setOpen('')} reload={reload} />}
     {open === 'Movements' && <MovementForm data={data} close={() => setOpen('')} reload={reload} />}
@@ -126,6 +128,7 @@ function RequestDetail({ request, close, refresh, can }) {
 
   return <Modal title={`${request.reference} — ${request.project}`} close={close}>
     <div className="report-form">
+      <WorkflowChecklist title="Purchase to payment" steps={requestSteps(request)} />
       <div className="project-stats wide">
         <div><span>Requested by</span><strong>{request.requestedBy}</strong></div>
         <div><span>Needed by</span><strong>{shortDate(request.neededBy)}</strong></div>
@@ -234,9 +237,16 @@ function OrderDetail({ order, close, done, can }) {
       setError(failure.message);
     } finally { setBusy(false); }
   };
+  const approve = async () => {
+    setBusy(true); setError('');
+    try { await post(`/purchasing/orders/${order.id}/approve`, {}); await done(); }
+    catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  };
 
   return <Modal title={`${order.reference} — ${order.supplier}`} close={close}>
     <div className="report-form">
+      <WorkflowChecklist title="Purchase to payment" steps={orderSteps(order)} />
       <div className="project-stats wide">
         <div><span>Project</span><strong>{order.project}</strong></div>
         <div><span>Order total</span><strong>{rupees(order.total)}</strong></div>
@@ -257,7 +267,10 @@ function OrderDetail({ order, close, done, can }) {
       {error && <p className="form-error">{error}</p>}
       <div className="form-actions">
         <button type="button" className="secondary" onClick={close}>Close</button>
-        {can.stock && order.status !== 'Received' && (
+        {can.projects && order.status === 'Pending approval' && (
+          <button type="button" className="primary" onClick={approve} disabled={busy}>Approve order</button>
+        )}
+        {can.stock && order.status !== 'Received' && order.status !== 'Pending approval' && (
           <button type="button" className="primary" onClick={receive} disabled={busy}>
             <Check size={17} />{busy ? 'Saving…' : 'Record goods received'}
           </button>
@@ -267,11 +280,13 @@ function OrderDetail({ order, close, done, can }) {
   </Modal>;
 }
 
-function Suppliers() {
+function Suppliers({ can }) {
   const [rows, setRows] = useState([]);
-  const template = 'minmax(190px,1.4fr) minmax(150px,1fr) 140px minmax(170px,1.1fr) 90px 140px';
-  useLiveList(() => api('/purchasing/suppliers').then(setRows).catch(() => setRows([])));
-  return <Table columns={['Supplier', 'Contact', 'Phone', 'Email', 'Orders', 'Outstanding']} template={template}
+  const [bankSupplier, setBankSupplier] = useState(null);
+  const template = 'minmax(190px,1.4fr) minmax(150px,1fr) 140px minmax(170px,1.1fr) 90px 140px 130px';
+  const load = () => api('/purchasing/suppliers').then(setRows).catch(() => setRows([]));
+  useLiveList(load);
+  return <><Table columns={['Supplier', 'Contact', 'Phone', 'Email', 'Orders', 'Outstanding', 'Bank']} template={template}
     title="Suppliers" empty="No suppliers recorded.">
     {rows.map(row => <Row template={template} key={row.id}>
       <strong>{row.name}</strong>
@@ -280,8 +295,24 @@ function Suppliers() {
       <span>{row.email || '—'}</span>
       <span>{row.orders}</span>
       <span className={Number(row.outstanding) > 0 ? 'overdue' : ''}>{rupees(row.outstanding)}</span>
+      <span>{can.supplierPay ? <button className="status-button" onClick={() => setBankSupplier(row)}>Bank details</button> : '—'}</span>
     </Row>)}
-  </Table>;
+  </Table>
+  {bankSupplier && <FormModal title={`${bankSupplier.name} — bank details`} close={() => setBankSupplier(null)} label="Save bank details" onSubmit={async values => {
+    await patch(`/purchasing/suppliers/${bankSupplier.id}/bank`, {
+      bankName: values.bankName, bankBranch: values.bankBranch || undefined,
+      bankAccountName: values.bankAccountName, bankAccountNumber: values.bankAccountNumber,
+      reason: values.reason
+    });
+    await load();
+  }}>
+    <Field name="bankName" label="Bank name" defaultValue={bankSupplier.bankName || ''} />
+    <Field name="bankBranch" label="Branch" required={false} defaultValue={bankSupplier.bankBranch || ''} />
+    <Field name="bankAccountName" label="Account holder" defaultValue={bankSupplier.bankAccountName || ''} />
+    <Field name="bankAccountNumber" label="Account number" defaultValue={bankSupplier.bankAccountNumber || ''} />
+    <TextArea name="reason" label="Reason for change (audited)" />
+  </FormModal>}
+  </>;
 }
 
 function MaterialForm({ close, reload }) {
@@ -366,7 +397,7 @@ function OrderForm({ data, close, reload }) {
   const selected = data.materials.find(row => String(row.id) === String(material));
 
   return <FormModal title="Create purchase order" close={close} label="Issue order" onSubmit={async values => {
-    await post('/purchasing/orders', {
+    const payload = {
       supplierId: Number(values.supplierId),
       projectId: Number(values.projectId),
       orderDate: values.orderDate,
@@ -377,7 +408,15 @@ function OrderForm({ data, close, reload }) {
         quantity: Number(values.quantity),
         rate: Number(values.rate)
       }]
-    });
+    };
+    const check = await post('/purchasing/orders/check', payload);
+    if (check.warnings.length) {
+      const reason = window.prompt(`Purchase risk review:\n${check.warnings.map(item => `• ${item.message}`).join('\n')}\n\nExplain why this order should proceed:`);
+      if (!reason || reason.trim().length < 10) throw new Error('Enter at least 10 characters explaining the purchase risk before saving.');
+      payload.riskAccepted = true;
+      payload.riskReason = reason.trim();
+    }
+    await post('/purchasing/orders', payload);
     await reload();
   }}>
     <SelectField name="supplierId" label="Supplier" options={suppliers.map(supplier => [supplier.id, supplier.name])} />

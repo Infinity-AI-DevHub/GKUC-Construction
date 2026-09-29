@@ -76,9 +76,9 @@ function sharedStrings(files) {
   const text = xml.toString('utf8');
   const strings = [];
   /* Each <si> is one string, possibly split across several <t> runs. */
-  for (const [, item] of text.matchAll(/<si>([\s\S]*?)<\/si>/g)) {
+  for (const [, item] of text.matchAll(/<(?:\w+:)?si\b[^>]*>([\s\S]*?)<\/(?:\w+:)?si>/g)) {
     let value = '';
-    for (const [, run] of item.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)) value += decode(run);
+    for (const [, run] of item.matchAll(/<(?:\w+:)?t\b[^>]*>([\s\S]*?)<\/(?:\w+:)?t>/g)) value += decode(run);
     strings.push(value);
   }
   return strings;
@@ -99,14 +99,14 @@ function sheetIndex(files) {
    * here.
    */
   const targets = new Map();
-  for (const [tag] of relations.matchAll(/<Relationship\b[^>]*>/g)) {
+  for (const [tag] of relations.matchAll(/<(?:\w+:)?Relationship\b[^>]*>/g)) {
     const id = tag.match(/\bId="([^"]+)"/)?.[1];
     const target = tag.match(/\bTarget="([^"]+)"/)?.[1];
     if (id && target) targets.set(id, target.replace(/^\/?xl\//, '').replace(/^\//, ''));
   }
 
   const sheets = new Map();
-  for (const [, attributes] of workbook.matchAll(/<sheet\b([^>]*)\/?>/g)) {
+  for (const [, attributes] of workbook.matchAll(/<(?:\w+:)?sheet\b([^>]*)\/?>/g)) {
     const name = attributes.match(/name="([^"]*)"/)?.[1];
     const id = attributes.match(/r:id="([^"]*)"/)?.[1];
     if (name && targets.has(id)) sheets.set(decode(name), `xl/${targets.get(id)}`);
@@ -134,16 +134,16 @@ function readSheet(xml, strings) {
 
   /* Lazy, so that the trailing slash of an empty cell — <c r="B3" s="2"/> — is left for the
      alternation to match. Greedy would swallow it and run on to the next cell's </c>. */
-  for (const [, attributes, body] of text.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+  for (const [, attributes, body] of text.matchAll(/<(?:\w+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?c>)/g)) {
     const address = cellAddress(attributes.match(/r="([A-Z]+\d+)"/)?.[1]);
     if (!address) continue;
     const type = attributes.match(/t="([^"]*)"/)?.[1];
 
     let value = null;
     if (type === 'inlineStr') {
-      value = [...(body || '').matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(m => decode(m[1])).join('');
+      value = [...(body || '').matchAll(/<(?:\w+:)?t\b[^>]*>([\s\S]*?)<\/(?:\w+:)?t>/g)].map(m => decode(m[1])).join('');
     } else {
-      const raw = (body || '').match(/<v>([\s\S]*?)<\/v>/)?.[1];
+      const raw = (body || '').match(/<(?:\w+:)?v>([\s\S]*?)<\/(?:\w+:)?v>/)?.[1];
       if (raw !== undefined) {
         value = type === 's' ? (strings[Number(raw)] ?? '') : type === 'str' ? decode(raw) : Number(raw);
       }

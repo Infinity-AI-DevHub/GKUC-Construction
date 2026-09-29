@@ -156,7 +156,7 @@ function ReviewRadar({ review }) {
   </div>;
 }
 
-export default function EmployeeProfile({ employeeId, close, canManage, canPayroll, canConduct, canAssets, canCorrect, projects = [], departments = [], companies = [], reloadPeople }) {
+export default function EmployeeProfile({ employeeId, close, canManage, canPayroll, canAccess, canConduct, canAssets, canCorrect, projects = [], departments = [], companies = [], reloadPeople }) {
   const [employee, setEmployee] = useState(null);
   const [error, setError] = useState('');
   const [correcting, setCorrecting] = useState(null);
@@ -314,7 +314,7 @@ export default function EmployeeProfile({ employeeId, close, canManage, canPayro
         close={() => setCorrecting(null)} reload={reloadEmployee} />}
     </section>
 
-    {(canManage||canAssets)&&<EmployeeAssets employeeId={employee.id} canEdit={canAssets}/>}
+    {(canManage||canAssets||canPayroll||canAccess)&&<EmployeeAssets employeeId={employee.id} employeeName={employee.name} employeeStatus={employee.status} canEdit={canAssets} canInitiate={canManage} canPayroll={canPayroll} canAccess={canAccess}/>}
     {canConduct && <ConductHistory employeeId={employee.id} />}
     {canManage && <EmployeeLetters employee={employee} companies={companies} />}
     {(canManage || canPayroll) && <EmployeeBankAccount employeeId={employee.id} canManage={canManage} />}

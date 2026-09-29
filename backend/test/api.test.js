@@ -16,6 +16,7 @@ let serverOutput = '';
 let admin;
 let testUploadDir;
 let lastOwnerToken;
+let lastFinanceToken;
 
 const today = () => new Date().toISOString().slice(0, 10);
 const shift = days => {
@@ -52,6 +53,7 @@ async function login(email = 'owner@gkuc.lk') {
   assert.equal(response.status, 200);
   const token=(await response.json()).token;
   if(email==='owner@gkuc.lk')lastOwnerToken=token;
+  if(email==='finance@gkuc.lk')lastFinanceToken=token;
   return token;
 }
 
@@ -117,6 +119,26 @@ test('fleet accepts an active registered employee as driver', async () => {
     notes: 'Registered driver regression test'
   });
   assert.equal(handover.status, 201, JSON.stringify(handover.body));
+});
+
+test('site attendance is a proposal until HR reviews it',async()=>{
+  const hr=await login('hr@gkuc.lk'),site=await login('supervisor@gkuc.lk');
+  const created=await call(hr,'POST','/employees',{code:`SITE-MOBILE-${Date.now()}`,name:'Site Mobile QA'});
+  assert.equal(created.status,201);
+  const id=created.body.id,date=shift(-2);
+  assert.equal((await call(site,'POST','/attendance',{employeeId:id,projectId:1,date})).status,403);
+  const submitted=await call(site,'POST','/attendance/site-submissions',{projectId:1,date,entries:[{employeeId:id,state:'On site'}]});
+  assert.equal(submitted.status,201,JSON.stringify(submitted.body));
+  assert.equal((await call(site,'GET','/attendance/site-submissions')).status,403);
+  assert.ok(!(await call(hr,'GET',`/attendance?date=${date}`)).body.some(row=>Number(row.employeeId)===id));
+  const pending=(await call(hr,'GET','/attendance/site-submissions')).body.find(row=>Number(row.employeeId)===id);
+  assert.ok(pending);
+  assert.equal((await call(hr,'POST',`/attendance/site-submissions/${pending.id}/review`,{decision:'Approved'})).status,200);
+  assert.ok((await call(hr,'GET',`/attendance?date=${date}`)).body.some(row=>Number(row.employeeId)===id));
+  assert.equal((await call(hr,'POST',`/attendance/site-submissions/${pending.id}/review`,{decision:'Approved'})).status,409);
+  await admin.query(`DELETE FROM ${testDatabase}.attendance WHERE employee_id=?`,[id]);
+  await admin.query(`DELETE FROM ${testDatabase}.site_attendance_submissions WHERE employee_id=?`,[id]);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
 });
 
 test('HR reviewed inputs reach weekly payroll once with separate OT, allowances and reimbursement snapshots',async()=>{
@@ -226,6 +248,33 @@ test('employee offboarding is blocked by assets, vehicles and unfinished tasks u
   assert.equal((await call(hr,'PATCH',`/employees/${employeeId}`,{status:'Left'})).status,200);
   await admin.query(`DELETE FROM ${testDatabase}.employee_asset_handovers WHERE employee_id=?`,[employeeId]);
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[employeeId]);
+});
+
+test('resignation creates distinct access and payroll clearances that gate offboarding',async()=>{
+  const owner=lastOwnerToken||await login();
+  const hr=await login('hr@gkuc.lk');
+  const qs=await login('qs@gkuc.lk');
+  const employee=await call(hr,'POST','/employees',{code:`RESIGN-QA-${Date.now()}`,name:'Resignation Checklist QA'});
+  assert.equal(employee.status,201);
+  const id=employee.body.id;
+  assert.equal((await call(qs,'POST',`/employees/${id}/offboarding/start`,{requestedOn:today(),reason:'Employee resigned'})).status,403);
+  const started=await call(hr,'POST',`/employees/${id}/offboarding/start`,{requestedOn:today(),reason:'Employee resigned'});
+  assert.equal(started.status,201,JSON.stringify(started.body));
+  assert.equal(Boolean(started.body.offboarding),true);
+  assert.equal(Boolean(started.body.clear),false);
+  assert.equal((await call(hr,'PATCH',`/employees/${id}`,{status:'Left'})).status,409);
+  const queue=await call(owner,'GET','/dashboard/queue?companyId=1');
+  assert.equal(queue.status,200,JSON.stringify(queue.body));
+  assert.ok(queue.body.work.some(item=>item.kind==='offboarding-access'&&item.title.includes('Resignation Checklist QA')));
+  assert.ok(queue.body.work.some(item=>item.kind==='offboarding-payroll'&&item.title.includes('Resignation Checklist QA')));
+  assert.equal((await call(qs,'PATCH',`/employees/${id}/offboarding/clearance`,{area:'access',note:'Not authorised'})).status,403);
+  assert.equal((await call(hr,'PATCH',`/employees/${id}/offboarding/clearance`,{area:'access',note:'Account disabled'})).status,403);
+  assert.equal((await call(owner,'PATCH',`/employees/${id}/offboarding/clearance`,{area:'access',note:'Account disabled'})).status,200);
+  assert.equal((await call(hr,'PATCH',`/employees/${id}/offboarding/clearance`,{area:'payroll',note:'Final pay reconciled'})).status,200);
+  assert.equal((await call(hr,'GET',`/employees/${id}/offboarding`)).body.clear,true);
+  assert.equal((await call(hr,'PATCH',`/employees/${id}`,{status:'Left'})).status,200);
+  await admin.query(`DELETE FROM ${testDatabase}.employee_offboarding_cases WHERE employee_id=?`,[id]);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
 });
 
 test('HR insurance connects to Fleet and sends custom reminders without duplicates',async()=>{
@@ -665,6 +714,18 @@ test('purchase request, order, goods receipt and stock stay in step', async () =
   assert.equal(over.status, 409, 'cannot receive more than was ordered');
 
   assert.equal((await call(store, 'POST', `/purchasing/orders/${order.body.id}/receive`, { lines: [{ itemId: line.id, quantity: 100 }] })).status, 200);
+
+  const finance = await login('finance@gkuc.lk');
+  const invoice = await call(finance, 'POST', '/purchasing/invoices', {
+    companyId: 1, orderId: order.body.id, supplierId: 1,
+    invoiceNo: `MATCH-${Date.now()}`, amount: 250000, invoiceDate: today()
+  });
+  assert.equal(invoice.status, 201);
+  assert.equal((await call(finance, 'POST', `/purchasing/invoices/${invoice.body.id}/verify`, {})).status, 403,
+    'the invoice creator cannot verify their own three-way match');
+  assert.equal((await call(owner, 'POST', `/purchasing/invoices/${invoice.body.id}/verify`, {})).status, 200);
+  const verifiedOrder = await call(owner, 'GET', `/purchasing/orders/${order.body.id}`);
+  assert.ok(verifiedOrder.body.invoices.some(row => row.id === invoice.body.id && row.verifiedAt));
 
   const after = (await call(owner, 'GET', '/materials')).body.find(material => material.id === 1);
   assert.equal(Number(after.stock), Number(before.stock) + 100);
@@ -1696,14 +1757,68 @@ test('equipment cannot be assigned twice without a return', async () => {
 
 test('supplier payments cannot exceed the invoice', async () => {
   const finance = await login('finance@gkuc.lk');
+  const owner = lastOwnerToken || await login();
   const invoice = await call(finance, 'POST', '/purchasing/invoices', {
     supplierId: 2, invoiceNo: 'INV-TEST-1', amount: 100000, invoiceDate: today(), dueDate: shift(14)
   });
   assert.equal(invoice.status, 201);
   assert.equal((await call(finance, 'POST', `/purchasing/invoices/${invoice.body.id}/payments`, { amount: 150000, paidDate: today() })).status, 409);
+  assert.equal((await call(owner, 'POST', `/purchasing/invoices/${invoice.body.id}/payment-exception`, {
+    reason: 'Verified this standalone supplier invoice with the supplier and purchasing records'
+  })).status, 204);
   const paid = await call(finance, 'POST', `/purchasing/invoices/${invoice.body.id}/payments`, { amount: 100000, paidDate: today() });
   assert.equal(paid.status, 201);
   assert.equal(paid.body.status, 'Paid');
+});
+
+test('supplier invoice duplicate check and independent no-PO payment exception', async () => {
+  const finance = lastFinanceToken || await login('finance@gkuc.lk');
+  const owner = lastOwnerToken || await login();
+  const invoiceNo = `RISK-${Date.now()}`;
+  const first = await call(finance, 'POST', '/purchasing/invoices', {
+    supplierId: 2, invoiceNo, amount: 43210, invoiceDate: today()
+  });
+  assert.equal(first.status, 201);
+  const duplicate = await call(finance, 'POST', '/purchasing/invoices', {
+    supplierId: 2, invoiceNo, amount: 43210, invoiceDate: today()
+  });
+  assert.equal(duplicate.status, 409);
+  assert.ok(duplicate.body.warnings?.some(warning => warning.code === 'duplicate_invoice'));
+  assert.equal((await call(finance, 'POST', `/purchasing/invoices/${first.body.id}/payment-exception`, {
+    reason: 'Self approval must not be allowed'
+  })).status, 403);
+  assert.equal((await call(finance, 'POST', `/purchasing/invoices/${first.body.id}/payments`, {
+    amount: 43210, paidDate: today()
+  })).status, 409);
+  assert.equal((await call(owner, 'POST', `/purchasing/invoices/${first.body.id}/payment-exception`, {
+    reason: 'Independently checked the standalone invoice and authorised the exception'
+  })).status, 204);
+  assert.equal((await call(finance, 'POST', `/purchasing/invoices/${first.body.id}/payments`, {
+    amount: 43210, paidDate: today()
+  })).status, 201);
+  const accepted = await call(finance, 'POST', '/purchasing/invoices', {
+    supplierId: 2, invoiceNo: `${invoiceNo}-B`, amount: 43210, invoiceDate: today(),
+    riskAccepted: true, riskReason: 'Checked the second signed invoice and confirmed a separate delivery'
+  });
+  assert.equal(accepted.status, 201);
+  assert.equal((await call(finance, 'GET', '/integrity/findings?status=Open')).status, 403);
+  const findings = await call(owner, 'GET', '/integrity/findings?status=Open');
+  const finding = findings.body.find(row => row.entity === 'supplier_invoice' && Number(row.entityId) === Number(accepted.body.id));
+  assert.ok(finding, 'accepted warning becomes an investigation finding');
+  assert.equal((await call(finance, 'POST', `/integrity/findings/${finding.id}/review`, {
+    status: 'Dismissed', note: 'I recorded this invoice myself'
+  })).status, 403);
+  const [[ownerRow]] = await admin.query(`SELECT id FROM \`${testDatabase}\`.users WHERE email='owner@gkuc.lk'`);
+  assert.equal((await call(owner, 'POST', `/integrity/findings/${finding.id}/review`, {
+    status: 'Confirmed', note: 'Investigate the supporting delivery', assignedUserId: ownerRow.id,
+    resolutionDueAt: new Date(Date.now() + 86400000).toISOString()
+  })).status, 204);
+  assert.equal((await call(owner, 'POST', `/integrity/findings/${finding.id}/comments`, {
+    body: 'Requested the signed delivery note and bank advice.'
+  })).status, 201);
+  assert.equal((await call(owner, 'POST', `/integrity/findings/${finding.id}/review`, {
+    status: 'Resolved', resolutionProof: 'Signed delivery note reviewed; separate goods received.'
+  })).status, 204);
 });
 
 test('operating bills, VAT, credit cards and bond extensions reconcile end to end', async () => {
@@ -1743,6 +1858,9 @@ test('operating bills, VAT, credit cards and bond extensions reconcile end to en
   });
   assert.equal(supplierInvoice.status, 201);
   assert.equal(Number(supplierInvoice.body.amount), 118000);
+  assert.equal((await call(owner, 'POST', `/purchasing/invoices/${supplierInvoice.body.id}/payment-exception`, {
+    reason: 'Verified this standalone VAT invoice against the original supplier document'
+  })).status, 204);
   assert.equal((await call(finance, 'POST', `/purchasing/invoices/${supplierInvoice.body.id}/payments`, {
     amount: 118000, paidDate: today(), method: 'Bank transfer'
   })).status, 201);

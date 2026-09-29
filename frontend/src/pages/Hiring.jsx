@@ -2,6 +2,7 @@ import React,{useEffect,useState} from 'react';
 import {api,post,patch} from '../api.js';
 import {Table,Row,Badge,FormModal,Field,TextArea,SelectField} from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
+import WorkflowChecklist from '../WorkflowChecklist.jsx';
 
 export default function Hiring({companies,companyId,reload}){
   const [rows,setRows]=useState([]),[candidate,setCandidate]=useState(null),[form,setForm]=useState(null),[roles,setRoles]=useState([]),[access,setAccess]=useState(false),[error,setError]=useState('');
@@ -12,6 +13,7 @@ export default function Hiring({companies,companyId,reload}){
   const load=()=>api('/hiring').then(setRows).catch(e=>setError(e.message));
   const open=async id=>{try{setCandidate(await api(`/hiring/${id}`));setError('');}catch(e){setError(e.message);}};
   useEffect(()=>{load();api('/hiring/roles').then(setRoles).catch(()=>setRoles([]));},[]);
+  useEffect(()=>{const id=Number(new URLSearchParams(window.location.search).get('record'));if(id&&rows.some(row=>Number(row.id)===id)&&Number(candidate?.id)!==id)open(id);},[rows]);
   const refresh=async()=>{await load();if(candidate)await open(candidate.id);};
   return <>
     <div className="panel-title"><h2>Hiring pipeline</h2><div className="row-actions"><button className="secondary" onClick={()=>setForm({type:'candidate'})}>Add previously shortlisted</button><button className="primary" onClick={()=>setForm({type:'applicant'})}>Add applicant / CV</button></div></div>
@@ -30,6 +32,14 @@ export default function Hiring({companies,companyId,reload}){
     </Table>
     {candidate&&<section className="panel">
       <div className="panel-title"><h2>{candidate.name}</h2><button className="secondary" onClick={()=>setCandidate(null)}>Close profile</button></div>
+      <WorkflowChecklist title="Applicant to employee" steps={[
+        {label:'Applicant recorded',owner:'HR',done:true,detail:'Candidate profile is in the applicant pool'},
+        {label:'CV reviewed and scored',owner:'HR',done:Boolean(candidate.screening_scores),detail:candidate.screening_scores?'Screening evidence recorded':'Upload CV and record screening scores'},
+        {label:'Shortlisted',owner:'HR',done:['Shortlisted','Interviewing','Selected','Hired'].includes(candidate.status),detail:'Confirm this candidate proceeds to interview'},
+        {label:'Interview completed',owner:'HR',done:candidate.interviews?.some(row=>row.status==='Completed'),detail:'Record the interview outcome'},
+        {label:'Selection decision',owner:'HR',done:['Selected','Dropped','Hired'].includes(candidate.status),detail:candidate.status==='Dropped'?'Candidate dropped':'Select or drop after review'},
+        {label:'Employee created',owner:'HR',done:candidate.status==='Hired',detail:candidate.status==='Hired'?`Employee profile #${candidate.employee_id}`:'Convert selected candidate; system access is optional'}
+      ]}/>
       <div className="report-form"><p>{candidate.phone}<br/>{candidate.email}<br/>{candidate.address}</p><div><Badge>{candidate.status}</Badge><p>{candidate.decision_notes}</p></div>
       {candidate.status!=='Hired'&&<div className="wide row-actions"><button className="secondary" onClick={()=>setForm({type:'candidate',...candidate})}>Edit details</button>{['Applicant','Screening','Shortlisted','Dropped'].includes(candidate.status)&&<button className="secondary" onClick={()=>setForm({type:'screening'})}>Screen CV / shortlist</button>}{!['Applicant','Screening'].includes(candidate.status)&&<button className="secondary" onClick={()=>setForm({type:'decision'})}>Record selection decision</button>}{['Shortlisted','Interviewing'].includes(candidate.status)&&<button className="secondary" onClick={()=>setForm({type:'interview'})}>Schedule interview</button>}{candidate.status==='Selected'&&<button className="primary" onClick={()=>{setAccess(false);setForm({type:'hire'});}}>Convert to employee</button>}</div>}
       {candidate.screening_scores&&<p className="form-note wide">CV screening: {score(candidate)?.total} / 15 · {candidate.screening_notes}</p>}

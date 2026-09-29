@@ -896,7 +896,7 @@ async function createAttachmentTables() {
     CONSTRAINT fk_upload_user FOREIGN KEY(uploaded_by) REFERENCES users(id),
     INDEX idx_attachment_owner(owner_type,owner_id), INDEX idx_attachment_expiry(expiry_date)
   ) ENGINE=InnoDB`);
-  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter') NOT NULL");
+  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter','risk_finding') NOT NULL");
 }
 
 /** 2.2 payroll and performance, and PID section 3 step 1 (customer inquiry). */
@@ -2002,6 +2002,22 @@ async function createDriveTables() {
 }
 
 async function createIntegrityTables() {
+  await addColumn('suppliers','bank_name','VARCHAR(180) NULL');
+  await addColumn('suppliers','bank_branch','VARCHAR(180) NULL');
+  await addColumn('suppliers','bank_account_name','VARCHAR(180) NULL');
+  await addColumn('suppliers','bank_account_number','VARCHAR(120) NULL');
+  await addColumn('suppliers','bank_changed_at','DATETIME NULL');
+  await addColumn('suppliers','bank_changed_by','BIGINT UNSIGNED NULL');
+  await addColumn('purchase_requests','first_approved_by','BIGINT UNSIGNED NULL');
+  await addColumn('purchase_requests','first_approved_at','DATETIME NULL');
+  await query("ALTER TABLE purchase_orders MODIFY COLUMN status ENUM('Pending approval','Issued','Partially received','Received','Cancelled') NOT NULL DEFAULT 'Issued'");
+  await addColumn('purchase_orders','first_approved_by','BIGINT UNSIGNED NULL');
+  await addColumn('purchase_orders','first_approved_at','DATETIME NULL');
+  await addColumn('purchase_orders','second_approved_by','BIGINT UNSIGNED NULL');
+  await addColumn('purchase_orders','second_approved_at','DATETIME NULL');
+  await addColumn('supplier_invoices','payment_exception_approved_by','BIGINT UNSIGNED NULL');
+  await addColumn('supplier_invoices','payment_exception_reason','VARCHAR(500) NULL');
+  await addColumn('supplier_invoices','payment_exception_approved_at','DATETIME NULL');
   await query(`CREATE TABLE IF NOT EXISTS risk_findings (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     /* The detector that raised it, so a noisy one can be traced and tuned. */
@@ -2034,6 +2050,16 @@ async function createIntegrityTables() {
     INDEX idx_finding_open (status, severity, id),
     INDEX idx_finding_entity (entity, entity_id)
   ) ENGINE=InnoDB`);
+  await addColumn('risk_findings','assigned_user_id','BIGINT UNSIGNED NULL');
+  await addColumn('risk_findings','resolution_due_at','DATETIME NULL');
+  await addColumn('risk_findings','resolution_proof','VARCHAR(1000) NULL');
+  await query(`CREATE TABLE IF NOT EXISTS risk_finding_comments (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,finding_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,body VARCHAR(2000) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(finding_id) REFERENCES risk_findings(id),FOREIGN KEY(user_id) REFERENCES users(id),
+    INDEX idx_finding_comment(finding_id,id)
+  ) ENGINE=InnoDB`);
 
   /*
    * What the company considers normal, so the thresholds are theirs rather than mine.
@@ -2053,6 +2079,12 @@ async function createIntegrityTables() {
   const defaults = [
     ['approval.threshold', '250000', 'Purchase approval threshold (LKR)',
       'Orders above this need sign-off. Used to spot purchases split to stay just underneath it.'],
+    ['approval.two.person.threshold', '1000000', 'Two-approval threshold (LKR)',
+      'Purchase requests and orders at or above this value require two distinct approvers, neither of whom created the transaction.'],
+    ['supplier.bank.change.days', '14', 'Recent supplier bank-change warning (days)',
+      'Payments to a supplier whose bank details changed within this many days require a warning acknowledgement.'],
+    ['price.warning.multiplier', '1.5', 'Unusual purchase price multiplier',
+      'Warn when a material rate exceeds this multiple of the same supplier and project history.'],
     ['split.window.days', '7', 'Window for spotting split purchases (days)',
       'Several orders to one supplier inside this many days are judged together against the threshold.'],
     ['outlier.sigma', '3', 'How far from normal counts as unusual',
@@ -3200,6 +3232,57 @@ export async function migrate() {
   await addColumn('employee_pay_components','calculation_method',"VARCHAR(50) NOT NULL DEFAULT 'Fixed full amount'");
   await addColumn('employee_pay_components','allowance_type',"VARCHAR(50) NOT NULL DEFAULT 'Other'");
   await addColumn('payslip_components','calculation_detail','TEXT NULL');
+  await addColumn('supplier_invoices','verified_by','BIGINT UNSIGNED NULL');
+  await addColumn('supplier_invoices','verified_at','DATETIME NULL');
+  await query(`CREATE TABLE IF NOT EXISTS employee_offboarding_cases (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    employee_id BIGINT UNSIGNED NOT NULL UNIQUE,
+    reason VARCHAR(600) NOT NULL,
+    requested_on DATE NOT NULL,
+    requested_by BIGINT UNSIGNED NOT NULL,
+    access_cleared_by BIGINT UNSIGNED NULL,
+    access_cleared_at DATETIME NULL,
+    payroll_cleared_by BIGINT UNSIGNED NULL,
+    payroll_cleared_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(employee_id) REFERENCES employees(id),
+    FOREIGN KEY(requested_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS site_attendance_submissions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    employee_id BIGINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NOT NULL,
+    work_date DATE NOT NULL,
+    state ENUM('On site','Absent') NOT NULL,
+    submitted_by BIGINT UNSIGNED NOT NULL,
+    submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status ENUM('Pending','Approved','Rejected') NOT NULL DEFAULT 'Pending',
+    reviewed_by BIGINT UNSIGNED NULL,
+    reviewed_at DATETIME NULL,
+    review_note VARCHAR(500) NULL,
+    UNIQUE KEY uq_site_attendance_employee_day(employee_id,work_date),
+    FOREIGN KEY(employee_id) REFERENCES employees(id),
+    FOREIGN KEY(project_id) REFERENCES projects(id),
+    FOREIGN KEY(submitted_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('site_material_counts','client_ref','VARCHAR(120) NULL');
+  await addIndex('site_material_counts','uq_sitecount_client_ref','UNIQUE KEY uq_sitecount_client_ref(client_ref)');
+  await addColumn('site_material_consumption','client_ref','VARCHAR(120) NULL');
+  await addIndex('site_material_consumption','uq_siteuse_client_ref','UNIQUE KEY uq_siteuse_client_ref(client_ref)');
+  await query(`CREATE TABLE IF NOT EXISTS historical_import_batches (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    kind VARCHAR(40) NOT NULL, filename VARCHAR(190) NOT NULL, checksum CHAR(64) NOT NULL,
+    status ENUM('Review','Imported') NOT NULL DEFAULT 'Review',
+    preview_json LONGTEXT NOT NULL, uploaded_by BIGINT UNSIGNED NOT NULL,
+    confirmed_by BIGINT UNSIGNED NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    confirmed_at DATETIME NULL,
+    FOREIGN KEY(uploaded_by) REFERENCES users(id), FOREIGN KEY(confirmed_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS historical_import_links (
+    kind VARCHAR(40) NOT NULL, source_code VARCHAR(120) NOT NULL,
+    target_id BIGINT UNSIGNED NOT NULL, batch_id BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY(kind,source_code), FOREIGN KEY(batch_id) REFERENCES historical_import_batches(id)
+  ) ENGINE=InnoDB`);
   await seedWorkMethods();
   await seedAccessControl();
 }

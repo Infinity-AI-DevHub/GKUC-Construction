@@ -9,12 +9,13 @@ import DocumentSettings from '../DocumentSettings.jsx';
 import Messaging from '../Messaging.jsx';
 import OptionLists from '../OptionLists.jsx';
 import Integrity from '../Integrity.jsx';
+import ImportCentre from '../ImportCentre.jsx';
 
-export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Notifications', 'Evening summary', 'Messages', 'Lists', 'Fraud watch', 'Audit log', 'My account'];
+export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Import centre', 'Notifications', 'Evening summary', 'Messages', 'Lists', 'Fraud watch', 'Audit log', 'My account'];
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
 export default function Admin({ can, user, reload, companyId, initialTab = TABS[0], onTabChange }) {
-  const allowed = TABS.filter(name => ({Users:can.manage,'Access control':can.roles,Company:can.companySettings,Documents:can.documentSettings,Notifications:true,'Evening summary':can.audit,Messages:can.messages,Lists:can.lists,'Fraud watch':can.audit,'Audit log':can.audit,'My account':true})[name]);
+  const allowed = TABS.filter(name => ({Users:can.manage,'Access control':can.roles,Company:can.companySettings,Documents:can.documentSettings,'Import centre':['clients.manage','subcontractors.manage','projects.manage','qs.boq','qs.quotation','qs.costControl','qs.retention'].some(key=>can.has(key)),Notifications:true,'Evening summary':can.audit,Messages:can.messages,Lists:can.lists,'Fraud watch':can.audit,'Audit log':can.audit,'My account':true})[name]);
   const [selectedTab, setTab] = useState(initialTab);
   const tab = allowed.includes(selectedTab) ? selectedTab : allowed[0];
   const [creating, setCreating] = useState(false);
@@ -33,6 +34,7 @@ export default function Admin({ can, user, reload, companyId, initialTab = TABS[
     {tab === 'Access control' && <AccessControl user={user} />}
     {tab === 'Company' && <CompanySettings can={{...can,manage:can.companySettings}} companyId={companyId} />}
     {tab === 'Documents' && <DocumentSettings can={{...can,manage:can.documentSettings}} />}
+    {tab === 'Import centre' && <ImportCentre />}
     {tab === 'Notifications' && <Notifications can={can} reload={reload} />}
     {tab === 'Evening summary' && <EveningSummary can={can} />}
     {tab === 'Messages' && (can.messages

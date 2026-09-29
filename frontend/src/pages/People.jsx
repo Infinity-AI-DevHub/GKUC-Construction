@@ -12,6 +12,8 @@ import BiometricImport from './BiometricImport.jsx';
 import { useOptions } from '../options.js';
 import { AttendanceRegister, LeaveRegister } from '../Registers.jsx';
 import EmployeeProfile from './EmployeeProfile.jsx';
+import WorkflowChecklist from '../WorkflowChecklist.jsx';
+import { payrollSteps } from '../workflow-paths.js';
 import AttendanceCorrection from './AttendanceCorrection.jsx';
 import WorkforceMap from './WorkforceMap.jsx';
 
@@ -78,7 +80,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     Departments: can.hr && 'Add department'
   };
 
-  if (employeeId) return <RecordScopeProvider scope={{ kind: 'shared' }}><EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} canPayroll={can.payroll} canConduct={can.conduct} canAssets={can.assets}
+  if (employeeId) return <RecordScopeProvider scope={{ kind: 'shared' }}><EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} canPayroll={can.payroll} canAccess={can.manage} canConduct={can.conduct} canAssets={can.assets}
     canCorrect={can.attendance || can.hrImport} projects={allProjects} departments={data.departments}
     companies={companies} reloadPeople={reload} /></RecordScopeProvider>;
 
@@ -386,6 +388,7 @@ function PayrollDetail({ run, close }) {
   const employerCost = run.payslips.reduce((sum, slip) => sum + Number(slip.employerCost), 0);
   return <Modal title={`${run.reference} · ${run.payFrequency} · ${shortDate(run.periodStart)} to ${shortDate(run.periodEnd)}`} close={close} wide>
     <div className="report-form">
+      <WorkflowChecklist title="Monthly payroll path" steps={payrollSteps(run)} />
       <div className="project-stats wide">
         <div><span>Employees</span><strong>{run.payslips.length}</strong></div>
         <div><span>Gross earnings</span><strong>{rupees(gross)}</strong></div>
@@ -511,16 +514,21 @@ function Attendance({ data, projects, reload, can }) {
   const [date, setDate] = useState(todayInput());
   const [rows, setRows] = useState(data.attendance);
   const [analytics, setAnalytics] = useState(null);
+  const [siteSubmissions,setSiteSubmissions]=useState([]);
+  const [reviewError,setReviewError]=useState('');
+  const loadSubmissions=()=>api('/attendance/site-submissions').then(setSiteSubmissions).catch(()=>setSiteSubmissions([]));
   const loadRows = () => api(`/attendance?date=${date}`).then(setRows).catch(() => setRows([]));
   const loadAnalytics = () => api('/attendance/analytics').then(setAnalytics).catch(() => setAnalytics(null));
-  useEffect(() => { loadRows(); }, [date]);
+  useEffect(() => { loadRows(); loadSubmissions(); }, [date]);
   useLiveList(loadAnalytics);
   const present = rows.filter(row => ['On site', 'Late', 'Checked out', 'Business trip'].includes(row.state)).length;
   const refresh = async () => { await Promise.all([loadRows(), loadAnalytics(), reload()]); };
   const toggle = async id => { await post(`/attendance/${id}/toggle`); await refresh(); };
+  const reviewSubmission=async(id,decision)=>{try{await post(`/attendance/site-submissions/${id}/review`,{decision});setReviewError('');await Promise.all([loadSubmissions(),refresh()]);}catch(error){setReviewError(error.message);}};
   const canCorrect = can.attendance || can.hrImport;
 
   return <>
+    {siteSubmissions.length>0&&<section className="site-attendance-review"><h3>Site attendance awaiting HR review</h3><p>These field submissions do not affect payroll until HR approves them.</p>{reviewError&&<p className="form-error" role="alert">{reviewError}</p>}{siteSubmissions.map(row=><div key={row.id}><strong>{row.employee}</strong><span>{row.project} · {row.workDate} · {row.state} · submitted by {row.submittedBy}</span><button type="button" onClick={()=>reviewSubmission(row.id,'Approved')}>Approve</button><button type="button" onClick={()=>reviewSubmission(row.id,'Rejected')}>Reject</button></div>)}</section>}
     {analytics && <AttendanceVisuals analytics={analytics} />}
     <div className="attendance-day-toolbar">
       <div><span>Daily record</span><h2>{date === todayInput() ? 'Today’s attendance' : shortDate(date)}</h2></div>

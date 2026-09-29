@@ -33,14 +33,17 @@ router.get('/', auth, wrap(async (req, res) => {
   const [companies, projects, tasks, attendance, materials, fleet, reports, employees, departments, equipment,
     suppliers, purchaseRequests, boqs, milestones, notifications, finance, inquiries, weekly] = await Promise.all([
     query('SELECT id,code,name FROM companies WHERE active=1 ORDER BY id'),
-    gated(['projects.view'], () => query(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,
+    gated(['projects.view','site.reports'], () => can(req,'projects.view') ? query(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,
       COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,c.name company,c.code companyCode FROM projects p
       JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id
-      LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.active=1 ORDER BY p.id`)),
+      LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.active=1 ORDER BY p.id`)
+      : query('SELECT id,name,company_id companyId FROM projects WHERE active=1 ORDER BY name')),
     gated(['site.tasks','projects.view'], () => query(`SELECT t.id,t.title,t.project_id projectId,t.assignee_employee_id assigneeEmployeeId,COALESCE(e.name,t.assignee) assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project,p.company_id companyId FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN employees e ON e.id=t.assignee_employee_id ORDER BY t.id`).then(withTaskAssignees)),
     gated(['hr.manage','hr.attendance'], () => query(`SELECT a.id,a.employee_name name,a.role,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,a.state,a.work_date workDate
       FROM attendance a LEFT JOIN projects p ON p.id=a.project_id WHERE a.work_date=CURDATE() ORDER BY a.id`)),
-    gated(['store.view','store.manage'], () => query('SELECT * FROM materials WHERE active=1 ORDER BY id')),
+    gated(['store.view','store.manage','site.reports'], () => can(req,'store.view')||can(req,'store.manage')
+      ? query('SELECT * FROM materials WHERE active=1 ORDER BY id')
+      : query('SELECT id,name,unit,stock,minimum FROM materials WHERE active=1 ORDER BY name')),
     gated(['transport.view','transport.manage'], () => query(`SELECT f.id,f.vehicle,f.registration reg,f.driver,f.status,
       f.renewal_type renewal,COALESCE(d.expiry_date,f.due_date) due_date,f.odometer,p.name project
       FROM fleet f LEFT JOIN projects p ON p.id=f.project_id
@@ -58,7 +61,10 @@ router.get('/', auth, wrap(async (req, res) => {
      * out has to say who took it, and had the same empty list. Pay is a separate matter and
      * still travels only to the people who maintain it, as in routes/employees.js.
      */
-    gated(['hr.view','hr.manage','hr.attendance','site.attendance','store.lending','projects.manage','enquiries.manage','site.tasks','qs.tender'], () => query(`SELECT e.id,e.user_id userId,e.code,e.name,e.designation,e.phone,e.email,e.status,
+    gated(['hr.view','hr.manage','hr.attendance','site.attendance','site.reports','store.lending','projects.manage','enquiries.manage','site.tasks','qs.tender'], () =>
+      !['hr.view','hr.manage','hr.attendance','store.lending','projects.manage','enquiries.manage','site.tasks','qs.tender'].some(key=>can(req,key))
+        ? query('SELECT id,code,name,status FROM employees WHERE status<>? ORDER BY name',['Archived'])
+        : query(`SELECT e.id,e.user_id userId,e.code,e.name,e.designation,e.phone,e.email,e.status,
       ${['hr.payroll', 'hr.manage','hr.settings'].some(key => req.user.permissions.includes(key))
     ? `e.allowance_eligibility allowanceEligibility,e.basic_salary basicSalary,e.daily_rate dailyRate,e.weekly_rate weeklyRate,e.overtime_rate overtimeRate,
        e.pay_basis payBasis,e.pay_frequency payFrequency,e.payroll_category payrollCategory,e.payroll_company_id payrollCompanyId,

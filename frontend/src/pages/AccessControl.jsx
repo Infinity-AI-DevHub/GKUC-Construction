@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { KeyRound, ShieldCheck, UserCog } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, KeyRound, ShieldCheck, UserCog } from 'lucide-react';
 import { api, del, patch, post, shortDate } from '../api.js';
 import { Avatar, Badge, EmptyState, Field, FormModal, Modal, Row, Table, useLiveList } from '../ui.jsx';
 
@@ -19,6 +19,7 @@ export default function AccessControl({ user }) {
   const [delegating, setDelegating] = useState(null);
   const [saving, setSaving] = useState('');
   const [error, setError] = useState('');
+  const matrixRef = useRef(null);
 
   const load = async () => {
     const [permissions, roleRows, userRows] = await Promise.all([
@@ -80,7 +81,17 @@ export default function AccessControl({ user }) {
 
     {error && <p className="form-error">{error}</p>}
 
-    <section className="table-panel access-matrix">
+    <div className="access-scroll-controls" aria-label="Move across role columns">
+      <span>Scroll across to see and edit every role</span>
+      <div>
+        <button className="secondary" type="button" onClick={() => matrixRef.current?.scrollBy({ left: -420, behavior: 'smooth' })}
+          aria-label="Scroll roles left"><ChevronLeft size={16} /> Previous roles</button>
+        <button className="secondary" type="button" onClick={() => matrixRef.current?.scrollBy({ left: 420, behavior: 'smooth' })}
+          aria-label="Scroll roles right">More roles <ChevronRight size={16} /></button>
+      </div>
+    </div>
+
+    <section className="table-panel access-matrix" ref={matrixRef} tabIndex={0} aria-label="Role permissions matrix, scroll horizontally for more roles">
       <div className="table-head" style={{ gridTemplateColumns: template }}>
         <span>Permission</span>
         {roles.map(role => (

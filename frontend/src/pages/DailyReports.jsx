@@ -3,10 +3,11 @@ import { AlertTriangle, ChevronRight, HardHat, Users } from 'lucide-react';
 import { openRecord, post, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
+import WorkflowChecklist from '../WorkflowChecklist.jsx';
 
 /** PID 2.11 — the structured daily site record that replaces paper logs and phone updates. */
 export default function DailyReports({ data, reload, can }) {
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(() => can.site && new URLSearchParams(window.location.search).get('new') === '1');
   const [detail, setDetail] = useState(null);
 
   return <Page title="Daily site reports" subtitle="Capture workforce, completed work, materials, delays, and site evidence."
@@ -41,6 +42,14 @@ export default function DailyReports({ data, reload, can }) {
 function ReportDetail({ report, close, can }) {
   return <Modal title={`${report.site} — ${report.date}`} close={close}>
     <div className="report-form">
+      <WorkflowChecklist title="Daily site close" steps={[
+        {label:'Attendance reconciled',owner:'HR',done:report.attendance.length>0,detail:report.attendance.length?`${report.attendance.length} attendance entries linked`:'HR must record or import attendance'},
+        {label:'Work and workforce recorded',owner:'Project team',done:Boolean(report.work),detail:report.work?'Daily work report submitted':'Describe completed work'},
+        {label:'Material and equipment usage checked',owner:'Store / project team',done:true,detail:`${report.materials.length} material lines and ${report.equipment.length} equipment lines recorded; verify zero use if blank`},
+        {label:'Delays and issues declared',owner:'Project manager',done:true,detail:report.issue||Number(report.delayHours)>0?'Issue or delay recorded':'No issue or delay declared'},
+        {label:'Supporting evidence',owner:'Project team',done:(report.photos||[]).length>0,skipped:(report.photos||[]).length===0,detail:(report.photos||[]).length?`${report.photos.length} file(s) attached`:'Optional photos can be added below'},
+        {label:'Site report submitted',owner:'Project team',done:true,detail:'This dated report is the authoritative daily record'}
+      ]}/>
       <div className="project-stats wide">
         <div><span>Supervisor</span><strong>{report.supervisor}</strong></div>
         <div><span>Workforce on site</span><strong>{report.workforce}</strong></div>
@@ -85,6 +94,7 @@ function ReportDetail({ report, close, can }) {
 }
 
 function ReportForm({ data, close, reload }) {
+  const query = new URLSearchParams(window.location.search);
   const [usage, setUsage] = useState([]);
   const [plant, setPlant] = useState([]);
   const addUsage = () => setUsage(current => [...current, { materialId: data.materials[0]?.id || '', quantity: '' }]);
@@ -108,8 +118,8 @@ function ReportForm({ data, close, reload }) {
     });
     await reload();
   }}>
-    <SelectField name="projectId" label="Project / site" options={data.projects.map(project => [project.id, project.name])} />
-    <Field name="reportDate" label="Report date" type="date" defaultValue={todayInput()} />
+    <SelectField name="projectId" label="Project / site" defaultValue={query.get('project') || undefined} options={data.projects.map(project => [project.id, project.name])} />
+    <Field name="reportDate" label="Report date" type="date" defaultValue={query.get('workDate') || todayInput()} />
     <Field name="workforce" label="Workforce on site" type="number" min="0" placeholder="e.g. 24" />
     <SelectField name="weather" label="Weather" options={['Clear', 'Cloudy', 'Light rain', 'Heavy rain', 'Windy']} />
     <Field name="delayHours" label="Delay hours" type="number" step="0.5" min="0" defaultValue="0" required={false} />

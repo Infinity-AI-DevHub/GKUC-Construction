@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, clock, getOne, pool, query, today } from '../db.js';
+import { audit, clock, getOne, pool, query, today, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
 
 const router = Router();
@@ -9,6 +9,66 @@ const attendanceTime = z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9](?::[0-5]
 
 const select = `SELECT a.id,a.employee_name name,a.role,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,a.project_id projectId,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,
   a.state,a.work_date workDate,a.employee_id employeeId FROM attendance a LEFT JOIN projects p ON p.id=a.project_id`;
+
+router.get('/site-submissions',auth,permit('hr.attendance','hr.manage'),wrap(async(req,res)=>{
+  res.json(await query(`SELECT s.id,s.employee_id employeeId,e.name employee,p.name project,s.state,
+    DATE_FORMAT(s.work_date,'%Y-%m-%d') workDate,s.status,u.name submittedBy,s.submitted_at submittedAt
+    FROM site_attendance_submissions s JOIN employees e ON e.id=s.employee_id
+    JOIN projects p ON p.id=s.project_id JOIN users u ON u.id=s.submitted_by
+    WHERE s.status='Pending' ORDER BY s.work_date DESC,s.id DESC LIMIT 150`));
+}));
+
+router.post('/site-submissions',auth,permit('site.reports'),validate(z.object({
+  projectId:z.number().int().positive(),date:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  entries:z.array(z.object({employeeId:z.number().int().positive(),state:z.enum(['On site','Absent'])})).min(1).max(300)
+})),wrap(async(req,res)=>{
+  const {projectId,date,entries}=req.body;
+  if(new Set(entries.map(row=>row.employeeId)).size!==entries.length)return res.status(400).json({error:'Each employee can appear only once.'});
+  const project=await getOne('SELECT id FROM projects WHERE id=? AND active=1',[projectId]);
+  if(!project)return res.status(404).json({error:'Active project not found.'});
+  const existing=await query(`SELECT employee_id employeeId,status FROM site_attendance_submissions WHERE work_date=?
+    AND employee_id IN (${entries.map(()=>'?').join(',')})`,[date,...entries.map(row=>row.employeeId)]);
+  if(existing.some(row=>row.status!=='Pending'))return res.status(409).json({error:'An employee has already been reviewed for this date. Ask HR to correct the attendance record.'});
+  const authoritative=await query(`SELECT employee_id employeeId FROM attendance WHERE work_date=? AND employee_id IN (${entries.map(()=>'?').join(',')})`,[date,...entries.map(row=>row.employeeId)]);
+  if(authoritative.length)return res.status(409).json({error:'HR has already recorded attendance for an employee on this date.'});
+  await transaction(async connection=>{
+    for(const entry of entries){
+      const [[employee]]=await connection.execute('SELECT id FROM employees WHERE id=? AND status<>?',[entry.employeeId,'Archived']);
+      if(!employee)throw Object.assign(new Error('Choose an active employee.'),{status:400});
+      await connection.execute(`INSERT INTO site_attendance_submissions
+        (employee_id,project_id,work_date,state,submitted_by) VALUES (?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE project_id=VALUES(project_id),state=VALUES(state),submitted_by=VALUES(submitted_by),submitted_at=NOW()`,
+      [entry.employeeId,projectId,date,entry.state,req.user.id]);
+    }
+    await audit(connection,req.user.id,'SUBMIT','site_attendance',projectId,null,{date,entries},req.ip);
+  });
+  res.status(201).json({submitted:entries.length,status:'Pending HR review'});
+}));
+
+router.post('/site-submissions/:id/review',auth,permit('hr.attendance','hr.manage'),validate(z.object({
+  decision:z.enum(['Approved','Rejected']),note:z.string().trim().max(500).optional()
+})),wrap(async(req,res)=>{
+  const outcome=await transaction(async connection=>{
+    const [[row]]=await connection.execute('SELECT * FROM site_attendance_submissions WHERE id=? FOR UPDATE',[req.params.id]);
+    if(!row)return {status:404,error:'Submission not found'};
+    if(row.status!=='Pending')return {status:409,error:'This submission was already reviewed'};
+    if(req.body.decision==='Approved'){
+      const [[employee]]=await connection.execute('SELECT name,designation FROM employees WHERE id=?',[row.employee_id]);
+      const [[existing]]=await connection.execute('SELECT id FROM attendance WHERE employee_id=? AND work_date=?',[row.employee_id,row.work_date]);
+      if(existing)return {status:409,error:'HR attendance already exists. Reject this submission or use an audited correction.'};
+      await connection.execute(`INSERT INTO attendance
+        (employee_name,role,project_id,work_location,employee_id,work_date,state,confirmed_by,source,source_notes)
+        VALUES (?,?,?,'Site',?,?,?,?,'Attendance sheet',?)`,
+      [employee.name,employee.designation||'Employee',row.project_id,row.employee_id,row.work_date,row.state,req.user.id,`Site submission ${row.id}`]);
+    }
+    await connection.execute('UPDATE site_attendance_submissions SET status=?,reviewed_by=?,reviewed_at=NOW(),review_note=? WHERE id=?',
+      [req.body.decision,req.user.id,req.body.note||null,row.id]);
+    await audit(connection,req.user.id,'REVIEW','site_attendance',row.id,row,{decision:req.body.decision,note:req.body.note},req.ip);
+    return {id:row.id,status:req.body.decision};
+  });
+  if(outcome.error)return res.status(outcome.status).json({error:outcome.error});
+  res.json(outcome);
+}));
 
 router.get('/', auth, permit('hr.attendance','hr.manage'), wrap(async (req, res) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : today();

@@ -40,7 +40,7 @@ const money = value => `LKR ${Number(value || 0).toLocaleString('en-LK', { maxim
  * a sweep that runs nightly would report the same invoice every night until somebody
  * looked at it, and the list would become something people scroll past.
  */
-async function raise(finding) {
+export async function raise(finding) {
   const fingerprint = `${finding.rule}:${finding.entity}:${finding.entityId}`;
   await query(
     `INSERT INTO risk_findings
@@ -587,6 +587,15 @@ export async function runIntegritySweep() {
       referenceType: 'risk_finding', referenceId: finding.id
     }).catch(() => {});
   }
+  const overdue = await query(`SELECT id,title,assigned_user_id,resolution_due_at FROM risk_findings
+    WHERE status='Confirmed' AND assigned_user_id IS NOT NULL AND resolution_due_at<NOW()`);
+  for (const finding of overdue) await notify({
+    key: `risk-overdue:${finding.id}:${new Date().toISOString().slice(0,10)}`,
+    caseKey: `risk-investigation:${finding.id}`, userId: finding.assigned_user_id,
+    severity: 'Critical', title: `Investigation overdue: ${finding.title}`,
+    message: `The resolution deadline was ${finding.resolution_due_at}. Escalate or record resolution proof.`,
+    referenceType: 'risk_finding', referenceId: finding.id
+  }).catch(() => {});
 
   return { raised: found.length, rules: DETECTORS.length, failures };
 }
