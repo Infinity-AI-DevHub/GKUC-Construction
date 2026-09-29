@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
+import { auth, can, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { notify } from '../alerts.js';
+import { controlNumber, invoiceWarnings, orderWarnings, paymentMatch } from '../lib/procurement-controls.js';
+import { raise as raiseFinding } from '../lib/integrity.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -10,7 +12,10 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 /* Suppliers */
 router.get('/suppliers', auth, permit('store.view','store.manage','finance.pay'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 0);
+  const canSeeBank = can(req, 'finance.pay');
   res.json(await query(`SELECT s.id,s.name,s.contact_person contact,s.phone,s.email,s.address,
+    ${canSeeBank ? 's.bank_name bankName,s.bank_branch bankBranch,s.bank_account_name bankAccountName,s.bank_account_number bankAccountNumber,' : ''}
+    s.bank_changed_at bankChangedAt,
     (SELECT COUNT(*) FROM purchase_orders o JOIN projects op ON op.id=o.project_id
       WHERE o.supplier_id=s.id ${companyId ? 'AND op.company_id=?' : ''}) orders,
     (SELECT COALESCE(SUM(i.amount-i.paid_amount),0) FROM supplier_invoices i
@@ -23,18 +28,41 @@ router.post('/suppliers', auth, permit('store.manage', 'finance.pay'), validate(
   contact: z.string().max(120).optional(),
   phone: z.string().max(40).optional(),
   email: z.string().email().optional().or(z.literal('')),
-  address: z.string().max(400).optional()
+  address: z.string().max(400).optional(),bankName:z.string().max(180).optional(),
+  bankBranch:z.string().max(180).optional(),bankAccountName:z.string().max(180).optional(),
+  bankAccountNumber:z.string().max(120).optional()
 })), wrap(async (req, res) => {
   const body = req.body;
-  const result = await query('INSERT INTO suppliers (name,contact_person,phone,email,address) VALUES (?,?,?,?,?)',
-    [body.name, body.contact || null, body.phone || null, body.email || null, body.address || null]);
+  const result = await query(`INSERT INTO suppliers (name,contact_person,phone,email,address,
+    bank_name,bank_branch,bank_account_name,bank_account_number,bank_changed_at,bank_changed_by)
+    VALUES (?,?,?,?,?,?,?,?,?,${body.bankAccountNumber?'NOW()':'NULL'},?)`,
+    [body.name, body.contact || null, body.phone || null, body.email || null, body.address || null,
+      body.bankName||null,body.bankBranch||null,body.bankAccountName||null,body.bankAccountNumber||null,
+      body.bankAccountNumber?req.user.id:null]);
   const row = await getOne('SELECT * FROM suppliers WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'supplier', row.id, null, row, req.ip);
   res.status(201).json(row);
 }));
 
+router.patch('/suppliers/:id/bank',auth,permit('finance.pay'),validate(z.object({
+  bankName:z.string().trim().min(2).max(180),bankBranch:z.string().trim().max(180).optional(),
+  bankAccountName:z.string().trim().min(2).max(180),bankAccountNumber:z.string().trim().min(4).max(120),
+  reason:z.string().trim().min(10).max(500)
+})),wrap(async(req,res)=>{
+  const before=await getOne('SELECT * FROM suppliers WHERE id=? AND active=1',[req.params.id]);
+  if(!before)return res.status(404).json({error:'Supplier not found'});
+  await query(`UPDATE suppliers SET bank_name=?,bank_branch=?,bank_account_name=?,bank_account_number=?,
+    bank_changed_at=NOW(),bank_changed_by=? WHERE id=?`,
+  [req.body.bankName,req.body.bankBranch||null,req.body.bankAccountName,req.body.bankAccountNumber,req.user.id,before.id]);
+  await audit(pool,req.user.id,'BANK_CHANGE','supplier',before.id,
+    {bankName:before.bank_name,accountLastFour:String(before.bank_account_number||'').slice(-4)},
+    {bankName:req.body.bankName,accountLastFour:req.body.bankAccountNumber.slice(-4),reason:req.body.reason},req.ip);
+  res.json({id:before.id,bankName:req.body.bankName,bankChangedAt:new Date().toISOString()});
+}));
+
 /* Purchase requests */
 const requestList = `SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,r.created_at createdAt,
+  r.first_approved_by firstApprovedBy,r.requested_by requestedById,
   r.project_id projectId,p.name project,u.name requestedBy,
   (SELECT COUNT(*) FROM purchase_request_items i WHERE i.request_id=r.id) lineCount,
   (SELECT COALESCE(SUM(i.quantity*i.estimated_rate),0) FROM purchase_request_items i WHERE i.request_id=r.id) estimate
@@ -97,8 +125,16 @@ router.patch('/requests/:id', auth, permit('projects.manage'), validate(z.object
 })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM purchase_requests WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Purchase request not found' });
-  if (before.status === 'Ordered') return res.status(409).json({ error: 'This request has already been ordered' });
-  await query('UPDATE purchase_requests SET status=?,decided_by=?,decided_at=NOW() WHERE id=?', [req.body.status, req.user.id, req.params.id]);
+  if(before.status!=='Pending')return res.status(409).json({error:'This request has already been decided'});
+  if(req.body.status==='Approved'){
+    if(Number(before.requested_by)===Number(req.user.id))return res.status(403).json({error:'The requester cannot approve their own purchase request.'});
+    if(Number(before.first_approved_by)===Number(req.user.id))return res.status(403).json({error:'A different person must give the second approval.'});
+    const estimate=(await query(`SELECT COALESCE(SUM(quantity*estimated_rate),0) amount FROM purchase_request_items WHERE request_id=?`,[before.id]))[0].amount;
+    const dual=Number(estimate)>=await controlNumber('approval.two.person.threshold',1000000);
+    if(dual&&!before.first_approved_by){
+      await query('UPDATE purchase_requests SET first_approved_by=?,first_approved_at=NOW() WHERE id=?',[req.user.id,before.id]);
+    }else await query("UPDATE purchase_requests SET status='Approved',decided_by=?,decided_at=NOW() WHERE id=?",[req.user.id,before.id]);
+  }else await query('UPDATE purchase_requests SET status=?,decided_by=?,decided_at=NOW() WHERE id=?',[req.body.status,req.user.id,before.id]);
   const after = await getOne(`${requestList} WHERE r.id=?`, [req.params.id]);
   await audit(pool, req.user.id, req.body.status.toUpperCase(), 'purchase_request', after.id, before, after, req.ip);
   res.json(after);
@@ -134,7 +170,9 @@ router.post('/requests/:id/quotations', auth, permit('store.manage', 'finance.pa
 
 /* Purchase orders */
 const orderList = `SELECT o.id,o.reference,o.status,o.order_date orderDate,o.total,o.project_id projectId,
-  p.company_id companyId,p.name project,s.name supplier,s.id supplierId,u.name issuedBy,o.request_id requestId
+  p.company_id companyId,p.name project,s.name supplier,s.id supplierId,u.name issuedBy,
+  o.issued_by issuedById,o.first_approved_by firstApprovedBy,o.second_approved_by secondApprovedBy,
+  o.request_id requestId
   FROM purchase_orders o JOIN projects p ON p.id=o.project_id JOIN suppliers s ON s.id=o.supplier_id JOIN users u ON u.id=o.issued_by`;
 
 router.get('/orders', auth, permit('store.view','store.manage','finance.pay'), wrap(async (req, res) => {
@@ -153,7 +191,7 @@ router.get('/orders/:id', auth, permit('store.view','store.manage','finance.pay'
   res.json({ ...order, items, invoices });
 }));
 
-router.post('/orders', auth, permit('store.manage', 'finance.pay'), validate(z.object({
+const orderSchema=z.object({
   requestId: z.number().int().positive().optional(),
   supplierId: z.number().int().positive(),
   projectId: z.number().int().positive(),
@@ -164,23 +202,62 @@ router.post('/orders', auth, permit('store.manage', 'finance.pay'), validate(z.o
     unit: z.string().min(1).max(30),
     quantity: z.number().positive(),
     rate: z.number().nonnegative()
-  })).min(1)
-})), wrap(async (req, res) => {
+  })).min(1),riskAccepted:z.boolean().default(false),riskReason:z.string().trim().max(500).optional()
+});
+router.post('/orders/check',auth,permit('store.manage','finance.pay'),validate(orderSchema),wrap(async(req,res)=>{
+  res.json({warnings:await orderWarnings(req.body),total:req.body.items.reduce((sum,item)=>sum+item.quantity*item.rate,0)});
+}));
+router.post('/orders', auth, permit('store.manage', 'finance.pay'), validate(orderSchema), wrap(async (req, res) => {
   const body = req.body;
   const reference = await nextReference('PO', 'purchase_orders');
   const total = body.items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
+  const warnings=await orderWarnings(body);
+  if(warnings.length&&(!body.riskAccepted||!body.riskReason||body.riskReason.length<10))
+    return res.status(409).json({error:'Review these purchase risks and enter a reason before issuing the order.',warnings});
+  const request=body.requestId?await getOne('SELECT * FROM purchase_requests WHERE id=?',[body.requestId]):null;
+  if(body.requestId&&(!request||request.status!=='Approved'||Number(request.project_id)!==body.projectId))
+    return res.status(409).json({error:'The linked purchase request must be approved and belong to this project.'});
+  const dual=total>=await controlNumber('approval.two.person.threshold',1000000);
+  const status=request&&!dual?'Issued':'Pending approval';
   const id = await transaction(async connection => {
-    const [result] = await connection.execute(`INSERT INTO purchase_orders (reference,request_id,supplier_id,project_id,order_date,total,issued_by)
-      VALUES (?,?,?,?,?,?,?)`, [reference, body.requestId || null, body.supplierId, body.projectId, body.orderDate, total, req.user.id]);
+    const [result] = await connection.execute(`INSERT INTO purchase_orders (reference,request_id,supplier_id,project_id,order_date,total,issued_by,status)
+      VALUES (?,?,?,?,?,?,?,?)`, [reference, body.requestId || null, body.supplierId, body.projectId, body.orderDate, total, req.user.id,status]);
     for (const item of body.items) {
       await connection.execute('INSERT INTO purchase_order_items (order_id,material_id,description,unit,quantity,rate) VALUES (?,?,?,?,?,?)',
         [result.insertId, item.materialId || null, item.description, item.unit, item.quantity, item.rate]);
     }
     if (body.requestId) await connection.execute("UPDATE purchase_requests SET status='Ordered' WHERE id=?", [body.requestId]);
-    await audit(connection, req.user.id, 'CREATE', 'purchase_order', result.insertId, null, { reference, total, ...body }, req.ip);
+    await audit(connection, req.user.id, 'CREATE', 'purchase_order', result.insertId, null,
+      {reference,total,status,warnings,riskReason:body.riskReason||null,...body},req.ip);
     return result.insertId;
   });
+  for(const warning of warnings)await raiseFinding({rule:`precommit_${warning.code}`,category:'Control',severity:'High',
+    entity:'purchase_order',entityId:id,projectId:body.projectId,subjectUserId:req.user.id,amount:total,
+    title:`Purchase order ${reference} needs investigation`,detail:warning.message,
+    evidence:{...warning.evidence,acceptanceReason:body.riskReason},score:75});
   res.status(201).json(await getOne(`${orderList} WHERE o.id=?`, [id]));
+}));
+
+router.post('/orders/:id/approve',auth,permit('projects.manage'),wrap(async(req,res)=>{
+  const outcome=await transaction(async connection=>{
+    const [rows]=await connection.execute('SELECT * FROM purchase_orders WHERE id=? FOR UPDATE',[req.params.id]);
+    const order=rows[0];
+    if(!order)return {error:'Purchase order not found',status:404};
+    if(order.status!=='Pending approval')return {error:'This order is not awaiting approval',status:409};
+    if(Number(order.issued_by)===Number(req.user.id)||Number(order.first_approved_by)===Number(req.user.id))
+      return {error:'A creator or first approver cannot approve this order again.',status:403};
+    const dual=Number(order.total)>=await controlNumber('approval.two.person.threshold',1000000);
+    if(dual&&!order.first_approved_by){
+      await connection.execute('UPDATE purchase_orders SET first_approved_by=?,first_approved_at=NOW() WHERE id=?',[req.user.id,order.id]);
+    }else await connection.execute(`UPDATE purchase_orders SET status='Issued',
+      ${dual?'second_approved_by=?,second_approved_at=NOW()':'first_approved_by=?,first_approved_at=NOW()'} WHERE id=?`,
+      [req.user.id,order.id]);
+    await audit(connection,req.user.id,'APPROVE','purchase_order',order.id,order,
+      {stage:dual&&!order.first_approved_by?'First approval':'Final approval'},req.ip);
+    return {id:order.id};
+  });
+  if(outcome.error)return res.status(outcome.status).json({error:outcome.error});
+  res.json(await getOne(`${orderList} WHERE o.id=?`,[outcome.id]));
 }));
 
 /**
@@ -202,7 +279,7 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
       const [orders] = await connection.execute('SELECT * FROM purchase_orders WHERE id=? FOR UPDATE', [req.params.id]);
       const current = orders[0];
       if (!current) throw Object.assign(new Error('Purchase order not found'), { status: 404 });
-      if (current.status === 'Cancelled') throw Object.assign(new Error('This order was cancelled'), { status: 409 });
+      if (current.status === 'Cancelled'||current.status==='Pending approval') throw Object.assign(new Error('This order is cancelled or still awaiting approval'), { status: 409 });
 
       let receivedValue = 0;
       for (const line of req.body.lines) {
@@ -244,12 +321,27 @@ router.get('/invoices', auth, permit('finance.view','finance.pay'), wrap(async (
   const companyId = Number(req.query.companyId || 0);
   res.json(await query(`SELECT i.id,i.company_id companyId,i.supplier_id supplierId,i.invoice_no invoiceNo,i.amount,i.paid_amount paidAmount,
     i.net_amount netAmount,i.tax_treatment taxTreatment,i.vat_rate vatRate,i.vat_amount vatAmount,
-    i.invoice_date invoiceDate,i.due_date dueDate,i.status,s.name supplier,o.reference orderReference
+    i.invoice_date invoiceDate,i.due_date dueDate,i.status,s.name supplier,o.reference orderReference,
+    i.payment_exception_approved_by paymentExceptionApprovedBy,i.recorded_by recordedById
     FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN purchase_orders o ON o.id=i.order_id
     ${companyId ? 'WHERE i.company_id=?' : ''} ORDER BY i.id DESC`, companyId ? [companyId] : []));
 }));
 
-router.post('/invoices', auth, permit('finance.pay'), validate(z.object({
+router.post('/invoices/:id/payment-exception',auth,permit('finance.manage'),validate(z.object({
+  reason:z.string().trim().min(10).max(500)
+})),wrap(async(req,res)=>{
+  const invoice=await getOne('SELECT * FROM supplier_invoices WHERE id=?',[req.params.id]);
+  if(!invoice)return res.status(404).json({error:'Invoice not found'});
+  if(invoice.order_id)return res.status(409).json({error:'This invoice has a purchase order; complete the goods-receipt match instead.'});
+  if(Number(invoice.recorded_by)===Number(req.user.id))return res.status(403).json({error:'A different Finance user must approve a payment without a purchase order.'});
+  await query(`UPDATE supplier_invoices SET payment_exception_approved_by=?,payment_exception_reason=?,
+    payment_exception_approved_at=NOW() WHERE id=?`,[req.user.id,req.body.reason,invoice.id]);
+  await audit(pool,req.user.id,'APPROVE_PAYMENT_EXCEPTION','supplier_invoice',invoice.id,null,
+    {reason:req.body.reason},req.ip);
+  res.status(204).end();
+}));
+
+const supplierInvoiceSchema=z.object({
   companyId: z.number().int().positive().default(1),
   orderId: z.number().int().positive().optional(),
   supplierId: z.number().int().positive(),
@@ -259,23 +351,42 @@ router.post('/invoices', auth, permit('finance.pay'), validate(z.object({
   taxTreatment: z.enum(['Standard','Exempt']).default('Exempt'),
   vatRate: z.number().min(0).max(100).default(0),
   invoiceDate: isoDate,
-  dueDate: isoDate.optional()
-}).refine(value=>value.amount||value.netAmount,{message:'Enter the invoice amount',path:['amount']})), wrap(async (req, res) => {
+  dueDate: isoDate.optional(),riskAccepted:z.boolean().default(false),riskReason:z.string().trim().max(500).optional()
+}).refine(value=>value.amount||value.netAmount,{message:'Enter the invoice amount',path:['amount']});
+router.post('/invoices/check',auth,permit('finance.pay'),validate(supplierInvoiceSchema),wrap(async(req,res)=>{
+  const body=req.body,net=Number(body.netAmount??body.amount);
+  const vat=body.taxTreatment==='Standard'?Math.round(net*body.vatRate)/100:0;
+  const total=body.netAmount?Math.round((net+vat)*100)/100:Number(body.amount);
+  res.json({warnings:await invoiceWarnings(body,total)});
+}));
+router.post('/invoices', auth, permit('finance.pay'), validate(supplierInvoiceSchema), wrap(async (req, res) => {
   const body = req.body;
   try {
-    const order = body.orderId ? await getOne(`SELECT o.id,p.company_id companyId FROM purchase_orders o
+    const order = body.orderId ? await getOne(`SELECT o.id,o.supplier_id supplierId,o.status,p.company_id companyId FROM purchase_orders o
       JOIN projects p ON p.id=o.project_id WHERE o.id=?`, [body.orderId]) : null;
     if (body.orderId && !order) return res.status(404).json({ error: 'Purchase order not found' });
     if (order && Number(order.companyId) !== body.companyId)
       return res.status(400).json({ error: 'That purchase order belongs to a different company' });
+    if(order&&Number(order.supplierId)!==body.supplierId)
+      return res.status(409).json({error:'The invoice supplier does not match the purchase order supplier.'});
+    if(order&&order.status==='Pending approval')
+      return res.status(409).json({error:'Approve the purchase order before recording its invoice.'});
     const net=Number(body.netAmount??body.amount),vat=body.taxTreatment==='Standard'?Math.round(net*body.vatRate)/100:0,total=body.netAmount?Math.round((net+vat)*100)/100:Number(body.amount);
+    const warnings=await invoiceWarnings(body,total);
+    if(warnings.length&&(!body.riskAccepted||!body.riskReason||body.riskReason.length<10))
+      return res.status(409).json({error:'Possible duplicate invoice. Check the document and explain why this is a separate invoice.',warnings});
     const result = await query(`INSERT INTO supplier_invoices
       (company_id,order_id,supplier_id,invoice_no,amount,net_amount,tax_treatment,vat_rate,vat_amount,invoice_date,due_date,recorded_by)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       [body.companyId,body.orderId||null,body.supplierId,body.invoiceNo,total,net,body.taxTreatment,
         body.taxTreatment==='Standard'?body.vatRate:0,vat,body.invoiceDate,body.dueDate||null,req.user.id]);
     const row = await getOne('SELECT * FROM supplier_invoices WHERE id=?', [result.insertId]);
-    await audit(pool, req.user.id, 'CREATE', 'supplier_invoice', row.id, null, row, req.ip);
+    await audit(pool, req.user.id, 'CREATE', 'supplier_invoice', row.id, null,
+      {...row,warnings,riskReason:body.riskReason||null},req.ip);
+    for(const warning of warnings)await raiseFinding({rule:`precommit_${warning.code}`,category:'Control',severity:'High',
+      entity:'supplier_invoice',entityId:row.id,subjectUserId:req.user.id,amount:total,
+      title:`Supplier invoice ${body.invoiceNo} needs investigation`,detail:warning.message,
+      evidence:{...warning.evidence,acceptanceReason:body.riskReason},score:80});
     res.status(201).json(row);
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'That invoice number is already recorded for this supplier' });
@@ -287,7 +398,8 @@ router.post('/invoices/:id/payments', auth, permit('finance.pay'), validate(z.ob
   amount: z.number().positive(),
   paidDate: isoDate,
   method: z.string().trim().min(1).max(60).default('Bank transfer'),
-  reference: z.string().max(120).optional()
+  reference: z.string().max(120).optional(),bankChangeAcknowledged:z.boolean().default(false),
+  bankChangeReason:z.string().trim().max(500).optional()
 })), fromOptions({ method: 'income.method' }), wrap(async (req, res) => {
   if (req.body.method === 'Cheque') return res.status(400).json({ error: 'Register this payment in Issued cheques; clearing it updates the supplier invoice once' });
   try {
@@ -295,13 +407,23 @@ router.post('/invoices/:id/payments', auth, permit('finance.pay'), validate(z.ob
       const [rows] = await connection.execute('SELECT * FROM supplier_invoices WHERE id=? FOR UPDATE', [req.params.id]);
       const current = rows[0];
       if (!current) throw Object.assign(new Error('Invoice not found'), { status: 404 });
+      const match=await paymentMatch(current,connection);
+      if(current.order_id&&!match.matched)throw Object.assign(new Error(`Payment blocked: ${match.reason}`),{status:409});
+      if(!current.order_id&&!current.payment_exception_approved_by)
+        throw Object.assign(new Error('Payment blocked: another Finance user must approve the no-purchase-order exception first.'),{status:409});
+      const [suppliers]=await connection.execute('SELECT bank_changed_at FROM suppliers WHERE id=?',[current.supplier_id]);
+      const days=await controlNumber('supplier.bank.change.days',14);
+      const changed=suppliers[0]?.bank_changed_at&&Date.now()-new Date(suppliers[0].bank_changed_at).getTime()<=days*86400000;
+      if(changed&&(!req.body.bankChangeAcknowledged||!req.body.bankChangeReason||req.body.bankChangeReason.length<10))
+        throw Object.assign(new Error('Supplier bank details changed recently. Verify by an independent channel and record how you checked.'),{status:409});
       const paid = Number(current.paid_amount) + req.body.amount;
       if (paid > Number(current.amount) + 0.001) throw Object.assign(new Error('Payment exceeds the invoice balance'), { status: 409 });
       const status = paid >= Number(current.amount) - 0.001 ? 'Paid' : 'Partially paid';
       await connection.execute('UPDATE supplier_invoices SET paid_amount=?,status=? WHERE id=?', [paid, status, current.id]);
       await connection.execute('INSERT INTO supplier_payments (invoice_id,amount,paid_date,method,reference,created_by) VALUES (?,?,?,?,?,?)',
         [current.id, req.body.amount, req.body.paidDate, req.body.method, req.body.reference || null, req.user.id]);
-      await audit(connection, req.user.id, 'PAYMENT', 'supplier_invoice', current.id, current, { paid, status }, req.ip);
+      await audit(connection, req.user.id, 'PAYMENT', 'supplier_invoice', current.id, current,
+        {paid,status,threeWayMatch:match,bankChangeReason:req.body.bankChangeReason||null},req.ip);
       return { ...current, paid_amount: paid, status };
     });
     res.status(201).json(invoice);

@@ -223,11 +223,21 @@ const INVOICE_TEMPLATE = 'minmax(130px,1fr) minmax(160px,1.2fr) 130px 120px 140p
 function Invoices({ can, refresh, companyId }) {
   const [rows, setRows] = useState([]);
   const [paying, setPaying] = useState(null);
+  const [error, setError] = useState('');
   const load = () => api(`/purchasing/invoices?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
 
+  const approveException = async row => {
+    const reason = window.prompt(`This supplier invoice has no purchase order or goods receipt. Explain why payment may proceed for ${row.invoiceNo}:`);
+    if (!reason) return;
+    try {
+      await post(`/purchasing/invoices/${row.id}/payment-exception`, { reason: reason.trim() });
+      setError(''); await load();
+    } catch (failure) { setError(failure.message); }
+  };
   return <>
+    {error && <p className="form-error">{error}</p>}
     <Table columns={INVOICE_COLUMNS} template={INVOICE_TEMPLATE} title="Supplier invoices" empty="No invoices recorded.">
       {rows.map(row => <Row template={INVOICE_TEMPLATE} key={row.id}>
         <strong>{row.invoiceNo}</strong>
@@ -237,8 +247,10 @@ function Invoices({ can, refresh, companyId }) {
         <div><span>{rupees(row.netAmount)}</span><small>VAT {rupees(row.vatAmount)}</small></div><span>{rupees(row.amount)}</span>
         <strong>{rupees(Number(row.amount) - Number(row.paidAmount))}</strong>
         <Badge tone={slug(row.status)}>{row.status}</Badge>
-        {can.finance && row.status !== 'Paid'
-          ? <button className="status-button" onClick={() => setPaying(row)}>Pay</button>
+        {row.status !== 'Paid' && !row.orderReference && !row.paymentExceptionApprovedBy && can.finance
+          ? <button className="status-button" onClick={() => approveException(row)}>Review exception</button>
+          : row.status !== 'Paid' && can.supplierPay && (row.orderReference || row.paymentExceptionApprovedBy)
+            ? <button className="status-button" onClick={() => setPaying(row)}>Pay</button>
           : <span>—</span>}
       </Row>)}
     </Table>
@@ -344,7 +356,7 @@ function InvoiceForm({ companyId, close, reload }) {
     api(`/purchasing/orders?companyId=${companyId}`).then(setOrders).catch(() => setOrders([]));
   }, [companyId]);
   return <FormModal title="Record supplier invoice" close={close} label="Save invoice" onSubmit={async values => {
-    await post('/purchasing/invoices', {
+    const payload = {
       companyId,
       supplierId: Number(values.supplierId),
       orderId: values.orderId ? Number(values.orderId) : undefined,
@@ -352,7 +364,15 @@ function InvoiceForm({ companyId, close, reload }) {
       amount: Number(values.amount),
       invoiceDate: values.invoiceDate,
       dueDate: values.dueDate || undefined
-    });
+    };
+    const check = await post('/purchasing/invoices/check', payload);
+    if (check.warnings.length) {
+      const reason = window.prompt(`Possible duplicate invoice:\n${check.warnings.map(item => `• ${item.message}`).join('\n')}\n\nExplain why this is a separate invoice:`);
+      if (!reason || reason.trim().length < 10) throw new Error('Review the possible duplicate and enter a reason before saving.');
+      payload.riskAccepted = true;
+      payload.riskReason = reason.trim();
+    }
+    await post('/purchasing/invoices', payload);
     await reload();
   }}>
     <SelectField name="supplierId" label="Supplier" options={suppliers.map(supplier => [supplier.id, supplier.name])} />
@@ -372,7 +392,9 @@ function PaymentForm({ invoice, close, reload }) {
       amount: Number(values.amount),
       paidDate: values.paidDate,
       method: values.method,
-      reference: values.reference || undefined
+      reference: values.reference || undefined,
+      bankChangeAcknowledged: Boolean(values.bankChangeReason?.trim()),
+      bankChangeReason: values.bankChangeReason || undefined
     });
     await reload();
   }}>
@@ -380,6 +402,7 @@ function PaymentForm({ invoice, close, reload }) {
     <Field name="paidDate" label="Paid on" type="date" defaultValue={todayInput()} />
     <SelectField name="method" label="Method" options={payMethods.filter(method => method !== 'Cheque')} />
     <Field name="reference" label="Reference" required={false} />
+    <Field name="bankChangeReason" label="If the supplier changed bank details recently, how were they independently verified?" required={false} wide />
     <p className="invoice-note">Use Issued cheques for cheque payments; clearing the cheque will update this invoice.</p>
   </FormModal>;
 }

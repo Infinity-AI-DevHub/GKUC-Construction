@@ -16,6 +16,7 @@ let serverOutput = '';
 let admin;
 let testUploadDir;
 let lastOwnerToken;
+let lastFinanceToken;
 
 const today = () => new Date().toISOString().slice(0, 10);
 const shift = days => {
@@ -52,6 +53,7 @@ async function login(email = 'owner@gkuc.lk') {
   assert.equal(response.status, 200);
   const token=(await response.json()).token;
   if(email==='owner@gkuc.lk')lastOwnerToken=token;
+  if(email==='finance@gkuc.lk')lastFinanceToken=token;
   return token;
 }
 
@@ -1696,14 +1698,68 @@ test('equipment cannot be assigned twice without a return', async () => {
 
 test('supplier payments cannot exceed the invoice', async () => {
   const finance = await login('finance@gkuc.lk');
+  const owner = lastOwnerToken || await login();
   const invoice = await call(finance, 'POST', '/purchasing/invoices', {
     supplierId: 2, invoiceNo: 'INV-TEST-1', amount: 100000, invoiceDate: today(), dueDate: shift(14)
   });
   assert.equal(invoice.status, 201);
   assert.equal((await call(finance, 'POST', `/purchasing/invoices/${invoice.body.id}/payments`, { amount: 150000, paidDate: today() })).status, 409);
+  assert.equal((await call(owner, 'POST', `/purchasing/invoices/${invoice.body.id}/payment-exception`, {
+    reason: 'Verified this standalone supplier invoice with the supplier and purchasing records'
+  })).status, 204);
   const paid = await call(finance, 'POST', `/purchasing/invoices/${invoice.body.id}/payments`, { amount: 100000, paidDate: today() });
   assert.equal(paid.status, 201);
   assert.equal(paid.body.status, 'Paid');
+});
+
+test('supplier invoice duplicate check and independent no-PO payment exception', async () => {
+  const finance = lastFinanceToken || await login('finance@gkuc.lk');
+  const owner = lastOwnerToken || await login();
+  const invoiceNo = `RISK-${Date.now()}`;
+  const first = await call(finance, 'POST', '/purchasing/invoices', {
+    supplierId: 2, invoiceNo, amount: 43210, invoiceDate: today()
+  });
+  assert.equal(first.status, 201);
+  const duplicate = await call(finance, 'POST', '/purchasing/invoices', {
+    supplierId: 2, invoiceNo, amount: 43210, invoiceDate: today()
+  });
+  assert.equal(duplicate.status, 409);
+  assert.ok(duplicate.body.warnings?.some(warning => warning.code === 'duplicate_invoice'));
+  assert.equal((await call(finance, 'POST', `/purchasing/invoices/${first.body.id}/payment-exception`, {
+    reason: 'Self approval must not be allowed'
+  })).status, 403);
+  assert.equal((await call(finance, 'POST', `/purchasing/invoices/${first.body.id}/payments`, {
+    amount: 43210, paidDate: today()
+  })).status, 409);
+  assert.equal((await call(owner, 'POST', `/purchasing/invoices/${first.body.id}/payment-exception`, {
+    reason: 'Independently checked the standalone invoice and authorised the exception'
+  })).status, 204);
+  assert.equal((await call(finance, 'POST', `/purchasing/invoices/${first.body.id}/payments`, {
+    amount: 43210, paidDate: today()
+  })).status, 201);
+  const accepted = await call(finance, 'POST', '/purchasing/invoices', {
+    supplierId: 2, invoiceNo: `${invoiceNo}-B`, amount: 43210, invoiceDate: today(),
+    riskAccepted: true, riskReason: 'Checked the second signed invoice and confirmed a separate delivery'
+  });
+  assert.equal(accepted.status, 201);
+  assert.equal((await call(finance, 'GET', '/integrity/findings?status=Open')).status, 403);
+  const findings = await call(owner, 'GET', '/integrity/findings?status=Open');
+  const finding = findings.body.find(row => row.entity === 'supplier_invoice' && Number(row.entityId) === Number(accepted.body.id));
+  assert.ok(finding, 'accepted warning becomes an investigation finding');
+  assert.equal((await call(finance, 'POST', `/integrity/findings/${finding.id}/review`, {
+    status: 'Dismissed', note: 'I recorded this invoice myself'
+  })).status, 403);
+  const [[ownerRow]] = await admin.query(`SELECT id FROM \`${testDatabase}\`.users WHERE email='owner@gkuc.lk'`);
+  assert.equal((await call(owner, 'POST', `/integrity/findings/${finding.id}/review`, {
+    status: 'Confirmed', note: 'Investigate the supporting delivery', assignedUserId: ownerRow.id,
+    resolutionDueAt: new Date(Date.now() + 86400000).toISOString()
+  })).status, 204);
+  assert.equal((await call(owner, 'POST', `/integrity/findings/${finding.id}/comments`, {
+    body: 'Requested the signed delivery note and bank advice.'
+  })).status, 201);
+  assert.equal((await call(owner, 'POST', `/integrity/findings/${finding.id}/review`, {
+    status: 'Resolved', resolutionProof: 'Signed delivery note reviewed; separate goods received.'
+  })).status, 204);
 });
 
 test('operating bills, VAT, credit cards and bond extensions reconcile end to end', async () => {
@@ -1743,6 +1799,9 @@ test('operating bills, VAT, credit cards and bond extensions reconcile end to en
   });
   assert.equal(supplierInvoice.status, 201);
   assert.equal(Number(supplierInvoice.body.amount), 118000);
+  assert.equal((await call(owner, 'POST', `/purchasing/invoices/${supplierInvoice.body.id}/payment-exception`, {
+    reason: 'Verified this standalone VAT invoice against the original supplier document'
+  })).status, 204);
   assert.equal((await call(finance, 'POST', `/purchasing/invoices/${supplierInvoice.body.id}/payments`, {
     amount: 118000, paidDate: today(), method: 'Bank transfer'
   })).status, 201);

@@ -103,6 +103,7 @@ const capabilities = permissions => {
     lending: any('store.lending'),
     purchasing: any('store.manage', 'finance.pay'),
     finance: any('finance.manage'),
+    supplierPay: any('finance.pay'),
     money: any('finance.view', 'finance.manage'),
     invoice: any('finance.invoice'),
     hr: any('hr.manage'),

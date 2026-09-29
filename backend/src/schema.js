@@ -896,7 +896,7 @@ async function createAttachmentTables() {
     CONSTRAINT fk_upload_user FOREIGN KEY(uploaded_by) REFERENCES users(id),
     INDEX idx_attachment_owner(owner_type,owner_id), INDEX idx_attachment_expiry(expiry_date)
   ) ENGINE=InnoDB`);
-  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter') NOT NULL");
+  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter','risk_finding') NOT NULL");
 }
 
 /** 2.2 payroll and performance, and PID section 3 step 1 (customer inquiry). */
@@ -2002,6 +2002,22 @@ async function createDriveTables() {
 }
 
 async function createIntegrityTables() {
+  await addColumn('suppliers','bank_name','VARCHAR(180) NULL');
+  await addColumn('suppliers','bank_branch','VARCHAR(180) NULL');
+  await addColumn('suppliers','bank_account_name','VARCHAR(180) NULL');
+  await addColumn('suppliers','bank_account_number','VARCHAR(120) NULL');
+  await addColumn('suppliers','bank_changed_at','DATETIME NULL');
+  await addColumn('suppliers','bank_changed_by','BIGINT UNSIGNED NULL');
+  await addColumn('purchase_requests','first_approved_by','BIGINT UNSIGNED NULL');
+  await addColumn('purchase_requests','first_approved_at','DATETIME NULL');
+  await query("ALTER TABLE purchase_orders MODIFY COLUMN status ENUM('Pending approval','Issued','Partially received','Received','Cancelled') NOT NULL DEFAULT 'Issued'");
+  await addColumn('purchase_orders','first_approved_by','BIGINT UNSIGNED NULL');
+  await addColumn('purchase_orders','first_approved_at','DATETIME NULL');
+  await addColumn('purchase_orders','second_approved_by','BIGINT UNSIGNED NULL');
+  await addColumn('purchase_orders','second_approved_at','DATETIME NULL');
+  await addColumn('supplier_invoices','payment_exception_approved_by','BIGINT UNSIGNED NULL');
+  await addColumn('supplier_invoices','payment_exception_reason','VARCHAR(500) NULL');
+  await addColumn('supplier_invoices','payment_exception_approved_at','DATETIME NULL');
   await query(`CREATE TABLE IF NOT EXISTS risk_findings (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     /* The detector that raised it, so a noisy one can be traced and tuned. */
@@ -2034,6 +2050,16 @@ async function createIntegrityTables() {
     INDEX idx_finding_open (status, severity, id),
     INDEX idx_finding_entity (entity, entity_id)
   ) ENGINE=InnoDB`);
+  await addColumn('risk_findings','assigned_user_id','BIGINT UNSIGNED NULL');
+  await addColumn('risk_findings','resolution_due_at','DATETIME NULL');
+  await addColumn('risk_findings','resolution_proof','VARCHAR(1000) NULL');
+  await query(`CREATE TABLE IF NOT EXISTS risk_finding_comments (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,finding_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,body VARCHAR(2000) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(finding_id) REFERENCES risk_findings(id),FOREIGN KEY(user_id) REFERENCES users(id),
+    INDEX idx_finding_comment(finding_id,id)
+  ) ENGINE=InnoDB`);
 
   /*
    * What the company considers normal, so the thresholds are theirs rather than mine.
@@ -2053,6 +2079,12 @@ async function createIntegrityTables() {
   const defaults = [
     ['approval.threshold', '250000', 'Purchase approval threshold (LKR)',
       'Orders above this need sign-off. Used to spot purchases split to stay just underneath it.'],
+    ['approval.two.person.threshold', '1000000', 'Two-approval threshold (LKR)',
+      'Purchase requests and orders at or above this value require two distinct approvers, neither of whom created the transaction.'],
+    ['supplier.bank.change.days', '14', 'Recent supplier bank-change warning (days)',
+      'Payments to a supplier whose bank details changed within this many days require a warning acknowledgement.'],
+    ['price.warning.multiplier', '1.5', 'Unusual purchase price multiplier',
+      'Warn when a material rate exceeds this multiple of the same supplier and project history.'],
     ['split.window.days', '7', 'Window for spotting split purchases (days)',
       'Several orders to one supplier inside this many days are judged together against the threshold.'],
     ['outlier.sigma', '3', 'How far from normal counts as unusual',
