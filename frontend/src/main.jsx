@@ -33,7 +33,7 @@ const Reports = lazy(() => import('./pages/Reports.jsx'));
 const Admin = lazy(() => import('./pages/Admin.jsx'));
 const Coordination = lazy(() => import('./pages/Coordination.jsx'));
 const QuantitySurveying = lazy(() => import('./pages/QuantitySurveying.jsx'));
-const ADMIN_TABS = ['Users', 'Access control', 'Company', 'Documents', 'Notifications', 'Evening summary', 'Messages', 'Lists', 'Fraud watch', 'Audit log', 'My account'];
+const ADMIN_TABS = ['Users', 'Access control', 'Company', 'Documents', 'Import centre', 'Notifications', 'Evening summary', 'Messages', 'Lists', 'Fraud watch', 'Audit log', 'My account'];
 
 /*
  * The menu, and who sees each entry.
@@ -65,7 +65,7 @@ const NAV = [
   ['Chat', MessageSquare, ['chat.use']],
   ['Drive', HardDrive, ['drive.use']],
   ['Reports', ClipboardList, []],
-  ['Administration', ShieldCheck, ['admin.users', 'admin.roles', 'admin.audit', 'admin.lists', 'admin.notifications', 'admin.company','admin.documents']]
+  ['Administration', ShieldCheck, ['admin.users', 'admin.roles', 'admin.audit', 'admin.lists', 'admin.notifications', 'admin.company','admin.documents', 'clients.manage', 'subcontractors.manage', 'projects.manage', 'qs.boq', 'qs.quotation', 'qs.costControl', 'qs.retention']]
 ];
 
 /**

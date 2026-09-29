@@ -3269,6 +3269,20 @@ export async function migrate() {
   await addIndex('site_material_counts','uq_sitecount_client_ref','UNIQUE KEY uq_sitecount_client_ref(client_ref)');
   await addColumn('site_material_consumption','client_ref','VARCHAR(120) NULL');
   await addIndex('site_material_consumption','uq_siteuse_client_ref','UNIQUE KEY uq_siteuse_client_ref(client_ref)');
+  await query(`CREATE TABLE IF NOT EXISTS historical_import_batches (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    kind VARCHAR(40) NOT NULL, filename VARCHAR(190) NOT NULL, checksum CHAR(64) NOT NULL,
+    status ENUM('Review','Imported') NOT NULL DEFAULT 'Review',
+    preview_json LONGTEXT NOT NULL, uploaded_by BIGINT UNSIGNED NOT NULL,
+    confirmed_by BIGINT UNSIGNED NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    confirmed_at DATETIME NULL,
+    FOREIGN KEY(uploaded_by) REFERENCES users(id), FOREIGN KEY(confirmed_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS historical_import_links (
+    kind VARCHAR(40) NOT NULL, source_code VARCHAR(120) NOT NULL,
+    target_id BIGINT UNSIGNED NOT NULL, batch_id BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY(kind,source_code), FOREIGN KEY(batch_id) REFERENCES historical_import_batches(id)
+  ) ENGINE=InnoDB`);
   await seedWorkMethods();
   await seedAccessControl();
 }
