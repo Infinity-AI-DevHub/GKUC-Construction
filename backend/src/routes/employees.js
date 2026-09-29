@@ -451,7 +451,36 @@ router.post('/', auth, permit('hr.manage'), validate(employeeSchema), wrap(async
   }
 }));
 
-router.get('/:id/offboarding',auth,permit('hr.manage','hr.assets'),wrap(async(req,res)=>{
+router.post('/:id/offboarding/start',auth,permit('hr.manage'),validate(z.object({
+  requestedOn:isoDate,reason:z.string().trim().min(5).max(600)
+})),wrap(async(req,res)=>{
+  const employee=await getOne('SELECT id,name,status FROM employees WHERE id=?',[req.params.id]);
+  if(!employee)return res.status(404).json({error:'Employee not found.'});
+  if(employee.status==='Left')return res.status(409).json({error:'This employee has already left.'});
+  const existing=await getOne('SELECT id FROM employee_offboarding_cases WHERE employee_id=?',[employee.id]);
+  if(existing)return res.status(409).json({error:'An offboarding checklist is already active for this employee.'});
+  const result=await query(`INSERT INTO employee_offboarding_cases(employee_id,reason,requested_on,requested_by)
+    VALUES(?,?,?,?)`,[employee.id,req.body.reason,req.body.requestedOn,req.user.id]);
+  await audit(pool,req.user.id,'START_OFFBOARDING','employee',employee.id,null,
+    {caseId:result.insertId,reason:req.body.reason,requestedOn:req.body.requestedOn},req.ip);
+  res.status(201).json(await offboardingChecklist(employee));
+}));
+router.patch('/:id/offboarding/clearance',auth,permit('admin.users','hr.payroll'),validate(z.object({
+  area:z.enum(['access','payroll']),note:z.string().trim().min(5).max(600)
+})),wrap(async(req,res)=>{
+  const permission=req.body.area==='access'?'admin.users':'hr.payroll';
+  if(!can(req,permission))return res.status(403).json({error:`${req.body.area==='access'?'Administration':'HR payroll'} must confirm this clearance.`});
+  const employee=await getOne('SELECT id,name,status FROM employees WHERE id=?',[req.params.id]);
+  if(!employee)return res.status(404).json({error:'Employee not found.'});
+  const column=req.body.area==='access'?'access':'payroll';
+  const result=await query(`UPDATE employee_offboarding_cases SET ${column}_cleared_by=?,${column}_cleared_at=NOW()
+    WHERE employee_id=? AND ${column}_cleared_at IS NULL`,[req.user.id,employee.id]);
+  if(!result.affectedRows)return res.status(409).json({error:'No open clearance exists, or it has already been confirmed.'});
+  await audit(pool,req.user.id,'OFFBOARDING_CLEARANCE','employee',employee.id,null,
+    {area:req.body.area,note:req.body.note},req.ip);
+  res.json(await offboardingChecklist(employee));
+}));
+router.get('/:id/offboarding',auth,permit('hr.manage','hr.assets','hr.payroll','admin.users'),wrap(async(req,res)=>{
   const employee=await getOne('SELECT id,name FROM employees WHERE id=?',[req.params.id]);
   if(!employee)return res.status(404).json({error:'Employee not found.'});
   res.json(await offboardingChecklist(employee));
@@ -483,7 +512,7 @@ router.patch('/:id', auth, permit('hr.manage'), validate(employeeSchema.partial(
   if (!before) return res.status(404).json({ error: 'Employee not found' });
   if(req.body.status==='Left'){
     const checklist=await offboardingChecklist(before);
-    if(!checklist.clear)return res.status(409).json({error:`Cannot offboard this employee: ${checklist.assets.length} HR asset(s), ${checklist.store.length} store loan(s), ${checklist.vehicles.length} vehicle assignment(s) and ${checklist.tasks.length} unfinished task(s) remain. Return or reassign assets and complete or reassign tasks first. See the profile's Assets & offboarding section.`,checklist});
+    if(!checklist.clear)return res.status(409).json({error:`Cannot offboard this employee: ${checklist.assets.length} HR asset(s), ${checklist.store.length} store loan(s), ${checklist.vehicles.length} vehicle assignment(s), ${checklist.tasks.length} unfinished task(s)${checklist.offboarding?', plus access and payroll clearance if not confirmed':''} remain. Resolve each item in Assets & offboarding first.`,checklist});
   }
   const profileError = payProfileError({
     payBasis: req.body.payBasis ?? before.pay_basis,

@@ -4,6 +4,8 @@ import { api, openDocument, post, rupees, shortDate, slug, todayInput } from './
 import {
   Badge, EmptyState, Field, FormModal, WorkflowForm, Modal, Row, SelectField, Summary, Table, TextArea, useLiveList
 } from './ui.jsx';
+import WorkflowChecklist from './WorkflowChecklist.jsx';
+import { clientCollectionSteps } from './workflow-paths.js';
 
 /*
  * The money owed to the company, the guarantees the bank holds against it, and the cash
@@ -150,6 +152,7 @@ function InvoicePayments({ invoice, close, onPayment, canRecord }) {
   return <Modal title={`${invoice.reference} — payments`} close={close} wide>
     <div className="invoice-payments-dialog">
     {error && <p className="form-error">{error}</p>}
+    <WorkflowChecklist title="Client invoice & collection" steps={clientCollectionSteps(invoice, detail?.receipts || [])} />
     <div className="attendance-summary">
       <Summary label="Invoice amount" value={rupees(invoice.netPayable)} icon={Wallet} />
       <Summary label="Received" value={rupees(invoice.paidAmount)} icon={Landmark} />

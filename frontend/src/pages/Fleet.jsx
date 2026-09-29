@@ -5,6 +5,8 @@ import { allowedTabs, Badge, Field, FormModal, Modal, Page, Row, SelectField, Ta
 import { toSvg } from '../qr.js';
 import { useOptions } from '../options.js';
 import { RecordScopeProvider } from '../record-scope.jsx';
+import WorkflowChecklist from '../WorkflowChecklist.jsx';
+import { vehicleRenewalSteps } from '../workflow-paths.js';
 
 /* Fleet is two registers under one roof: the transport office's vehicles, and the store's
    tools. Each tab names what the server will accept for it — see allowedTabs. */
@@ -106,6 +108,7 @@ function VehicleDetail({ vehicle, data, close, can, refresh }) {
   const fuelMax=Math.max(1,...vehicle.fuel.slice(0,8).map(row=>Number(row.cost)));
   return <Modal title={`${vehicle.vehicle} — ${vehicle.reg}`} close={close} wide>
     <div className="report-form">
+      <WorkflowChecklist title="Insurance renewal" steps={vehicleRenewalSteps(vehicle)} />
       {vehicle.documents.some(document=>document.docType==='Insurance')&&<p className="form-note wide">Vehicle insurance is one shared record. Renew it here; the same current policy appears in People → Insurance.{can?.has('hr.insurance')&&<> <a href="/people/insurance">Open HR insurance details and reminders</a>.</>}</p>}
       <div className="project-stats wide">
         <div><span>Fuel cost to date</span><strong>{rupees(vehicle.running.fuelCost)}</strong></div>

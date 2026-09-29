@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowUpRight, CalendarClock, ClipboardCheck, CornerDownLeft, Handshake } from 'lucide-react';
-import { api, onDataChanged } from './api.js';
+import { api, onDataChanged, patch } from './api.js';
+import { Modal } from './ui.jsx';
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Colombo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const datePart = value => String(value || '').slice(0, 10);
@@ -58,8 +59,8 @@ export function buildWorkQueues({ data, queue, can, user }) {
   }
   for (const item of queue.work || []) {
     const card = { ...item, key: `${item.kind}-${item.id}` };
-    if (['purchase-request','leave','overtime','attendance','integrity'].includes(item.kind)) needsApproval.push(card);
-    else if (['purchase-order','low-stock','client-followup','milestone','tender','tender-document','insurance','vehicle-renewal','returned-cheque','retention','bond'].includes(item.kind)) dueToday.push(card);
+    if (['purchase-request','order-approval','leave','overtime','attendance','integrity'].includes(item.kind)) needsApproval.push(card);
+    else if (['approved-request','purchase-order','invoice-verification','offboarding-assets','offboarding-store','offboarding-vehicle','offboarding-access','offboarding-payroll','payroll-step','project-start','project-closeout','accepted-quotation','onboarding','daily-site-close','low-stock','client-followup','milestone','tender','tender-document','insurance','vehicle-renewal','returned-cheque','retention','bond'].includes(item.kind)) dueToday.push(card);
   }
   const urgency = (a, b) => {
     const left = datePart(a.deadline) || '9999-12-31';
@@ -80,6 +81,9 @@ const SECTIONS = [
 export default function MyWorkToday({ user, can, go, data, companyId }) {
   const [queue, setQueue] = useState({ sheets: [], claims: [], invoicesDue: [], work: [] });
   const [error, setError] = useState('');
+  const [clearance, setClearance] = useState(null);
+  const [clearanceNote, setClearanceNote] = useState('');
+  const [clearanceError, setClearanceError] = useState('');
   const load = () => api(`/dashboard/queue?companyId=${companyId}`)
     .then(result => { setQueue(result); setError(''); })
     .catch(failure => setError(failure.message));
@@ -90,6 +94,22 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
   }, [companyId]);
   const groups = useMemo(() => buildWorkQueues({ data, queue, can, user }), [data, queue, can, user]);
   const open = item => {
+    if (['offboarding-access','offboarding-payroll','offboarding-store','offboarding-vehicle'].includes(item.kind)) {
+      api(`/employees/${item.target[2]}/offboarding`).then(result => {setClearance({item,result});setClearanceNote('');setClearanceError('');}).catch(failure => setClearanceError(failure.message));
+      return;
+    }
+    if (item.kind === 'offboarding-assets') {
+      window.location.assign(`/people/${item.target[2]}`);
+      return;
+    }
+    if (item.kind === 'project-start' || item.kind === 'project-closeout') {
+      window.location.assign(`/projects/${item.target[2]}`);
+      return;
+    }
+    if (item.kind === 'daily-site-close') {
+      window.location.assign(`/daily-reports?new=1&project=${item.target[2]}&workDate=${item.workDate}`);
+      return;
+    }
     const [page, tab, id, projectId] = item.target;
     go(page, tab);
     const params = new URLSearchParams({ record: String(id) });
@@ -102,6 +122,7 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
     <div className="my-work-heading"><div><span className="my-work-kicker">Your starting point</span>
       <h2 id="my-work-title">My work today</h2><p>{user.role || 'Your role'} · live records you can act on</p></div></div>
     {error && <p className="form-error" role="alert">Some work queues could not load: {error}</p>}
+    {clearanceError && !clearance && <p className="form-error" role="alert">{clearanceError}</p>}
     <div className="my-work-grid">{SECTIONS.map(section => {
       const Icon = section.icon;
       const items = groups[section.key];
@@ -116,5 +137,27 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
         </button>)}{!items.length && <p>{section.empty}</p>}</div>
       </div>;
     })}</div>
+    {clearance && <Modal title={clearance.item.title} close={() => setClearance(null)}>
+      <div className="report-form"><p className="wide">{clearance.result.offboarding?.reason}</p>
+        <p className="wide">Return status: {clearance.result.assets.length} HR assets, {clearance.result.store.length} store tools, {clearance.result.vehicles.length} vehicles and {clearance.result.tasks.length} open tasks.</p>
+        {clearance.item.kind === 'offboarding-store' || clearance.item.kind === 'offboarding-vehicle'
+          ? <div className="wide"><strong>Still assigned</strong><ul>{(clearance.item.kind === 'offboarding-store' ? clearance.result.store : clearance.result.vehicles)
+            .map(row => <li key={row.id}>{row.name}{row.code ? ` · ${row.code}` : ''}</li>)}</ul>
+            <p>Record the return or release in the authoritative register. This checklist updates automatically.</p></div>
+          : <><p className="wide">{clearance.item.kind === 'offboarding-access'
+            ? 'Verify system access has been removed (or that no account exists) before confirming.'
+            : 'Verify final salary, deductions and advances before confirming.'}</p>
+            <label className="wide">Clearance evidence / explanation<textarea value={clearanceNote} onChange={event => setClearanceNote(event.target.value)} rows={3} minLength={5} required /></label></>}
+        {clearanceError && <p className="form-error wide" role="alert">{clearanceError}</p>}
+        <div className="form-actions wide"><button type="button" className="secondary" onClick={() => setClearance(null)}>Cancel</button>
+          {['offboarding-store','offboarding-vehicle'].includes(clearance.item.kind)
+            ? <button type="button" className="primary" onClick={() => window.location.assign(clearance.item.kind === 'offboarding-store' ? '/stock-locations' : '/fleet')}>Open register</button>
+            : <button type="button" className="primary" onClick={async () => {
+            try {await patch(`/employees/${clearance.item.target[2]}/offboarding/clearance`,{
+              area:clearance.item.kind === 'offboarding-access'?'access':'payroll',note:clearanceNote.trim()});
+              setClearance(null);await load();}catch(failure){setClearanceError(failure.message);}
+          }}>Confirm clearance</button>}</div>
+      </div>
+    </Modal>}
   </section>;
 }

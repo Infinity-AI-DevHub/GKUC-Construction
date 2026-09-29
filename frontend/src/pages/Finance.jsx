@@ -236,6 +236,12 @@ function Invoices({ can, refresh, companyId }) {
       setError(''); await load();
     } catch (failure) { setError(failure.message); }
   };
+  const verifyInvoice = async row => {
+    try {
+      await post(`/purchasing/invoices/${row.id}/verify`, {});
+      setError(''); await load(); await refresh();
+    } catch (failure) { setError(failure.message); }
+  };
   return <>
     {error && <p className="form-error">{error}</p>}
     <Table columns={INVOICE_COLUMNS} template={INVOICE_TEMPLATE} title="Supplier invoices" empty="No invoices recorded.">
@@ -247,7 +253,9 @@ function Invoices({ can, refresh, companyId }) {
         <div><span>{rupees(row.netAmount)}</span><small>VAT {rupees(row.vatAmount)}</small></div><span>{rupees(row.amount)}</span>
         <strong>{rupees(Number(row.amount) - Number(row.paidAmount))}</strong>
         <Badge tone={slug(row.status)}>{row.status}</Badge>
-        {row.status !== 'Paid' && !row.orderReference && !row.paymentExceptionApprovedBy && can.finance
+        {row.orderReference && !row.verifiedAt && can.supplierPay
+          ? <button className="status-button" onClick={() => verifyInvoice(row)}>Verify match</button>
+          : row.status !== 'Paid' && !row.orderReference && !row.paymentExceptionApprovedBy && can.finance
           ? <button className="status-button" onClick={() => approveException(row)}>Review exception</button>
           : row.status !== 'Paid' && can.supplierPay && (row.orderReference || row.paymentExceptionApprovedBy)
             ? <button className="status-button" onClick={() => setPaying(row)}>Pay</button>

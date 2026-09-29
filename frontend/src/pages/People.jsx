@@ -12,6 +12,8 @@ import BiometricImport from './BiometricImport.jsx';
 import { useOptions } from '../options.js';
 import { AttendanceRegister, LeaveRegister } from '../Registers.jsx';
 import EmployeeProfile from './EmployeeProfile.jsx';
+import WorkflowChecklist from '../WorkflowChecklist.jsx';
+import { payrollSteps } from '../workflow-paths.js';
 import AttendanceCorrection from './AttendanceCorrection.jsx';
 import WorkforceMap from './WorkforceMap.jsx';
 
@@ -78,7 +80,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     Departments: can.hr && 'Add department'
   };
 
-  if (employeeId) return <RecordScopeProvider scope={{ kind: 'shared' }}><EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} canPayroll={can.payroll} canConduct={can.conduct} canAssets={can.assets}
+  if (employeeId) return <RecordScopeProvider scope={{ kind: 'shared' }}><EmployeeProfile employeeId={employeeId} close={closeEmployee} canManage={can.hr} canPayroll={can.payroll} canAccess={can.manage} canConduct={can.conduct} canAssets={can.assets}
     canCorrect={can.attendance || can.hrImport} projects={allProjects} departments={data.departments}
     companies={companies} reloadPeople={reload} /></RecordScopeProvider>;
 
@@ -386,6 +388,7 @@ function PayrollDetail({ run, close }) {
   const employerCost = run.payslips.reduce((sum, slip) => sum + Number(slip.employerCost), 0);
   return <Modal title={`${run.reference} · ${run.payFrequency} · ${shortDate(run.periodStart)} to ${shortDate(run.periodEnd)}`} close={close} wide>
     <div className="report-form">
+      <WorkflowChecklist title="Monthly payroll path" steps={payrollSteps(run)} />
       <div className="project-stats wide">
         <div><span>Employees</span><strong>{run.payslips.length}</strong></div>
         <div><span>Gross earnings</span><strong>{rupees(gross)}</strong></div>

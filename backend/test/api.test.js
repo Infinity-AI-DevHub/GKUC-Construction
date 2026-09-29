@@ -230,6 +230,33 @@ test('employee offboarding is blocked by assets, vehicles and unfinished tasks u
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[employeeId]);
 });
 
+test('resignation creates distinct access and payroll clearances that gate offboarding',async()=>{
+  const owner=lastOwnerToken||await login();
+  const hr=await login('hr@gkuc.lk');
+  const qs=await login('qs@gkuc.lk');
+  const employee=await call(hr,'POST','/employees',{code:`RESIGN-QA-${Date.now()}`,name:'Resignation Checklist QA'});
+  assert.equal(employee.status,201);
+  const id=employee.body.id;
+  assert.equal((await call(qs,'POST',`/employees/${id}/offboarding/start`,{requestedOn:today(),reason:'Employee resigned'})).status,403);
+  const started=await call(hr,'POST',`/employees/${id}/offboarding/start`,{requestedOn:today(),reason:'Employee resigned'});
+  assert.equal(started.status,201,JSON.stringify(started.body));
+  assert.equal(Boolean(started.body.offboarding),true);
+  assert.equal(Boolean(started.body.clear),false);
+  assert.equal((await call(hr,'PATCH',`/employees/${id}`,{status:'Left'})).status,409);
+  const queue=await call(owner,'GET','/dashboard/queue?companyId=1');
+  assert.equal(queue.status,200,JSON.stringify(queue.body));
+  assert.ok(queue.body.work.some(item=>item.kind==='offboarding-access'&&item.title.includes('Resignation Checklist QA')));
+  assert.ok(queue.body.work.some(item=>item.kind==='offboarding-payroll'&&item.title.includes('Resignation Checklist QA')));
+  assert.equal((await call(qs,'PATCH',`/employees/${id}/offboarding/clearance`,{area:'access',note:'Not authorised'})).status,403);
+  assert.equal((await call(hr,'PATCH',`/employees/${id}/offboarding/clearance`,{area:'access',note:'Account disabled'})).status,403);
+  assert.equal((await call(owner,'PATCH',`/employees/${id}/offboarding/clearance`,{area:'access',note:'Account disabled'})).status,200);
+  assert.equal((await call(hr,'PATCH',`/employees/${id}/offboarding/clearance`,{area:'payroll',note:'Final pay reconciled'})).status,200);
+  assert.equal((await call(hr,'GET',`/employees/${id}/offboarding`)).body.clear,true);
+  assert.equal((await call(hr,'PATCH',`/employees/${id}`,{status:'Left'})).status,200);
+  await admin.query(`DELETE FROM ${testDatabase}.employee_offboarding_cases WHERE employee_id=?`,[id]);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
+});
+
 test('HR insurance connects to Fleet and sends custom reminders without duplicates',async()=>{
   const hr=await login('hr@gkuc.lk'),owner=await login(),qs=await login('qs@gkuc.lk');
   assert.equal((await call(hr,'GET','/fleet')).status,200);
@@ -667,6 +694,18 @@ test('purchase request, order, goods receipt and stock stay in step', async () =
   assert.equal(over.status, 409, 'cannot receive more than was ordered');
 
   assert.equal((await call(store, 'POST', `/purchasing/orders/${order.body.id}/receive`, { lines: [{ itemId: line.id, quantity: 100 }] })).status, 200);
+
+  const finance = await login('finance@gkuc.lk');
+  const invoice = await call(finance, 'POST', '/purchasing/invoices', {
+    companyId: 1, orderId: order.body.id, supplierId: 1,
+    invoiceNo: `MATCH-${Date.now()}`, amount: 250000, invoiceDate: today()
+  });
+  assert.equal(invoice.status, 201);
+  assert.equal((await call(finance, 'POST', `/purchasing/invoices/${invoice.body.id}/verify`, {})).status, 403,
+    'the invoice creator cannot verify their own three-way match');
+  assert.equal((await call(owner, 'POST', `/purchasing/invoices/${invoice.body.id}/verify`, {})).status, 200);
+  const verifiedOrder = await call(owner, 'GET', `/purchasing/orders/${order.body.id}`);
+  assert.ok(verifiedOrder.body.invoices.some(row => row.id === invoice.body.id && row.verifiedAt));
 
   const after = (await call(owner, 'GET', '/materials')).body.find(material => material.id === 1);
   assert.equal(Number(after.stock), Number(before.stock) + 100);

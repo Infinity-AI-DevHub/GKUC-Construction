@@ -3,6 +3,8 @@ import { Check, PackageCheck } from 'lucide-react';
 import { api, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
+import WorkflowChecklist from '../WorkflowChecklist.jsx';
+import { requestSteps, orderSteps } from '../purchasing-workflow.js';
 
 const TABS = ['Stock', 'Movements', 'Purchase requests', 'Orders', 'Suppliers'];
 
@@ -126,6 +128,7 @@ function RequestDetail({ request, close, refresh, can }) {
 
   return <Modal title={`${request.reference} — ${request.project}`} close={close}>
     <div className="report-form">
+      <WorkflowChecklist title="Purchase to payment" steps={requestSteps(request)} />
       <div className="project-stats wide">
         <div><span>Requested by</span><strong>{request.requestedBy}</strong></div>
         <div><span>Needed by</span><strong>{shortDate(request.neededBy)}</strong></div>
@@ -243,6 +246,7 @@ function OrderDetail({ order, close, done, can }) {
 
   return <Modal title={`${order.reference} — ${order.supplier}`} close={close}>
     <div className="report-form">
+      <WorkflowChecklist title="Purchase to payment" steps={orderSteps(order)} />
       <div className="project-stats wide">
         <div><span>Project</span><strong>{order.project}</strong></div>
         <div><span>Order total</span><strong>{rupees(order.total)}</strong></div>

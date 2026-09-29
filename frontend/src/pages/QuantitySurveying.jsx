@@ -7,6 +7,8 @@ import BoqChanges from '../BoqChanges.jsx';
 import CostControl from './CostControl.jsx';
 import './quantity-surveying.css';
 import { RecordScopeProvider } from '../record-scope.jsx';
+import WorkflowChecklist from '../WorkflowChecklist.jsx';
+import { tenderSteps } from '../workflow-paths.js';
 
 /* The bills already on the system, so this tab shows what exists as well as how to add. */
 function BoqList({ companyId }) {
@@ -496,6 +498,7 @@ function TenderDetail({ tenderId, can, employees, close, reload }) {
 
   return <Modal title={`${tender.reference} — ${tender.title}`} close={close}>
     <div className="report-form">
+      <WorkflowChecklist title="Tender submission" steps={tenderSteps(tender)} />
       <div className="wide"><Tabs tabs={DETAIL_TABS} active={tab} onChange={setTab} /></div>
       {error && <p className="wide form-error">{error}</p>}
 

@@ -3232,6 +3232,22 @@ export async function migrate() {
   await addColumn('employee_pay_components','calculation_method',"VARCHAR(50) NOT NULL DEFAULT 'Fixed full amount'");
   await addColumn('employee_pay_components','allowance_type',"VARCHAR(50) NOT NULL DEFAULT 'Other'");
   await addColumn('payslip_components','calculation_detail','TEXT NULL');
+  await addColumn('supplier_invoices','verified_by','BIGINT UNSIGNED NULL');
+  await addColumn('supplier_invoices','verified_at','DATETIME NULL');
+  await query(`CREATE TABLE IF NOT EXISTS employee_offboarding_cases (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    employee_id BIGINT UNSIGNED NOT NULL UNIQUE,
+    reason VARCHAR(600) NOT NULL,
+    requested_on DATE NOT NULL,
+    requested_by BIGINT UNSIGNED NOT NULL,
+    access_cleared_by BIGINT UNSIGNED NULL,
+    access_cleared_at DATETIME NULL,
+    payroll_cleared_by BIGINT UNSIGNED NULL,
+    payroll_cleared_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(employee_id) REFERENCES employees(id),
+    FOREIGN KEY(requested_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await seedWorkMethods();
   await seedAccessControl();
 }

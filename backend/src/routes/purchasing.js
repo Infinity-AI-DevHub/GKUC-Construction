@@ -76,13 +76,19 @@ router.get('/requests', auth, permit('store.view','store.manage','projects.manag
 router.get('/requests/:id', auth, permit('store.view','store.manage','projects.manage'), wrap(async (req, res) => {
   const request = await getOne(`${requestList} WHERE r.id=?`, [req.params.id]);
   if (!request) return res.status(404).json({ error: 'Purchase request not found' });
-  const [items, quotes] = await Promise.all([
+  const [items, quotes, orders] = await Promise.all([
     query(`SELECT i.id,i.description,i.unit,i.quantity,i.estimated_rate estimatedRate,i.material_id materialId,m.name material
       FROM purchase_request_items i LEFT JOIN materials m ON m.id=i.material_id WHERE i.request_id=?`, [request.id]),
     query(`SELECT q.id,q.amount,q.lead_time_days leadTimeDays,q.notes,q.selected,s.name supplier,s.id supplierId
-      FROM quotations q JOIN suppliers s ON s.id=q.supplier_id WHERE q.request_id=? ORDER BY q.amount`, [request.id])
+      FROM quotations q JOIN suppliers s ON s.id=q.supplier_id WHERE q.request_id=? ORDER BY q.amount`, [request.id]),
+    query(`SELECT o.id,o.reference,o.status,
+      (SELECT COUNT(*) FROM goods_receipts g WHERE g.order_id=o.id) receiptCount,
+      (SELECT COUNT(*) FROM supplier_invoices i WHERE i.order_id=o.id) invoiceCount,
+      (SELECT COUNT(*) FROM supplier_invoices i WHERE i.order_id=o.id AND i.verified_at IS NOT NULL) verifiedInvoiceCount,
+      (SELECT COUNT(*) FROM supplier_invoices i WHERE i.order_id=o.id AND i.status<>'Paid') unpaidInvoiceCount
+      FROM purchase_orders o WHERE o.request_id=? ORDER BY o.id DESC`, [request.id])
   ]);
-  res.json({ ...request, items, quotes });
+  res.json({ ...request, items, quotes, orders });
 }));
 
 router.post('/requests', auth, permit('store.manage'), validate(z.object({
@@ -183,12 +189,13 @@ router.get('/orders', auth, permit('store.view','store.manage','finance.pay'), w
 router.get('/orders/:id', auth, permit('store.view','store.manage','finance.pay'), wrap(async (req, res) => {
   const order = await getOne(`${orderList} WHERE o.id=?`, [req.params.id]);
   if (!order) return res.status(404).json({ error: 'Purchase order not found' });
-  const [items, invoices] = await Promise.all([
+  const [items, invoices, receipts] = await Promise.all([
     query(`SELECT i.id,i.description,i.unit,i.quantity,i.rate,i.received_quantity receivedQuantity,i.material_id materialId
       FROM purchase_order_items i WHERE i.order_id=?`, [order.id]),
-    query('SELECT id,invoice_no invoiceNo,amount,paid_amount paidAmount,invoice_date invoiceDate,due_date dueDate,status FROM supplier_invoices WHERE order_id=?', [order.id])
+    query('SELECT id,invoice_no invoiceNo,amount,paid_amount paidAmount,invoice_date invoiceDate,due_date dueDate,status,verified_at verifiedAt FROM supplier_invoices WHERE order_id=?', [order.id]),
+    query('SELECT id,created_at createdAt FROM goods_receipts WHERE order_id=? ORDER BY id DESC', [order.id])
   ]);
-  res.json({ ...order, items, invoices });
+  res.json({ ...order, items, invoices, receipts });
 }));
 
 const orderSchema=z.object({
@@ -322,7 +329,7 @@ router.get('/invoices', auth, permit('finance.view','finance.pay'), wrap(async (
   res.json(await query(`SELECT i.id,i.company_id companyId,i.supplier_id supplierId,i.invoice_no invoiceNo,i.amount,i.paid_amount paidAmount,
     i.net_amount netAmount,i.tax_treatment taxTreatment,i.vat_rate vatRate,i.vat_amount vatAmount,
     i.invoice_date invoiceDate,i.due_date dueDate,i.status,s.name supplier,o.reference orderReference,
-    i.payment_exception_approved_by paymentExceptionApprovedBy,i.recorded_by recordedById
+    i.payment_exception_approved_by paymentExceptionApprovedBy,i.recorded_by recordedById,i.verified_at verifiedAt
     FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN purchase_orders o ON o.id=i.order_id
     ${companyId ? 'WHERE i.company_id=?' : ''} ORDER BY i.id DESC`, companyId ? [companyId] : []));
 }));
@@ -339,6 +346,24 @@ router.post('/invoices/:id/payment-exception',auth,permit('finance.manage'),vali
   await audit(pool,req.user.id,'APPROVE_PAYMENT_EXCEPTION','supplier_invoice',invoice.id,null,
     {reason:req.body.reason},req.ip);
   res.status(204).end();
+}));
+
+router.post('/invoices/:id/verify',auth,permit('finance.pay'),wrap(async(req,res)=>{
+  const outcome=await transaction(async connection=>{
+    const [rows]=await connection.execute('SELECT * FROM supplier_invoices WHERE id=? FOR UPDATE',[req.params.id]);
+    const invoice=rows[0];
+    if(!invoice)return {error:'Supplier invoice not found.',status:404};
+    if(!invoice.order_id)return {error:'This invoice has no purchase order. Use the independent payment-exception review.',status:409};
+    if(invoice.verified_at)return {error:'This invoice was already verified.',status:409};
+    if(Number(invoice.recorded_by)===Number(req.user.id))return {error:'A different Finance user must verify the invoice recorded by its creator.',status:403};
+    const match=await paymentMatch(invoice,connection);
+    if(!match.matched)return {error:`Invoice cannot be verified: ${match.reason}`,status:409};
+    await connection.execute('UPDATE supplier_invoices SET verified_by=?,verified_at=NOW() WHERE id=?',[req.user.id,invoice.id]);
+    await audit(connection,req.user.id,'VERIFY_THREE_WAY_MATCH','supplier_invoice',invoice.id,null,match,req.ip);
+    return {id:invoice.id};
+  });
+  if(outcome.error)return res.status(outcome.status).json({error:outcome.error});
+  res.json(await getOne('SELECT id,verified_at verifiedAt FROM supplier_invoices WHERE id=?',[outcome.id]));
 }));
 
 const supplierInvoiceSchema=z.object({
