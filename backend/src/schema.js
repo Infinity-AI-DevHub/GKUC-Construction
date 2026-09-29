@@ -3248,6 +3248,27 @@ export async function migrate() {
     FOREIGN KEY(employee_id) REFERENCES employees(id),
     FOREIGN KEY(requested_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS site_attendance_submissions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    employee_id BIGINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NOT NULL,
+    work_date DATE NOT NULL,
+    state ENUM('On site','Absent') NOT NULL,
+    submitted_by BIGINT UNSIGNED NOT NULL,
+    submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status ENUM('Pending','Approved','Rejected') NOT NULL DEFAULT 'Pending',
+    reviewed_by BIGINT UNSIGNED NULL,
+    reviewed_at DATETIME NULL,
+    review_note VARCHAR(500) NULL,
+    UNIQUE KEY uq_site_attendance_employee_day(employee_id,work_date),
+    FOREIGN KEY(employee_id) REFERENCES employees(id),
+    FOREIGN KEY(project_id) REFERENCES projects(id),
+    FOREIGN KEY(submitted_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('site_material_counts','client_ref','VARCHAR(120) NULL');
+  await addIndex('site_material_counts','uq_sitecount_client_ref','UNIQUE KEY uq_sitecount_client_ref(client_ref)');
+  await addColumn('site_material_consumption','client_ref','VARCHAR(120) NULL');
+  await addIndex('site_material_consumption','uq_siteuse_client_ref','UNIQUE KEY uq_siteuse_client_ref(client_ref)');
   await seedWorkMethods();
   await seedAccessControl();
 }

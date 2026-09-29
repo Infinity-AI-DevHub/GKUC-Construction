@@ -17,6 +17,22 @@ router.get('/', auth, permit('site.reports','projects.view'), wrap(async (req, r
   res.json(await query(`${select} ${where} ORDER BY r.report_date DESC,r.id DESC LIMIT 120`, params));
 }));
 
+router.get('/site-today/:projectId', auth, permit('site.reports'), wrap(async(req,res)=>{
+  const project=await getOne('SELECT id,name FROM projects WHERE id=? AND active=1',[req.params.projectId]);
+  if(!project)return res.status(404).json({error:'Active project not found'});
+  const [previous,todayReport,previousAttendance]=await Promise.all([
+    getOne(`SELECT id,report_date reportDate,workforce,work_completed work FROM daily_reports
+      WHERE project_id=? AND report_date=DATE_SUB(CURDATE(),INTERVAL 1 DAY) ORDER BY id DESC LIMIT 1`,[project.id]),
+    getOne(`SELECT id FROM daily_reports WHERE project_id=? AND report_date=CURDATE()`,[project.id]),
+    query(`SELECT a.employee_id employeeId,e.name FROM attendance a JOIN employees e ON e.id=a.employee_id
+      WHERE a.project_id=? AND a.work_date=DATE_SUB(CURDATE(),INTERVAL 1 DAY)
+      AND a.state IN ('On site','Late','Checked out')`,[project.id])
+  ]);
+  const materials=previous?await query(`SELECT rm.material_id materialId,m.name,m.unit,rm.quantity
+    FROM report_materials rm JOIN materials m ON m.id=rm.material_id WHERE rm.report_id=?`,[previous.id]):[];
+  res.json({project,previous,materials,previousAttendance,todayReportId:todayReport?.id||null});
+}));
+
 router.get('/:id', auth, permit('site.reports','projects.view'), wrap(async (req, res) => {
   const report = await getOne(`${select} WHERE r.id=?`, [req.params.id]);
   if (!report) return res.status(404).json({ error: 'Report not found' });

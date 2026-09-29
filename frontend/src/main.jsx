@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Building2, Calculator, CircleDollarSign, ClipboardCheck, ClipboardList, FileText, LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse, MessageSquare, HardDrive } from 'lucide-react';
 import './styles.css';
@@ -19,29 +19,31 @@ import { onRealtime, startRealtime, stopRealtime } from './realtime.js';
 import NavBar from './NavBar.jsx';
 import AccountMenu from './AccountMenu.jsx';
 import AccountPanel from './AccountPanel.jsx';
-import Dashboard from './pages/Dashboard.jsx';
-import Projects from './pages/Projects.jsx';
-import Tasks from './pages/Tasks.jsx';
-import People from './pages/People.jsx';
-import Materials from './pages/Materials.jsx';
-import Inventory from './pages/Inventory.jsx';
-import Fleet from './pages/Fleet.jsx';
-import Finance from './pages/Finance.jsx';
-import DailyReports from './pages/DailyReports.jsx';
-import Reports from './pages/Reports.jsx';
-import Admin, { TABS as ADMIN_TABS } from './pages/Admin.jsx';
-import Coordination from './pages/Coordination.jsx';
-import QuantitySurveying from './pages/QuantitySurveying.jsx';
+const Dashboard = lazy(() => import('./pages/Dashboard.jsx'));
+const Projects = lazy(() => import('./pages/Projects.jsx'));
+const Tasks = lazy(() => import('./pages/Tasks.jsx'));
+const People = lazy(() => import('./pages/People.jsx'));
+const Materials = lazy(() => import('./pages/Materials.jsx'));
+const Inventory = lazy(() => import('./pages/Inventory.jsx'));
+const Fleet = lazy(() => import('./pages/Fleet.jsx'));
+const Finance = lazy(() => import('./pages/Finance.jsx'));
+const DailyReports = lazy(() => import('./pages/DailyReports.jsx'));
+const SiteToday = lazy(() => import('./pages/SiteToday.jsx'));
+const Reports = lazy(() => import('./pages/Reports.jsx'));
+const Admin = lazy(() => import('./pages/Admin.jsx'));
+const Coordination = lazy(() => import('./pages/Coordination.jsx'));
+const QuantitySurveying = lazy(() => import('./pages/QuantitySurveying.jsx'));
+const ADMIN_TABS = ['Users', 'Access control', 'Company', 'Documents', 'Notifications', 'Evening summary', 'Messages', 'Lists', 'Fraud watch', 'Audit log', 'My account'];
 
 /*
  * The menu, and who sees each entry.
  *
  * A module is listed if the person holds *any* of its permissions, because several of them
- * serve more than one trade. People is the HR office's record of everybody, and it is also
- * where a site supervisor marks who turned up this morning; Fleet is the transport office's
+ * serve more than one trade. People is the HR office's record of everybody; Site Today
+ * is where a site supervisor submits attendance for HR review. Fleet is the transport office's
  * register, and it is also where the store keeper books tools out. Gating each on a single
  * permission hid exactly those screens from the people whose daily work they are: the
- * supervisor held site.attendance and had nowhere to use it, and the store keeper held
+ * supervisor needs site.reports for the field workflow, and the store keeper held
  * store.lending and could not reach the equipment.
  *
  * This mirrors what the API already does — `permit()` has always accepted several keys —
@@ -59,6 +61,7 @@ const NAV = [
   ['Fleet', Truck, ['transport.view', 'transport.manage', 'store.lending']],
   ['Finance', CircleDollarSign, ['finance.view', 'finance.manage', 'finance.invoice', 'finance.pay', 'finance.costReview']],
   ['Daily reports', FileText, ['projects.view']],
+  ['Site Today', ClipboardList, ['site.reports']],
   ['Chat', MessageSquare, ['chat.use']],
   ['Drive', HardDrive, ['drive.use']],
   ['Reports', ClipboardList, []],
@@ -450,6 +453,7 @@ function App() {
     Fleet: <Fleet {...shared} />,
     Finance: <Finance {...shared} />,
     'Daily reports': <DailyReports {...shared} />,
+    'Site Today': <SiteToday {...shared} />,
     Reports: <Reports {...shared} />,
     Chat: <Chat user={user} />,
     Drive: <Drive user={user} />,
@@ -531,7 +535,7 @@ function App() {
           </div>
           <small>People, materials and vehicles stay shared.</small>
         </div>
-        {content}
+        <Suspense fallback={<div className="loading-screen"><Building2 size={30} /><strong>Opening workspace…</strong></div>}>{content}</Suspense>
       </main>
     </div>
   </div>;

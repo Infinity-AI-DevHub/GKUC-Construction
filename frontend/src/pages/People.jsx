@@ -514,16 +514,21 @@ function Attendance({ data, projects, reload, can }) {
   const [date, setDate] = useState(todayInput());
   const [rows, setRows] = useState(data.attendance);
   const [analytics, setAnalytics] = useState(null);
+  const [siteSubmissions,setSiteSubmissions]=useState([]);
+  const [reviewError,setReviewError]=useState('');
+  const loadSubmissions=()=>api('/attendance/site-submissions').then(setSiteSubmissions).catch(()=>setSiteSubmissions([]));
   const loadRows = () => api(`/attendance?date=${date}`).then(setRows).catch(() => setRows([]));
   const loadAnalytics = () => api('/attendance/analytics').then(setAnalytics).catch(() => setAnalytics(null));
-  useEffect(() => { loadRows(); }, [date]);
+  useEffect(() => { loadRows(); loadSubmissions(); }, [date]);
   useLiveList(loadAnalytics);
   const present = rows.filter(row => ['On site', 'Late', 'Checked out', 'Business trip'].includes(row.state)).length;
   const refresh = async () => { await Promise.all([loadRows(), loadAnalytics(), reload()]); };
   const toggle = async id => { await post(`/attendance/${id}/toggle`); await refresh(); };
+  const reviewSubmission=async(id,decision)=>{try{await post(`/attendance/site-submissions/${id}/review`,{decision});setReviewError('');await Promise.all([loadSubmissions(),refresh()]);}catch(error){setReviewError(error.message);}};
   const canCorrect = can.attendance || can.hrImport;
 
   return <>
+    {siteSubmissions.length>0&&<section className="site-attendance-review"><h3>Site attendance awaiting HR review</h3><p>These field submissions do not affect payroll until HR approves them.</p>{reviewError&&<p className="form-error" role="alert">{reviewError}</p>}{siteSubmissions.map(row=><div key={row.id}><strong>{row.employee}</strong><span>{row.project} · {row.workDate} · {row.state} · submitted by {row.submittedBy}</span><button type="button" onClick={()=>reviewSubmission(row.id,'Approved')}>Approve</button><button type="button" onClick={()=>reviewSubmission(row.id,'Rejected')}>Reject</button></div>)}</section>}
     {analytics && <AttendanceVisuals analytics={analytics} />}
     <div className="attendance-day-toolbar">
       <div><span>Daily record</span><h2>{date === todayInput() ? 'Today’s attendance' : shortDate(date)}</h2></div>

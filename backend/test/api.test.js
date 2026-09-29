@@ -121,6 +121,26 @@ test('fleet accepts an active registered employee as driver', async () => {
   assert.equal(handover.status, 201, JSON.stringify(handover.body));
 });
 
+test('site attendance is a proposal until HR reviews it',async()=>{
+  const hr=await login('hr@gkuc.lk'),site=await login('supervisor@gkuc.lk');
+  const created=await call(hr,'POST','/employees',{code:`SITE-MOBILE-${Date.now()}`,name:'Site Mobile QA'});
+  assert.equal(created.status,201);
+  const id=created.body.id,date=shift(-2);
+  assert.equal((await call(site,'POST','/attendance',{employeeId:id,projectId:1,date})).status,403);
+  const submitted=await call(site,'POST','/attendance/site-submissions',{projectId:1,date,entries:[{employeeId:id,state:'On site'}]});
+  assert.equal(submitted.status,201,JSON.stringify(submitted.body));
+  assert.equal((await call(site,'GET','/attendance/site-submissions')).status,403);
+  assert.ok(!(await call(hr,'GET',`/attendance?date=${date}`)).body.some(row=>Number(row.employeeId)===id));
+  const pending=(await call(hr,'GET','/attendance/site-submissions')).body.find(row=>Number(row.employeeId)===id);
+  assert.ok(pending);
+  assert.equal((await call(hr,'POST',`/attendance/site-submissions/${pending.id}/review`,{decision:'Approved'})).status,200);
+  assert.ok((await call(hr,'GET',`/attendance?date=${date}`)).body.some(row=>Number(row.employeeId)===id));
+  assert.equal((await call(hr,'POST',`/attendance/site-submissions/${pending.id}/review`,{decision:'Approved'})).status,409);
+  await admin.query(`DELETE FROM ${testDatabase}.attendance WHERE employee_id=?`,[id]);
+  await admin.query(`DELETE FROM ${testDatabase}.site_attendance_submissions WHERE employee_id=?`,[id]);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
+});
+
 test('HR reviewed inputs reach weekly payroll once with separate OT, allowances and reimbursement snapshots',async()=>{
   const hr=await login('hr@gkuc.lk'),owner=await login(),site=await login('supervisor@gkuc.lk');
   const employee=await call(hr,'POST','/employees',{code:'HR-INPUT-QA',name:'HR Inputs QA',joinDate:shift(60)});assert.equal(employee.status,201);

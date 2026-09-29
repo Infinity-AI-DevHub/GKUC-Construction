@@ -110,10 +110,19 @@ router.get('/inventory',auth,permit('store.view','store.manage','projects.view')
   res.json({materials,loans,siteIssues:usage,vehicles,equipment});
 }));
 
+router.get('/site-position',auth,permit('store.manage','site.reports'),wrap(async(req,res)=>{
+  const projectId=Number(req.query.projectId),materialId=Number(req.query.materialId);
+  if(!Number.isInteger(projectId)||projectId<1||!Number.isInteger(materialId)||materialId<1)
+    return res.status(400).json({error:'Choose a project and material.'});
+  const position=await transaction(connection=>sitePosition(connection,materialId,projectId));
+  res.json({projectId,materialId,balance:Math.max(0,position.balance)});
+}));
+
 router.post('/site-counts',auth,permit('store.manage','site.reports'),validate(z.object({
   materialId:z.number().int().positive(),projectId:z.number().int().positive(),
-  countedQuantity:z.number().nonnegative(),notes:z.string().max(500).optional()
+  countedQuantity:z.number().nonnegative(),notes:z.string().max(500).optional(),clientRef:z.string().min(8).max(120).optional()
 })),wrap(async(req,res)=>{const b=req.body;
+  if(b.clientRef){const existing=await getOne('SELECT id FROM site_material_counts WHERE client_ref=?',[b.clientRef]);if(existing)return res.json(existing);}
   const id=await transaction(async connection=>{
     const [[material]]=await connection.execute('SELECT id,stock_kind FROM materials WHERE id=? FOR UPDATE',[b.materialId]);
     if(!material||material.stock_kind!=='Consumable')throw Object.assign(new Error('Choose a consumable material'),{status:400});
@@ -121,8 +130,8 @@ router.post('/site-counts',auth,permit('store.manage','site.reports'),validate(z
     if(!project)throw Object.assign(new Error('Project not found'),{status:404});
     const position=await sitePosition(connection,b.materialId,b.projectId);
     const [created]=await connection.execute(`INSERT INTO site_material_counts
-      (material_id,project_id,counted_quantity,baseline_issued,baseline_consumed,notes,counted_by) VALUES (?,?,?,?,?,?,?)`,
-      [b.materialId,b.projectId,b.countedQuantity,position.issued,position.consumed,b.notes||null,req.user.id]);
+      (material_id,project_id,counted_quantity,baseline_issued,baseline_consumed,notes,counted_by,client_ref) VALUES (?,?,?,?,?,?,?,?)`,
+      [b.materialId,b.projectId,b.countedQuantity,position.issued,position.consumed,b.notes||null,req.user.id,b.clientRef||null]);
     await audit(connection,req.user.id,'COUNT','site_material',created.insertId,position,{countedQuantity:b.countedQuantity,...b},req.ip);
     return created.insertId;
   });res.status(201).json({id});
@@ -130,8 +139,9 @@ router.post('/site-counts',auth,permit('store.manage','site.reports'),validate(z
 
 router.post('/site-consumption',auth,permit('store.manage','site.reports'),validate(z.object({
   materialId:z.number().int().positive(),projectId:z.number().int().positive(),quantity:z.number().positive(),
-  consumedOn:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),notes:z.string().max(500).optional()
+  consumedOn:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),notes:z.string().max(500).optional(),clientRef:z.string().min(8).max(120).optional()
 })),wrap(async(req,res)=>{const b=req.body;
+  if(b.clientRef){const existing=await getOne('SELECT id FROM site_material_consumption WHERE client_ref=?',[b.clientRef]);if(existing)return res.json(existing);}
   const id=await transaction(async connection=>{
     const [[material]]=await connection.execute('SELECT id,stock_kind FROM materials WHERE id=? FOR UPDATE',[b.materialId]);
     if(!material||material.stock_kind!=='Consumable')throw Object.assign(new Error('Choose a consumable material'),{status:400});
@@ -139,8 +149,8 @@ router.post('/site-consumption',auth,permit('store.manage','site.reports'),valid
     if(position.balance<b.quantity-.0001)
       throw Object.assign(new Error('The site does not have enough unconsumed material'),{status:409});
     const [created]=await connection.execute(`INSERT INTO site_material_consumption
-      (material_id,project_id,quantity,consumed_on,notes,recorded_by) VALUES (?,?,?,?,?,?)`,
-      [b.materialId,b.projectId,b.quantity,b.consumedOn,b.notes||null,req.user.id]);
+      (material_id,project_id,quantity,consumed_on,notes,recorded_by,client_ref) VALUES (?,?,?,?,?,?,?)`,
+      [b.materialId,b.projectId,b.quantity,b.consumedOn,b.notes||null,req.user.id,b.clientRef||null]);
     await audit(connection,req.user.id,'CONSUME','site_material',created.insertId,null,b,req.ip);
     return created.insertId;
   });res.status(201).json({id});
