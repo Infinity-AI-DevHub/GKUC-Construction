@@ -230,6 +230,73 @@ main .reference-dashboard :is(.dashboard-card,.metric){border-radius:16px;border
 @media(max-width:1100px){.my-work-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.project-workspace-tabs .segments.grouped-segments{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:800px){.module-navigation .segments.grouped-segments{display:flex;gap:10px}.module-navigation .segment-group{display:flex;align-items:center;gap:3px}.module-navigation .segment-group-label{flex:none;padding:0 5px}.project-workspace-tabs .segments.grouped-segments{display:flex;width:max-content}.project-workspace-tabs .segment-group{flex:none}.my-work-today{padding:18px}}
 @media(max-width:520px){.my-work-grid{grid-template-columns:1fr}.my-work-grid button{min-height:0}.my-work-today{padding:15px}}
+
+/* Keep record details readable even when an evidence value or label is unusually long. */
+main :is(.panel,.table-panel,.summary,.metric,.modal,.finding,.my-work-queue){min-width:0}
+main :is(.panel,.table-panel,.modal,.finding) :is(p,dd,li,small){overflow-wrap:anywhere}
+main .report-form>label{min-width:0}
+main .report-form>label :is(input,select,textarea){max-width:100%}
+
+/* Investigation cards use the same spacing and field hierarchy as the rest of the workspace. */
+.integrity{gap:20px}
+.integrity-scores{min-width:0}
+.integrity-score{min-width:0;border-radius:13px;padding:18px}
+.integrity-score strong{overflow-wrap:anywhere}
+.finding{border-radius:14px}
+.finding-head{padding:18px 20px;gap:16px}
+.finding-body{display:grid;gap:20px;padding:22px 24px 26px;border-top:1px solid #e7edf2}
+.finding-body>p{margin:0;max-width:84ch;line-height:1.65}
+.finding-evidence{margin:0;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px;padding:16px;background:#f7f9fb;border:1px solid #e7edf2;border-radius:12px}
+.finding-evidence>div{min-width:0;padding:12px 14px;background:#fff;border:1px solid #e5ebf0;border-radius:9px}
+.finding-evidence dt,.finding-meta dt{font-size:11px;line-height:1.4;letter-spacing:.06em;text-transform:uppercase;font-weight:800;color:#667b8c}
+.finding-evidence dd{margin-top:7px;font-size:13px;line-height:1.6;white-space:normal;overflow-wrap:anywhere}
+.finding-evidence-list{display:grid;gap:9px;margin:0;padding:0;list-style:none}
+.finding-evidence-list>li{padding:9px 11px;border:1px solid #e7edf2;border-radius:8px;background:#fbfcfd}
+.finding-evidence-details{display:grid;gap:5px;margin:0}
+.finding-evidence-details>div{display:grid;grid-template-columns:minmax(80px,auto) minmax(0,1fr);gap:6px 12px;align-items:baseline}
+.finding-evidence-details dt{font-size:11px;letter-spacing:0;text-transform:none;color:#6a7e8f}
+.finding-evidence-details dd{margin:0;min-width:0}
+.finding-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0}
+.finding-meta>div{min-width:0;padding:14px 16px;border:1px solid #e2e9f0;border-radius:10px;background:#fff}
+.finding-meta dd{margin:5px 0 0;color:#18334b;font-weight:750;font-size:13px;line-height:1.45}
+.finding-comments,.finding-review{display:grid;gap:14px;min-width:0;padding:20px;border:1px solid #dfe7ee;border-radius:13px;background:#fbfcfe}
+.finding-section-heading h3{margin:0;color:#17324a;font:800 16px/1.35 Manrope,sans-serif}
+.finding-section-heading p{margin:4px 0 0;color:#667b8c;font-size:12px;line-height:1.5}
+.finding-comment-list{display:grid;gap:9px;max-height:290px;overflow-y:auto}
+.finding-comment-list article{padding:12px 14px;border:1px solid #e4ebf1;border-radius:9px;background:#fff}
+.finding-comment-list article>div{display:flex;justify-content:space-between;flex-wrap:wrap;gap:5px 12px;font-size:12px;color:#17324a}
+.finding-comment-list time{color:#6a7f90}
+.finding-comment-list p{margin:6px 0 0;line-height:1.55;font-size:13px;color:#3e5365}
+.finding-comment-empty{margin:0;color:#6a7f90;font-size:13px}
+.finding-comments label,.finding-review label{display:grid;gap:7px;min-width:0;font-size:12px;font-weight:750;color:#3e566a}
+.finding-comments textarea,.finding-review :is(textarea,input,select){box-sizing:border-box;width:100%;min-width:0;max-width:100%;min-height:42px;margin:0;padding:11px 12px;border:1px solid #d7e1ea;border-radius:9px;background:#fff;color:#18334b;font-family:inherit;font-size:13px;line-height:1.5;font-weight:400}
+.finding-comments textarea,.finding-review textarea{min-height:82px;resize:vertical}
+.finding-comments>button{justify-self:start}
+.finding-review-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.finding-review-fields>label:first-child,.finding-review-fields>label:last-child:nth-child(4){grid-column:1/-1}
+.finding-review .finding-buttons{margin:0;padding-top:15px;border-top:1px solid #e1e8ef}
+.finding-review .finding-hint{margin:0;max-width:80ch}
+.finding-decided{padding:14px 16px;border:1px solid #e1e8ef;border-radius:9px;background:#f8fafc}
+@media(max-width:760px){.finding-body{padding:18px;gap:16px}.finding-meta,.finding-review-fields{grid-template-columns:1fr}.finding-review-fields>label:first-child,.finding-review-fields>label:last-child:nth-child(4){grid-column:auto}.finding-comments,.finding-review{padding:16px}.finding-evidence-details>div{grid-template-columns:1fr;gap:2px}}
+
+/* Forms outside dialogs still need an explicit grid; otherwise labels and controls run together. */
+main .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 20px;align-items:end;min-width:0}
+main .form-grid .form-field{display:grid;gap:7px;min-width:0}
+main .form-grid .form-field label{font-size:12px;font-weight:750;line-height:1.4;color:#40596f}
+main .form-grid .form-field :is(input,select,textarea){box-sizing:border-box;width:100%;min-width:0;max-width:100%;min-height:42px;padding:10px 12px;border:1px solid #dce4ed;border-radius:9px;background:#fafbfd;color:#102a43;font:inherit}
+main .form-grid .form-actions{display:flex;align-items:center;gap:10px;min-width:0;margin:0}
+main .form-grid .form-field>button{justify-self:start;margin-top:4px}
+main .form-grid>.toolbar{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:15px 0 0;margin:0;border-top:1px solid #e2e9f0;background:transparent}
+.import-centre>.table-panel{min-width:0}
+.import-centre>.table-panel>h2{margin:0 0 8px;font:800 18px/1.4 Manrope,sans-serif;color:#102a43}
+.import-centre>.table-panel>p{line-height:1.65;max-width:85ch;color:#52687b}
+.import-centre .form-grid{margin:20px 0;padding:20px;border:1px solid #e2e9f0;border-radius:13px;background:#f8fafc}
+.import-centre .import-review-scroll{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+.import-centre .import-review-table{min-width:650px;width:100%;border-collapse:collapse}
+.import-centre .import-review-table :is(th,td){padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid #e5ebf1;line-height:1.5}
+.import-centre .import-review-table th{background:#f6f9fc;color:#5b7184;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.import-centre .import-review-table td{font-size:13px;color:#274058;overflow-wrap:anywhere}
+@media(max-width:760px){main .form-grid{grid-template-columns:1fr}.import-centre .form-grid{padding:15px}}
 @media(max-width:800px){
   .module-navigation .segments.grouped-segments,.project-workspace-tabs .segments.grouped-segments{display:none}
   .toolbar .compact-section-picker{display:grid;gap:6px;width:100%;padding:2px 4px;color:#72869a;font-size:10px;letter-spacing:.8px;text-transform:uppercase;font-weight:800}

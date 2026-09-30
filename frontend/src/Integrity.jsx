@@ -20,6 +20,14 @@ const CATEGORY_HELP = {
   Integrity: 'The records or documents do not hold together'
 };
 
+const evidenceLabel = key => key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]/g, ' ').replace(/^./, c => c.toUpperCase());
+function EvidenceValue({ value }) {
+  if (value == null || value === '') return <span>Not recorded</span>;
+  if (Array.isArray(value)) return <ul className="finding-evidence-list">{value.map((entry, index) => <li key={index}><EvidenceValue value={entry} /></li>)}</ul>;
+  if (typeof value === 'object') return <dl className="finding-evidence-details">{Object.entries(value).map(([key, entry]) => <div key={key}><dt>{evidenceLabel(key)}</dt><dd><EvidenceValue value={entry} /></dd></div>)}</dl>;
+  return <span>{String(value)}</span>;
+}
+
 export default function Integrity({ can }) {
   const [findings, setFindings] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -128,16 +136,20 @@ export default function Integrity({ can }) {
             <div className="finding-body">
               <p>{finding.detail}</p>
               {finding.evidence && (
-                <dl className="finding-evidence">
+                <dl className="finding-evidence" aria-label="Finding evidence">
                   {Object.entries(finding.evidence).map(([key, value]) => (
                     <div key={key}>
-                      <dt>{key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, c => c.toUpperCase())}</dt>
-                      <dd>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd>
+                      <dt>{evidenceLabel(key)}</dt>
+                      <dd><EvidenceValue value={value} /></dd>
                     </div>
                   ))}
                 </dl>
               )}
-              <p><strong>Investigator:</strong> {finding.assignedTo || 'Not assigned'} · <strong>Resolution due:</strong> {finding.resolutionDueAt ? shortDate(finding.resolutionDueAt) : 'Not set'} · <strong>Financial exposure:</strong> {rupees(finding.amount || 0)}</p>
+              <dl className="finding-meta">
+                <div><dt>Investigator</dt><dd>{finding.assignedTo || 'Not assigned'}</dd></div>
+                <div><dt>Resolution due</dt><dd>{finding.resolutionDueAt ? shortDate(finding.resolutionDueAt) : 'Not set'}</dd></div>
+                <div><dt>Financial exposure</dt><dd>{rupees(finding.amount || 0)}</dd></div>
+              </dl>
               {finding.resolutionProof && <p><strong>Resolution proof:</strong> {finding.resolutionProof}</p>}
               <Attachments ownerType="risk_finding" ownerId={finding.id} title="Evidence files" canUpload canDelete={false} />
               <FindingComments id={finding.id} />
@@ -188,7 +200,9 @@ function Review({ finding, investigators, onDone }) {
     } catch (failure) { setError(failure.message); setBusy(false); }
   };
 
-  return <div className="finding-review">
+  return <section className="finding-review" aria-label="Review finding">
+    <div className="finding-section-heading"><h3>Review decision</h3><p>Record your assessment, ownership and deadline before choosing an action.</p></div>
+    <div className="finding-review-fields">
     <label>
       What did you find when you looked?
       <textarea value={note} rows={2} onChange={event => setNote(event.target.value)}
@@ -204,6 +218,7 @@ function Review({ finding, investigators, onDone }) {
     {finding.status === 'Confirmed' && <label>Resolution proof
       <textarea value={resolutionProof} rows={2} onChange={event => setResolutionProof(event.target.value)} placeholder="Describe the correction and attach supporting evidence above" />
     </label>}
+    </div>
     {error && <p className="form-error">{error}</p>}
     <div className="finding-buttons">
       {finding.status === 'Open' && <button type="button" className="secondary" disabled={busy} onClick={() => decide('Dismissed')}>
@@ -221,7 +236,7 @@ function Review({ finding, investigators, onDone }) {
       Saying why matters more than which button. Six months from now the note is the only thing
       that says whether this was checked or just cleared off the list.
     </p>
-  </div>;
+  </section>;
 }
 
 function FindingComments({ id }) {
@@ -234,12 +249,14 @@ function FindingComments({ id }) {
     try { await post(`/integrity/findings/${id}/comments`, { body }); setBody(''); await load(); }
     catch (failure) { setError(failure.message); }
   };
-  return <div className="finding-comments"><strong>Investigation notes</strong>
-    {rows.map(row => <p key={row.id}><b>{row.author}</b> · {shortDate(row.createdAt)} — {row.body}</p>)}
-    <label>Add a note<textarea value={body} onChange={event => setBody(event.target.value)} rows={2} /></label>
+  return <section className="finding-comments" aria-label="Investigation notes">
+    <div className="finding-section-heading"><h3>Investigation notes</h3><p>Keep the review trail together with this finding.</p></div>
+    {rows.length ? <div className="finding-comment-list">{rows.map(row => <article key={row.id}><div><strong>{row.author}</strong><time>{shortDate(row.createdAt)}</time></div><p>{row.body}</p></article>)}</div> : <p className="finding-comment-empty">No notes yet. Add what you checked or what needs follow-up.</p>}
+    <label htmlFor={`finding-note-${id}`}>Add a note</label>
+    <textarea id={`finding-note-${id}`} value={body} onChange={event => setBody(event.target.value)} rows={3} placeholder="What did you check or discover?" />
     {error && <p className="form-error">{error}</p>}
     <button type="button" className="secondary" onClick={add} disabled={!body.trim()}>Add note</button>
-  </div>;
+  </section>;
 }
 
 function RiskSettings({ onClose }) {
