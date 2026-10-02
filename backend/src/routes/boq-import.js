@@ -115,12 +115,28 @@ const detail = async importId => {
     LEFT JOIN projects p ON p.id=i.project_id WHERE i.id=?`, [importId]);
   if (!record) return null;
   record.items = await query(`SELECT id,source_row sourceRow,category,description,unit,quantity,rate,amount,
-    method,notes,problems,notice,include FROM boq_import_items WHERE import_id=? ORDER BY source_row`, [importId]);
-  record.items = record.items.map(item => ({ ...item, problems: relevantProblems(item.problems) }));
+    method,notes,raw_json rawJson,problems,notice,include FROM boq_import_items WHERE import_id=? ORDER BY source_row`, [importId]);
+  record.items = record.items.map(item => {
+    let raw = item.rawJson;
+    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
+    const { rawJson, ...visible } = item;
+    return { ...visible, sourceSheet: raw?.sheet || null, sheetRow: raw?.row || null,
+      problems: relevantProblems(item.problems) };
+  });
   record.problemCount = record.items.filter(item => item.include && item.problems).length;
   record.categories = await optionsFor('boq.category');
   if (typeof record.layout === 'string') {
     try { record.layout = JSON.parse(record.layout); } catch { record.layout = null; }
+  }
+  if (record.layout?.format === 'Layered BOQ') {
+    const priced = sheet => record.items.filter(item => item.include && item.sourceSheet === sheet)
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const prelim = priced(record.layout.sheets[2]);
+    const measured = priced(record.layout.sheets[3]);
+    record.layout.checks = record.layout.checks.map(check => {
+      const imported = check.label === 'Preliminaries' ? prelim : check.label === 'Measured works' ? measured : prelim + measured;
+      return { ...check, imported, matches: Math.abs(Number(check.source) - imported) < 0.02 };
+    });
   }
   return record;
 };
@@ -184,6 +200,59 @@ const rowSchema = z.object({
   method: z.string().trim().max(4000).nullable().optional(),
   notes: z.string().trim().max(600).nullable().optional(),
   include: z.boolean().optional()
+});
+
+router.post('/boq/imports/:id/items', auth, permit('qs.boq'), validate(rowSchema.extend({
+  description: z.string().trim().min(1).max(300), unit: z.string().trim().min(1).max(30),
+  quantity: z.coerce.number().positive(), rate: z.coerce.number().nonnegative(),
+  afterItemId: z.coerce.number().int().positive().optional(),
+  sourceSheet: z.string().trim().max(100).optional()
+})), fromOptions({ category: 'boq.category' }), async (req, res, next) => {
+  try {
+    const record = await getOne('SELECT status,layout_json layoutJson FROM boq_imports WHERE id=?', [req.params.id]);
+    if (!record) return res.status(404).json({ error: 'That import was not found' });
+    if (record.status !== 'Review') return res.status(409).json({ error: 'Only a BOQ under review can receive new lines.' });
+    let layout = record.layoutJson;
+    if (typeof layout === 'string') { try { layout = JSON.parse(layout); } catch { layout = null; } }
+    if (layout?.format === 'Layered BOQ' && !layout.sheets.slice(2).includes(req.body.sourceSheet))
+      return res.status(400).json({ error: 'Choose Preliminaries or Measured Works for the new line.' });
+    const after = req.body.afterItemId ? await getOne(
+      'SELECT source_row sourceRow,raw_json rawJson FROM boq_import_items WHERE id=? AND import_id=?',
+      [req.body.afterItemId, req.params.id]) : null;
+    if (req.body.afterItemId && !after) return res.status(400).json({ error: 'Choose a line in this review to insert after.' });
+    const last = await getOne('SELECT COALESCE(MAX(source_row),0) lastRow FROM boq_import_items WHERE import_id=?', [req.params.id]);
+    let position = after ? Number(after.sourceRow) + 1 : Number(last.lastRow) + 1;
+    let raw = after?.rawJson;
+    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
+    const sheet = req.body.sourceSheet || raw?.sheet || null;
+    if (after && layout?.format === 'Layered BOQ' && raw?.sheet !== sheet)
+      return res.status(400).json({ error: 'Choose a line from the selected detail sheet as the insertion point.' });
+    if (!after && layout?.format === 'Layered BOQ' && sheet === layout.sheets[2]) {
+      const existing = await query('SELECT source_row sourceRow,raw_json rawJson FROM boq_import_items WHERE import_id=? ORDER BY source_row', [req.params.id]);
+      let lastPrelim = 0;
+      for (const line of existing) {
+        let source = line.rawJson;
+        if (typeof source === 'string') { try { source = JSON.parse(source); } catch { source = {}; } }
+        if (source?.sheet === sheet) lastPrelim = Number(line.sourceRow);
+      }
+      position = lastPrelim + 1;
+    }
+    const body = req.body;
+    const amount = Number((body.quantity * body.rate).toFixed(2));
+    await transaction(async connection => {
+      await connection.execute('UPDATE boq_import_items SET source_row=source_row+1 WHERE import_id=? AND source_row>=? ORDER BY source_row DESC', [req.params.id, position]);
+      await connection.execute(`INSERT INTO boq_import_items
+        (import_id,source_row,category,description,unit,quantity,rate,amount,method,notes,raw_json,include)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,1)`, [req.params.id, position, body.category || null, body.description,
+        body.unit, body.quantity, body.rate, amount, body.method || null,
+        [sheet ? `${sheet} · Added during review` : 'Added during review', body.notes].filter(Boolean).join(' · ').slice(0, 600),
+        JSON.stringify({ addedDuringReview: true, sheet, afterItemId: body.afterItemId || null })]);
+    });
+    await refreshTotals(req.params.id);
+    await audit(pool, req.user.id, 'ADD_LINE', 'boq_import', req.params.id, null,
+      { position, description: body.description, amount }, req.ip);
+    res.status(201).json(await detail(req.params.id));
+  } catch (error) { next(error); }
 });
 
 router.patch('/boq/imports/:id/items/:itemId', auth, permit('qs.boq'), validate(rowSchema), fromOptions({ category: 'boq.category' }),
@@ -270,12 +339,16 @@ router.post('/boq/imports/:id/commit', auth, permit('qs.boq'),
 
       const reference = await nextReference('BOQ', 'boqs');
       const total = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const layout = (await detail(record.id)).layout;
+      const sourceChecks = (layout?.checks || []).map(check =>
+        `${check.label}: source LKR ${Number(check.source).toFixed(2)}, imported LKR ${Number(check.imported).toFixed(2)}`).join('; ');
       const sourceNotes = [
         req.body.notes || record.notes,
         record.document_reference ? `Source reference: ${record.document_reference}` : null,
         record.location ? `Source location: ${record.location}` : null,
-        record.document_date ? `Source document date: ${record.document_date}` : null
-      ].filter(Boolean).join('\n') || null;
+        record.document_date ? `Source document date: ${record.document_date}` : null,
+        sourceChecks ? `Source summary checks: ${sourceChecks}` : null
+      ].filter(Boolean).join('\n').slice(0, 1000) || null;
 
       const boqId = await transaction(async connection => {
         const [created] = await connection.execute(

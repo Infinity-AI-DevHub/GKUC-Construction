@@ -119,11 +119,26 @@ test('BOQ Excel upload and commit accept an empty Category cell', async () => {
   assert.equal(uploaded.status, 201, JSON.stringify(staged));
   assert.equal(staged.problemCount, 0, JSON.stringify(staged));
   assert.equal(staged.items[0].category, null);
+  const added = await call(qs, 'POST', `/boq/imports/${staged.id}/items`, {
+    description: 'Added during review', unit: 'item', quantity: 3, rate: 10,
+    afterItemId: staged.items[0].id
+  });
+  assert.equal(added.status, 201, JSON.stringify(added.body));
+  assert.equal(added.body.items.length, 2);
+  assert.equal(added.body.items[1].description, 'Added during review');
+  assert.equal(Number(added.body.total), 280);
+  assert.equal((await call(qs, 'POST', `/boq/imports/${staged.id}/items`, {
+    description: 'Invalid line', unit: 'item', quantity: 0, rate: 1
+  })).status, 400);
   const committed = await call(qs, 'POST', `/boq/imports/${staged.id}/commit`, { projectId });
   assert.equal(committed.status, 201, JSON.stringify(committed.body));
   const detail = await call(qs, 'GET', `/boq/${committed.body.id || committed.body.boqId}`);
   assert.equal(detail.status, 200, JSON.stringify(detail.body));
   assert.equal(detail.body.items[0].category, null);
+  assert.equal(detail.body.items[1].description, 'Added during review');
+  assert.equal((await call(qs, 'POST', `/boq/imports/${staged.id}/items`, {
+    description: 'Too late', unit: 'item', quantity: 1, rate: 1
+  })).status, 409);
 });
 
 test('only the Managing Director resets another user password and old sessions are revoked', async () => {

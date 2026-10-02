@@ -149,6 +149,9 @@ export function parseBoqWorkbook(buffer, { categories = CATEGORIES } = {}) {
     return { ok: false, error: 'That file could not be opened as a spreadsheet. Save it as .xlsx and try again.' };
   }
 
+  const layered = readLayeredBoq(workbook);
+  if (layered) return layered;
+
   const sheetName = workbook.names.find(name => normalise(name) === 'boq') || workbook.names[0];
   const sheet = sheetName ? workbook.sheet(sheetName) : null;
   if (!sheet?.rows?.length) {
@@ -252,6 +255,107 @@ export function parseBoqWorkbook(buffer, { categories = CATEGORIES } = {}) {
   }
 
   return { ok: true, title, client, items, sheet: sheetName };
+}
+
+/* Consultant BOQs often put their control totals ahead of separate detail sheets. Keep
+   those controls for reconciliation, but never turn them into additional priced work. */
+function readLayeredBoq(workbook) {
+  const find = wanted => workbook.names.find(name => normalise(name) === wanted);
+  const grand = find('grandsummary');
+  const collection = find('summarycollection');
+  const prelim = find('preliminaries');
+  const measured = find('measuredworks');
+  if (![grand, collection, prelim, measured].every(Boolean)) return null;
+
+  const cell = (sheet, row, col) => workbook.sheet(sheet)?.rows?.[row]?.[col] ?? null;
+  const summaryRows = (sheet, start, end, labelColumn, amountColumn) => {
+    const entries = [];
+    for (let row = start; row <= end; row++) {
+      const label = String(cell(sheet, row, labelColumn) || '').trim();
+      const amount = toNumber(cell(sheet, row, amountColumn));
+      if (label && amount !== null) entries.push({ row, label, amount });
+    }
+    return entries;
+  };
+  const grandRows = summaryRows(grand, 4, workbook.sheet(grand).rows.length - 1, 1, 3);
+  const collectionRows = summaryRows(collection, 5, workbook.sheet(collection).rows.length - 1, 2, 3);
+  const grandTotal = grandRows.find(row => normalise(row.label) === 'grandtotal')?.amount;
+  const prelimTotal = grandRows.find(row => normalise(row.label) === 'preliminaries')?.amount;
+  const measuredTotal = collectionRows.find(row => /totalcarriedtosummary/i.test(normalise(row.label)))?.amount;
+
+  const items = [];
+  const sourceSections = [];
+  let sequence = 0;
+  let section = '';
+  const add = (sheet, sheetRow, ref, description, unit, quantity, rate, statedAmount, extra = '') => {
+    const amount = quantity !== null && rate !== null ? Number((quantity * rate).toFixed(2)) : null;
+    const problems = [];
+    const notices = [];
+    if (!description) problems.push('No description');
+    if (!unit) problems.push('No unit');
+    if (quantity === null || quantity <= 0) problems.push('Quantity must be more than zero');
+    if (rate === null || rate < 0) problems.push('Rate must be zero or more');
+    if (statedAmount !== null && amount !== null && Math.abs(statedAmount - amount) > 1)
+      notices.push(`Source amount ${statedAmount.toLocaleString('en-LK')} differs from quantity × rate ${amount.toLocaleString('en-LK')}`);
+    if (sheet === prelim) notices.push('The source gives a single amount; imported as quantity 1 at that rate');
+    items.push({ sourceRow: ++sequence, sourceSheet: sheet, sheetRow, category: null,
+      description: description.slice(0, 300), unit: unit.slice(0, 30), quantity, rate, amount,
+      method: null, notes: [`${sheet} row ${sheetRow}`, section, ref ? `Ref ${ref}` : '', extra].filter(Boolean).join(' · ').slice(0, 600),
+      raw: { sheet, row: sheetRow, ref, description, unit, quantity, rate, amount: statedAmount },
+      problems, notices });
+  };
+
+  for (let row = 14; row < workbook.sheet(prelim).rows.length; row++) {
+    const ref = cell(prelim, row, 1);
+    const description = String(cell(prelim, row, 2) || '').trim();
+    const rawAmount = cell(prelim, row, 5);
+    if (!description && ref && !toNumber(rawAmount)) { section = String(ref).trim(); sourceSections.push({ sheet: prelim, row, title: section }); continue; }
+    if (!description || /total\s+preliminaries/i.test(description)) continue;
+    if (String(rawAmount || '').trim().toLowerCase() === 'deleted') {
+      sourceSections.push({ sheet: prelim, row, title: `${ref || ''} ${description}`.slice(0, 200), status: 'Deleted in source' });
+      continue;
+    }
+    const amount = toNumber(rawAmount);
+    if (amount === null) continue;
+    add(prelim, row, ref, description, String(cell(prelim, row, 4) || 'Item'), 1, amount, amount,
+      cell(prelim, row, 3) ? `Payment category ${cell(prelim, row, 3)}` : '');
+  }
+  const prelimCount = items.length;
+  section = '';
+  for (let row = 3; row < workbook.sheet(measured).rows.length; row++) {
+    const ref = cell(measured, row, 1);
+    const description = String(cell(measured, row, 2) || '').trim();
+    const quantity = toNumber(cell(measured, row, 3));
+    const unit = String(cell(measured, row, 4) || '').trim();
+    const rate = toNumber(cell(measured, row, 5));
+    const statedAmount = toNumber(cell(measured, row, 6));
+    if (description && quantity === null && rate === null) {
+      if (statedAmount === null && description.length < 120) { section = description; sourceSections.push({ sheet: measured, row, title: section }); }
+      continue;
+    }
+    if (description && (quantity !== null || rate !== null || statedAmount !== null))
+      add(measured, row, ref, description, unit, quantity, rate, statedAmount);
+  }
+  if (!items.length) return { ok: false, error: 'The detail sheets contain no priced BOQ lines.' };
+  const prelimAmount = items.slice(0, prelimCount).reduce((sum, item) => sum + (item.amount || 0), 0);
+  const measuredAmount = items.slice(prelimCount).reduce((sum, item) => sum + (item.amount || 0), 0);
+  const total = prelimAmount + measuredAmount;
+  const checks = [
+    { label: 'Preliminaries', source: prelimTotal, imported: prelimAmount },
+    { label: 'Measured works', source: measuredTotal, imported: measuredAmount },
+    { label: 'Grand total', source: grandTotal, imported: total }
+  ].map(check => ({ ...check, matches: check.source !== undefined && Math.abs(check.source - check.imported) < 0.02 }));
+  return { ok: true, title: String(cell(grand, 2, 1) || '').replace(/^Project:\s*/i, '').slice(0, 180) || null,
+    client: null, items, sheet: prelim, layout: { foreign: true, format: 'Layered BOQ',
+      sheet: prelim, sheets: [grand, collection, prelim, measured],
+      summaries: [{ sheet: grand, rows: grandRows }, { sheet: collection, rows: collectionRows }],
+      sections: sourceSections, checks,
+      sourceNotes: [
+        ...Array.from({ length: 11 }, (_, index) => ({ sheet: prelim, row: index + 2, text: cell(prelim, index + 2, 1) }))
+          .filter(note => typeof note.text === 'string' && /^Note\s*\d/i.test(note.text)),
+        { sheet: measured, row: 3, text: cell(measured, 3, 2) }
+      ].filter(note => note.text),
+      notes: checks.filter(check => !check.matches).map(check => `${check.label} does not match the source summary; review the detail lines`) } };
 }
 
 /**
