@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { pool, query, getOne, transaction, audit, nextReference } from '../db.js';
 import { auth, permit, validate, fail, fromOptions } from '../lib/http.js';
 import { readUpload, readUploadedFile, store, checksumFile, remove,
-  isLocalStore, localPathFor, signedDownloadUrl } from '../lib/storage.js';
+  isLocalStore, localPathFor, pipeStoredObject } from '../lib/storage.js';
 import { buildTemplate, parseBoqWorkbook } from '../lib/boq-template.js';
 import { parseBoqPdf } from '../lib/boq-pdf.js';
 import { optionsFor } from '../lib/options.js';
@@ -39,6 +39,8 @@ router.get('/boq/template', auth, permit('qs.boq'), async (req, res, next) => {
  */
 router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
   let discard = async () => {};
+  let stored;
+  let committed = false;
   try {
     const upload = await readUpload(req);
     discard = upload.discard;
@@ -63,7 +65,7 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
      * stored copy can later be shown to be the one that was received.
      */
     const checksum = await checksumFile(file.path);
-    const stored = await store({
+    stored = await store({
       folder: 'boq', filename: file.filename, mime: file.mime,
       path: file.path, head: file.head, size: file.size
     });
@@ -93,12 +95,16 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
       }
       return created.insertId;
     });
+    committed = true;
 
     await audit(pool, req.user.id, 'IMPORT', 'boq_import', importId, null,
       { filename: file.filename, rows: parsed.items.length, problems: problemCount }, req.ip);
 
     res.status(201).json(await detail(importId));
   } catch (error) {
+    if (stored && !committed) await remove(stored.key).catch(cleanupError => {
+      console.error('Could not remove an unreferenced BOQ upload', { key: stored.key, error: cleanupError.message });
+    });
     next(error);
   } finally {
     await discard();
@@ -551,7 +557,7 @@ router.get('/boq/imports/:id/file', auth, permit('qs.view', 'qs.boq'), async (re
       `attachment; filename="${record.filename.replace(/[^\w.\- ]+/g, '')}"`);
 
     if (isLocalStore()) return res.sendFile(localPathFor(record.storageKey));
-    return res.redirect(await signedDownloadUrl(record.storageKey));
+    return pipeStoredObject(record.storageKey, res);
   } catch (error) { next(error); }
 });
 

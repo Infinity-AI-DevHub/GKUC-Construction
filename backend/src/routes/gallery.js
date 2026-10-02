@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, can, permit, validate, wrap } from '../lib/http.js';
-import { checksumFile, isAllowedType, isLocalStore, localPathFor, readUpload, remove, signedDownloadUrl, store } from '../lib/storage.js';
+import { checksumFile, isAllowedType, isLocalStore, localPathFor, pipeStoredObject, readUpload, remove, store } from '../lib/storage.js';
 
 const router = Router();
 
@@ -251,11 +251,11 @@ router.get('/gallery/photos/:id/file', auth, permit('projects.view'), wrap(async
   }
 
   const key = req.query.size === 'thumb' && photo.thumb_key ? photo.thumb_key : photo.storage_key;
-  if (!isLocalStore()) return res.redirect(302, signedDownloadUrl(key));
   res.type(photo.mime);
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(photo.filename)}"`);
   res.setHeader('Cache-Control', 'private, max-age=3600');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (!isLocalStore()) return pipeStoredObject(key, res);
   res.sendFile(localPathFor(key), error => {
     if (error && !res.headersSent) res.status(404).json({ error: 'Photo file not found' });
   });

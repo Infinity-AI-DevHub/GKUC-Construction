@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, spendSql, today, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
-import { checksumFile, contentMatchesType, isLocalStore, localPathFor, readUpload, remove, signedDownloadUrl, store } from '../lib/storage.js';
+import { checksumFile, contentMatchesType, isLocalStore, localPathFor, pipeStoredObject, readUpload, remove, store } from '../lib/storage.js';
 import { parseSubcontractQuotePdf, suggestSubcontractors } from '../lib/subcontract-quote-pdf.js';
 import { parseTenderPdf } from '../lib/tender-pdf.js';
 import { commitmentsDocument, documentContext, quotationDocument } from '../lib/documents.js';
@@ -865,7 +865,7 @@ router.get('/tenders/:id/pdf', auth, permit('qs.view'), wrap(async (req, res) =>
   res.type('application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="${file.filename.replace(/[^\w.\- ]+/g, '')}"`);
   if (isLocalStore()) return res.sendFile(localPathFor(file.storageKey));
-  return res.redirect(await signedDownloadUrl(file.storageKey));
+  return pipeStoredObject(file.storageKey, res);
 }));
 
 router.post('/tenders', auth, permit('qs.tender'), validate(tenderShape.refine(datesRunForwards, dateOrder)
@@ -1240,7 +1240,7 @@ router.get('/subcontract-quotations/:id/pdf', auth, permit('qs.view', 'projects.
   res.type('application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="${file.filename.replace(/[^\w.\- ]+/g, '')}"`);
   if (isLocalStore()) return res.sendFile(localPathFor(file.storageKey));
-  return res.redirect(await signedDownloadUrl(file.storageKey));
+  return pipeStoredObject(file.storageKey, res);
 }));
 
 router.get('/subcontract-quotations', auth, permit('qs.view', 'projects.view'), wrap(async (req, res) => {

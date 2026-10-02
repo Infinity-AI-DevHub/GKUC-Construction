@@ -43,20 +43,22 @@ console.log(`${apply ? 'Migration' : 'Dry run'}: ${files.length} local objects f
 for (const file of files) {
   const key = path.relative(UPLOAD_ROOT, file).split(path.sep).join('/');
   try {
-    let exists = false;
+    const local = await fs.stat(file);
+    let remoteSize = null;
     try {
-      await objectStoreClient().send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-      exists = true;
+      const remote = await objectStoreClient().send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      remoteSize = Number(remote.ContentLength);
     } catch (error) {
       if (error.$metadata?.httpStatusCode !== 404 && error.name !== 'NotFound') throw error;
     }
-    if (exists) {
+    if (remoteSize === local.size) {
       skipped += 1;
-      console.log(`SKIP  ${key} (already exists)`);
+      console.log(`SKIP  ${key} (already exists with matching size)`);
       continue;
     }
+    const action = remoteSize === null ? 'COPY' : 'REPLACE';
     if (!apply) {
-      console.log(`COPY  ${key}`);
+      console.log(`${action.padEnd(7)}${key}${remoteSize === null ? '' : ` (R2 ${remoteSize} bytes; local ${local.size} bytes)`}`);
       copied += 1;
       continue;
     }
@@ -66,7 +68,7 @@ for (const file of files) {
     }});
     await upload.done();
     copied += 1;
-    console.log(`DONE  ${key}`);
+    console.log(`DONE  ${key}${remoteSize === null ? '' : ' (replaced size-mismatched object)'}`);
   } catch (error) {
     failed += 1;
     console.error(`FAIL  ${key}: ${error.message}`);

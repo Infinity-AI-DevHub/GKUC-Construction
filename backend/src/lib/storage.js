@@ -188,6 +188,18 @@ export function objectStoreClient() {
   if (!endpoint || !process.env.R2_BUCKET || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
     throw Object.assign(new Error('Object storage is selected but its endpoint, bucket or credentials are not set'), { status: 500 });
   }
+  let parsedEndpoint;
+  try { parsedEndpoint = new URL(endpoint); }
+  catch { throw Object.assign(new Error('The R2 S3 API endpoint is not a valid URL'), { status: 500 }); }
+  if (!['http:', 'https:'].includes(parsedEndpoint.protocol)) {
+    throw Object.assign(new Error('The R2 S3 API endpoint must use HTTPS'), { status: 500 });
+  }
+  if (process.env.NODE_ENV === 'production' && parsedEndpoint.protocol !== 'https:') {
+    throw Object.assign(new Error('The R2 S3 API endpoint must use HTTPS in production'), { status: 500 });
+  }
+  if (parsedEndpoint.pathname !== '/' && parsedEndpoint.pathname !== '') {
+    throw Object.assign(new Error('Use the account-level R2 S3 API endpoint without a bucket name or path'), { status: 500 });
+  }
   r2Client = new S3Client({
     region: 'auto', endpoint, forcePathStyle: true,
     credentials: { accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY }
@@ -195,9 +207,12 @@ export function objectStoreClient() {
   return r2Client;
 }
 
-const storedUrl = key => process.env.R2_PUBLIC_BASE_URL
-  ? `${process.env.R2_PUBLIC_BASE_URL.replace(/\/$/, '')}/${key}`
-  : `/uploads/${key}`;
+/*
+ * This value is legacy metadata only; opening always goes through an authorised route.
+ * Never persist a custom-domain object URL here. Doing so would leak a permanent public
+ * path for HR, tender and finance documents through attachment-list API responses.
+ */
+const storedUrl = key => `/uploads/${key}`;
 
 function r2Failure(action, error) {
   console.error(`R2 ${action} failed`, {
@@ -251,11 +266,23 @@ const r2Driver = {
  * carries its own expiry, so the bucket itself stays private and a URL that leaks stops
  * working within minutes rather than never.
  */
-export const signedDownloadUrl = (key, seconds = 300) => getSignedUrl(
-  objectStoreClient(),
-  new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }),
-  { expiresIn: seconds }
-);
+export async function signedDownloadUrl(key, seconds = 300, options = {}) {
+  const filename = options.filename ? safeName(options.filename) : '';
+  const disposition = options.disposition === 'inline' ? 'inline' : 'attachment';
+  try {
+    return await getSignedUrl(
+      objectStoreClient(),
+      new GetObjectCommand({
+        Bucket: process.env.R2_BUCKET,
+        Key: key,
+        ...(filename ? { ResponseContentDisposition:
+          `${disposition}; filename*=UTF-8''${encodeURIComponent(filename)}` } : {}),
+        ...(options.mime ? { ResponseContentType: options.mime } : {})
+      }),
+      { expiresIn: seconds }
+    );
+  } catch (error) { throw r2Failure('download link', error); }
+}
 
 /** Downloads a private object to a temporary local path for OCR/import processing. */
 export async function downloadToFile(key, destination) {
@@ -272,10 +299,39 @@ export async function downloadToFile(key, destination) {
   }
 }
 
+/**
+ * Sends a private R2 object through an already-authorised application response.
+ *
+ * The frontend opens protected files with an authenticated fetch. Redirecting that fetch
+ * to another origin makes every browser depend on a separately maintained bucket CORS
+ * policy, so an otherwise correct upload appears broken when it is opened. Proxying only
+ * the authorised download keeps the bucket private and works in Safari, Chrome, Brave and
+ * Edge without exposing credentials or making deployment depend on CORS.
+ */
+export async function pipeStoredObject(key, response) {
+  try {
+    const stored = await objectStoreClient().send(new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET, Key: key
+    }));
+    if (!stored.Body) throw Object.assign(new Error('The stored object has no content'), { status: 404 });
+    if (stored.ContentLength !== undefined && !response.headersSent) {
+      response.setHeader('Content-Length', String(stored.ContentLength));
+    }
+    await pipeline(stored.Body, response);
+  } catch (error) {
+    if (error.status === 404 || error?.$metadata?.httpStatusCode === 404 || error?.name === 'NoSuchKey') {
+      throw Object.assign(new Error('File not found'), { status: 404, cause: error });
+    }
+    throw r2Failure('download', error);
+  }
+}
+
 /** Startup/deployment health check that verifies the configured bucket is reachable. */
 export async function checkObjectStore() {
   if (driver !== r2Driver) return { driver: 'local' };
-  await objectStoreClient().send(new HeadBucketCommand({ Bucket: process.env.R2_BUCKET }));
+  try {
+    await objectStoreClient().send(new HeadBucketCommand({ Bucket: process.env.R2_BUCKET }));
+  } catch (error) { throw r2Failure('health check', error); }
   return { driver: 'r2', bucket: process.env.R2_BUCKET, endpoint: r2Endpoint() };
 }
 

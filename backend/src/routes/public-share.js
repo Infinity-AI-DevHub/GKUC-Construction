@@ -87,7 +87,9 @@ router.get('/s/:token/download', async (req, res, next) => {
     res.setHeader('Cache-Control', 'private, no-store');
 
     if (isLocalStore()) return res.sendFile(localPathFor(item.storageKey));
-    return res.redirect(await signedDownloadUrl(item.storageKey));
+    return res.redirect(await signedDownloadUrl(item.storageKey, 300, {
+      filename: item.name, mime: item.mime, disposition: 'attachment'
+    }));
   } catch (error) { next(error); }
 });
 

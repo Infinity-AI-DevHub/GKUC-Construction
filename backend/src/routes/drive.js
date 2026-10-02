@@ -3,7 +3,7 @@ import { z } from 'zod';
 import crypto from 'node:crypto';
 import { pool, query, getOne, audit, transaction } from '../db.js';
 import { auth, permit, validate, fail } from '../lib/http.js';
-import { readUpload, store, checksumFile, remove, isLocalStore, localPathFor, signedDownloadUrl } from '../lib/storage.js';
+import { readUpload, store, checksumFile, remove, isLocalStore, localPathFor, pipeStoredObject } from '../lib/storage.js';
 import { checkDriveFile, guessType, fileFamily } from '../lib/drive-files.js';
 import { accessFor, atLeast, ancestry, visibleChildren, publicLinkFor } from '../lib/drive-access.js';
 import { publishTo, publishChange } from '../lib/realtime.js';
@@ -77,6 +77,8 @@ router.post('/drive/folders', auth, permit('drive.use'),
 
 router.post('/drive/files', auth, permit('drive.use'), async (req, res, next) => {
   let discard = async () => {};
+  let stored;
+  let committed = false;
   try {
     const upload = await readUpload(req);
     discard = upload.discard;
@@ -90,7 +92,7 @@ router.post('/drive/files', auth, permit('drive.use'), async (req, res, next) =>
 
     const mime = guessType(file.filename);
     const checksum = await checksumFile(file.path);
-    const stored = await store({
+    stored = await store({
       folder: 'drive', filename: file.filename, mime,
       path: file.path, head: file.head, size: file.size, skipTypeCheck: true
     });
@@ -100,6 +102,7 @@ router.post('/drive/files', auth, permit('drive.use'), async (req, res, next) =>
        VALUES (?,?,?,?,?,?,?,?)`,
       [parentId, 'File', file.filename.slice(0, 255), req.user.id,
         stored.key, file.size, mime, checksum]);
+    committed = true;
 
     await audit(pool, req.user.id, 'UPLOAD', 'drive_file', result.insertId, null,
       { name: file.filename, size: file.size, checksum }, req.ip);
@@ -107,6 +110,9 @@ router.post('/drive/files', auth, permit('drive.use'), async (req, res, next) =>
     res.status(201).json({ id: result.insertId, name: file.filename, size: file.size, mime,
       family: fileFamily(file.filename, mime) });
   } catch (error) {
+    if (stored && !committed) await remove(stored.key).catch(cleanupError => {
+      console.error('Could not remove an unreferenced Drive upload', { key: stored.key, error: cleanupError.message });
+    });
     next(error);
   } finally { await discard(); }
 });
@@ -126,7 +132,7 @@ router.get('/drive/items/:id/download', auth, permit('drive.use'), async (req, r
     res.setHeader('Content-Disposition',
       `attachment; filename="${item.name.replace(/[^\w.\- ]+/g, '')}"`);
     if (isLocalStore()) return res.sendFile(localPathFor(item.storageKey));
-    return res.redirect(await signedDownloadUrl(item.storageKey));
+    return pipeStoredObject(item.storageKey, res);
   } catch (error) { next(error); }
 });
 

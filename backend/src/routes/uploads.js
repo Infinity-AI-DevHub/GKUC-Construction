@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, can, permit, wrap } from '../lib/http.js';
 import { enqueue as enqueueOcr } from '../lib/ocr-queue.js';
-import { allowedExtensions, FOLDERS, isLocalStore, localPathFor, MAX_UPLOAD_BYTES, readUpload, remove, signedDownloadUrl, storageDriver, store } from '../lib/storage.js';
+import { allowedExtensions, FOLDERS, isLocalStore, localPathFor, MAX_UPLOAD_BYTES, pipeStoredObject, readUpload, remove, storageDriver, store } from '../lib/storage.js';
 
 const router = Router();
 
@@ -179,19 +179,15 @@ router.get('/file/:id', auth, wrap(async (req, res) => {
     return res.status(403).json({ error: 'You do not have permission to open this file' });
   }
 
-  /*
-   * Object storage answers with a link of its own rather than streaming through here. The
-   * bucket stays private: the URL is signed for a few minutes, and the permission check
-   * above is what decides whether one is issued at all.
-   */
-  if (!isLocalStore()) return res.redirect(302, signedDownloadUrl(file.storageKey));
-
+  /* The bucket stays private. Cloud objects stream through this authorised route so the
+     browser never needs a public object URL or separate R2 CORS permission. */
   res.type(file.mime);
   /* Attachment rather than inline: a stored HTML or SVG file rendered in place would run
      in this origin, which is the same as letting an uploader script the application. */
   res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.filename)}"`);
   res.setHeader('Cache-Control', 'private, no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (!isLocalStore()) return pipeStoredObject(file.storageKey, res);
   res.sendFile(localPathFor(file.storageKey), error => {
     if (error && !res.headersSent) res.status(404).json({ error: 'File not found' });
   });
@@ -274,7 +270,13 @@ router.delete('/:id', auth, wrap(async (req, res) => {
     return res.status(403).json({ error: 'You do not have permission to remove files from this record' });
   }
   await query('DELETE FROM attachments WHERE id=?', [attachment.id]);
-  await remove(attachment.storage_key).catch(() => {});
+  await remove(attachment.storage_key).catch(error => {
+    /* The database deletion is authoritative. Log an R2 orphan for operational cleanup
+       instead of turning a successful user action into a misleading failure. */
+    console.error('Could not remove deleted attachment object', {
+      attachmentId: attachment.id, key: attachment.storage_key, error: error.message
+    });
+  });
   await audit(pool, req.user.id, 'DELETE', `${attachment.owner_type}_attachment`, attachment.id, attachment, null, req.ip);
   res.status(204).end();
 }));

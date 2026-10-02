@@ -80,6 +80,9 @@ function checkConfiguration() {
     for (const key of ['R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']) {
       if (!process.env[key]) missing.push(key);
     }
+    if (process.env.R2_PUBLIC_BASE_URL) {
+      warnings.push('R2_PUBLIC_BASE_URL is ignored — private files are opened only through authorised SiteOps routes');
+    }
   }
 
   if (production && !process.env.TRUST_PROXY) {
