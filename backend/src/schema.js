@@ -562,7 +562,7 @@ async function createBoqTables() {
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS boq_items (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, boq_id BIGINT UNSIGNED NOT NULL,
-    category ENUM('Material','Labour','Equipment','Subcontract','Overhead') NOT NULL, description VARCHAR(300) NOT NULL,
+    category VARCHAR(60) NULL DEFAULT NULL, description VARCHAR(300) NOT NULL,
     unit VARCHAR(30) NOT NULL, quantity DECIMAL(14,3) NOT NULL, rate DECIMAL(14,2) NOT NULL,
     amount DECIMAL(15,2) NOT NULL, material_id BIGINT UNSIGNED NULL,
     CONSTRAINT fk_boqitem_boq FOREIGN KEY(boq_id) REFERENCES boqs(id) ON DELETE CASCADE,
@@ -2245,6 +2245,9 @@ async function createOptionTables() {
   await addColumn('option_values', 'locked', 'TINYINT(1) NOT NULL DEFAULT 0');
 
   await modifyColumn('boq_items', 'category', "VARCHAR(60) NOT NULL DEFAULT 'Material'");
+  if (!await columnIsNullable('boq_items', 'category')) {
+    await query('ALTER TABLE boq_items MODIFY category VARCHAR(60) NULL DEFAULT NULL');
+  }
   await modifyColumn('expenses', 'source', "VARCHAR(60) NOT NULL DEFAULT 'Other'");
   await modifyColumn('leave_requests', 'leave_type', "VARCHAR(60) NOT NULL DEFAULT 'Annual'");
   await modifyColumn('vehicle_documents', 'doc_type', "VARCHAR(60) NOT NULL DEFAULT 'Insurance'");

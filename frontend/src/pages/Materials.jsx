@@ -316,7 +316,7 @@ function Suppliers({ can }) {
 }
 
 function MaterialForm({ close, reload }) {
-  return <FormModal title="Add material" close={close} label="Add material" onSubmit={async values => {
+  return <FormModal title="Add material" close={close} label="Add material" repeat onSubmit={async values => {
     await post('/materials', {
       name: values.name,
       unit: values.unit,
@@ -433,7 +433,7 @@ function OrderForm({ data, close, reload }) {
 }
 
 function SupplierForm({ close, reload }) {
-  return <FormModal title="Add supplier" close={close} label="Add supplier" onSubmit={async values => {
+  return <FormModal title="Add supplier" close={close} label="Add supplier" repeat onSubmit={async values => {
     await post('/purchasing/suppliers', {
       name: values.name,
       contact: values.contact || undefined,

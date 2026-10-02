@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { optionsFor } from '../lib/options.js';
+import { optionsFor, allOptions, addOption, forgetOptions } from '../lib/options.js';
 import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { assertUniqueManualEntry } from '../lib/ledger-duplicates.js';
 import { boqDocument, documentContext } from '../lib/documents.js';
 import { sendDocument } from '../lib/document-pdf.js';
 import { notify } from '../alerts.js';
+import { publishChange } from '../lib/realtime.js';
 
 const router = Router();
 /* Kept only as the fallback grouping for the cost comparison below; the values people
@@ -35,7 +36,7 @@ async function recalculateBudget(connection, projectId) {
 }
 
 const itemSchema = z.object({
-  category: z.string().trim().min(1).max(60),
+  category: z.string().trim().max(60).nullable().optional(),
   description: z.string().min(2).max(300),
   unit: z.string().min(1).max(30),
   quantity: z.number().positive(),
@@ -51,7 +52,7 @@ const itemSchema = z.object({
 const checkItemCategories = async (req, res, next) => {
   try {
     const allowed = await optionsFor('boq.category');
-    const wrong = (req.body.items || []).find(item => !allowed.includes(item.category));
+    const wrong = (req.body.items || []).find(item => item.category && !allowed.includes(item.category));
     if (wrong) {
       return res.status(400).json({
         error: `"${wrong.category}" is not one of the BOQ categories.`,
@@ -61,6 +62,37 @@ const checkItemCategories = async (req, res, next) => {
     next();
   } catch (error) { next(error); }
 };
+
+router.get('/categories', auth, permit('qs.view','qs.boq'), wrap(async (_req,res) => {
+  const list=(await allOptions()).find(row=>row.listKey==='boq.category');
+  res.json(list?.values || []);
+}));
+
+router.post('/categories', auth, permit('qs.boq'), validate(z.object({value:z.string().trim().min(1).max(60)})), wrap(async(req,res)=>{
+  const result=await addOption('boq.category',req.body.value,req.user.id);
+  if(!result.ok)return res.status(409).json({error:result.error});
+  await audit(pool,req.user.id,result.restored?'RESTORE':'CREATE','option_value',`boq.category:${req.body.value}`,null,{value:req.body.value},req.ip);
+  publishChange('options',{list:'boq.category'});
+  res.status(201).json((await allOptions()).find(row=>row.listKey==='boq.category')?.values || []);
+}));
+
+router.patch('/categories/:id', auth, permit('qs.boq'), validate(z.object({value:z.string().trim().min(1).max(60)})), wrap(async(req,res)=>{
+  const option=await getOne('SELECT * FROM option_values WHERE id=? AND list_key=?',[req.params.id,'boq.category']);
+  if(!option)return res.status(404).json({error:'Category not found.'});
+  if(option.locked)return res.status(409).json({error:'This system category cannot be renamed.'});
+  if(option.value===req.body.value)return res.json((await allOptions()).find(row=>row.listKey==='boq.category')?.values || []);
+  const result=await transaction(async connection=>{
+    const [[clash]]=await connection.execute('SELECT id FROM option_values WHERE list_key=? AND value=? AND id<>?',['boq.category',req.body.value,option.id]);
+    if(clash)return {error:'That category already exists.'};
+    await connection.execute('UPDATE option_values SET value=? WHERE id=?',[req.body.value,option.id]);
+    await connection.execute('UPDATE boq_items SET category=? WHERE category=?',[req.body.value,option.value]);
+    await audit(connection,req.user.id,'UPDATE','option_value',option.id,{value:option.value},{value:req.body.value},req.ip);
+    return {};
+  });
+  if(result.error)return res.status(409).json(result);
+  forgetOptions();publishChange('options',{list:'boq.category'});
+  res.json((await allOptions()).find(row=>row.listKey==='boq.category')?.values || []);
+}));
 
 router.get('/', auth, permit('qs.view','qs.boq'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId);
@@ -486,8 +518,9 @@ router.get('/:id', auth, permit('qs.view','qs.boq'), wrap(async (req, res) => {
   ]);
   /* Estimate against actual, by category — PID 2.5 "Final Cost Analysis". */
   const spentBySource = Object.fromEntries(actual.map(row => [row.source, Number(row.total)]));
-  const comparison = CATEGORIES.map(category => {
-    const estimated = items.filter(item => item.category === category).reduce((sum, item) => sum + Number(item.amount), 0);
+  const comparisonCategories=[...new Set([...CATEGORIES,...items.map(item=>item.category || 'Uncategorised')])];
+  const comparison = comparisonCategories.map(category => {
+    const estimated = items.filter(item => (item.category || 'Uncategorised') === category).reduce((sum, item) => sum + Number(item.amount), 0);
     const sourceKey = { Subcontract: 'Subcontractor', Overhead: 'Overhead' }[category] || category;
     return { category, estimated, actual: spentBySource[sourceKey] || 0 };
   });
@@ -518,7 +551,7 @@ router.post('/', auth, permit('qs.boq'), validate(z.object({
       [body.projectId, reference, body.title, total, req.user.id, body.notes || null]);
     for (const item of priced) {
       await connection.execute('INSERT INTO boq_items (boq_id,category,description,unit,quantity,rate,amount,material_id,subcontract_rate_id) VALUES (?,?,?,?,?,?,?,?,?)',
-        [result.insertId, item.category, item.description, item.unit, item.quantity, item.rate, item.quantity * item.rate, item.materialId || null,item.subcontractRateId||null]);
+        [result.insertId, item.category || null, item.description, item.unit, item.quantity, item.rate, item.quantity * item.rate, item.materialId || null,item.subcontractRateId||null]);
     }
     await audit(connection, req.user.id, 'CREATE', 'boq', result.insertId, null, { reference, total }, req.ip);
     return result.insertId;
@@ -533,7 +566,7 @@ router.post('/:id/items', auth, permit('qs.boq'), validate(itemSchema),
   if (boq.status === 'Approved') return res.status(409).json({ error: 'An approved BOQ cannot be edited — raise a variation order instead' });
   const item = req.body;
   await query('INSERT INTO boq_items (boq_id,category,description,unit,quantity,rate,amount,material_id) VALUES (?,?,?,?,?,?,?,?)',
-    [boq.id, item.category, item.description, item.unit, item.quantity, item.rate, item.quantity * item.rate, item.materialId || null]);
+    [boq.id, item.category || null, item.description, item.unit, item.quantity, item.rate, item.quantity * item.rate, item.materialId || null]);
   await query('UPDATE boqs SET total=(SELECT COALESCE(SUM(amount),0) FROM boq_items WHERE boq_id=?) WHERE id=?', [boq.id, boq.id]);
   res.status(201).json(await getOne(`${select} WHERE b.id=?`, [boq.id]));
 }));

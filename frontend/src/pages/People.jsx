@@ -715,31 +715,42 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
 
 function AttendanceForm({ data, close, reload }) {
   const [workLocation, setWorkLocation] = useState('Site');
-  return <FormModal title="Record attendance" close={close} label="Record attendance" onSubmit={async values => {
-    const employee = data.employees.find(row => String(row.id) === values.employeeId);
-    await post('/attendance', {
-      name: employee.name,
-      role: employee.designation,
-      employeeId: employee.id,
-      projectId: workLocation === 'Site' ? Number(values.projectId) : null,
-      workLocation,
-      date: values.date,
-      state: values.state,
-      checkIn: values.checkIn || null,
-      checkOut: values.checkOut || null,informationSource:values.informationSource,sourceNotes:values.sourceNotes
-    });
-    await reload();
-  }}>
-    <SelectField name="employeeId" label="Employee" options={data.employees.map(employee => [employee.id, `${employee.name} — ${employee.designation}`])} />
-    <label>Work location<select name="workLocation" value={workLocation} onChange={event => setWorkLocation(event.target.value)}><option value="Site">Project site</option><option value="Office">Head office</option></select></label>
-    {workLocation === 'Site' && <SelectField name="projectId" label="Project / site" options={data.projects.map(project => [project.id, project.name])} />}
-    <Field name="date" label="Work date" type="date" defaultValue={todayInput()} />
-    <SelectField name="state" label="Status" options={['On site', 'Late', 'Absent', 'On leave', 'Business trip']} />
-    <Field name="checkIn" label="Check in (optional)" type="time" required={false} />
-    <Field name="checkOut" label="Check out (optional)" type="time" required={false} />
-    <SelectField name="informationSource" label="Information source" options={['Biometric','Attendance sheet','WhatsApp','Signed timesheet','Management instruction','Other']}/>
-    <TextArea name="sourceNotes" label="Source reference / notes" required={false}/>
-  </FormModal>;
+  const [projectId,setProjectId]=useState(''),[date,setDate]=useState(todayInput()),[source,setSource]=useState('Attendance sheet'),[notes,setNotes]=useState('');
+  const [search,setSearch]=useState(''),[selected,setSelected]=useState({}),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const employees=data.employees.filter(row=>row.status!=='Archived');
+  const visible=employees.filter(row=>`${row.name} ${row.code||''} ${row.designation||''}`.toLowerCase().includes(search.toLowerCase()));
+  const chosen=employees.filter(row=>selected[row.id]);
+  const update=(id,patch)=>setSelected(rows=>({...rows,[id]:{...rows[id],...patch}}));
+  const toggle=id=>setSelected(rows=>{const next={...rows};if(next[id])delete next[id];else next[id]={state:'On site',checkIn:'',checkOut:''};return next;});
+  const selectVisible=()=>setSelected(rows=>{const next={...rows};for(const employee of visible)next[employee.id]??={state:'On site',checkIn:'',checkOut:''};return next;});
+  const submit=async event=>{
+    event.preventDefault();setError('');setBusy(true);
+    try{
+      if(!chosen.length)throw new Error('Select at least one employee.');
+      await post('/attendance/bulk',{workLocation,projectId:workLocation==='Site'?Number(projectId):null,date,informationSource:source,sourceNotes:notes,
+        entries:chosen.map(employee=>({employeeId:Number(employee.id),state:selected[employee.id].state,checkIn:selected[employee.id].checkIn||null,checkOut:selected[employee.id].checkOut||null}))});
+      await reload();close();
+    }catch(failure){setError(failure.message);}finally{setBusy(false);}
+  };
+  return <Modal title="Record attendance for the team" close={close} wide>
+    <form className="attendance-batch" onSubmit={submit}>
+      <p className="form-note">Set the date and source once, then select everyone to record. You can adjust each person’s status and times before saving.</p>
+      <div className="attendance-batch-common">
+        <label>Work location<select value={workLocation} onChange={event=>setWorkLocation(event.target.value)}><option value="Site">Project site</option><option value="Office">Head office</option></select></label>
+        {workLocation==='Site'&&<label>Project / site *<select required value={projectId} onChange={event=>setProjectId(event.target.value)}><option value="">Choose a project…</option>{data.projects.map(project=><option value={project.id} key={project.id}>{project.name}</option>)}</select></label>}
+        <label>Work date *<input required type="date" value={date} onChange={event=>setDate(event.target.value)}/></label>
+        <label>Information source *<select value={source} onChange={event=>setSource(event.target.value)}>{['Biometric','Attendance sheet','WhatsApp','Signed timesheet','Management instruction','Other'].map(value=><option key={value}>{value}</option>)}</select></label>
+        <label className="wide">Source reference / notes<textarea rows={2} value={notes} onChange={event=>setNotes(event.target.value)}/></label>
+      </div>
+      <div className="attendance-batch-picker"><div><strong>Employees</strong><span>{chosen.length} selected</span></div><input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Search name, ID or role" aria-label="Search employees"/>
+        <div className="attendance-batch-picker-actions"><button type="button" className="status-button" onClick={selectVisible} disabled={!visible.length}>Select all shown</button><button type="button" className="status-button" onClick={()=>setSelected({})} disabled={!chosen.length}>Clear selection</button></div>
+        <div className="attendance-batch-options">{visible.map(employee=><label key={employee.id}><input type="checkbox" checked={!!selected[employee.id]} onChange={()=>toggle(employee.id)}/><span>{employee.name}<small>{employee.code||employee.designation||'Employee'}</small></span></label>)}</div>
+      </div>
+      {chosen.length>0&&<section className="attendance-batch-selected"><h3>Review {chosen.length} attendance record{chosen.length===1?'':'s'}</h3>{chosen.map(employee=>{const entry=selected[employee.id];return <div className="attendance-batch-row" key={employee.id}><strong>{employee.name}</strong><label>Status<select value={entry.state} onChange={event=>update(employee.id,{state:event.target.value})}>{['On site','Late','Checked out','Absent','On leave','Business trip'].map(value=><option key={value}>{value}</option>)}</select></label><label>Check in<input type="time" disabled={['Absent','On leave'].includes(entry.state)} value={entry.checkIn} onChange={event=>update(employee.id,{checkIn:event.target.value})}/></label><label>Check out<input type="time" disabled={['Absent','On leave'].includes(entry.state)} value={entry.checkOut} onChange={event=>update(employee.id,{checkOut:event.target.value})}/></label></div>})}</section>}
+      {error&&<p className="form-error" role="alert">{error}</p>}
+      <div className="form-actions"><button type="button" className="secondary" onClick={close}>Cancel</button><button className="primary" disabled={busy||!chosen.length}>{busy?'Recording…':`Record ${chosen.length} employee${chosen.length===1?'':'s'}`}</button></div>
+    </form>
+  </Modal>;
 }
 
 function LeaveSettings(){

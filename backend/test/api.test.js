@@ -77,6 +77,73 @@ test('document designer cannot be opened or changed through the API', async () =
   }
 });
 
+test('BOQ lines can be uncategorised and QS can maintain categories from the BOQ workflow', async () => {
+  const owner = await login();
+  const qs = await login('qs@gkuc.lk');
+  const projects = await call(owner, 'GET', '/projects');
+  const projectId = projects.body[0]?.id;
+  assert.ok(projectId);
+  const created = await call(qs, 'POST', '/boq/categories', { value: 'Test category' });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const category = created.body.find(row => row.value === 'Test category');
+  assert.ok(category);
+  const renamed = await call(qs, 'PATCH', `/boq/categories/${category.id}`, { value: 'Test category renamed' });
+  assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+  const boq = await call(owner, 'POST', '/boq', { projectId, title: 'Optional category test BOQ', items: [
+    { description: 'Uncategorised work', unit: 'item', quantity: 2, rate: 100 },
+    { category: 'Test category renamed', description: 'Categorised work', unit: 'item', quantity: 1, rate: 50 }
+  ] });
+  assert.equal(boq.status, 201, JSON.stringify(boq.body));
+  const detail = await call(owner, 'GET', `/boq/${boq.body.id}`);
+  assert.equal(detail.body.items[0].category, null);
+  assert.equal(detail.body.items[1].category, 'Test category renamed');
+  assert.equal(detail.body.comparison.find(row => row.category === 'Uncategorised')?.estimated, 200);
+});
+
+test('only the Managing Director resets another user password and old sessions are revoked', async () => {
+  const owner = await login();
+  const roles = await call(owner, 'GET', '/users/roles');
+  const viewer = roles.body.find(role => role.name === 'Read-Only Viewer');
+  assert.ok(viewer);
+  const created = await call(owner, 'POST', '/users', {
+    name: 'Password Reset Check', email: 'password.reset.check@gkuc.lk', password: 'FirstKey!2026A', roleId: viewer.id
+  });
+  assert.equal(created.status, 201);
+  const firstLogin = await call('', 'POST', '/auth/login', { email: 'password.reset.check@gkuc.lk', password: 'FirstKey!2026A' });
+  assert.equal(firstLogin.status, 200);
+  const limited = await call(firstLogin.body.token, 'POST', `/users/${created.body.id}/reset-password`, { password: 'SecondKey!2026B' });
+  assert.equal(limited.status, 403);
+  const own = await call(owner, 'POST', `/users/${(await call(owner, 'GET', '/auth/me')).body.user.id}/reset-password`, { password: 'SecondKey!2026B' });
+  assert.equal(own.status, 409);
+  const reset = await call(owner, 'POST', `/users/${created.body.id}/reset-password`, { password: 'SecondKey!2026B' });
+  assert.equal(reset.status, 204);
+  assert.equal((await call(firstLogin.body.token, 'GET', '/auth/me')).status, 401);
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'password.reset.check@gkuc.lk', password: 'FirstKey!2026A' })).status, 401);
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'password.reset.check@gkuc.lk', password: 'SecondKey!2026B' })).status, 200);
+});
+
+test('HR records several attendance entries atomically without duplicating an employee date', async () => {
+  const owner = await login();
+  const employees = await call(owner, 'GET', '/employees');
+  const ids = employees.body.slice(0, 3).map(row => row.id);
+  assert.equal(ids.length, 3);
+  const date = '2018-04-19';
+  const common = { workLocation: 'Office', projectId: null, date, informationSource: 'Other', sourceNotes: 'Batch test' };
+  const first = await call(owner, 'POST', '/attendance/bulk', { ...common, entries: [
+    { employeeId: ids[0], state: 'On site', checkIn: '07:30', checkOut: '16:30' },
+    { employeeId: ids[1], state: 'Absent' }
+  ] });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal(first.body.count, 2);
+  const duplicate = await call(owner, 'POST', '/attendance/bulk', { ...common, entries: [
+    { employeeId: ids[0], state: 'On site' }, { employeeId: ids[2], state: 'On site' }
+  ] });
+  assert.equal(duplicate.status, 409);
+  const records = await call(owner, 'GET', `/attendance?date=${date}`);
+  assert.equal(records.status, 200);
+  assert.equal(records.body.filter(row => ids.includes(row.employeeId)).length, 2);
+});
+
 test('attendance accepts an employee without a designation and ignores non-workforce legacy rows in rates', async () => {
   const hr = await login('hr@gkuc.lk');
   const created = await call(hr, 'POST', '/employees', { code: 'ATT-NO-ROLE-QA', name: 'Attendance No Role QA' });
