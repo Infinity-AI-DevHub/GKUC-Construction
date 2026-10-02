@@ -4,6 +4,7 @@ import http from 'node:http';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 
 let server, origin, storage, temporary;
 const objects = new Map();
@@ -51,13 +52,27 @@ test('R2 driver stores, signs, downloads and removes private objects', async () 
     path: source, head: Buffer.from('private siteops document'), size: 24 });
   assert.equal(objects.get(stored.key).toString(), 'private siteops document');
 
-  const signed = await storage.signedDownloadUrl(stored.key, 60);
+  const signed = await storage.signedDownloadUrl(stored.key, 60, {
+    filename: 'evidence report.txt', mime: 'text/plain', disposition: 'attachment'
+  });
   assert.match(signed, /^http:\/\/127\.0\.0\.1:/);
   assert.match(signed, /X-Amz-Signature=/);
+  const signedUrl = new URL(signed);
+  assert.equal(signedUrl.searchParams.get('response-content-type'), 'text/plain');
+  assert.match(signedUrl.searchParams.get('response-content-disposition'), /^attachment;/);
 
   const destination = path.join(temporary, 'downloaded.txt');
   await storage.downloadToFile(stored.key, destination);
   assert.equal(await readFile(destination, 'utf8'), 'private siteops document');
+
+  const response = new PassThrough();
+  const streamed = [];
+  response.headersSent = false;
+  response.setHeader = (name, value) => { response.headers ||= {}; response.headers[name] = value; };
+  response.on('data', chunk => streamed.push(chunk));
+  await storage.pipeStoredObject(stored.key, response);
+  assert.equal(Buffer.concat(streamed).toString(), 'private siteops document');
+  assert.equal(response.headers['Content-Length'], '24');
 
   await storage.remove(stored.key);
   assert.equal(objects.has(stored.key), false);

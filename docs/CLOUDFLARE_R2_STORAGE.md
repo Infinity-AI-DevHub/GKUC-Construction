@@ -1,7 +1,9 @@
 # Cloudflare R2 storage rollout
 
-SiteOps keeps R2 private. Uploads go directly from the backend to R2 using the S3 API;
-downloads first pass the SiteOps permission check and then use a five-minute signed URL.
+SiteOps keeps R2 private. Uploads go directly from the backend to R2 using the S3 API.
+Protected downloads pass the SiteOps permission check and stream through the backend, so
+Safari, Chrome, Brave and Edge do not depend on public-bucket access or an R2 CORS rule.
+Only deliberately published Drive links receive a five-minute signed URL.
 
 ## 1. Server environment
 
@@ -49,8 +51,9 @@ Review the object count and any failures, then copy:
 pnpm --filter @gkuc/backend storage:migrate:r2:apply
 ```
 
-The migration preserves every existing storage key, skips objects already in R2, and keeps
-the local files as a rollback copy. It is safe to rerun.
+The migration preserves every existing storage key, skips objects already in R2 only when
+their size matches the local source, replaces size-mismatched objects, and keeps the local
+files as a rollback copy. It is safe to rerun.
 
 ## 3. Switch and verify
 

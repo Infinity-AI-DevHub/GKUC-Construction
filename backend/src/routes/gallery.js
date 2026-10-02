@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, can, permit, validate, wrap } from '../lib/http.js';
-import { checksumFile, isAllowedType, isLocalStore, localPathFor, readUpload, remove, signedDownloadUrl, store } from '../lib/storage.js';
+import { checksumFile, isAllowedType, isLocalStore, localPathFor, pipeStoredObject, readUpload, remove, store } from '../lib/storage.js';
 
 const router = Router();
 
@@ -147,23 +147,22 @@ router.post('/projects/:projectId/gallery/photos', auth, permit('gallery.manage'
     folderId = folder.id;
   }
 
-  /* Fingerprinted on arrival: the checksum is what lets anyone later show the file behind
-     this record is the file that was received, and the trigger keeps it from being reset. */
-  const checksum = await checksumFile(file.path);
-
-  const stored = await store({
-    folder: 'gallery', filename: file.filename, mime: file.mime,
-    path: file.path, head: file.head, size: file.size
-  });
+  let stored = null;
   let thumb = null;
-  if (thumbnail && isAllowedType(thumbnail.mime)) {
-    thumb = await store({
-      folder: 'gallery', filename: `thumb-${file.filename}`, mime: thumbnail.mime,
-      path: thumbnail.path, head: thumbnail.head, size: thumbnail.size
-    }).catch(() => null);
-  }
-
   try {
+    /* Fingerprinted on arrival: the checksum is what lets anyone later show the file behind
+       this record is the file that was received, and the trigger keeps it from being reset. */
+    const checksum = await checksumFile(file.path);
+    stored = await store({
+      folder: 'gallery', filename: file.filename, mime: file.mime,
+      path: file.path, head: file.head, size: file.size
+    });
+    if (thumbnail && isAllowedType(thumbnail.mime)) {
+      thumb = await store({
+        folder: 'gallery', filename: `thumb-${file.filename}`, mime: thumbnail.mime,
+        path: thumbnail.path, head: thumbnail.head, size: thumbnail.size
+      }).catch(() => null);
+    }
     const result = await query(
       `INSERT INTO gallery_photos
         (project_id,folder_id,storage_key,thumb_key,filename,mime,size_bytes,checksum,caption,captured_at,uploaded_by)
@@ -174,9 +173,11 @@ router.post('/projects/:projectId/gallery/photos', auth, permit('gallery.manage'
       { project: project.name, filename: stored.filename, checksum }, req.ip);
     res.status(201).json(await getOne(`${photoSelect} WHERE p.id=?`, [result.insertId]));
   } catch (error) {
-    await remove(stored.key).catch(() => {});
+    if (stored) await remove(stored.key).catch(() => {});
     if (thumb) await remove(thumb.key).catch(() => {});
     next(error);
+  } finally {
+    await discard();
   }
 }));
 
@@ -250,11 +251,11 @@ router.get('/gallery/photos/:id/file', auth, permit('projects.view'), wrap(async
   }
 
   const key = req.query.size === 'thumb' && photo.thumb_key ? photo.thumb_key : photo.storage_key;
-  if (!isLocalStore()) return res.redirect(302, signedDownloadUrl(key));
   res.type(photo.mime);
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(photo.filename)}"`);
   res.setHeader('Cache-Control', 'private, max-age=3600');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (!isLocalStore()) return pipeStoredObject(key, res);
   res.sendFile(localPathFor(key), error => {
     if (error && !res.headersSent) res.status(404).json({ error: 'Photo file not found' });
   });
