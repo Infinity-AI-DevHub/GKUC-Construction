@@ -65,7 +65,13 @@ const ALLOWED = new Map([
  * to, and treating one list as both made /api/uploads/gallery/:id fall over with a 500.
  */
 /* 'boq' holds the spreadsheets bills were read from, kept as the evidence behind them. */
-export const FOLDERS = ['task', 'project', 'employee', 'report', 'vehicle', 'equipment', 'gallery', 'boq', 'subcontract-quotation', 'tender', 'drive'];
+export const FOLDERS = [
+  /* Generic record attachments. Keep this group aligned with routes/uploads.js. */
+  'attendance', 'claim', 'handover', 'candidate', 'task', 'project', 'employee', 'report',
+  'vehicle', 'equipment', 'incoming_letter', 'risk_finding',
+  /* Files managed by their own modules. */
+  'gallery', 'boq', 'subcontract-quotation', 'tender', 'drive'
+];
 
 export const isAllowedType = mime => ALLOWED.has(mime);
 
@@ -193,14 +199,29 @@ const storedUrl = key => process.env.R2_PUBLIC_BASE_URL
   ? `${process.env.R2_PUBLIC_BASE_URL.replace(/\/$/, '')}/${key}`
   : `/uploads/${key}`;
 
+function r2Failure(action, error) {
+  console.error(`R2 ${action} failed`, {
+    name: error?.name, code: error?.Code || error?.code,
+    status: error?.$metadata?.httpStatusCode, message: error?.message
+  });
+  const detail = ['AccessDenied','InvalidAccessKeyId','SignatureDoesNotMatch'].includes(error?.name)
+    ? 'Check the R2 access key, secret and bucket permissions.'
+    : ['NoSuchBucket','NotFound'].includes(error?.name)
+      ? 'Check the R2 bucket name and S3 API endpoint.'
+      : 'Check the R2 endpoint, bucket and server network connection.';
+  return Object.assign(new Error(`Cloud file storage is unavailable. ${detail}`), { status: 503, cause: error });
+}
+
 /** Cloudflare R2 through its supported S3-compatible API. */
 const r2Driver = {
   name: 'r2',
   async put(key, buffer, mime) {
-    await objectStoreClient().send(new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET, Key: key, Body: buffer, ContentType: mime
-    }));
-    return storedUrl(key);
+    try {
+      await objectStoreClient().send(new PutObjectCommand({
+        Bucket: process.env.R2_BUCKET, Key: key, Body: buffer, ContentType: mime
+      }));
+      return storedUrl(key);
+    } catch (error) { throw r2Failure('upload', error); }
   },
   async putFile(key, sourcePath, mime) {
     try {
@@ -209,12 +230,16 @@ const r2Driver = {
       }});
       await upload.done();
       return storedUrl(key);
+    } catch (error) {
+      throw r2Failure('upload', error);
     } finally {
       await fs.rm(sourcePath, { force: true });
     }
   },
   async remove(key) {
-    await objectStoreClient().send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    try {
+      await objectStoreClient().send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    } catch (error) { throw r2Failure('delete', error); }
   }
 };
 
@@ -235,10 +260,16 @@ export const signedDownloadUrl = (key, seconds = 300) => getSignedUrl(
 /** Downloads a private object to a temporary local path for OCR/import processing. */
 export async function downloadToFile(key, destination) {
   await fs.mkdir(path.dirname(destination), { recursive: true });
-  const response = await objectStoreClient().send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
-  if (!response.Body) throw Object.assign(new Error('The stored object has no content'), { status: 404 });
-  await pipeline(response.Body, createWriteStream(destination, { flags: 'wx' }));
-  return destination;
+  try {
+    const response = await objectStoreClient().send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    if (!response.Body) throw Object.assign(new Error('The stored object has no content'), { status: 404 });
+    await pipeline(response.Body, createWriteStream(destination, { flags: 'wx' }));
+    return destination;
+  } catch (error) {
+    await fs.rm(destination, { force: true });
+    if (error.status === 404) throw error;
+    throw r2Failure('download', error);
+  }
 }
 
 /** Startup/deployment health check that verifies the configured bucket is reachable. */

@@ -2567,6 +2567,27 @@ test('stores uploads, enforces type and permission, and lists them on the record
     { headers: { authorization: `Bearer ${owner}` } })).status, 404, 'deleting removes the record and the object');
 });
 
+test('project gallery accepts a photo and serves it through the protected file route', async () => {
+  const owner = await login();
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const form = new FormData();
+  form.append('file', new Blob([png], { type:'image/png' }), 'gallery-check.png');
+  const response = await fetch(`${base}/projects/1/gallery/photos`, {
+    method:'POST',headers:{authorization:`Bearer ${owner}`},body:form
+  });
+  const photo = await response.json();
+  assert.equal(response.status,201,JSON.stringify(photo));
+  const listing = await call(owner,'GET','/projects/1/gallery/photos?folderId=none');
+  assert.equal(listing.status,200);
+  assert.ok(listing.body.some(row=>row.id===photo.id));
+  const file = await fetch(`${base}/gallery/photos/${photo.id}/file`, {
+    headers:{authorization:`Bearer ${owner}`}
+  });
+  assert.equal(file.status,200);
+  assert.deepEqual(Buffer.from(await file.arrayBuffer()),png);
+  await admin.query(`DELETE FROM ${testDatabase}.gallery_photos WHERE id=?`,[photo.id]);
+});
+
 test('an inquiry converts into a registered project', async () => {
   const manager = await login('manager@gkuc.lk');
   const inquiry = await call(manager, 'POST', '/inquiries', {
@@ -3302,6 +3323,15 @@ test('applicant CV screening scores and shortlisting gate interviews', async () 
   const id = applicant.body.id;
   assert.equal((await call(hr,'GET',`/hiring/${id}`)).body.status,'Applicant');
   assert.equal((await call(site,'GET',`/hiring/${id}`)).status,403);
+  const cvForm = new FormData();
+  cvForm.append('file', new Blob([Buffer.from('%PDF-1.4\nCV test content')], { type:'application/pdf' }), 'candidate-cv.pdf');
+  cvForm.append('title', 'Candidate CV');
+  const cvResponse = await fetch(`${base}/uploads/candidate/${id}`, {
+    method:'POST',headers:{authorization:`Bearer ${hr}`},body:cvForm
+  });
+  const cv = await cvResponse.json();
+  assert.equal(cvResponse.status,201,JSON.stringify(cv));
+  assert.equal((await call(site,'GET',`/uploads/candidate/${id}`)).status,403);
   const interview={scheduledAt:'2027-04-01T10:00',interviewer:'HR test'};
   assert.equal((await call(hr,'POST',`/hiring/${id}/interviews`,interview)).status,409);
   assert.equal((await call(hr,'PATCH',`/hiring/${id}`,{status:'Selected'})).status,409);
@@ -3309,6 +3339,7 @@ test('applicant CV screening scores and shortlisting gate interviews', async () 
   assert.equal(screen.status,200);
   assert.equal(screen.body.scores.total,12);
   assert.equal((await call(hr,'POST',`/hiring/${id}/interviews`,interview)).status,201);
+  assert.equal((await call(hr,'DELETE',`/uploads/${cv.id}`)).status,204);
   await admin.query(`DELETE FROM ${testDatabase}.hiring_candidates WHERE id=?`,[id]);
 });
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
 import { auth, can, permit, wrap } from '../lib/http.js';
 import { enqueue as enqueueOcr } from '../lib/ocr-queue.js';
-import { allowedExtensions, isLocalStore, localPathFor, MAX_UPLOAD_BYTES, readUpload, remove, signedDownloadUrl, storageDriver, store } from '../lib/storage.js';
+import { allowedExtensions, FOLDERS, isLocalStore, localPathFor, MAX_UPLOAD_BYTES, readUpload, remove, signedDownloadUrl, storageDriver, store } from '../lib/storage.js';
 
 const router = Router();
 
@@ -46,6 +46,10 @@ const READERS = {
  * storage folders: those include places the store writes to that are not attachment owners.
  */
 const OWNER_TYPES = Object.keys(WRITERS);
+const missingStorageFolders = OWNER_TYPES.filter(type => !FOLDERS.includes(type));
+if (missingStorageFolders.length) {
+  throw new Error(`Attachment types are missing storage folders: ${missingStorageFolders.join(', ')}`);
+}
 
 /** Each owner type points at the table its id must exist in. */
 const OWNER_TABLES = {
