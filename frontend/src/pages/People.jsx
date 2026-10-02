@@ -287,7 +287,7 @@ function PayrollSchedule({companyId}) {
 }
 
 function PolicyForm({ companyId, policy, close, reload }) {
-  return <FormModal title="Set payroll rates and effective date" close={close} label="Save payroll policy" wide onSubmit={async values => {
+  return <FormModal title="Payroll rules" close={close} label="Save dated policy" wide onSubmit={async values => {
     await post('/payroll/settings/policies', {
       companyId,
       effectiveFrom: values.effectiveFrom,
@@ -301,26 +301,33 @@ function PolicyForm({ companyId, policy, close, reload }) {
     });
     await reload();
   }}>
+    <div className="payroll-policy-intro wide"><strong>Set how pay is calculated</strong><p>These are company-wide rules, not an employee's salary. Work through each section, then save a dated policy. Existing approved payslips will not change.</p></div>
+    <div className="payroll-policy-heading wide"><span>01</span><div><strong>When these rules begin</strong><p>The date determines which policy applies to new payroll calculations.</p></div></div>
     <Field name="effectiveFrom" label="Effective from" type="date" defaultValue={todayInput()} />
+    <div className="payroll-policy-heading wide"><span>02</span><div><strong>Basic pay and contributions</strong><p>EPF and ETF use earned basic pay only, not overtime, allowances or reimbursements.</p></div></div>
     <SelectField name="permanentOnly" label="GKUC EPF / ETF policy — permanent employees only" options={[[true,'Yes'],[false,'No']]} defaultValue={String((typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.permanentOnly ?? true)} />
     <Field name="minimumMonthlySalary" label="Minimum monthly-equivalent basic salary (LKR)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.minimumMonthlySalary ?? 30000} />
     <Field name="weeklyWeeksPerMonth" label="Weeks per month for weekly-rate comparison" type="number" min="0.01" step="0.000001" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.weeklyWeeksPerMonth ?? 52/12} />
     <Field name="dailyDaysPerMonth" label="Days per month for daily-rate comparison" type="number" min="0.01" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.dailyDaysPerMonth ?? 25} />
-    {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],otInterval:['OT rounding interval (hours, rounded down)',0.5,'number'],minimumOt:['Minimum payable OT (hours)',0.5,'number'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number'],transportDivisor:['Monthly transport proration divisor (days)',25,'number'],fullTransportDays:['Full transport threshold — confirm with HR','', 'number'],longDistanceKm:['Long-distance threshold (km, greater than)',50,'number'],longDistancePayment:['Long-distance allowance per qualifying claim (LKR)',500,'number'],mileageRate:['Motorcycle mileage rate (LKR/km)',17,'number'],fixedTravelPayment:['Fixed office-travel payment (LKR)',300,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} required={name!=='fullTransportDays'} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
-    <Field name="supervisorSiteCharge" label="HR-approved supervisor site charge (LKR per day)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.supervisorSiteCharge ?? 500} />
-    <SelectField name="fullTransportComparison" label="Full transport threshold comparison" options={['At least','More than']} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.fullTransportComparison||'At least'}/>
-    {['allowMileageAndFixed','countLeaveForTransport','countAbsenceForTransport'].map(name=><SelectField key={name} name={name} label={{allowMileageAndFixed:'Allow mileage and fixed travel together',countLeaveForTransport:'Count leave days for transport',countAbsenceForTransport:'Count absent days for transport'}[name]} options={[[false,'No'],[true,'Yes']]} defaultValue={String((typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]||false)}/>)}
+    <div className="payroll-policy-heading wide"><span>03</span><div><strong>Working hours and overtime</strong><p>Attendance suggests Site OT. HR must review and confirm it before payroll.</p></div></div>
+    {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],otInterval:['OT rounding interval (hours, rounded down)',0.5,'number'],minimumOt:['Minimum payable OT (hours)',0.5,'number'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
     <Field name="officeOtRate" label="Office OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.officeOtRate ?? 225} />
     <Field name="siteLabourSiteOtRate" label="Labour site OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.siteLabourSiteOtRate ?? 200} />
     <Field name="siteLabourTravelOtRate" label="Labour travel OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.siteLabourTravelOtRate ?? 100} />
     <Field name="driverOtRate" label="Driver OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.driverOtRate ?? 225} />
     <Field name="supervisorSiteOtRate" label="Supervisor site OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.supervisorSiteOtRate ?? 225} />
     <Field name="supervisorTravelOtRate" label="Supervisor travel OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.supervisorTravelOtRate ?? 100} />
+    <div className="payroll-policy-heading wide"><span>04</span><div><strong>Transport and travel</strong><p>Set when the full transport amount is due and how approved travel is reimbursed.</p></div></div>
+    {Object.entries({transportDivisor:['Monthly transport proration divisor (days)',25],fullTransportDays:['Full transport after this many eligible days (set by HR)',''],longDistanceKm:['Long-distance threshold (km, greater than)',50],longDistancePayment:['Long-distance allowance per qualifying claim (LKR)',500],mileageRate:['Motorcycle mileage rate (LKR/km)',17],fixedTravelPayment:['Fixed office-travel payment (LKR)',300]}).map(([name,[label,fallback]])=><Field key={name} name={name} label={label} type="number" step="0.01" min="0" required={name!=='fullTransportDays'} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
+    <SelectField name="fullTransportComparison" label="Full transport threshold comparison" options={['At least','More than']} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.fullTransportComparison||'At least'}/>
+    {['allowMileageAndFixed','countLeaveForTransport','countAbsenceForTransport'].map(name=><SelectField key={name} name={name} label={{allowMileageAndFixed:'Allow mileage and fixed travel together',countLeaveForTransport:'Count leave days for transport',countAbsenceForTransport:'Count absent days for transport'}[name]} options={[[false,'No'],[true,'Yes']]} defaultValue={String((typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]||false)}/>)}
+    <div className="payroll-policy-heading wide"><span>05</span><div><strong>Supervisor site charge</strong><p>HR decides whether a qualifying visit or mobilisation should be claimed. It is never paid just because this rate is set.</p></div></div>
+    <Field name="supervisorSiteCharge" label="Approved supervisor site charge (LKR per day)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.supervisorSiteCharge ?? 500} />
+    <div className="payroll-policy-heading wide"><span>06</span><div><strong>EPF and ETF percentages</strong><p>Employee EPF reduces take-home pay; employer EPF and ETF add to company cost.</p></div></div>
     <Field name="epfEmployeeRate" label="EPF employee rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.epfEmployeeRate ?? 0} />
     <Field name="epfEmployerRate" label="EPF employer rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.epfEmployerRate ?? 0} />
     <Field name="etfEmployerRate" label="ETF employer rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.etfEmployerRate ?? 0} />
-    <p className="form-note wide">These are GKUC's configurable payroll rules. Eligibility requires the selected employment classification, monthly-equivalent basic salary threshold, contribution start date and the employee's EPF/ETF switches. Changing rules creates a new effective-dated policy; approved salary sheets stay unchanged.</p>
-    <p className="form-note wide">Saving creates a new dated policy. Previously recorded overtime and completed salary sheets keep their original rates.</p>
+    <p className="form-note wide">Before saving, check the effective date and transport threshold. Eligibility also depends on each employee's profile and contribution start date. Previously recorded overtime and approved payslips keep their original values.</p>
   </FormModal>;
 }
 
@@ -396,7 +403,18 @@ function PayrollDetail({ run, close }) {
         <div><span>Total net pay</span><strong>{rupees(run.total)}</strong></div>
         <div><span>Total employer cost</span><strong>{rupees(employerCost)}</strong></div>
       </div>
-      <div className="wide">
+      <div className="payroll-payslip-list wide">
+        <div className="payroll-policy-heading"><span>01</span><div><strong>What each employee receives</strong><p>Read left to right: basic pay and extras, then deductions, then take-home pay. Open the full table only when you need every accounting column.</p></div></div>
+        {run.payslips.map(slip => <div className="payroll-payslip-card" key={slip.id}>
+          <div className="payroll-payslip-person"><strong>{slip.employee}</strong><small>{slip.employeeCode} · {slip.daysPresent} attended days</small></div>
+          <div><span>Basic pay</span><strong>{rupees(slip.basic)}</strong></div>
+          <div><span>OT + allowances</span><strong>{rupees(Number(slip.overtimePay || 0) + Number(slip.allowanceTotal || 0))}</strong></div>
+          <div><span>Reimbursements</span><strong>{rupees(slip.reimbursementTotal)}</strong></div>
+          <div><span>Total deductions</span><strong>{rupees(slip.deductions)}</strong></div>
+          <div className="payroll-payslip-net"><span>Take-home pay</span><strong>{rupees(slip.netPay)}</strong></div>
+        </div>)}
+      </div>
+      <details className="payroll-breakdown-details wide"><summary>Show full salary calculation table</summary>
         <Table columns={['Employee', 'Present', 'Basic', 'Office OT', 'Site OT', 'Travel OT', 'Allowances', 'Reimbursements', 'Gross', 'Unpaid leave', 'EPF employee', 'Other deductions', 'Salary advance', 'Net pay', 'Employer cost']} template={template} title="Salary sheet breakdown">
           {run.payslips.map(slip => <Row template={template} key={slip.id}>
             <div><strong>{slip.employee}</strong><small>{slip.employeeCode}</small></div>
@@ -414,7 +432,7 @@ function PayrollDetail({ run, close }) {
             <strong>{rupees(slip.employerCost)}</strong>
           </Row>)}
         </Table>
-      </div>
+      </details>
       {!!components.length && <div className="wide">
         <Table columns={['Employee', 'Type', 'Component', 'Amount']} template="minmax(170px,1.2fr) 130px minmax(220px,1.5fr) 140px" title="Recurring component breakdown">
           {components.map(component => <Row template="minmax(170px,1.2fr) 130px minmax(220px,1.5fr) 140px" key={`${component.employeeCode}-${component.id}`}>
