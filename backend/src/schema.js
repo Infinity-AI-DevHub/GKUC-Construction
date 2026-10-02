@@ -1273,6 +1273,7 @@ async function createCommunicationTable() {
     direction ENUM('Incoming','Outgoing') NOT NULL DEFAULT 'Outgoing',
     channel ENUM('Call','WhatsApp','Email','Meeting','Site visit','Letter') NOT NULL DEFAULT 'Call',
     contact_person VARCHAR(120) NULL,
+    contact_party ENUM('Client','Agency','Both') NOT NULL DEFAULT 'Client',
     summary VARCHAR(1000) NOT NULL,
     happened_at DATETIME NOT NULL,
     follow_up_date DATE NULL,
@@ -1284,6 +1285,7 @@ async function createCommunicationTable() {
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
   await addColumn('client_communications', 'follow_up_done_at', 'DATETIME NULL');
+  await addColumn('client_communications', 'contact_party', "ENUM('Client','Agency','Both') NOT NULL DEFAULT 'Client'");
 
   await addForeignKey('client_communications', 'fk_communication_inquiry',
     'CONSTRAINT fk_communication_inquiry FOREIGN KEY(inquiry_id) REFERENCES inquiries(id)');
@@ -3026,6 +3028,12 @@ async function createClientDirectory() {
     tax_number VARCHAR(100) NULL,
     tin VARCHAR(100) NULL,
     vat_number VARCHAR(100) NULL,
+    consultant_agency_name VARCHAR(180) NULL,
+    consultant_contact_person VARCHAR(120) NULL,
+    consultant_phone VARCHAR(40) NULL,
+    consultant_email VARCHAR(190) NULL,
+    consultant_address VARCHAR(500) NULL,
+    preferred_contact ENUM('Client','Agency','Both') NOT NULL DEFAULT 'Client',
     notes TEXT NULL,
     active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -3034,6 +3042,12 @@ async function createClientDirectory() {
   ) ENGINE=InnoDB`);
   await addColumn('clients', 'tin', 'VARCHAR(100) NULL');
   await addColumn('clients', 'vat_number', 'VARCHAR(100) NULL');
+  await addColumn('clients', 'consultant_agency_name', 'VARCHAR(180) NULL');
+  await addColumn('clients', 'consultant_contact_person', 'VARCHAR(120) NULL');
+  await addColumn('clients', 'consultant_phone', 'VARCHAR(40) NULL');
+  await addColumn('clients', 'consultant_email', 'VARCHAR(190) NULL');
+  await addColumn('clients', 'consultant_address', 'VARCHAR(500) NULL');
+  await addColumn('clients', 'preferred_contact', "ENUM('Client','Agency','Both') NOT NULL DEFAULT 'Client'");
   for (const table of ['projects', 'inquiries', 'quotations_client', 'client_invoices', 'tenders']) {
     await addColumn(table, 'client_id', 'BIGINT UNSIGNED NULL');
     await addForeignKey(table, `fk_${table}_client_directory`,

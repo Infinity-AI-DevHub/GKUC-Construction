@@ -21,8 +21,8 @@ export const CATEGORIES = ['Material', 'Labour', 'Equipment', 'Subcontract', 'Ov
  * stray capital or a trailing space.
  */
 export const COLUMNS = [
-  { key: 'category', header: 'Category', width: 15, required: true,
-    help: `One of: ${CATEGORIES.join(', ')}` },
+  { key: 'category', header: 'Category', width: 15, required: false,
+    help: 'Optional. If filled, use a saved BOQ category.' },
   { key: 'description', header: 'Description of work', width: 48, required: true,
     help: 'What the item is. This appears on quotations and invoices.' },
   { key: 'unit', header: 'Unit', width: 10, required: true, help: 'e.g. m3, m2, kg, nos, item' },
@@ -38,7 +38,7 @@ export const COLUMNS = [
 const HEADER_ROW = 8;   /* zero-based: rows 0-6 are the heading block, row 7 is the header */
 
 /** Builds the template workbook a person downloads. */
-export function buildTemplate({ company = 'GKUC Construction', title = '', client = '' } = {}) {
+export function buildTemplate({ company = 'GKUC Construction', title = '', client = '', categories = CATEGORIES } = {}) {
   const head = value => ({ value, style: STYLE.HEADER });
   const note = value => ({ value, style: STYLE.NOTE });
   const cell = value => ({ value, style: STYLE.CELL });
@@ -50,7 +50,7 @@ export function buildTemplate({ company = 'GKUC Construction', title = '', clien
     [cell('BOQ title'), cell(title || '')],
     [cell('Client'), cell(client || '')],
     [],
-    [note('Every row below needs a Category, Description, Unit, Quantity and Rate. Leave Amount blank — it is worked out for you.')],
+    [note('Every row needs Description, Unit, Quantity and Rate. Category is optional. Leave Amount blank — it is worked out for you.')],
     COLUMNS.map(column => head(column.header)),
     /* A worked example, so the shape is obvious without reading instructions. */
     [cell('Material'), cell('Supply and lay 20mm aggregate base course'), cell('m3'),
@@ -71,8 +71,8 @@ export function buildTemplate({ company = 'GKUC Construction', title = '', clien
       { value: column.help, style: STYLE.CELL }
     ]),
     [],
-    [note('Categories must be spelled exactly as shown:')],
-    ...CATEGORIES.map(name => [{ value: name, style: STYLE.CELL }]),
+    [note('If you use a category, spell it exactly as shown:')],
+    ...categories.map(name => [{ value: name, style: STYLE.CELL }]),
     [],
     [note('When you upload this file the system shows you everything it read, marks anything it could not understand, and lets you correct it on screen before anything is saved.')]
   ];
@@ -129,9 +129,9 @@ function toNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-const matchCategory = value => {
+const matchCategory = (value, categories = CATEGORIES) => {
   const wanted = normalise(value);
-  return CATEGORIES.find(name => normalise(name) === wanted) || null;
+  return categories.find(name => normalise(name) === wanted) || null;
 };
 
 /**
@@ -141,7 +141,7 @@ const matchCategory = value => {
  * plain-English note about whatever could not — the person who filled it in is the one who
  * can fix it, and they can only do that if they are told which row and what is wrong.
  */
-export function parseBoqWorkbook(buffer) {
+export function parseBoqWorkbook(buffer, { categories = CATEGORIES } = {}) {
   let workbook;
   try {
     workbook = readWorkbook(buffer);
@@ -164,7 +164,7 @@ export function parseBoqWorkbook(buffer) {
      * whatever shape their office uses, and refusing them would mean retyping a hundred
      * priced lines by hand. The sheet is examined instead — see boq-detect.js.
      */
-    return readForeignWorkbook(workbook);
+    return readForeignWorkbook(workbook, categories);
   }
 
   const columns = mapColumns(rows[headerIndex]);
@@ -204,7 +204,7 @@ export function parseBoqWorkbook(buffer) {
     const notices = [];
     const description = String(at(row, 'description') ?? '').trim();
     const rawCategory = at(row, 'category');
-    const category = matchCategory(rawCategory);
+    const category = matchCategory(rawCategory, categories) || String(rawCategory ?? '').trim() || null;
     const unit = String(at(row, 'unit') ?? '').trim();
     const quantity = toNumber(at(row, 'quantity'));
     const rate = toNumber(at(row, 'rate'));
@@ -213,8 +213,7 @@ export function parseBoqWorkbook(buffer) {
     if (!description) problems.push('No description');
     else if (description.length > 300) problems.push('Description is longer than 300 characters and will be shortened');
 
-    if (!rawCategory) problems.push('No category');
-    else if (!category) problems.push(`"${rawCategory}" is not one of ${CATEGORIES.join(', ')}`);
+    if (category && !categories.includes(category)) problems.push(`"${rawCategory}" is not one of ${categories.join(', ')}`);
 
     if (!unit) problems.push('No unit');
     if (quantity === null) problems.push('Quantity is not a number');
@@ -263,7 +262,7 @@ export function parseBoqWorkbook(buffer) {
  * way we do, and the rate is sometimes worked back from the amount. Both are marked so the
  * person checking knows which figures the system decided rather than read.
  */
-function readForeignWorkbook(workbook) {
+function readForeignWorkbook(workbook, categories = CATEGORIES) {
   const found = chooseSheet(workbook);
   if (!found) {
     return {
@@ -277,17 +276,12 @@ function readForeignWorkbook(workbook) {
   const items = found.items.map(item => {
     const problems = [];
     const notices = [];
-    const category = matchCategory(item.category);
+    const category = matchCategory(item.category, categories) || String(item.category ?? '').trim() || null;
 
     if (!item.description) problems.push('No description');
-    /*
-     * Almost no other company groups work the way we do, so the category is normally
-     * absent. It is a problem rather than a notice because a bill cannot be committed
-     * without one — but the reviewer can set them all at once rather than row by row.
-     */
-    if (!category) problems.push(item.category
-      ? `"${item.category}" is not one of ${CATEGORIES.join(', ')}`
-      : 'No category in the file — choose one');
+    if (category && !categories.includes(category)) {
+      problems.push(`"${item.category}" is not one of ${categories.join(', ')}`);
+    }
     if (!item.unit) problems.push('No unit');
     if (item.quantity === null) problems.push('Quantity is not a number');
     else if (item.quantity <= 0) problems.push('Quantity must be more than zero');

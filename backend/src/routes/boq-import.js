@@ -4,7 +4,7 @@ import { pool, query, getOne, transaction, audit, nextReference } from '../db.js
 import { auth, permit, validate, fail, fromOptions } from '../lib/http.js';
 import { readUpload, readUploadedFile, store, checksumFile, remove,
   isLocalStore, localPathFor, signedDownloadUrl } from '../lib/storage.js';
-import { buildTemplate, parseBoqWorkbook, CATEGORIES } from '../lib/boq-template.js';
+import { buildTemplate, parseBoqWorkbook } from '../lib/boq-template.js';
 import { parseBoqPdf } from '../lib/boq-pdf.js';
 import { optionsFor } from '../lib/options.js';
 import { notify } from '../alerts.js';
@@ -21,7 +21,8 @@ router.get('/boq/template', auth, permit('qs.boq'), async (req, res, next) => {
     const file = buildTemplate({
       company: company?.name || 'GKUC Construction',
       title: project ? `${project.name} — Bill of Quantities` : '',
-      client: project?.client || ''
+      client: project?.client || '',
+      categories: await optionsFor('boq.category')
     });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="GKUC-BOQ-template.xlsx"');
@@ -45,7 +46,7 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
 
     const buffer = await readUploadedFile(file.path);
     const isPdf = file.mime === 'application/pdf' || /\.pdf$/i.test(file.filename || '');
-    const parsed = isPdf ? await parseBoqPdf(file.path) : parseBoqWorkbook(buffer);
+    const parsed = isPdf ? await parseBoqPdf(file.path) : parseBoqWorkbook(buffer, { categories: await optionsFor('boq.category') });
     if (!parsed.ok) throw fail(422, parsed.error);
 
     const projectId = fields.projectId ? Number(fields.projectId) : null;
@@ -115,12 +116,20 @@ const detail = async importId => {
   if (!record) return null;
   record.items = await query(`SELECT id,source_row sourceRow,category,description,unit,quantity,rate,amount,
     method,notes,problems,notice,include FROM boq_import_items WHERE import_id=? ORDER BY source_row`, [importId]);
-  record.categories = CATEGORIES;
+  record.items = record.items.map(item => ({ ...item, problems: relevantProblems(item.problems) }));
+  record.problemCount = record.items.filter(item => item.include && item.problems).length;
+  record.categories = await optionsFor('boq.category');
   if (typeof record.layout === 'string') {
     try { record.layout = JSON.parse(record.layout); } catch { record.layout = null; }
   }
   return record;
 };
+
+/* Older staged files may still carry the former mandatory-category warning. Preserve
+   every other parsing issue, including an explicitly invalid category. */
+const relevantProblems = value => String(value || '').split(' · ')
+  .filter(problem => problem && problem !== 'No category' && problem !== 'No category — choose one')
+  .join(' · ') || null;
 
 router.get('/boq/imports', auth, permit('qs.boq', 'qs.view'), async (_req, res, next) => {
   try {
@@ -167,7 +176,7 @@ router.patch('/boq/imports/:id', auth, permit('qs.boq'), validate(documentSchema
 
 /* Correcting a staged row. The original is kept in raw_json, so this is never destructive. */
 const rowSchema = z.object({
-  category: z.string().trim().min(1).max(60).nullable().optional(),
+  category: z.string().trim().max(60).nullable().optional(),
   description: z.string().trim().max(300).nullable().optional(),
   unit: z.string().trim().max(30).nullable().optional(),
   quantity: z.coerce.number().nonnegative().nullable().optional(),
@@ -177,7 +186,7 @@ const rowSchema = z.object({
   include: z.boolean().optional()
 });
 
-router.patch('/boq/imports/:id/items/:itemId', auth, permit('qs.boq'), validate(rowSchema),
+router.patch('/boq/imports/:id/items/:itemId', auth, permit('qs.boq'), validate(rowSchema), fromOptions({ category: 'boq.category' }),
   async (req, res, next) => {
     try {
       const staged = await getOne(
@@ -187,7 +196,7 @@ router.patch('/boq/imports/:id/items/:itemId', auth, permit('qs.boq'), validate(
       if (staged.status !== 'Review') return res.status(409).json({ error: 'This import has already been dealt with' });
 
       const merged = {
-        category: req.body.category ?? staged.category,
+        category: req.body.category === undefined ? staged.category : (req.body.category || null),
         description: req.body.description ?? staged.description,
         unit: req.body.unit ?? staged.unit,
         quantity: req.body.quantity ?? staged.quantity,
@@ -202,7 +211,6 @@ router.patch('/boq/imports/:id/items/:itemId', auth, permit('qs.boq'), validate(
       /* Re-checked after the correction, so a fixed row stops being flagged. */
       const problems = [];
       if (!merged.description) problems.push('No description');
-      if (!merged.category) problems.push('No category');
       if (!merged.unit) problems.push('No unit');
       if (merged.quantity === null || Number(merged.quantity) <= 0) problems.push('Quantity must be more than zero');
       if (merged.rate === null) problems.push('No rate');
@@ -249,7 +257,9 @@ router.post('/boq/imports/:id/commit', auth, permit('qs.boq'),
         'SELECT * FROM boq_import_items WHERE import_id=? AND include=1 ORDER BY source_row', [record.id]);
       if (!items.length) return res.status(400).json({ error: 'No rows are marked to be included' });
 
-      const unresolved = items.filter(item => item.problems);
+      const allowedCategories = await optionsFor('boq.category');
+      const unresolved = items.filter(item => relevantProblems(item.problems) ||
+        (item.category && !allowedCategories.includes(item.category)));
       if (unresolved.length) {
         return res.status(400).json({
           error: `${unresolved.length} row${unresolved.length === 1 ? '' : 's'} still need attention. `
@@ -521,10 +531,11 @@ router.post('/boq/imports/:id/bulk', auth, permit('qs.boq'),
 /** Re-runs the row checks after a bulk change, so the flags match what is now there. */
 async function recheck(importId) {
   const rows = await query('SELECT * FROM boq_import_items WHERE import_id=?', [importId]);
+  const allowedCategories = await optionsFor('boq.category');
   for (const row of rows) {
     const problems = [];
     if (!row.description) problems.push('No description');
-    if (!row.category) problems.push('No category — choose one');
+    if (row.category && !allowedCategories.includes(row.category)) problems.push('Category is not in the saved BOQ categories');
     if (!row.unit) problems.push('No unit');
     if (row.quantity === null || Number(row.quantity) <= 0) problems.push('Quantity must be more than zero');
     if (row.rate === null) problems.push('No rate');

@@ -7,6 +7,7 @@ import path from 'node:path';
 import 'dotenv/config';
 import mysql from 'mysql2/promise';
 import {INITIAL_HR_RULES} from '../src/lib/hr-payroll-rules.js';
+import { writeWorkbook } from '../src/lib/xlsx-write.js';
 
 const port = 43971;
 const base = `http://127.0.0.1:${port}/api`;
@@ -98,6 +99,31 @@ test('BOQ lines can be uncategorised and QS can maintain categories from the BOQ
   assert.equal(detail.body.items[0].category, null);
   assert.equal(detail.body.items[1].category, 'Test category renamed');
   assert.equal(detail.body.comparison.find(row => row.category === 'Uncategorised')?.estimated, 200);
+});
+
+test('BOQ Excel upload and commit accept an empty Category cell', async () => {
+  const qs = await login('qs@gkuc.lk');
+  const owner = await login();
+  const projects = await call(owner, 'GET', '/projects');
+  const projectId = projects.body[0]?.id;
+  assert.ok(projectId);
+  const xlsx = writeWorkbook([{ name: 'BOQ', rows: [
+    ['Category', 'Description of work', 'Unit', 'Quantity', 'Rate (LKR)', 'Amount (LKR)', 'Method statement', 'Notes'],
+    ['', 'Imported uncategorised work', 'm3', 2, 125, '', '', '']
+  ] }]);
+  const form = new FormData();
+  form.append('file', new Blob([xlsx], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'optional-category.xlsx');
+  form.append('projectId', String(projectId));
+  const uploaded = await fetch(`${base}/boq/import`, { method: 'POST', headers: { authorization: `Bearer ${qs}` }, body: form });
+  const staged = await uploaded.json();
+  assert.equal(uploaded.status, 201, JSON.stringify(staged));
+  assert.equal(staged.problemCount, 0, JSON.stringify(staged));
+  assert.equal(staged.items[0].category, null);
+  const committed = await call(qs, 'POST', `/boq/imports/${staged.id}/commit`, { projectId });
+  assert.equal(committed.status, 201, JSON.stringify(committed.body));
+  const detail = await call(qs, 'GET', `/boq/${committed.body.id || committed.body.boqId}`);
+  assert.equal(detail.status, 200, JSON.stringify(detail.body));
+  assert.equal(detail.body.items[0].category, null);
 });
 
 test('only the Managing Director resets another user password and old sessions are revoked', async () => {
@@ -1037,6 +1063,38 @@ test('client directory links projects, quotations, invoices and payments without
   assert.equal(profile.body.invoices.length, 1, 'archiving keeps commercial history');
 });
 
+test('client consultation agency is separate from billing client and contact logs identify the party', async () => {
+  const owner = await login();
+  const client = await call(owner, 'POST', '/clients', {
+    type: 'Organisation', name: `Consultant Client ${Date.now()}`,
+    contactPerson: 'Client manager', phone: '0771111111',
+    consultantAgencyName: 'Example Consulting', consultantContactPerson: 'Consultant engineer',
+    consultantPhone: '0772222222', consultantEmail: 'engineer@example.lk',
+    preferredContact: 'Agency'
+  });
+  assert.equal(client.status, 201, JSON.stringify(client.body));
+  assert.equal(client.body.preferredContact, 'Agency');
+  const inquiry = await call(owner, 'POST', '/inquiries', {
+    companyId: 1, clientId: client.body.id, location: 'Colombo', description: 'Construction proposal', expectedValue: 1000
+  });
+  assert.equal(inquiry.status, 201, JSON.stringify(inquiry.body));
+  assert.equal(inquiry.body.contact, 'Consultant engineer');
+  assert.equal(inquiry.body.phone, '0772222222');
+  const routing = await call(owner, 'GET', `/inquiries/${inquiry.body.id}/contact-routing`);
+  assert.equal(routing.body.consultantAgencyName, 'Example Consulting');
+  const logged = await call(owner, 'POST', `/inquiries/${inquiry.body.id}/communications`, {
+    direction: 'Outgoing', channel: 'Call', contactParty: 'Agency',
+    contactPerson: 'Consultant engineer', summary: 'Discussed drawings'
+  });
+  assert.equal(logged.status, 201, JSON.stringify(logged.body));
+  assert.equal(logged.body.contactParty, 'Agency');
+  const profile = await call(owner, 'GET', `/clients/${client.body.id}`);
+  assert.equal(profile.body.consultantPhone, '0772222222');
+  assert.equal(profile.body.communications[0].contactParty, 'Agency');
+  const withoutAgency = await call(owner, 'PATCH', `/clients/${client.body.id}`, { consultantAgencyName: null });
+  assert.equal(withoutAgency.status, 400);
+});
+
 test('Finance invoices support approved BOQ lines, standalone work and several capped payments', async () => {
   const owner = await login();
   const client = await call(owner, 'POST', '/clients', { type: 'Organisation', name: `Invoice Client ${Date.now()}`,
@@ -1478,6 +1536,25 @@ test('a new project belongs to the selected operating company', async () => {
     companyId: 999, name: 'Invalid company project', clientId: client.id,
     managerEmployeeId: manager.id, site: 'Nowhere', stage: 'Planning', budget: 0
   })).status, 400);
+});
+
+test('project details can be edited and an uncommitted project can change company', async () => {
+  const owner = await login();
+  const data = (await call(owner, 'GET', '/bootstrap')).body.data;
+  const manager = data.employees.find(employee => employee.status === 'Active');
+  const client = (await call(owner, 'POST', '/clients', { type: 'Organisation', name: `Edit Client ${Date.now()}` })).body;
+  const created = await call(owner, 'POST', '/projects', { companyId: 1, name: `Edit Project ${Date.now()}`,
+    clientId: client.id, managerEmployeeId: manager.id, site: 'Original site', stage: 'Mid-way' });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const changed = await call(owner, 'PATCH', `/projects/${created.body.id}`, {
+    companyId: 2, name: 'Updated project name', site: 'Updated site', progress: 35, health: 'Watch'
+  });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  const detail = await call(owner, 'GET', `/projects/${created.body.id}`);
+  assert.equal(detail.body.companyId, 2);
+  assert.equal(detail.body.name, 'Updated project name');
+  assert.equal(detail.body.site, 'Updated site');
+  assert.equal(Number(detail.body.progress), 35);
 });
 
 test('not-started projects notify every selected user on the configured schedule', async () => {

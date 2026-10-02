@@ -262,8 +262,19 @@ router.post('/', auth, permit('projects.manage'), validate(projectSchema), wrap(
 router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Project not found' });
-  if (req.body.companyId && Number(req.body.companyId) !== Number(before.company_id))
-    return res.status(409).json({ error: 'A project cannot be moved to another company after creation because its BOQs, quotations, invoices and costs belong to the original company.' });
+  if (req.body.companyId && Number(req.body.companyId) !== Number(before.company_id)) {
+    // Moving a project with commercial records would leave company-scoped ledgers and documents inconsistent.
+    const committedTables = ['boqs', 'quotations_client', 'client_invoices',
+      'daily_cost_sheets', 'expenses', 'incomes', 'purchase_requests', 'purchase_orders',
+      'subcontractor_bills', 'subcontractor_project_rates', 'subcontractor_quotations',
+      'variation_orders', 'quotation_billing_plans', 'petty_cash_entries',
+      'fuel_records',
+      'project_awards', 'project_work_authorisations'];
+    for (const table of committedTables) {
+      if (await getOne(`SELECT 1 AS found FROM ${table} WHERE project_id=? LIMIT 1`, [before.id]))
+        return res.status(409).json({ error: 'This project already has commercial or financial records. Its operating company cannot be changed without moving those records. Other project details can still be edited.' });
+    }
+  }
 
   /* Only one end of the range may be in the request, so the other comes from the record. */
   const asDate = value => (value instanceof Date ? value.toISOString().slice(0, 10) : value);

@@ -95,7 +95,7 @@ export default function BoqImport({ projects, onDone, onCreate }) {
     <div className="boq-import-body">
       <ol className="boq-steps">
         <li><strong>Download the template.</strong> It has the right columns and an example row.</li>
-        <li><strong>Fill it in.</strong> One line of work per row. Leave the Amount column empty — it is worked out for you.</li>
+        <li><strong>Fill it in.</strong> One line of work per row. Category is optional. Leave the Amount column empty — it is worked out for you.</li>
         <li><strong>Upload it back.</strong> You will see everything the system read, and anything it could not understand, before it is saved.</li>
       </ol>
 
@@ -309,7 +309,7 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
 
     <div className="boq-bulk">
       <Wand2 size={15} />
-      <span>Set every line still missing a category to</span>
+      <span>Optional: set uncategorised lines to</span>
       <select value={bulkCategory} onChange={event => setBulkCategory(event.target.value)}>
         <option value="">Choose…</option>
         {(staged.categories || []).map(category => <option key={category}>{category}</option>)}
@@ -346,7 +346,7 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
               <td className="num">{item.sourceRow}</td>
               <td>
                 <select value={item.category || ''} onChange={event => patch(item.id, { category: event.target.value })}>
-                  <option value="">—</option>
+                  <option value="">Uncategorised</option>
                   {staged.categories.map(name => <option key={name} value={name}>{name}</option>)}
                 </select>
               </td>
