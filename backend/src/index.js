@@ -76,7 +76,8 @@ function checkConfiguration() {
   if (!process.env.DB_NAME) warnings.push('DB_NAME (defaulting to gkuc_siteops)');
 
   if (process.env.STORAGE_DRIVER === 'r2') {
-    for (const key of ['R2_ACCOUNT_ID', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']) {
+    if (!process.env.R2_S3_ENDPOINT && !process.env.R2_ACCOUNT_ID) missing.push('R2_S3_ENDPOINT (or R2_ACCOUNT_ID)');
+    for (const key of ['R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']) {
       if (!process.env[key]) missing.push(key);
     }
   }

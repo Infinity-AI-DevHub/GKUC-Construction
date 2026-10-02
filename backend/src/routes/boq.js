@@ -267,14 +267,13 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
           WHERE qi.id=? AND q.project_id=? AND q.status='Accepted'`, [line.quotationItemId, projectId]);
         if (!quoted) throw costError('The quotation item must belong to an accepted quotation for this project.');
       }
-      if (line.source === 'Labour') {
+      if (line.source === 'Labour' && line.employeeId) {
         const [[allocated]]=await connection.execute("SELECT id FROM payroll_project_allocations WHERE employee_id=? AND work_date=? AND source_type='Attendance'",[line.employeeId||0,workDate]);
         if(allocated)throw costError('This employee/day is already allocated from payroll. Use the payroll allocation instead of recording a second labour cost.',409);
         if (labourersOnSheet.has(line.employeeId)) throw costError('A labourer day salary can be charged only once on this sheet.');
         labourersOnSheet.add(line.employeeId);
-        const [[employee]] = await connection.execute('SELECT daily_rate dailyRate FROM employees WHERE id=? AND status<>\'Left\'', [line.employeeId || 0]);
-        if (!employee || Number(employee.dailyRate) <= 0 || Math.abs(Number(employee.dailyRate) - line.amount) > .01)
-          throw costError('Choose a labourer with a configured daily rate. The manpower cost must equal that day salary.');
+        const [[employee]] = await connection.execute('SELECT id FROM employees WHERE id=? AND status<>\'Left\'', [line.employeeId]);
+        if (!employee) throw costError('The selected employee is not active. Choose another employee or leave the cost unassigned.');
         const [[already]] = await connection.execute(`SELECT l.id FROM daily_cost_lines l
           JOIN daily_cost_sheets s ON s.id=l.sheet_id
           WHERE l.employee_id=? AND s.work_date=? AND s.status IN ('Submitted','Approved') LIMIT 1`,

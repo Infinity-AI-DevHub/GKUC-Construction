@@ -7,9 +7,14 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "seed": "node src/seed.js",
+    "storage:migrate:r2": "node src/scripts/migrate-local-uploads-to-r2.js",
+    "storage:migrate:r2:apply": "node src/scripts/migrate-local-uploads-to-r2.js --apply",
     "test": "node --test"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/lib-storage": "^3.1146.0",
+    "@aws-sdk/s3-request-presigner": "^3.1146.0",
     "dotenv": "16.4.7",
     "express": "4.22.2",
     "helmet": "8.0.0",

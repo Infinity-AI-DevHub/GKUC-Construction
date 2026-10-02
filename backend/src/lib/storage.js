@@ -4,6 +4,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { today } from '../db.js';
 import { fileURLToPath } from 'node:url';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 /**
  * Object storage behind one small interface so the application never knows where a file
@@ -166,68 +171,52 @@ const localDriver = {
   }
 };
 
-/**
- * Cloudflare R2. Enabled by setting STORAGE_DRIVER=r2 with the R2_* variables; it signs
- * requests itself rather than pulling in the AWS SDK for the two calls we make.
- */
+const r2Endpoint = () => process.env.R2_S3_ENDPOINT
+  || (process.env.R2_ACCOUNT_ID ? `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : '');
+
+let r2Client;
+export function objectStoreClient() {
+  if (r2Client) return r2Client;
+  const endpoint = r2Endpoint();
+  const { R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
+  if (!endpoint || !process.env.R2_BUCKET || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
+    throw Object.assign(new Error('Object storage is selected but its endpoint, bucket or credentials are not set'), { status: 500 });
+  }
+  r2Client = new S3Client({
+    region: 'auto', endpoint, forcePathStyle: true,
+    credentials: { accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY }
+  });
+  return r2Client;
+}
+
+const storedUrl = key => process.env.R2_PUBLIC_BASE_URL
+  ? `${process.env.R2_PUBLIC_BASE_URL.replace(/\/$/, '')}/${key}`
+  : `/uploads/${key}`;
+
+/** Cloudflare R2 through its supported S3-compatible API. */
 const r2Driver = {
   name: 'r2',
   async put(key, buffer, mime) {
-    const response = await signedR2Request('PUT', key, buffer, mime);
-    if (!response.ok) throw new Error(`R2 upload failed (${response.status})`);
-    return process.env.R2_PUBLIC_BASE_URL ? `${process.env.R2_PUBLIC_BASE_URL.replace(/\/$/, '')}/${key}` : `/uploads/${key}`;
+    await objectStoreClient().send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET, Key: key, Body: buffer, ContentType: mime
+    }));
+    return storedUrl(key);
   },
-  /*
-   * R2 signs each request over a hash of the payload, so the file has to be read to be
-   * signed — this one does load it into memory, unlike the local driver.
-   *
-   * That is acceptable today because the local driver is the one in use, and it is flagged
-   * rather than hidden: before switching STORAGE_DRIVER to r2 with large uploads allowed,
-   * this wants replacing with S3 multipart upload, which signs and sends in parts.
-   */
   async putFile(key, sourcePath, mime) {
-    const buffer = await fs.readFile(sourcePath);
-    const url = await this.put(key, buffer, mime);
-    await fs.rm(sourcePath, { force: true });
-    return url;
+    try {
+      const upload = new Upload({ client: objectStoreClient(), params: {
+        Bucket: process.env.R2_BUCKET, Key: key, Body: createReadStream(sourcePath), ContentType: mime
+      }});
+      await upload.done();
+      return storedUrl(key);
+    } finally {
+      await fs.rm(sourcePath, { force: true });
+    }
   },
   async remove(key) {
-    await signedR2Request('DELETE', key);
+    await objectStoreClient().send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
   }
 };
-
-async function signedR2Request(method, key, body = Buffer.alloc(0), mime = 'application/octet-stream') {
-  const { R2_ACCOUNT_ID, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
-  const host = `${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
-  const url = `https://${host}/${R2_BUCKET}/${key}`;
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const dateStamp = amzDate.slice(0, 8);
-  const payloadHash = crypto.createHash('sha256').update(body).digest('hex');
-
-  const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
-  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
-  const canonicalRequest = [method, `/${R2_BUCKET}/${key}`, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
-  const scope = `${dateStamp}/auto/s3/aws4_request`;
-  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
-    crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
-
-  const hmac = (key_, data) => crypto.createHmac('sha256', key_).update(data).digest();
-  let signingKey = hmac(`AWS4${R2_SECRET_ACCESS_KEY}`, dateStamp);
-  for (const part of ['auto', 's3', 'aws4_request']) signingKey = hmac(signingKey, part);
-  const signature = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex');
-
-  return fetch(url, {
-    method,
-    headers: {
-      Authorization: `AWS4-HMAC-SHA256 Credential=${R2_ACCESS_KEY_ID}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
-      'x-amz-content-sha256': payloadHash,
-      'x-amz-date': amzDate,
-      ...(method === 'PUT' ? { 'content-type': mime, 'content-length': String(body.length) } : {})
-    },
-    body: method === 'PUT' ? body : undefined
-  });
-}
 
 /**
  * A short-lived URL for one object, signed with the same credentials as the writes.
@@ -237,39 +226,26 @@ async function signedR2Request(method, key, body = Buffer.alloc(0), mime = 'appl
  * carries its own expiry, so the bucket itself stays private and a URL that leaks stops
  * working within minutes rather than never.
  */
-export function signedDownloadUrl(key, seconds = 300) {
-  const { R2_ACCOUNT_ID, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
-  if (!R2_ACCOUNT_ID || !R2_BUCKET || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
-    throw Object.assign(new Error('Object storage is selected but its credentials are not set'), { status: 500 });
-  }
-  const host = `${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const dateStamp = amzDate.slice(0, 8);
-  const scope = `${dateStamp}/auto/s3/aws4_request`;
-  const canonicalUri = `/${R2_BUCKET}/${key.split('/').map(encodeURIComponent).join('/')}`;
+export const signedDownloadUrl = (key, seconds = 300) => getSignedUrl(
+  objectStoreClient(),
+  new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }),
+  { expiresIn: seconds }
+);
 
-  const params = new URLSearchParams({
-    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
-    'X-Amz-Credential': `${R2_ACCESS_KEY_ID}/${scope}`,
-    'X-Amz-Date': amzDate,
-    'X-Amz-Expires': String(seconds),
-    'X-Amz-SignedHeaders': 'host'
-  });
-  /* The signature covers the query string, so it has to be built in sorted order. */
-  const canonicalQuery = [...params.entries()].sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+/** Downloads a private object to a temporary local path for OCR/import processing. */
+export async function downloadToFile(key, destination) {
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  const response = await objectStoreClient().send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+  if (!response.Body) throw Object.assign(new Error('The stored object has no content'), { status: 404 });
+  await pipeline(response.Body, createWriteStream(destination, { flags: 'wx' }));
+  return destination;
+}
 
-  const canonicalRequest = ['GET', canonicalUri, canonicalQuery, `host:${host}\n`, 'host', 'UNSIGNED-PAYLOAD'].join('\n');
-  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope,
-    crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n');
-
-  const hmac = (secret, data) => crypto.createHmac('sha256', secret).update(data).digest();
-  let signingKey = hmac(`AWS4${R2_SECRET_ACCESS_KEY}`, dateStamp);
-  for (const part of ['auto', 's3', 'aws4_request']) signingKey = hmac(signingKey, part);
-  const signature = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex');
-
-  return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+/** Startup/deployment health check that verifies the configured bucket is reachable. */
+export async function checkObjectStore() {
+  if (driver !== r2Driver) return { driver: 'local' };
+  await objectStoreClient().send(new HeadBucketCommand({ Bucket: process.env.R2_BUCKET }));
+  return { driver: 'r2', bucket: process.env.R2_BUCKET, endpoint: r2Endpoint() };
 }
 
 const driver = process.env.STORAGE_DRIVER === 'r2' ? r2Driver : localDriver;

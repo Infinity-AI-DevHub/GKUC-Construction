@@ -1836,6 +1836,39 @@ test('returned manpower costs can be corrected, but a day salary cannot be charg
   assert.equal(costs.length,1);
 });
 
+test('daily labour costs allow an unassigned employee and a manually entered amount',async()=>{
+  const owner=await login(),qs=await login('qs@gkuc.lk');
+  const options=(await call(qs,'GET','/boq/cost-control/options?projectId=1')).body;
+  const taskId=options.tasks[0]?.id;
+  assert.ok(taskId);
+  const workDate=shift(-45);
+  const description=`Unassigned labour ${Date.now()}`;
+  const sheet=await call(qs,'POST','/boq/cost-control/daily-sheets',{
+    projectId:1,workDate,lines:[
+      {taskId,source:'Labour',description,amount:875.25},
+      {taskId,source:'Labour',description:`${description} additional`,amount:500}
+    ]
+  });
+  assert.equal(sheet.status,201,JSON.stringify(sheet.body));
+  const detail=await call(owner,'GET',`/boq/cost-control/daily-sheets/${sheet.body.id}`);
+  assert.equal(detail.status,200);
+  assert.equal(detail.body.lines.length,2);
+  assert.ok(detail.body.lines.every(line=>line.employee_id===null));
+  assert.equal((await call(owner,'POST',`/boq/cost-control/daily-sheets/${sheet.body.id}/review`,{decision:'Approved'})).status,200);
+  const costs=(await call(owner,'GET','/finance/expenses?projectId=1')).body.filter(row=>
+    row.originType==='daily_cost_line'&&row.description.startsWith(description));
+  assert.equal(costs.length,2);
+  assert.deepEqual(costs.map(row=>Number(row.amount)).sort((a,b)=>a-b),[500,875.25]);
+
+  const worker=options.employees.find(employee=>Number(employee.dailyRate)>0);
+  assert.ok(worker);
+  const adjusted=await call(qs,'POST','/boq/cost-control/daily-sheets',{
+    projectId:1,workDate:shift(-46),lines:[{taskId,source:'Labour',employeeId:worker.id,
+      description:`Adjusted labour ${Date.now()}`,amount:Number(worker.dailyRate)+125}]
+  });
+  assert.equal(adjusted.status,201,JSON.stringify(adjusted.body));
+});
+
 test('cheque payments use dedicated clearing workflows and manual income is deduplicated', async () => {
   const owner = await login();
   const income = { projectId: 1, description: 'Reconciliation test receipt', amount: 4273,

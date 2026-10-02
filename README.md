@@ -145,7 +145,9 @@ rather than a code change.
 - `STORAGE_DRIVER=local` (default) writes to `uploads/` at the repository root and serves
   it from `/uploads`. The folder is git-ignored.
 - `STORAGE_DRIVER=r2` targets Cloudflare R2 over its S3-compatible API using the `R2_*`
-  variables. Requests are signed directly, so no AWS SDK is pulled in.
+  variables. Uploads use multipart streaming, so large files are not loaded into server
+  memory. Private downloads remain behind the application's permission checks and use
+  short-lived signed links.
 
 Storage keys are random UUIDs, matching how a public R2 bucket behaves: a URL cannot be
 guessed or walked. Accepted types are images, PDF, Word, Excel and CSV, capped by
@@ -179,6 +181,11 @@ Optional environment variables:
 | `ALERT_WINDOW_DAYS` | `30` | How far ahead expiries are alerted |
 | `ATTENDANCE_LATE_AFTER` | `08:00:00` | Check-in time after which a worker is marked late |
 | `STORAGE_DRIVER` | `local` | `local` or `r2` |
+| `R2_S3_ENDPOINT` | *(empty)* | Complete Cloudflare R2 S3 API endpoint |
+| `R2_BUCKET` | *(empty)* | R2 bucket name |
+| `R2_ACCESS_KEY_ID` | *(empty)* | R2 API token access key |
+| `R2_SECRET_ACCESS_KEY` | *(empty)* | R2 API token secret; keep only in the server environment |
+| `R2_PUBLIC_BASE_URL` | *(empty)* | Optional public/Worker-protected domain; leave empty for confidential SiteOps files |
 | `MAX_UPLOAD_MB` | `15` | Largest accepted upload |
 | `NOTIFY_CHANNELS` | *(empty)* | Any of `WhatsApp,SMS,Email` |
 | `NOTIFY_MIN_SEVERITY` | `Warning` | Minimum severity pushed off-platform |
