@@ -188,9 +188,10 @@ export function SelectField({ name, label, options, defaultValue, wide = false, 
   </label>;
 }
 
-export function FormButtons({ close, label, busy }) {
+export function FormButtons({ close, label, busy, repeat = false }) {
   return <div className="form-actions">
     <button type="button" className="secondary" onClick={close}>Cancel</button>
+    {repeat && <button type="submit" name="submitMode" value="again" className="secondary" disabled={busy}>Save & add another</button>}
     <button className="primary" disabled={busy}><Check size={17} />{busy ? 'Saving…' : label}</button>
   </div>;
 }
@@ -238,22 +239,26 @@ export function Row({ template, children, onClick, id, className = '' }) {
  * Wraps a create/edit form in a modal and handles the submit lifecycle, so each module
  * describes only its fields and the request to send.
  */
-export function FormModal({ title, close, label, onSubmit, children, wide = false, scope }) {
+export function FormModal({ title, close, label, onSubmit, children, wide = false, scope, repeat = false }) {
   const recordScope = useRecordScope(scope);
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
   const errorRef = useRef(null);
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
   const submit = async event => {
     event.preventDefault();
     const formElement = event.currentTarget;
+    const again = repeat && event.nativeEvent.submitter?.value === 'again';
     setBusy(true);
     setError('');
+    setNotice('');
     setFieldErrors({});
     const form = new FormData(formElement);
     try {
       await onSubmit(Object.fromEntries(form.entries()), form);
-      close();
+      if (again) { formElement.reset(); setNotice('Saved. Enter the next record when ready.'); formElement.querySelector('input:not([type=hidden]),select,textarea')?.focus(); }
+      else close();
       showScopeSaved(recordScope);
     } catch (failure) {
       const issues = parseFieldErrors(failure);
@@ -266,8 +271,9 @@ export function FormModal({ title, close, label, onSubmit, children, wide = fals
   };
   return <Modal title={title} close={close} wide={wide} scope={scope}>
     <EntityForm onSubmit={submit} error={error} fieldErrors={fieldErrors} errorRef={errorRef}>
+      {notice && <p className="form-note wide" role="status">{notice}</p>}
       {children}
-      <FormButtons close={close} label={label} busy={busy} />
+      <FormButtons close={close} label={label} busy={busy} repeat={repeat} />
     </EntityForm>
   </Modal>;
 }

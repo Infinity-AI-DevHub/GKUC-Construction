@@ -395,7 +395,7 @@ function EquipmentServiceForm({ item, close, reload }) {
 
 function VehicleForm({ data, close, reload }) {
   const docTypes = useOptions('vehicle.document');
-  return <FormModal title="Add fleet asset" close={close} label="Add asset" onSubmit={async values => {
+  return <FormModal title="Add fleet asset" close={close} label="Add asset" repeat onSubmit={async values => {
     await post('/fleet', {
       vehicle: values.vehicle,
       registration: values.registration,
@@ -488,7 +488,7 @@ function FuelForm({ data, vehicle, close, reload }) {
 }
 
 function EquipmentForm({ close, reload }) {
-  return <FormModal title="Add equipment" close={close} label="Add equipment" onSubmit={async values => {
+  return <FormModal title="Add equipment" close={close} label="Add equipment" repeat onSubmit={async values => {
     await post('/equipment', {
       code: values.code,
       name: values.name,

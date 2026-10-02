@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { audit, getOne, hashPassword, pool, query, transaction } from '../db.js';
+import { audit, getOne, hashPassword, pool, query, transaction, verifyPassword } from '../db.js';
 import { auth, can, permissionsFor, permit, validate, wrap } from '../lib/http.js';
 import { PRIVILEGED_KEYS } from '../lib/permissions.js';
-import { strongPassword } from '../lib/passwords.js';
+import { passwordProblems, strongPassword } from '../lib/passwords.js';
 import { runAlertScan } from '../alerts.js';
 
 
@@ -189,10 +189,30 @@ router.post('/users', auth, permit('admin.users'), validate(z.object({
   res.status(201).json(row);
 }));
 
-router.patch('/users/:id', auth, permit('admin.users'), validate(z.object({
-  active: z.boolean().optional(),
-  password: strongPassword.optional()
+router.post('/users/:id/reset-password', auth, permit('admin.users'), validate(z.object({
+  password: strongPassword
 })), wrap(async (req, res) => {
+  if (req.user.role !== 'Managing Director') {
+    await audit(pool, req.user.id, 'ACCESS_DENIED', 'user', req.params.id, null, { action: 'PASSWORD_RESET' }, req.ip);
+    return res.status(403).json({ error: 'Only the Managing Director can reset another user’s password.' });
+  }
+  if (Number(req.params.id) === req.user.id) return res.status(409).json({ error: 'Use My account to change your own password.' });
+  const target = await getOne('SELECT id,name,email,password_hash FROM users WHERE id=?', [req.params.id]);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  const problems = passwordProblems(req.body.password, { email: target.email, name: target.name });
+  if (problems.length) return res.status(400).json({ error: `The password must ${problems.join(', and ')}.` });
+  if (verifyPassword(req.body.password, target.password_hash)) return res.status(400).json({ error: 'Choose a password different from the current one.' });
+  await transaction(async connection => {
+    await connection.query('UPDATE users SET password_hash=? WHERE id=?', [hashPassword(req.body.password), target.id]);
+    await connection.query('DELETE FROM sessions WHERE user_id=?', [target.id]);
+    await audit(connection, req.user.id, 'PASSWORD_RESET', 'user', target.id, null, { by: req.user.id }, req.ip);
+  });
+  res.status(204).end();
+}));
+
+router.patch('/users/:id', auth, permit('admin.users'), validate(z.object({
+  active: z.boolean()
+}).strict()), wrap(async (req, res) => {
   const before = await getOne('SELECT id,name,email,role,role_id,active FROM users WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'User not found' });
   if (Number(req.params.id) === req.user.id && req.body.active === false) {
@@ -202,17 +222,13 @@ router.patch('/users/:id', auth, permit('admin.users'), validate(z.object({
   /*
    * You cannot reach past your own authority.
    *
-   * Holding admin.users meant being able to set anyone's password, the Managing Director's
-   * included — and then sign in as them. A user-administrator is meant to manage accounts,
-   * not to acquire every permission in the system by way of a password reset. Acting on an
-   * account whose rights exceed your own is refused; the MD, holding everything, is
-   * unaffected and can still act on anyone.
+   * A user-administrator must not alter an account whose rights exceed their own. Password
+   * resets use the separate Managing Director-only endpoint above.
    */
   if (Number(req.params.id) !== req.user.id) {
     const theirs = new Set(await permissionsFor(before.id, before.role_id));
     const mine = new Set(req.user.permissions);
-    /* Only the authorities that would amount to taking over the system are protected, so
-       resetting an ordinary colleague's password remains help desk work. */
+    /* Only the authorities that would amount to taking over the system are protected. */
     const beyond = PRIVILEGED_KEYS.filter(key => theirs.has(key) && !mine.has(key));
     if (beyond.length) {
       return res.status(403).json({
@@ -224,10 +240,6 @@ router.patch('/users/:id', auth, permit('admin.users'), validate(z.object({
   if (req.body.active !== undefined) {
     await query('UPDATE users SET active=? WHERE id=?', [req.body.active, req.params.id]);
     if (!req.body.active) await query('DELETE FROM sessions WHERE user_id=?', [req.params.id]);
-  }
-  if (req.body.password) {
-    await query('UPDATE users SET password_hash=? WHERE id=?', [hashPassword(req.body.password), req.params.id]);
-    await query('DELETE FROM sessions WHERE user_id=?', [req.params.id]);
   }
   const after = await getOne('SELECT id,name,email,role,active FROM users WHERE id=?', [req.params.id]);
   await audit(pool, req.user.id, 'UPDATE', 'user', after.id, before, after, req.ip);

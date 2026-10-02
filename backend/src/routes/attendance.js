@@ -190,6 +190,50 @@ router.post('/', auth, permit('hr.attendance'), validate(z.object({
   }
 }));
 
+router.post('/bulk', auth, permit('hr.attendance'), validate(z.object({
+  projectId:z.number().int().positive().nullable(),
+  workLocation:z.enum(['Office','Site']),
+  date:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  informationSource:z.enum(['Biometric','Attendance sheet','WhatsApp','Signed timesheet','Management instruction','Other']),
+  sourceNotes:z.string().trim().max(2000).default(''),
+  entries:z.array(z.object({
+    employeeId:z.number().int().positive(),
+    state:z.enum(['On site','Late','Checked out','Absent','On leave','Business trip']),
+    checkIn:attendanceTime.nullable().optional(),checkOut:attendanceTime.nullable().optional()
+  })).min(1).max(300)
+})), wrap(async(req,res)=>{
+  const b=req.body;
+  if(b.workLocation==='Site'&&!b.projectId)return res.status(400).json({error:'Choose the project or site for these attendance records.'});
+  const ids=b.entries.map(row=>row.employeeId);
+  if(new Set(ids).size!==ids.length)return res.status(400).json({error:'Each employee may appear only once in this attendance batch.'});
+  const result=await transaction(async connection=>{
+    if(b.workLocation==='Site'){
+      const [[project]]=await connection.query('SELECT id FROM projects WHERE id=? AND active=1',[b.projectId]);
+      if(!project)throw Object.assign(new Error('Choose an active project or site.'),{status:400});
+    }
+    const [employees]=await connection.query(`SELECT id,name,designation,status FROM employees WHERE id IN (${ids.map(()=>'?').join(',')})`,ids);
+    const byId=new Map(employees.map(row=>[Number(row.id),row]));
+    const missing=ids.filter(id=>!byId.has(id)||byId.get(id).status==='Archived');
+    if(missing.length)throw Object.assign(new Error('One or more employees are missing or archived. Refresh the employee list.'),{status:400});
+    const [existing]=await connection.query(`SELECT a.employee_id employeeId,e.name FROM attendance a JOIN employees e ON e.id=a.employee_id WHERE a.work_date=? AND a.employee_id IN (${ids.map(()=>'?').join(',')})`,[b.date,...ids]);
+    if(existing.length)throw Object.assign(new Error(`Attendance already exists on ${b.date} for ${existing.map(row=>row.name).join(', ')}. Correct those records separately.`),{status:409});
+    const created=[];
+    for(const entry of b.entries){
+      const employee=byId.get(entry.employeeId);
+      const checkIn=['Absent','On leave'].includes(entry.state)?null:(entry.checkIn||null);
+      const checkOut=['Absent','On leave'].includes(entry.state)?null:(entry.checkOut||null);
+      const state=entry.state==='On site'&&checkIn>LATE_AFTER?'Late':entry.state;
+      const [write]=await connection.query(`INSERT INTO attendance
+        (employee_name,role,project_id,work_location,employee_id,work_date,check_in,check_out,state,confirmed_by,source,source_notes)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,[employee.name,employee.designation?.trim()||'Employee',b.workLocation==='Site'?b.projectId:null,b.workLocation,employee.id,b.date,checkIn,checkOut,state,req.user.id,b.informationSource,b.sourceNotes]);
+      created.push({id:write.insertId,employeeId:employee.id,name:employee.name});
+      await audit(connection,req.user.id,'CREATE','attendance',write.insertId,null,{employeeId:employee.id,date:b.date,state,source:b.informationSource},req.ip);
+    }
+    return created;
+  }).catch(error=>{if(error.code==='ER_DUP_ENTRY')throw Object.assign(new Error('Attendance already exists for one of these employees on this date. No records in the batch were saved.'),{status:409});throw error;});
+  res.status(201).json({created:result,count:result.length});
+}));
+
 /** One button that checks a worker in, then out — supervisors do not have to pick the action. */
 router.post('/:id/toggle', auth, permit('hr.attendance'), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM attendance WHERE id=?', [req.params.id]);

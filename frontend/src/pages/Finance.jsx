@@ -109,7 +109,7 @@ function Bills({data,can,companyId,open,close}){
     {open&&<BillForm data={data} companyId={companyId} close={close} reload={load}/>} {paying&&<BillPayment bill={paying} close={()=>setPaying(null)} reload={load}/>}</>;
 }
 
-function BillForm({data,companyId,close,reload}){return <FormModal title="Record an operating bill" close={close} label="Save bill" onSubmit={async v=>{
+function BillForm({data,companyId,close,reload}){return <FormModal title="Record an operating bill" close={close} label="Save bill" repeat onSubmit={async v=>{
   await post('/finance/bills',{companyId,projectId:v.projectId?Number(v.projectId):null,billType:v.billType,provider:v.provider,accountNumber:v.accountNumber||undefined,
     reference:v.reference,periodFrom:v.periodFrom||undefined,periodTo:v.periodTo||undefined,billDate:v.billDate,dueDate:v.dueDate,netAmount:Number(v.netAmount),
     taxTreatment:v.taxTreatment,vatRate:Number(v.vatRate||0),reminderDays:Number(v.reminderDays||5),notes:v.notes||undefined});await reload();}}>
@@ -291,7 +291,7 @@ function Categories({ companyId }) {
 }
 
 function CategoryForm({ close, reload }) {
-  return <FormModal title="Add expense category" close={close} label="Add category" onSubmit={async values => {
+  return <FormModal title="Add expense category" close={close} label="Add category" repeat onSubmit={async values => {
     await post('/finance/categories', { name: values.name });
     await reload();
   }}>
@@ -303,7 +303,7 @@ function ExpenseForm({ data, close, reload }) {
   const costTypes = useOptions('expense.source');
   const [categories, setCategories] = useState([]);
   useEffect(() => { api('/finance/categories').then(setCategories).catch(() => setCategories([])); }, []);
-  return <FormModal title="Record expense" close={close} label="Save expense" onSubmit={async values => {
+  return <FormModal title="Record expense" close={close} label="Save expense" repeat onSubmit={async values => {
     await post('/finance/expenses', {
       projectId: Number(values.projectId),
       categoryId: values.categoryId ? Number(values.categoryId) : undefined,
@@ -334,7 +334,7 @@ function ExpenseForm({ data, close, reload }) {
 
 function IncomeForm({ data, close, reload }) {
   const payMethods = useOptions('income.method');
-  return <FormModal title="Record income" close={close} label="Save income" onSubmit={async values => {
+  return <FormModal title="Record income" close={close} label="Save income" repeat onSubmit={async values => {
     await post('/finance/income', {
       projectId: Number(values.projectId),
       description: values.description,
@@ -363,7 +363,7 @@ function InvoiceForm({ companyId, close, reload }) {
     api('/purchasing/suppliers').then(setSuppliers).catch(() => setSuppliers([]));
     api(`/purchasing/orders?companyId=${companyId}`).then(setOrders).catch(() => setOrders([]));
   }, [companyId]);
-  return <FormModal title="Record supplier invoice" close={close} label="Save invoice" onSubmit={async values => {
+  return <FormModal title="Record supplier invoice" close={close} label="Save invoice" repeat onSubmit={async values => {
     const payload = {
       companyId,
       supplierId: Number(values.supplierId),

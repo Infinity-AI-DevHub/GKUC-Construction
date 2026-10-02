@@ -4,7 +4,7 @@ import { api, money, openDocument, patch, post, rupees, shortDate, slug, todayIn
 import { Avatar, Badge, Field, FormModal, WorkflowForm, Page, Progress, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import ProjectDetail from './ProjectDetail.jsx';
 import ClientDirectory from './ClientDirectory.jsx';
-import { useOptions } from '../options.js';
+import { refreshOptions, useOptions } from '../options.js';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS = ['Projects', 'Clients', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquiries'];
@@ -205,7 +205,7 @@ function BoqDetail({ boq, close, decide, can, edit }) {
         <div className="wide">
           <Table columns={['Category', 'Description', 'Quantity', 'Rate', 'Amount']} template="minmax(90px,.7fr) minmax(120px,1.5fr) minmax(70px,.7fr) minmax(70px,.8fr) minmax(80px,.9fr)">
             {boq.items.map(item => <Row template="minmax(90px,.7fr) minmax(120px,1.5fr) minmax(70px,.7fr) minmax(70px,.8fr) minmax(80px,.9fr)" key={item.id}>
-              <Badge tone={slug(item.category)}>{item.category}</Badge>
+              <Badge tone={slug(item.category || 'uncategorised')}>{item.category || 'Uncategorised'}</Badge>
               <span>{item.description}</span>
               <span>{item.quantity} {item.unit}</span>
               <span>{rupees(item.rate)}</span>
@@ -445,6 +445,27 @@ const CATEGORIES = ['Material', 'Labour', 'Equipment', 'Subcontract', 'Overhead'
 /** A BOQ is created with its first priced line; further lines are added from the detail view. */
 export function BoqForm({ data, close, reload }) {
   const boqCategories = useOptions('boq.category');
+  const [categoryRecords,setCategoryRecords]=useState([]);
+  const [categoryEditor,setCategoryEditor]=useState(false);
+  const [categoryName,setCategoryName]=useState('');
+  const [editingCategory,setEditingCategory]=useState(null);
+  const [categoryError,setCategoryError]=useState('');
+  const loadCategories=()=>api('/boq/categories').then(setCategoryRecords).catch(error=>setCategoryError(error.message));
+  useEffect(()=>{loadCategories();},[]);
+  const saveCategory=async()=>{
+    setCategoryError('');
+    const name=categoryName.trim();
+    if(!name){setCategoryError('Enter a category name.');return;}
+    try{
+      if(editingCategory){
+        const oldName=categoryRecords.find(row=>row.id===editingCategory)?.value;
+        await patch(`/boq/categories/${editingCategory}`,{value:name});
+        setLines(current=>current.map(line=>line.category===oldName?{...line,category:name}:line));
+      }else await post('/boq/categories',{value:name});
+      await refreshOptions();await loadCategories();
+      setCategoryName('');setEditingCategory(null);
+    }catch(error){setCategoryError(error.message);}
+  };
   const units = useOptions('boq.unit');
   const [projectId,setProjectId]=useState(data.projects[0]?.id||'');
   const [subRates,setSubRates]=useState([]);
@@ -460,10 +481,10 @@ export function BoqForm({ data, close, reload }) {
    * somebody has started must be finished. A line left entirely blank is simply ignored,
    * so adding one row too many does not block the form.
    */
-  const started = line => Boolean(line.category || line.description || line.unit || line.quantity || line.rate);
+  const started = line => Boolean(line.description || line.unit || line.quantity || line.rate);
   const mustComplete = (line, index) => index === 0 || started(line);
 
-  return <WorkflowForm title="Create BOQ" close={close} label="Create BOQ" summary={[["Project", data.projects.find(project => String(project.id) === String(projectId))?.name || 'Choose a project'], ["Priced lines", String(lines.filter(started).length)], ["Estimated total", rupees(total)]]} reviewContent={<><h3>Measured items</h3>{lines.filter(started).map((line,index)=><div key={index}><span>{line.category} · {line.description}<small>{line.quantity} {line.unit} × {rupees(line.rate)}</small></span><strong>{rupees(Number(line.quantity)*Number(line.rate))}</strong></div>)}</>} onSubmit={async values => {
+  return <WorkflowForm title="Create BOQ" close={close} label="Create BOQ" summary={[["Project", data.projects.find(project => String(project.id) === String(projectId))?.name || 'Choose a project'], ["Priced lines", String(lines.filter(started).length)], ["Estimated total", rupees(total)]]} reviewContent={<><h3>Measured items</h3>{lines.filter(started).map((line,index)=><div key={index}><span>{line.category || 'Uncategorised'} · {line.description}<small>{line.quantity} {line.unit} × {rupees(line.rate)}</small></span><strong>{rupees(Number(line.quantity)*Number(line.rate))}</strong></div>)}</>} onSubmit={async values => {
     await post('/boq', {
       projectId: Number(values.projectId),
       title: values.title,
@@ -471,7 +492,7 @@ export function BoqForm({ data, close, reload }) {
       /* Only wholly blank lines are dropped. A half-filled one is caught by the form
          above rather than disappearing without a word, which is what used to happen. */
       items: lines.filter(started).map(line => ({
-        category: line.category,
+        category: line.category || null,
         description: line.description,
         unit: line.unit || 'item',
         quantity: Number(line.quantity),
@@ -488,11 +509,13 @@ export function BoqForm({ data, close, reload }) {
     {/* Laid out by class rather than inline, so a phone can stack what will not fit:
         the five fixed columns needed 464px inside a 303px dialog. */}
     <div className="qs-form-section wide"><span>02</span><div><h3>Priced work</h3><p>Add each measured item, quantity and rate.</p></div></div>
+    <div className="wide boq-category-tools"><span>Categories are optional. Use one to group related work.</span><button type="button" className="status-button" onClick={()=>setCategoryEditor(value=>!value)}>{categoryEditor?'Hide category manager':'Add or edit categories'}</button></div>
+    {categoryEditor&&<div className="wide boq-category-manager"><div className="boq-category-manager-list">{categoryRecords.filter(row=>row.active).map(row=><span key={row.id}>{row.value}<button type="button" className="status-button" onClick={()=>{setEditingCategory(row.id);setCategoryName(row.value);setCategoryError('');}}>Edit</button></span>)}</div><div className="boq-category-manager-entry"><label>{editingCategory?'Rename category':'New category'}<input type="text" maxLength={60} value={categoryName} onChange={event=>setCategoryName(event.target.value)}/></label><button type="button" className="status-button" onClick={saveCategory}>{editingCategory?'Save name':'Add category'}</button>{editingCategory&&<button type="button" className="status-button" onClick={()=>{setEditingCategory(null);setCategoryName('');setCategoryError('');}}>Cancel edit</button>}</div>{categoryError&&<p className="form-error" role="alert">{categoryError}</p>}</div>}
     {lines.map((line, index) => <div className="wide boq-line" key={index}>
-      <label>Category
-        <select value={line.category} required={mustComplete(line, index)}
+      <label>Category (optional)
+        <select value={line.category}
           onChange={event => update(index, 'category', event.target.value)}>
-          <option value="">Choose…</option>
+          <option value="">Uncategorised</option>
           {boqCategories.map(category => <option key={category}>{category}</option>)}
         </select>
       </label>

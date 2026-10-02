@@ -30,7 +30,7 @@ export default function Admin({ can, user, reload, companyId, initialTab = TABS[
   return <Page title="Administration" subtitle="Manage staff accounts, role-based permissions, alerts and the audit trail."
     action={tab === 'Users' && can.manage ? 'Add user' : null} onAction={() => setCreating(true)}>
     <Tabs tabs={allowed} active={tab} onChange={chooseTab} />
-    {tab === 'Users' && <Users can={can} creating={creating} closeCreate={() => setCreating(false)} />}
+    {tab === 'Users' && <Users can={can} currentUser={user} creating={creating} closeCreate={() => setCreating(false)} />}
     {tab === 'Access control' && <AccessControl user={user} />}
     {tab === 'Company' && <CompanySettings can={{...can,manage:can.companySettings}} companyId={companyId} />}
     {tab === 'Documents' && <DocumentSettings can={{...can,manage:can.documentSettings}} />}
@@ -53,11 +53,13 @@ export default function Admin({ can, user, reload, companyId, initialTab = TABS[
 }
 
 const USER_COLUMNS = ['User', 'Email', 'Role', 'Status', ''];
-const USER_TEMPLATE = 'minmax(180px,1.2fr) minmax(190px,1.2fr) minmax(160px,1fr) 100px 130px';
+const USER_TEMPLATE = 'minmax(180px,1.2fr) minmax(190px,1.2fr) minmax(160px,1fr) 100px minmax(190px,auto)';
 
-function Users({ can, creating, closeCreate }) {
+function Users({ can, currentUser, creating, closeCreate }) {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
+  const [resetUser, setResetUser] = useState(null);
+  const [notice, setNotice] = useState('');
   const load = () => api('/users').then(setRows).catch(failure => setError(failure.message));
   useLiveList(load);
 
@@ -65,22 +67,50 @@ function Users({ can, creating, closeCreate }) {
 
   if (error && !rows.length) return <p className="empty-state">{error}</p>;
   return <>
+    {notice && <p className="form-note" role="status">{notice}</p>}
     <Table columns={USER_COLUMNS} template={USER_TEMPLATE} title="Staff accounts">
       {rows.map(user => <Row template={USER_TEMPLATE} key={user.id}>
         <div className="person"><Avatar name={user.name} /><strong>{user.name}</strong></div>
         <span>{user.email}</span>
         <span>{user.role}</span>
         <Badge tone={user.active ? 'on-track' : 'inactive'}>{user.active ? 'Active' : 'Inactive'}</Badge>
-        {can.manage
-          ? <button className="status-button" onClick={() => toggle(user)}>{user.active ? 'Deactivate' : 'Reactivate'}</button>
-          : <span>—</span>}
+        <div className="user-account-actions">
+          {currentUser?.role === 'Managing Director' && Number(currentUser.id) !== Number(user.id) &&
+            <button type="button" className="status-button" onClick={() => { setNotice(''); setResetUser(user); }}>Reset password</button>}
+          {can.manage && <button type="button" className="status-button" onClick={() => toggle(user)}>{user.active ? 'Deactivate' : 'Reactivate'}</button>}
+        </div>
       </Row>)}
     </Table>
     {creating && <UserForm close={closeCreate} reload={load} />}
+    {resetUser && <FormModal title={`Reset password · ${resetUser.name}`} close={() => setResetUser(null)} label="Reset password"
+      onSubmit={async values => {
+        if (values.password !== values.confirmPassword) throw new Error('The two passwords do not match. Enter the same password in both fields.');
+        await post(`/users/${resetUser.id}/reset-password`, { password: values.password });
+        setNotice(`${resetUser.name}’s password was reset. Their existing sessions were signed out.`);
+      }}>
+      <p className="form-note wide">Set a new password for {resetUser.name}. Their existing sessions will be signed out. Share the password privately; it will not be shown again.</p>
+      <TemporaryPasswordField />
+      <Field name="confirmPassword" label="Confirm new password" type="password" />
+    </FormModal>}
   </>;
 }
 
 const NOTIFICATION_TEMPLATE = '100px minmax(220px,1.5fr) minmax(160px,1fr) 130px 135px';
+function SummaryMessage({ text }) {
+  const lines = String(text || '').split('\n');
+  return <div className="summary-message" aria-label="Evening summary">
+    {lines.map((line, index) => {
+      const value = line.trim();
+      if (!value) return null;
+      if (value.startsWith('*') && value.endsWith('*')) return <h3 key={index}>{value.slice(1, -1)}</h3>;
+      if (value.startsWith('_') && value.endsWith('_')) return <h4 key={index}>{value.slice(1, -1)}</h4>;
+      if (value.startsWith('• ')) return <p className="summary-message-bullet" key={index}>{value}</p>;
+      const separator = value.indexOf(':');
+      return separator > 0 ? <p className="summary-message-line" key={index}><span>{value.slice(0, separator)}</span><strong>{value.slice(separator + 1).trim()}</strong></p>
+        : <p className="summary-message-line" key={index}>{value}</p>;
+    })}
+  </div>;
+}
 const casePath = row => {
   if(row.referenceType==='alert_case')return `/administration/notifications?case=${row.referenceId}`;
   if(row.referenceType==='project')return `/projects/${encodeURIComponent(row.referenceId)}`;
@@ -135,26 +165,36 @@ function Notifications({ can, reload }) {
       {rows.map(row => <Row template={NOTIFICATION_TEMPLATE} key={row.id}
         onClick={() => openCase(row)}>
         <Badge tone={row.severity === 'Critical' ? 'at-risk' : row.severity === 'Warning' ? 'watch' : 'low'}>{row.severity}</Badge>
-        <div><strong>{row.title}</strong><small>#{row.id} · Seen {row.occurrenceCount} time(s) · {row.message}</small></div>
+        <div className="notification-case-list-detail"><strong>{row.title}</strong><small>#{row.id} · Seen {row.occurrenceCount} time(s){row.referenceType === 'daily_summary' ? ' · Daily summary available in this case' : ` · ${row.message}`}</small></div>
         <span>{row.assignedTo||'Unassigned'}</span>
         <span>{new Date(row.dueAt).toLocaleString('en-GB')}</span>
         <Badge tone={slug(row.state)}>{row.state}{row.escalatedAt?' · Escalated':''}</Badge>
       </Row>)}
     </Table>
-    {selected&&<section className="table-panel" style={{marginTop:16,padding:20}} aria-label={`Case ${selected.id}`}>
-      <div className="table-tools"><div><h2>Case #{selected.id} · {selected.title}</h2><p>{selected.message}</p></div>
-        <button className="secondary" onClick={()=>setSelected(null)}>Close</button></div>
-      <p><strong>State:</strong> {selected.state} · <strong>Owner:</strong> {selected.assignedTo||'Unassigned'} · <strong>First seen:</strong> {new Date(selected.firstSeenAt).toLocaleString('en-GB')}</p>
-      <p><strong>Response due:</strong> {new Date(selected.dueAt).toLocaleString('en-GB')}{selected.snoozedUntil?` · Snoozed until ${new Date(selected.snoozedUntil).toLocaleString('en-GB')}`:''}</p>
-      {casePath(selected)&&<p><a href={casePath(selected)}>Open affected record →</a></p>}
-      {selected.state!=='Resolved'&&<div className="form-grid">
-        <div className="form-field"><label htmlFor="case-assignee">Assign to</label><select id="case-assignee" value={assigneeId} onChange={event=>setAssigneeId(event.target.value)}><option value="">Myself</option>{assignees.map(user=><option key={user.id} value={user.id}>{user.name}</option>)}</select><button className="secondary" onClick={()=>act('assign',{assigneeId:assigneeId?Number(assigneeId):undefined})}>Assign</button></div>
-        <div className="form-field"><label htmlFor="case-snooze">Snooze until</label><input id="case-snooze" type="datetime-local" value={until} onChange={event=>setUntil(event.target.value)} /><button className="secondary" onClick={()=>act('snooze',{until:until?new Date(until).toISOString():undefined})}>Snooze</button></div>
-        <div className="form-field"><label htmlFor="case-note">Action note / resolution</label><textarea id="case-note" value={note} onChange={event=>setNote(event.target.value)} /></div>
-        <div className="form-field"><label htmlFor="case-evidence">Evidence reference (file link, document number or URL)</label><input id="case-evidence" value={evidence} onChange={event=>setEvidence(event.target.value)} /></div>
-        <div className="toolbar"><button className="secondary" disabled={selected.state!=='New'} onClick={()=>act('acknowledge')}>Acknowledge</button><button className="secondary" disabled={!['Acknowledged','Assigned'].includes(selected.state)} onClick={()=>act('start')}>Start work</button><button className="secondary" disabled={!note.trim()} onClick={()=>act('note')}>Add note</button><button className="primary" disabled={!note.trim()||!evidence.trim()} onClick={()=>act('resolve')}>Resolve with evidence</button></div>
-      </div>}
-      <h3>Case history</h3><div className="activity-list">{selected.events?.map(event=><p key={event.id}><strong>{event.action}</strong> · {event.actor||'System'} · {new Date(event.createdAt).toLocaleString('en-GB')}{event.note?` — ${event.note}`:''}{event.evidence?` · Evidence: ${event.evidence}`:''}</p>)}</div>
+    {selected&&<section className="table-panel notification-case" aria-label={`Case ${selected.id}`}>
+      <header className="notification-case-head"><div><span className="notification-case-kicker">Notification case #{selected.id}</span><h2>{selected.title}</h2></div>
+        <button type="button" className="secondary" onClick={()=>setSelected(null)}>Close case</button></header>
+      <div className="notification-case-content">
+        {selected.referenceType === 'daily_summary' ? <SummaryMessage text={selected.message} /> : <p className="notification-case-message">{selected.message}</p>}
+        <dl className="notification-case-facts">
+          <div><dt>State</dt><dd>{selected.state}</dd></div><div><dt>Owner</dt><dd>{selected.assignedTo||'Unassigned'}</dd></div>
+          <div><dt>First seen</dt><dd>{new Date(selected.firstSeenAt).toLocaleString('en-GB')}</dd></div>
+          <div><dt>Response due</dt><dd>{new Date(selected.dueAt).toLocaleString('en-GB')}</dd></div>
+          {selected.snoozedUntil&&<div><dt>Snoozed until</dt><dd>{new Date(selected.snoozedUntil).toLocaleString('en-GB')}</dd></div>}
+        </dl>
+        {casePath(selected)&&<a className="notification-case-record" href={casePath(selected)}>Open affected record →</a>}
+        {selected.state!=='Resolved'&&<section className="notification-case-actions" aria-label="Case actions">
+          <div className="notification-case-section-heading"><h3>Take action</h3><p>Assign responsibility, set a follow-up time, or document the resolution.</p></div>
+          <div className="form-grid">
+            <div className="form-field"><label htmlFor="case-assignee">Assign to</label><select id="case-assignee" value={assigneeId} onChange={event=>setAssigneeId(event.target.value)}><option value="">Myself</option>{assignees.map(user=><option key={user.id} value={user.id}>{user.name}</option>)}</select><button type="button" className="secondary" onClick={()=>act('assign',{assigneeId:assigneeId?Number(assigneeId):undefined})}>Assign</button></div>
+            <div className="form-field"><label htmlFor="case-snooze">Snooze until</label><input id="case-snooze" type="datetime-local" value={until} onChange={event=>setUntil(event.target.value)} /><button type="button" className="secondary" onClick={()=>act('snooze',{until:until?new Date(until).toISOString():undefined})}>Snooze</button></div>
+            <div className="form-field"><label htmlFor="case-note">Action note / resolution</label><textarea id="case-note" value={note} onChange={event=>setNote(event.target.value)} /></div>
+            <div className="form-field"><label htmlFor="case-evidence">Evidence reference (file link, document number or URL)</label><input id="case-evidence" value={evidence} onChange={event=>setEvidence(event.target.value)} /></div>
+          </div>
+          <div className="notification-case-buttons"><button type="button" className="secondary" disabled={selected.state!=='New'} onClick={()=>act('acknowledge')}>Acknowledge</button><button type="button" className="secondary" disabled={!['Acknowledged','Assigned'].includes(selected.state)} onClick={()=>act('start')}>Start work</button><button type="button" className="secondary" disabled={!note.trim()} onClick={()=>act('note')}>Add note</button><button type="button" className="primary" disabled={!note.trim()||!evidence.trim()} onClick={()=>act('resolve')}>Resolve with evidence</button></div>
+        </section>}
+        <section className="notification-case-history"><h3>Case history</h3><div className="activity-list">{selected.events?.map(event=><p key={event.id}><strong>{event.action}</strong> · {event.actor||'System'} · {new Date(event.createdAt).toLocaleString('en-GB')}{event.note?` — ${event.note}`:''}{event.evidence?` · Evidence: ${event.evidence}`:''}</p>)}</div></section>
+      </div>
     </section>}
   </>;
 }
@@ -202,7 +242,7 @@ function EveningSummary({ can }) {
       {sent && <p className="form-note">
         Sent to {sent.sent.length} recipient{sent.sent.length === 1 ? '' : 's'}.
       </p>}
-      {preview ? <pre className="summary-text">{preview.text}</pre>
+      {preview ? <SummaryMessage text={preview.text} />
         : !error && <p className="empty-state">Building tonight's message…</p>}
     </div>
   </section>;
