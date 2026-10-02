@@ -1,7 +1,10 @@
 import { query, getOne } from '../db.js';
 import { canOcr, extractText, ocrAvailable } from './ocr.js';
-import { isLocalStore, localPathFor } from './storage.js';
+import { downloadToFile, isLocalStore, localPathFor, scratchDir } from './storage.js';
 import { publish } from './realtime.js';
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 /*
  * The background reader.
@@ -43,17 +46,17 @@ async function processOne(job) {
     return;
   }
 
-  /*
-   * Reading needs the file on this machine. With object storage that means fetching it
-   * first; until R2 is switched on, everything is local and the path is known.
-   */
-  if (!isLocalStore()) {
-    await query("UPDATE ocr_jobs SET status='Skipped', detail=?, finished_at=NOW() WHERE id=?",
-      ['Remote object storage is in use; reading it here is not implemented yet', job.id]);
-    return;
+  const temporary = isLocalStore() ? null
+    : path.join(scratchDir(), `ocr-${crypto.randomUUID()}-${path.basename(attachment.filename)}`);
+  const sourcePath = temporary
+    ? await downloadToFile(attachment.storageKey, temporary)
+    : localPathFor(attachment.storageKey);
+  let result;
+  try {
+    result = await extractText(sourcePath, attachment.mime);
+  } finally {
+    if (temporary) await fs.rm(temporary, { force: true });
   }
-
-  const result = await extractText(localPathFor(attachment.storageKey), attachment.mime);
 
   await query(
     `INSERT INTO attachment_text (attachment_id,content,source,pages,characters)
