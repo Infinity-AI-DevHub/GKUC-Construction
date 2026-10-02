@@ -11,18 +11,25 @@ const shape = z.object({
   contactPerson: optional(120), phone: optional(40), alternatePhone: optional(40), email: z.string().trim().email().max(190).nullable().optional().or(z.literal('')),
   billingAddress: optional(500), siteAddress: optional(500), city: optional(120), district: optional(120),
   province: optional(120), country: optional(100), registrationNumber: optional(100), taxNumber: optional(100),
-  tin: optional(100), vatNumber: optional(100), notes: optional(5000)
+  tin: optional(100), vatNumber: optional(100), notes: optional(5000),
+  consultantAgencyName: optional(180), consultantContactPerson: optional(120), consultantPhone: optional(40),
+  consultantEmail: z.string().trim().email().max(190).nullable().optional().or(z.literal('')),
+  consultantAddress: optional(500), preferredContact: z.enum(['Client','Agency','Both']).optional()
 });
 const columns = {
   type: 'type', name: 'name', contactPerson: 'contact_person', phone: 'phone', alternatePhone: 'alternate_phone',
   email: 'email', billingAddress: 'billing_address', siteAddress: 'site_address', city: 'city', district: 'district',
   province: 'province', country: 'country', registrationNumber: 'registration_number', taxNumber: 'tax_number',
-  tin: 'tin', vatNumber: 'vat_number', notes: 'notes'
+  tin: 'tin', vatNumber: 'vat_number', notes: 'notes', consultantAgencyName: 'consultant_agency_name',
+  consultantContactPerson: 'consultant_contact_person', consultantPhone: 'consultant_phone',
+  consultantEmail: 'consultant_email', consultantAddress: 'consultant_address', preferredContact: 'preferred_contact'
 };
 const select = `SELECT id,type,name,contact_person contactPerson,phone,alternate_phone alternatePhone,email,
   billing_address billingAddress,site_address siteAddress,city,district,province,country,
   registration_number registrationNumber,tax_number taxNumber,tin,vat_number vatNumber,
-  notes,active,created_at createdAt,updated_at updatedAt FROM clients`;
+  consultant_agency_name consultantAgencyName,consultant_contact_person consultantContactPerson,
+  consultant_phone consultantPhone,consultant_email consultantEmail,consultant_address consultantAddress,
+  preferred_contact preferredContact,notes,active,created_at createdAt,updated_at updatedAt FROM clients`;
 
 router.get('/', auth, permit('clients.view'), wrap(async (req, res) => {
   const archived = req.query.archived === '1';
@@ -59,7 +66,7 @@ router.get('/:id', auth, permit('clients.view'), wrap(async (req, res) => {
       FROM client_receipts r JOIN client_invoices i ON i.id=r.invoice_id
       LEFT JOIN projects p ON p.id=i.project_id JOIN companies c ON c.id=i.company_id
       WHERE i.client_id=? ${companyId ? 'AND i.company_id=?' : ''} ORDER BY r.received_date DESC,r.id DESC`, scoped) : [],
-    activityVisible ? query(`SELECT cm.id,cm.direction,cm.channel,cm.contact_person contactPerson,cm.summary,
+    activityVisible ? query(`SELECT cm.id,cm.direction,cm.channel,cm.contact_person contactPerson,cm.contact_party contactParty,cm.summary,
       cm.happened_at happenedAt,cm.follow_up_date followUpDate,u.name loggedBy
       FROM client_communications cm JOIN users u ON u.id=cm.logged_by
       LEFT JOIN inquiries i ON i.id=cm.inquiry_id LEFT JOIN projects p ON p.id=cm.project_id
@@ -76,6 +83,8 @@ router.get('/:id', auth, permit('clients.view'), wrap(async (req, res) => {
 router.post('/', auth, permit('clients.manage'), validate(shape), wrap(async (req, res) => {
   const duplicate = await getOne('SELECT id FROM clients WHERE LOWER(name)=LOWER(?) AND type=? LIMIT 1', [req.body.name, req.body.type]);
   if (duplicate) return res.status(409).json({ error: 'A client with this name and type already exists. Open that profile instead of adding a duplicate.' });
+  if (['Agency','Both'].includes(req.body.preferredContact) && !req.body.consultantAgencyName)
+    return res.status(400).json({ error: 'Add the consultation agency name before choosing it as a contact.' });
   const values = Object.entries(req.body).filter(([key]) => key in columns);
   const result = await query(`INSERT INTO clients (${values.map(([key]) => columns[key]).join(',')}) VALUES (${values.map(() => '?').join(',')})`,
     values.map(([, value]) => value || null));
@@ -87,6 +96,9 @@ router.post('/', auth, permit('clients.manage'), validate(shape), wrap(async (re
 router.patch('/:id', auth, permit('clients.manage'), validate(shape.partial().extend({ active: z.boolean().optional() })), wrap(async (req, res) => {
   const before = await getOne(`${select} WHERE id=?`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Client not found' });
+  if (['Agency','Both'].includes(req.body.preferredContact || before.preferredContact)
+    && !(req.body.consultantAgencyName === undefined ? before.consultantAgencyName : req.body.consultantAgencyName))
+    return res.status(400).json({ error: 'Add the consultation agency name before choosing it as a contact, or change contact preference to Client.' });
   if ((req.body.name && req.body.name.toLowerCase() !== before.name.toLowerCase())
     || (req.body.type && req.body.type !== before.type)) {
     const duplicate = await getOne('SELECT id FROM clients WHERE LOWER(name)=LOWER(?) AND type=? AND id<>? LIMIT 1',

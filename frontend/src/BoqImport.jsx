@@ -95,7 +95,7 @@ export default function BoqImport({ projects, onDone, onCreate }) {
     <div className="boq-import-body">
       <ol className="boq-steps">
         <li><strong>Download the template.</strong> It has the right columns and an example row.</li>
-        <li><strong>Fill it in.</strong> One line of work per row. Leave the Amount column empty — it is worked out for you.</li>
+        <li><strong>Fill it in.</strong> One line of work per row. Category is optional. Leave the Amount column empty — it is worked out for you.</li>
         <li><strong>Upload it back.</strong> You will see everything the system read, and anything it could not understand, before it is saved.</li>
       </ol>
 
@@ -150,6 +150,9 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
   const [error, setError] = useState('');
   const [documentDraft, setDocumentDraft] = useState({});
   const [documentSaving, setDocumentSaving] = useState(false);
+  const [addingRow, setAddingRow] = useState(false);
+  const [newRow, setNewRow] = useState({ description: '', unit: 'Item', quantity: '1', rate: '', category: '', afterItemId: '', sourceSheet: '' });
+  const [addingBusy, setAddingBusy] = useState(false);
   const problems = staged.items.filter(item => item.include && item.problems).length;
 
   useEffect(() => {
@@ -179,6 +182,22 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
       });
       onChange(updated);
     } catch (failure) { setError(failure.message); }
+  };
+
+  const addRow = async event => {
+    event.preventDefault(); setError(''); setAddingBusy(true);
+    try {
+      const { afterItemId, sourceSheet, ...fields } = newRow;
+      const updated = await post(`/boq/imports/${staged.id}/items`, {
+        ...fields, quantity: Number(newRow.quantity), rate: Number(newRow.rate),
+        ...(afterItemId ? { afterItemId: Number(afterItemId) } : {}),
+        ...(staged.layout?.format === 'Layered BOQ' ? { sourceSheet: sourceSheet || staged.layout.sheets[3] } : {})
+      });
+      onChange(updated);
+      setNewRow({ description: '', unit: 'Item', quantity: '1', rate: '', category: '', afterItemId: '', sourceSheet: '' });
+      setAddingRow(false);
+    } catch (failure) { setError(failure.message); }
+    finally { setAddingBusy(false); }
   };
 
   const commit = async () => {
@@ -307,9 +326,22 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
       </div>
     )}
 
+    {staged.layout?.summaries?.length > 0 && <div className="boq-source-summary">
+      <strong>Workbook sheets and control totals</strong>
+      <p>Summary figures are kept for checking; only detail lines are priced, so totals are not counted twice.</p>
+      <div className="boq-source-checks">{(staged.layout.checks || []).map(check => <div key={check.label}>
+        <span>{check.label}</span><b>{rupees(check.imported)}</b>
+        <small>Source {rupees(check.source)} · {check.matches ? 'Matches' : 'Check difference'}</small>
+      </div>)}</div>
+      <details><summary>View source summary rows</summary>{staged.layout.summaries.map(summary => <div key={summary.sheet}>
+        <h4>{summary.sheet}</h4>{summary.rows.map(row => <div className="boq-source-line" key={row.row}>
+          <span>{row.row}. {row.label}</span><b>{rupees(row.amount)}</b>
+        </div>)}</div>)}</details>
+    </div>}
+
     <div className="boq-bulk">
       <Wand2 size={15} />
-      <span>Set every line still missing a category to</span>
+      <span>Optional: set uncategorised lines to</span>
       <select value={bulkCategory} onChange={event => setBulkCategory(event.target.value)}>
         <option value="">Choose…</option>
         {(staged.categories || []).map(category => <option key={category}>{category}</option>)}
@@ -343,10 +375,10 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
                     onChange={event => patch(item.id, { include: event.target.checked })} />
                 </label>
               </td>
-              <td className="num">{item.sourceRow}</td>
+              <td className="num">{item.sourceSheet ? <><small>{item.sourceSheet}</small><br />{item.sheetRow ? `Row ${item.sheetRow}` : 'Added'}</> : item.sourceRow}</td>
               <td>
                 <select value={item.category || ''} onChange={event => patch(item.id, { category: event.target.value })}>
-                  <option value="">—</option>
+                  <option value="">Uncategorised</option>
                   {staged.categories.map(name => <option key={name} value={name}>{name}</option>)}
                 </select>
               </td>
@@ -374,6 +406,26 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
         </tfoot>
       </table>
     </div>
+
+    <div className="boq-add-line"><button type="button" className="secondary" onClick={() => setAddingRow(value => !value)}>
+      {addingRow ? 'Close new line' : 'Add a BOQ line'}
+    </button>{addingRow && <form onSubmit={addRow} className="boq-add-line-form">
+      {staged.layout?.format === 'Layered BOQ' && <label>Detail sheet<select value={newRow.sourceSheet || staged.layout.sheets[3]}
+        onChange={event => setNewRow(row => ({ ...row, sourceSheet: event.target.value }))}>
+        {staged.layout.sheets.slice(2).map(sheet => <option key={sheet}>{sheet}</option>)}
+      </select></label>}
+      <label>Place after<select value={newRow.afterItemId} onChange={event => setNewRow(row => ({ ...row, afterItemId: event.target.value }))}>
+        <option value="">Last line</option>{staged.items.map(item => <option key={item.id} value={item.id}>{item.sourceRow}. {item.description?.slice(0, 55)}</option>)}
+      </select></label>
+      <label>Description<input required maxLength="300" value={newRow.description} onChange={event => setNewRow(row => ({ ...row, description: event.target.value }))} /></label>
+      <label>Unit<input required maxLength="30" value={newRow.unit} onChange={event => setNewRow(row => ({ ...row, unit: event.target.value }))} /></label>
+      <label>Quantity<input required type="number" min="0.001" step="0.001" value={newRow.quantity} onChange={event => setNewRow(row => ({ ...row, quantity: event.target.value }))} /></label>
+      <label>Rate (LKR)<input required type="number" min="0" step="0.01" value={newRow.rate} onChange={event => setNewRow(row => ({ ...row, rate: event.target.value }))} /></label>
+      <label>Category (optional)<select value={newRow.category} onChange={event => setNewRow(row => ({ ...row, category: event.target.value }))}>
+        <option value="">Uncategorised</option>{(staged.categories || []).map(category => <option key={category}>{category}</option>)}
+      </select></label>
+      <button className="primary" disabled={addingBusy}>{addingBusy ? 'Adding…' : 'Add line to review'}</button>
+    </form>}</div>
 
     {error && <p className="form-error boq-review-error">{error}</p>}
 

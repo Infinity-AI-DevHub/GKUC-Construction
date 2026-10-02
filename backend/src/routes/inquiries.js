@@ -13,7 +13,7 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
  * project record later carries where the work came from, and nothing sits in someone's
  * phone waiting to be typed up.
  */
-const select = `SELECT i.id,i.company_id companyId,c.name company,i.reference,i.customer_name customer,i.contact_person contact,i.phone,i.email,i.location,
+const select = `SELECT i.id,i.company_id companyId,i.client_id clientId,c.name company,i.reference,i.customer_name customer,i.contact_person contact,i.phone,i.email,i.location,
   i.description,i.expected_value expectedValue,i.expected_start expectedStart,i.source,i.status,i.lost_reason lostReason,
   i.project_id projectId,p.name project,u.name createdBy,i.created_at createdAt
   FROM inquiries i JOIN companies c ON c.id=i.company_id LEFT JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=i.created_by`;
@@ -25,7 +25,7 @@ const select = `SELECT i.id,i.company_id companyId,c.name company,i.reference,i.
  * conversations that won the work stay with the work rather than ending at conversion.
  */
 const communicationSelect = `SELECT c.id,c.inquiry_id inquiryId,c.project_id projectId,c.direction,c.channel,
-  c.contact_person contactPerson,c.summary,c.happened_at happenedAt,c.follow_up_date followUpDate,c.follow_up_done_at followUpDoneAt,
+  c.contact_person contactPerson,c.contact_party contactParty,c.summary,c.happened_at happenedAt,c.follow_up_date followUpDate,c.follow_up_done_at followUpDoneAt,
   u.name loggedBy,i.reference inquiryReference,i.customer_name customer,p.name project
   FROM client_communications c JOIN users u ON u.id=c.logged_by
   LEFT JOIN inquiries i ON i.id=c.inquiry_id LEFT JOIN projects p ON p.id=c.project_id`;
@@ -119,24 +119,43 @@ router.get('/:id/communications', auth, permit('enquiries.manage', 'projects.vie
   res.json(rows);
 }));
 
+router.get('/:id/contact-routing', auth, permit('enquiries.manage', 'projects.view'), wrap(async (req,res)=>{
+  const inquiry=await getOne(`SELECT i.client_id clientId,p.client_id projectClientId FROM inquiries i
+    LEFT JOIN projects p ON p.id=i.project_id WHERE i.id=?`,[req.params.id]);
+  if(!inquiry)return res.status(404).json({error:'Enquiry not found'});
+  const clientId=inquiry.clientId || inquiry.projectClientId;
+  if(!clientId)return res.json({preferredContact:'Client',clientContactPerson:null,consultantAgencyName:null});
+  const client=await getOne(`SELECT contact_person clientContactPerson,phone clientPhone,email clientEmail,
+    consultant_agency_name consultantAgencyName,consultant_contact_person consultantContactPerson,
+    consultant_phone consultantPhone,consultant_email consultantEmail,preferred_contact preferredContact
+    FROM clients WHERE id=?`,[clientId]);
+  res.json(client || {preferredContact:'Client',clientContactPerson:null,consultantAgencyName:null});
+}));
+
 router.post('/:id/communications', auth, permit('enquiries.manage'), validate(z.object({
   direction: z.enum(['Incoming', 'Outgoing']).default('Outgoing'),
   channel: z.string().trim().min(1).max(60).default('Call'),
   contactPerson: z.string().max(120).optional(),
+  contactParty: z.enum(['Client','Agency','Both']).default('Client'),
   summary: z.string().min(3).max(1000),
   happenedAt: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/)).optional(),
   followUpDate: isoDate.optional()
 })), fromOptions({ channel: 'client.channel' }), wrap(async (req, res) => {
-  const inquiry = await getOne('SELECT id,project_id FROM inquiries WHERE id=?', [req.params.id]);
+  const inquiry = await getOne('SELECT id,project_id,client_id FROM inquiries WHERE id=?', [req.params.id]);
   if (!inquiry) return res.status(404).json({ error: 'Enquiry not found' });
+  if (['Agency','Both'].includes(req.body.contactParty)) {
+    const clientId=inquiry.client_id || (inquiry.project_id ? (await getOne('SELECT client_id clientId FROM projects WHERE id=?',[inquiry.project_id]))?.clientId : null);
+    const agency=clientId && await getOne('SELECT consultant_agency_name agencyName FROM clients WHERE id=?',[clientId]);
+    if(!agency?.agencyName)return res.status(400).json({error:'Add a consultation agency to the client profile before logging contact with it.'});
+  }
 
   const body = req.body;
   const happened = (body.happenedAt || `${today()} ${clock()}`).replace('T', ' ').slice(0, 19);
   const result = await query(`INSERT INTO client_communications
-    (inquiry_id,project_id,direction,channel,contact_person,summary,happened_at,follow_up_date,logged_by)
-    VALUES (?,?,?,?,?,?,?,?,?)`,
+    (inquiry_id,project_id,direction,channel,contact_person,contact_party,summary,happened_at,follow_up_date,logged_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`,
   [inquiry.id, inquiry.project_id || null, body.direction, body.channel,
-    body.contactPerson || null, body.summary, happened, body.followUpDate || null, req.user.id]);
+    body.contactPerson || null, body.contactParty, body.summary, happened, body.followUpDate || null, req.user.id]);
 
   const row = await getOne(`${communicationSelect} WHERE c.id=?`, [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'client_communication', row.id, null, row, req.ip);
@@ -182,11 +201,15 @@ router.post('/', auth, permit('enquiries.manage'), validate(z.object({
     client = { id: created.insertId, name: body.customer };
   }
   if (!client) return res.status(400).json({ error: 'Choose an active client from the client directory.' });
+  const agencyFirst = client.preferred_contact === 'Agency' && client.consultant_agency_name;
+  const defaultContact = agencyFirst ? (client.consultant_contact_person || client.consultant_agency_name) : client.contact_person;
+  const defaultPhone = agencyFirst ? client.consultant_phone : client.phone;
+  const defaultEmail = agencyFirst ? client.consultant_email : client.email;
   const reference = await nextReference('INQ', 'inquiries');
   const result = await query(`INSERT INTO inquiries
     (reference,company_id,client_id,customer_name,contact_person,phone,email,location,description,expected_value,expected_start,source,created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-  [reference, body.companyId, client.id, client.name, body.contact || client.contact_person || null, body.phone || client.phone || null, body.email || client.email || null, body.location || client.site_address || client.billing_address || 'Location to confirm',
+  [reference, body.companyId, client.id, client.name, body.contact || defaultContact || null, body.phone || defaultPhone || null, body.email || defaultEmail || null, body.location || client.site_address || client.billing_address || 'Location to confirm',
     body.description, body.expectedValue, body.expectedStart || null, body.source || null, req.user.id]);
   const row = await getOne(`${select} WHERE i.id=?`, [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'inquiry', row.id, null, row, req.ip);

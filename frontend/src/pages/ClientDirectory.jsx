@@ -60,13 +60,21 @@ export default function ClientDirectory({ canManage, companyId }) {
           <span>Registration: {empty(detail.registrationNumber)}</span><span>TIN: {empty(detail.tin || detail.taxNumber)}</span><span>VAT registration: {empty(detail.vatNumber)}</span></div>
         {detail.notes && <p>{detail.notes}</p>}
       </section>
+      {detail.consultantAgencyName && <section className="client-contact-card"><h3>Consultation agency</h3>
+        <p>Usual communication: <strong>{detail.preferredContact === 'Agency' ? 'Agency' : detail.preferredContact === 'Both' ? 'Client and agency' : 'Client'}</strong>. The client remains the contracting and billing party.</p>
+        <div><span><Building2 size={15} /> {detail.consultantAgencyName}</span>
+          <span><UserRound size={15} /> Contact: {empty(detail.consultantContactPerson)}</span>
+          <span><Phone size={15} /> {empty(detail.consultantPhone)}</span>
+          <span><Mail size={15} /> {empty(detail.consultantEmail)}</span>
+          <span><MapPin size={15} /> {empty(detail.consultantAddress)}</span></div>
+      </section>}
       <ClientHistory title="Projects" columns={['Project', 'Company', 'Site', 'Stage', 'Budget']} rows={detail.projects.map(row => [row.name, row.company, row.site, row.stage, rupees(row.budget)])} />
       {detail.activityVisible && <ClientHistory title="Inquiries" columns={['Reference', 'Need', 'Status', 'Expected value']} rows={detail.inquiries.map(row => [row.reference, row.description, row.status, rupees(row.expectedValue)])} />}
       {detail.quotationsVisible && <ClientHistory title="Quotations" columns={['Reference', 'Title', 'Company', 'Status', 'Total']} rows={detail.quotations.map(row => [row.reference, row.title, row.company, row.status, rupees(row.total)])} />}
       {detail.quotationsVisible && <ClientHistory title="Tenders" columns={['Reference', 'Title', 'Company', 'Status', 'Expected value']} rows={detail.tenders.map(row => [row.reference, row.title, row.company, row.status, rupees(row.estimatedValue)])} />}
       {detail.financialVisible && <ClientHistory title="Invoices" columns={['Reference', 'Project', 'Company', 'Status', 'Payable']} rows={detail.invoices.map(row => [row.reference, row.project || 'Company-level', row.company, row.status, rupees(row.netPayable)])} />}
       {detail.financialVisible && <ClientHistory title="Payments" columns={['Date', 'Invoice', 'Project', 'Method', 'Amount']} rows={detail.payments.map(row => [shortDate(row.receivedDate), row.invoiceReference, row.project || 'Company-level', row.method, rupees(row.amount)])} />}
-      {detail.activityVisible && <ClientHistory title="Contact activity" columns={['Date', 'Direction', 'Channel', 'Contact', 'Summary']} rows={detail.communications.map(row => [shortDate(row.happenedAt), row.direction, row.channel, row.contactPerson || '—', row.summary])} />}
+      {detail.activityVisible && <ClientHistory title="Contact activity" columns={['Date', 'Direction', 'Channel', 'Party', 'Contact', 'Summary']} rows={detail.communications.map(row => [shortDate(row.happenedAt), row.direction, row.channel, row.contactParty || 'Client', row.contactPerson || '—', row.summary])} />}
     </> : <>
       <div className="client-directory-head"><div><h2>Clients</h2><p>One profile for contact details and the complete project and payment history.</p></div>
         <div><button className="secondary" onClick={() => setArchived(current => !current)}>{archived ? 'Show active' : 'Show archived'}</button>
@@ -74,7 +82,7 @@ export default function ClientDirectory({ canManage, companyId }) {
       <div className="client-grid">{rows.map(client => <button className="client-card" key={client.id} onClick={() => open(client.id)}>
         <span className="client-card-icon">{client.type === 'Private' ? <UserRound size={20} /> : <Building2 size={20} />}</span>
         <strong>{client.name}</strong><small>{client.type} · {client.city || client.district || 'Location not recorded'}</small>
-        <span>{client.contactPerson || client.phone || client.email || 'Open profile'}</span>
+        <span>{client.preferredContact === 'Agency' && client.consultantAgencyName ? `Via ${client.consultantAgencyName}` : client.preferredContact === 'Both' && client.consultantAgencyName ? `Client + ${client.consultantAgencyName}` : client.contactPerson || client.phone || client.email || 'Open profile'}</span>
       </button>)}</div>
       {!rows.length && <p className="empty-state">{archived ? 'No archived clients.' : 'No clients yet. Add the first client before creating a project.'}</p>}
     </>}
@@ -105,6 +113,14 @@ function ClientForm({ client, close, saved }) {
     <Field name="phone" label="Phone" required={false} defaultValue={client.phone || ''} />
     <Field name="alternatePhone" label="Alternate phone" required={false} defaultValue={client.alternatePhone || ''} />
     <Field name="email" label="Email" type="email" required={false} defaultValue={client.email || ''} />
+    <div className="wide client-form-section"><h3>Consultation agency (optional)</h3><p>Record the consultant separately so the client stays the contracting and billing party.</p></div>
+    <Field name="consultantAgencyName" label="Agency name" required={false} defaultValue={client.consultantAgencyName || ''} />
+    <Field name="consultantContactPerson" label="Agency contact person" required={false} defaultValue={client.consultantContactPerson || ''} />
+    <Field name="consultantPhone" label="Agency phone" required={false} defaultValue={client.consultantPhone || ''} />
+    <Field name="consultantEmail" label="Agency email" type="email" required={false} defaultValue={client.consultantEmail || ''} />
+    <Field name="consultantAddress" label="Agency address" required={false} defaultValue={client.consultantAddress || ''} wide />
+    <label>Who GKUC usually contacts<select name="preferredContact" defaultValue={client.preferredContact || 'Client'}><option value="Client">Client</option><option value="Agency">Consultation agency</option><option value="Both">Both client and agency</option></select></label>
+    <div className="wide client-form-section"><h3>Billing and identification</h3><p>These details belong to the client, not the consultation agency.</p></div>
     <Field name="billingAddress" label="Billing address" required={false} defaultValue={client.billingAddress || ''} />
     <Field name="siteAddress" label="Usual work/site address" required={false} defaultValue={client.siteAddress || ''} />
     <Field name="city" label="City" required={false} defaultValue={client.city || ''} />

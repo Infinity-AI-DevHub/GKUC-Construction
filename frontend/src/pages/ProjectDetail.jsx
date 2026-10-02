@@ -20,7 +20,7 @@ const TAB_GROUPS = [
 ];
 
 /** A project is a workspace, not a form dialog: every operational record converges here. */
-export default function ProjectDetail({ projectId, data, close, reload, can, navigate }) {
+export default function ProjectDetail({ projectId, data, close, reload, can, companies, setCompanyId, navigate }) {
   const [tab, setTab] = useState(TABS[0]);
   const [project, setProject] = useState(null);
   const [adding, setAdding] = useState('');
@@ -36,7 +36,7 @@ export default function ProjectDetail({ projectId, data, close, reload, can, nav
 
   return <RecordScopeProvider scope={{ kind: 'company', name: project.company }}><div className="project-workspace">
     <RecordScopeBadge />
-    <ProjectHero project={project} close={close} />
+    <ProjectHero project={project} close={close} onEdit={can.projects ? () => setAdding('edit-project') : null} />
     <ProjectMetrics project={project} />
     <div className="project-workspace-tabs"><Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} /></div>
     {tab === 'Command centre' && <CommandCentre project={project} can={can} onSection={setTab} navigate={navigate} onAuthorise={() => setAuthorising(true)} />}
@@ -50,6 +50,7 @@ export default function ProjectDetail({ projectId, data, close, reload, can, nav
     {tab === 'Documents' && <Attachments ownerType="project" ownerId={project.id} title="Project document library" canUpload={can.projects} canDelete={can.projects} withCategory />}
     {tab === 'Close-out' && <CompletionReport projectId={project.id} />}
     {adding === 'milestone' && <MilestoneForm projectId={project.id} close={() => setAdding('')} reload={refresh} />}
+    {adding === 'edit-project' && <EditProjectForm project={project} companies={companies} employees={data.employees} close={() => setAdding('')} reload={refresh} setCompanyId={setCompanyId} />}
     {adding === 'update' && <ProjectUpdateForm projectId={project.id} close={()=>setAdding('')} reload={refresh} />}
     {adding === 'task' && <ProjectTaskForm projectId={project.id} employees={data.employees} close={()=>setAdding('')} reload={refresh} />}
     {editingTask && <ProjectTaskForm projectId={project.id} employees={data.employees} task={editingTask} close={()=>setEditingTask(null)} reload={refresh} />}
@@ -104,16 +105,46 @@ function ProjectTaskForm({ projectId, employees, task, close, reload }) {
 function ProjectSubcontractors({project,can,onAdd,onAward}){const rates=project.subcontractRates||[];const t='minmax(190px,1.3fr) minmax(170px,1.2fr) 110px 120px minmax(160px,1fr)';const confirmed=project.award?.confirmed;return <div className="project-section-stack"><section className="workspace-surface"><div className="workspace-section-heading"><div><span className="section-kicker">Project supply chain</span><h2>Subcontractors and agreed rates</h2></div>{can.subcontractors&&confirmed&&<button className="secondary" onClick={onAdd}>Add agreed rate</button>}</div><p className="form-note">{confirmed?`Project confirmed${project.award.formalAward?` · award ${project.award.formalAward.reference}`:` · accepted quotation ${project.award.acceptedQuotation?.reference}`}. Subcontractor commitments may now be recorded.`:'Awaiting client confirmation. Accept the project quotation in QS or record a formal award before adding rates or bills.'}</p>{!confirmed&&can.projects&&<button className="secondary" onClick={onAward}>Record formal award</button>}<div className="attendance-summary"><article><strong>{new Set(rates.map(r=>r.subcontractorId)).size}</strong><span>Subcontractors</span></article><article><strong>{rates.length}</strong><span>Agreed work rates</span></article></div><Table columns={['Subcontractor','Work package','Unit','Rate','Contact / validity']} template={t} empty="No subcontractor rates assigned to this project.">{rates.map(r=><Row template={t} key={r.id}><div><strong>{r.subcontractor}</strong><small>{r.trade} · {r.contactType}</small></div><strong>{r.workItem}</strong><span>{r.unit}</span><strong>{rupees(r.rate)}</strong><div><span>{r.phone||r.email||'—'}</span><small>{r.validUntil?`Valid until ${shortDate(r.validUntil)}`:r.address||'No expiry set'}</small></div></Row>)}</Table></section></div>}
 function ProjectRateForm({projectId,close,reload}){const [subs,setSubs]=useState([]);useEffect(()=>{api('/qs/subcontractors').then(setSubs).catch(()=>setSubs([]));},[]);return <FormModal title="Agree subcontractor rate" close={close} label="Save project rate" onSubmit={async v=>{await post('/qs/subcontractor-rates',{projectId,subcontractorId:Number(v.subcontractorId),workItem:v.workItem,unit:v.unit,rate:Number(v.rate),agreedOn:v.agreedOn||undefined,validUntil:v.validUntil||undefined,notes:v.notes||undefined});await reload();}}><SelectField name="subcontractorId" label="Subcontractor" options={subs.map(s=>[s.id,`${s.name} · ${s.trade}`])}/><Field name="workItem" label="Work item / package"/><Field name="unit" label="Unit" placeholder="m², m³, day, item"/><Field name="rate" label="Agreed rate (LKR)" type="number" min="0" step="0.01"/><Field name="agreedOn" label="Agreed on" type="date" required={false}/><Field name="validUntil" label="Valid until" type="date" required={false}/><TextArea name="notes" label="Terms / notes" required={false}/></FormModal>}
 
-function ProjectHero({ project, close }) {
+function ProjectHero({ project, close, onEdit }) {
   return <section className="project-hero">
     <img src="/construction-site.jpg" alt="" className="project-hero-image" /><div className="project-hero-shade" />
     <button className="project-back" onClick={close}><ArrowLeft size={17} />All projects</button>
+    {onEdit && <button className="secondary project-edit-button" onClick={onEdit}>Edit project</button>}
     <div className="project-hero-content">
       <div className="project-kicker"><Badge tone={project.health === 'On track' ? 'on-track' : project.health === 'At risk' ? 'at-risk' : 'watch'}>{project.health}</Badge><span>{project.company} · {project.stage}</span></div>
       <h1>{project.name}</h1><p><MapPin size={16} />{project.site}<span /><Building2 size={16} />{project.client}</p>
     </div>
     <div className="project-hero-progress"><span>Overall delivery</span><strong>{project.progress}%</strong><Progress value={project.progress} /></div>
   </section>;
+}
+
+function EditProjectForm({ project, companies, employees, close, reload, setCompanyId }) {
+  const [clients, setClients] = useState([]);
+  useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
+  const dateValue = value => value ? String(value).slice(0, 10) : '';
+  return <FormModal title="Edit project" label="Save project" close={close} wide onSubmit={async values => {
+    const companyId = Number(values.companyId);
+    await patch(`/projects/${project.id}`, {
+      companyId, name: values.name.trim(), clientId: Number(values.clientId),
+      managerEmployeeId: Number(values.managerEmployeeId), site: values.site.trim(),
+      stage: values.stage, startDate: values.startDate || undefined,
+      endDate: values.endDate || undefined, progress: Number(values.progress), health: values.health
+    });
+    setCompanyId(companyId);
+    await reload();
+  }}>
+    <p className="form-note wide">You can correct the operating company before commercial records are created. Once BOQs, quotations, invoices or costs exist, the company is locked to protect those records.</p>
+    <Field name="name" label="Project name" defaultValue={project.name} />
+    <SelectField name="companyId" label="Operating company" defaultValue={project.companyId} options={companies.map(company => [company.id, company.name])} />
+    <SelectField name="clientId" label="Client" defaultValue={project.clientId} options={clients.map(client => [client.id, client.name])} />
+    <SelectField name="managerEmployeeId" label="Project manager" defaultValue={project.managerEmployeeId} options={employees.map(employee => [employee.id, `${employee.name} — ${employee.designation}`])} />
+    <Field name="site" label="Site location" defaultValue={project.site} />
+    <SelectField name="stage" label="Current stage" defaultValue={project.stage} options={[project.stage, 'Not started', 'Mid-way'].filter((value, index, all) => all.indexOf(value) === index)} />
+    <Field name="startDate" label="Start date" type="date" required={false} defaultValue={dateValue(project.start_date)} />
+    <Field name="endDate" label="Target completion" type="date" required={false} defaultValue={dateValue(project.end_date)} />
+    <Field name="progress" label="Progress (%)" type="number" min="0" max="100" defaultValue={project.progress} />
+    <SelectField name="health" label="Project health" defaultValue={project.health} options={['On track', 'Watch', 'At risk']} />
+  </FormModal>;
 }
 
 function ProjectMetrics({ project }) {

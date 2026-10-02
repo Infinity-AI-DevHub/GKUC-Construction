@@ -38,7 +38,7 @@ export default function Projects({ data, reload, can, companyId, company, compan
     Variations: null, Inquiries: 'Log inquiry'
   }[tab];
 
-  if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} reload={reload} close={closeProject} navigate={navigate} />;
+  if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} companies={companies} setCompanyId={setCompanyId} reload={reload} close={closeProject} navigate={navigate} />;
 
   return <RecordScopeProvider scope={tab === 'Clients' ? { kind: 'shared' } : { kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Projects" subtitle={`Monitor progress, cost, and site health for ${company?.name || 'the selected company'}.`}
     action={can.projects ? actionFor : null} onAction={() => setOpen(tab)}>

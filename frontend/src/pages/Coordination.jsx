@@ -268,11 +268,12 @@ const CHANNELS = ['Call', 'WhatsApp', 'Email', 'Meeting', 'Site visit', 'Letter'
 function ClientHistory({ enquiry, can, close }) {
   const channels = useOptions('client.channel');
   const [entries, setEntries] = useState(null);
+  const [routing,setRouting]=useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const load = () => api(`/inquiries/${enquiry.id}/communications`).then(setEntries).catch(() => setEntries([]));
-  useEffect(() => { load(); }, [enquiry.id]);
+  useEffect(() => { load();api(`/inquiries/${enquiry.id}/contact-routing`).then(setRouting).catch(()=>setRouting(null)); }, [enquiry.id]);
 
   const add = async event => {
     event.preventDefault();
@@ -283,6 +284,7 @@ function ClientHistory({ enquiry, can, close }) {
       await post(`/inquiries/${enquiry.id}/communications`, {
         direction: form.get('direction'),
         channel: form.get('channel'),
+        contactParty: form.get('contactParty'),
         contactPerson: form.get('contactPerson') || undefined,
         summary: form.get('summary'),
         followUpDate: form.get('followUpDate') || undefined
@@ -304,6 +306,7 @@ function ClientHistory({ enquiry, can, close }) {
         <div><span>Location</span><strong>{enquiry.location || '—'}</strong></div>
         <div><span>Contact</span><strong>{enquiry.contact || enquiry.phone || '—'}</strong></div>
       </div>
+      {routing?.consultantAgencyName && <p className="form-note wide">Usual contact: <strong>{routing.preferredContact === 'Both' ? 'Client and agency' : routing.preferredContact === 'Agency' ? 'Agency' : 'Client'}</strong>. Agency: {routing.consultantAgencyName}{routing.consultantContactPerson ? ` · ${routing.consultantContactPerson}` : ''}{routing.consultantPhone ? ` · ${routing.consultantPhone}` : ''}.</p>}
 
       <div className="wide">
         <Table columns={['When', 'How', 'What was said', 'Follow up']} template={template}
@@ -320,7 +323,7 @@ function ClientHistory({ enquiry, can, close }) {
             </div>
             <div>
               <span>{entry.summary}</span>
-              {entry.contactPerson && <small>with {entry.contactPerson}</small>}
+              <small>{entry.contactParty === 'Both' ? 'Client and agency' : entry.contactParty === 'Agency' ? 'Agency' : 'Client'}{entry.contactPerson ? ` · with ${entry.contactPerson}` : ''}</small>
             </div>
             <span className={entry.followUpDate && !entry.followUpDoneAt && daysUntil(entry.followUpDate) < 0 ? 'overdue' : ''}>
               {entry.followUpDate ? shortDate(entry.followUpDate) : '—'}
@@ -334,6 +337,7 @@ function ClientHistory({ enquiry, can, close }) {
       {can.enquiries && <form onSubmit={add} className="wide delegate-form">
         <label>Direction<select name="direction"><option>Incoming</option><option>Outgoing</option></select></label>
         <label>How<select name="channel">{channels.map(one => <option key={one}>{one}</option>)}</select></label>
+        <label>Contacted<select name="contactParty" key={routing?.preferredContact || 'Client'} defaultValue={routing?.preferredContact === 'Agency' || routing?.preferredContact === 'Both' ? routing.preferredContact : 'Client'}><option value="Client">Client</option>{routing?.consultantAgencyName && <><option value="Agency">Consultation agency</option><option value="Both">Both</option></>}</select></label>
         <label>Who<input name="contactPerson" placeholder="Person spoken to" /></label>
         <label>Follow up<input type="date" name="followUpDate" /></label>
         <label className="wide">What was said
