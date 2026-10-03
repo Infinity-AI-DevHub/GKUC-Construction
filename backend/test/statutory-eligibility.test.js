@@ -19,6 +19,6 @@ test('GKUC contribution policy checks permanent status, salary and start date in
 test('new effective-dated rule values can allow temporary staff and change the minimum', () => {
   const later = policy({permanentOnly:false,minimumMonthlySalary:20000,weeklyWeeksPerMonth:52/12,dailyDaysPerMonth:25});
   assert.equal(contributionEligibility(employee({employment_type:'Temporary',basic_salary:22000}),later,'2026-02-01').epf,true);
-  assert.equal(contributionEligibility(employee({pay_basis:'Daily rate',daily_rate:1200,basic_salary:0}),policy(null),'2026-02-01').epf,true);
-  assert.equal(contributionEligibility(employee({pay_basis:'Weekly rate',weekly_rate:6900,basic_salary:0}),policy(null),'2026-02-01').epf,false);
+  assert.equal(contributionEligibility(employee({pay_basis:'Daily rate',daily_rate:1200,basic_salary:30000}),policy(null),'2026-02-01').epf,true);
+  assert.equal(contributionEligibility(employee({pay_basis:'Weekly rate',weekly_rate:6900,basic_salary:29999}),policy(null),'2026-02-01').epf,false);
 });

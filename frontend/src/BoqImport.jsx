@@ -21,11 +21,13 @@ export default function BoqImport({ projects, onDone, onCreate }) {
   const [staged, setStaged] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [errorArea, setErrorArea] = useState('excel');
   const [projectId, setProjectId] = useState('');
   const fileInput = useRef(null);
   const pdfInput = useRef(null);
 
   const downloadTemplate = async () => {
+    setErrorArea('excel');
     setError('');
     try {
       const url = await fetchDownload(`/boq/template${projectId ? `?projectId=${projectId}` : ''}`);
@@ -37,8 +39,13 @@ export default function BoqImport({ projects, onDone, onCreate }) {
     } catch (failure) { setError(failure.message); }
   };
 
-  const upload = async file => {
+  const upload = async (file, area) => {
     if (!file) return;
+    setErrorArea(area);
+    if (!projectId) {
+      setError('Choose the project this BOQ belongs to before uploading the file.');
+      return;
+    }
     setError('');
     setBusy(true);
     try {
@@ -102,7 +109,7 @@ export default function BoqImport({ projects, onDone, onCreate }) {
       <label className="boq-project-pick">
         Which project is this for?
         <select value={projectId} onChange={event => setProjectId(event.target.value)}>
-          <option value="">Choose later</option>
+          <option value="">Choose a project…</option>
           {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
         </select>
       </label>
@@ -111,16 +118,16 @@ export default function BoqImport({ projects, onDone, onCreate }) {
         <button type="button" className="secondary" onClick={downloadTemplate}>
           <Download size={16} /> Download the template
         </button>
-        <button type="button" className="primary" onClick={() => fileInput.current?.click()} disabled={busy}>
+        <button type="button" className="primary" onClick={() => fileInput.current?.click()} disabled={busy || !projectId}>
           {busy ? <Loader2 size={16} className="docsearch-spin" /> : <Upload size={16} />}
           {busy ? 'Reading the file…' : 'Upload a filled-in BOQ'}
         </button>
         <input ref={fileInput} type="file" hidden
           accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          onChange={event => upload(event.target.files?.[0])} />
+          onChange={event => upload(event.target.files?.[0], 'excel')} />
       </div>
 
-      {error && <p className="form-error">{error}</p>}
+      {error && errorArea === 'excel' && <p className="form-error">{error}</p>}
     </div>
     </section>
 
@@ -129,16 +136,24 @@ export default function BoqImport({ projects, onDone, onCreate }) {
       <div className="boq-import-body">
         <div className="boq-pdf-copy">
           <FileText size={22} />
-          <p><strong>Have a BOQ as a PDF?</strong><br />Upload it here and the system will read the project details, client/reference information, sections, quantities, rates and amounts. It will open a review screen so you can correct anything before it becomes a BOQ.</p>
+          <p><strong>Have a BOQ as a PDF?</strong><br />Choose its project, then upload it here. The system will take the client from that project and read the title, reference, sections, quantities, rates and amounts from the PDF. You can correct the extracted BOQ details before saving.</p>
         </div>
+        <label className="boq-project-pick">
+          Which project is this PDF BOQ for?
+          <select value={projectId} onChange={event => setProjectId(event.target.value)}>
+            <option value="">Choose a project…</option>
+            {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+          </select>
+        </label>
         <div className="boq-import-actions">
-          <button type="button" className="primary" onClick={() => pdfInput.current?.click()} disabled={busy}>
+          <button type="button" className="primary" onClick={() => pdfInput.current?.click()} disabled={busy || !projectId}>
             {busy ? <Loader2 size={16} className="docsearch-spin" /> : <FileText size={16} />}
             {busy ? 'Reading the PDF…' : 'Read uploaded PDF'}
           </button>
           <input ref={pdfInput} type="file" hidden accept=".pdf,application/pdf"
-            onChange={event => upload(event.target.files?.[0])} />
+            onChange={event => upload(event.target.files?.[0], 'pdf')} />
         </div>
+        {error && errorArea === 'pdf' && <p className="form-error">{error}</p>}
         <p className="boq-help">Nothing is committed when you upload. Scanned/image-only PDFs may need an administrator to enable OCR.</p>
       </div>
     </section>
@@ -157,7 +172,7 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
 
   useEffect(() => {
     setDocumentDraft({
-      title: staged.title || '', client: staged.client || '',
+      title: staged.title || '',
       documentReference: staged.documentReference || staged.layout?.reference || '',
       location: staged.location || staged.layout?.location || '',
       documentDate: staged.documentDate || staged.layout?.documentDate || '',
@@ -253,6 +268,9 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
 
   const included = staged.items.filter(item => item.include);
   const total = included.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const selectedProject = projects.find(project => String(project.id) === String(projectId));
+  const projectClient = selectedProject?.client
+    || (String(staged.projectId || '') === String(projectId) ? staged.projectClient : '') || '';
 
   return <section className="panel boq-review">
     <div className="panel-title">
@@ -267,7 +285,7 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
         {staged.layout?.format === 'PDF' ? <FileText size={17} /> : <FileSpreadsheet size={17} />}
         <div>
           <strong>{staged.title || staged.filename}</strong>
-          <small>{staged.client ? `${staged.client} · ` : ''}{included.length} of {staged.items.length} lines included</small>
+          <small>{projectClient ? `${projectClient} · ` : ''}{included.length} of {staged.items.length} lines included</small>
         </div>
       </div>
       <label>
@@ -288,10 +306,15 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
       </div>
       <div className="boq-document-grid">
         {[
-          ['title', 'BOQ title'], ['client', 'Client'], ['documentReference', 'Reference'],
+          ['title', 'BOQ title'], ['documentReference', 'Reference'],
           ['location', 'Location'], ['documentDate', 'Document date']
         ].map(([key, label]) => <label key={key}>{label}<input value={documentDraft[key] || ''}
           onChange={event => setDocumentDraft(current => ({ ...current, [key]: event.target.value }))} /></label>)}
+        <div className="boq-derived-client">
+          <span>Client</span>
+          <strong>{projectId ? (projectClient || 'No client assigned to this project') : 'Choose the project above'}</strong>
+          <small>Automatically taken from the selected project.</small>
+        </div>
         <label className="boq-document-notes">Notes<textarea rows="2" value={documentDraft.notes || ''}
           onChange={event => setDocumentDraft(current => ({ ...current, notes: event.target.value }))} /></label>
       </div>

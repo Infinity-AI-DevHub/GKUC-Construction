@@ -296,6 +296,17 @@ main .form-grid>.toolbar{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:10px;a
 .import-centre .import-review-table :is(th,td){padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid #e5ebf1;line-height:1.5}
 .import-centre .import-review-table th{background:#f6f9fc;color:#5b7184;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
 .import-centre .import-review-table td{font-size:13px;color:#274058;overflow-wrap:anywhere}
+.import-document-review .table-tools{align-items:flex-start;gap:20px}
+.import-review-section{margin-top:20px;padding:20px;border:1px solid #dfe8f0;border-radius:13px;background:#fbfcfe}
+.import-review-section h3,.import-review-section h4{margin:0 0 8px;color:#102a43}
+.import-review-section h4{margin-top:18px;font-size:14px}
+.import-detail-grid{margin:14px 0 0!important;padding:0!important;border:0!important;background:transparent!important}
+.import-detail-grid label{display:flex;flex-direction:column;gap:6px;color:#40566a;font-size:12px;font-weight:800}
+.import-detail-grid :is(input,select,textarea),.import-edit-table :is(input,textarea){width:100%;box-sizing:border-box;border:1px solid #cfdbe6;border-radius:8px;background:#fff;padding:9px 10px;color:#152f46;font:inherit}
+.import-derived{padding:10px 12px;border:1px solid #c8deeb;border-radius:9px;background:#eff7fb}
+.import-derived :is(span,strong,small){display:block}.import-derived span{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#587084}.import-derived strong{margin-top:4px;color:#102a43}.import-derived small{margin-top:3px;color:#607588}
+.import-edit-table{min-width:1180px!important}.import-edit-table textarea{min-width:260px;resize:vertical}.import-edit-table input{min-width:100px}.import-edit-table td:first-child{min-width:120px}.import-edit-table td:first-child :is(small,em){display:block;margin-top:4px}.import-edit-table td:first-child em{max-width:180px;color:#a33131;font-style:normal;font-size:11px;font-weight:700}
+.import-review-total{display:flex;justify-content:flex-end;align-items:center;gap:18px;padding:16px 4px 0;color:#40566a}.import-review-total strong{font-size:18px;color:#102a43}
 @media(max-width:760px){main .form-grid{grid-template-columns:1fr}.import-centre .form-grid{padding:15px}}
 
 /* Notification cases are full record details, not a table row with controls underneath. */

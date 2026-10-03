@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { extractText } from './ocr.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -28,7 +29,8 @@ const heading = line => {
 export async function readPdfText(filePath) {
   try {
     const result = await execFileAsync('pdftotext', ['-layout', '-q', filePath, '-'], {
-      maxBuffer: 8 * 1024 * 1024
+      timeout: Number(process.env.OCR_PAGE_TIMEOUT_MS || 120000),
+      maxBuffer: 32 * 1024 * 1024
     });
     return String(result.stdout || '');
   } catch (error) {
@@ -40,7 +42,7 @@ export async function readPdfText(filePath) {
 }
 
 /* Columns are read from the right so descriptions may contain numbers and punctuation. */
-const rowPattern = /^\s*(\d+(?:\.\d+)?)\s*(.*?)\s{2,}([A-Za-z][A-Za-z0-9²./-]*)\s+([^\s]+)\s+([^\s]+)\s+([\d,]+(?:\.\d{1,2})?)\s*$/;
+const rowPattern = /^\s*(\d+(?:\.\d+)?)\s+(.*?)\s+([A-Za-z][A-Za-z0-9²./-]*)\s+([^\s]+)\s+([^\s]+)\s+([\d,]+(?:\.\d{1,2})?)\s*$/;
 const subtotalPattern = /\b(sub\s*total|total\s+civil|engineer\s+estimate|grand\s+total|total)\b/i;
 
 function rowFrom(line, sourceRow, category, trailing) {
@@ -106,8 +108,18 @@ function metadataFrom(lines) {
  */
 export async function parseBoqPdf(filePath) {
   let text;
-  try { text = await readPdfText(filePath); } catch (error) {
-    return { ok: false, error: error.message };
+  let parser = 'pdftotext-layout';
+  let textLayerError = null;
+  try { text = await readPdfText(filePath); } catch (error) { textLayerError = error; }
+  if (!text || !text.split(/\r?\n/).some(line => clean(line))) {
+    try {
+      const recognised = await extractText(filePath, 'application/pdf');
+      text = recognised.text;
+      parser = recognised.source === 'ocr' ? 'scanned-document-ocr' : 'pdf-text-layer';
+    } catch {
+      return { ok: false, error: textLayerError?.message
+        || 'This PDF has no readable text and scanned-document OCR is unavailable. Ask for a text PDF or enable OCR on the server.' };
+    }
   }
   const lines = text.split(/\r?\n/);
   if (!lines.some(line => clean(line))) {
@@ -175,7 +187,7 @@ export async function parseBoqPdf(filePath) {
     layout: {
       foreign: true,
       format: 'PDF',
-      parser: 'pdftotext-layout',
+      parser,
       reference: metadata.reference,
       location: metadata.location,
       documentDate: metadata.documentDate,

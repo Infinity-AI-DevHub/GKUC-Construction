@@ -1489,6 +1489,11 @@ button.attachment-icon { border: 1px solid var(--line); background: white; curso
 .boq-document-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px }
 .boq-document-grid label { display: block; font-size: 12.5px; font-weight: 700; color: #4b5951 }
 .boq-document-grid input, .boq-document-grid textarea { display: block; width: 100%; margin-top: 5px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 5px; padding: 8px 9px; background: #fff; font: inherit; font-weight: 400; color: #16201b }
+.boq-derived-client { min-width: 0; padding: 9px 11px; border: 1px solid #cbdce9; border-radius: 7px; background: #f3f8fc }
+.boq-derived-client span, .boq-derived-client strong, .boq-derived-client small { display: block }
+.boq-derived-client span { font-size: 12.5px; font-weight: 700; color: #4b5951 }
+.boq-derived-client strong { margin-top: 5px; color: #102a43; overflow-wrap: anywhere }
+.boq-derived-client small { margin-top: 3px; color: var(--muted); font-size: 11.5px; font-weight: 500 }
 .boq-document-notes { grid-column: 1 / -1 }
 
 .boq-review-head {

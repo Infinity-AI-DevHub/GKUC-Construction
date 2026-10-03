@@ -927,12 +927,14 @@ async function createLifecycleTables() {
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, run_id BIGINT UNSIGNED NOT NULL, employee_id BIGINT UNSIGNED NOT NULL,
     days_present DECIMAL(5,1) NOT NULL DEFAULT 0, days_absent DECIMAL(5,1) NOT NULL DEFAULT 0,
     overtime_hours DECIMAL(7,2) NOT NULL DEFAULT 0, basic DECIMAL(12,2) NOT NULL DEFAULT 0,
+    contribution_base DECIMAL(12,2) NOT NULL DEFAULT 0,
     overtime_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
     office_ot_hours DECIMAL(7,2) NOT NULL DEFAULT 0, office_ot_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
     site_ot_hours DECIMAL(7,2) NOT NULL DEFAULT 0, site_ot_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
     travel_ot_hours DECIMAL(7,2) NOT NULL DEFAULT 0, travel_ot_pay DECIMAL(12,2) NOT NULL DEFAULT 0,
     allowance_total DECIMAL(12,2) NOT NULL DEFAULT 0, reimbursement_total DECIMAL(12,2) NOT NULL DEFAULT 0,
     gross_earnings DECIMAL(12,2) NOT NULL DEFAULT 0,
+    late_minutes INT UNSIGNED NOT NULL DEFAULT 0, late_deduction DECIMAL(12,2) NOT NULL DEFAULT 0,
     epf_employee_deduction DECIMAL(12,2) NOT NULL DEFAULT 0,
     epf_employer_contribution DECIMAL(12,2) NOT NULL DEFAULT 0,
     etf_employer_contribution DECIMAL(12,2) NOT NULL DEFAULT 0,
@@ -947,6 +949,9 @@ async function createLifecycleTables() {
   ) ENGINE=InnoDB`);
   await addColumn('payslips', 'unpaid_leave_deduction', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
   await addColumn('payslips', 'salary_advance_deduction', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'contribution_base', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'late_minutes', 'INT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn('payslips', 'late_deduction', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
   await addColumn('payroll_runs', 'pay_frequency', "ENUM('Daily','Weekly','Monthly') NOT NULL DEFAULT 'Monthly'");
   await addColumn('payroll_runs', 'policy_id', 'BIGINT UNSIGNED NULL');
   await addForeignKey('payroll_runs', 'fk_payroll_policy', 'CONSTRAINT fk_payroll_policy FOREIGN KEY(policy_id) REFERENCES payroll_policies(id)');

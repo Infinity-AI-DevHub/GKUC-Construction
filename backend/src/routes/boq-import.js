@@ -15,7 +15,8 @@ const router = Router();
 router.get('/boq/template', auth, permit('qs.boq'), async (req, res, next) => {
   try {
     const project = req.query.projectId
-      ? await getOne('SELECT name,client FROM projects WHERE id=?', [req.query.projectId])
+      ? await getOne(`SELECT p.name,COALESCE(c.name,p.client) client
+          FROM projects p LEFT JOIN clients c ON c.id=p.client_id WHERE p.id=?`, [req.query.projectId])
       : null;
     const company = await getOne('SELECT name FROM company_profile LIMIT 1').catch(() => null);
     const file = buildTemplate({
@@ -46,16 +47,19 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
     discard = upload.discard;
     const { file, fields } = upload;
 
+    const projectId = Number(fields.projectId);
+    if (!Number.isInteger(projectId) || projectId < 1)
+      throw fail(400, 'Choose the project this BOQ belongs to before uploading it.');
+    const project = await getOne(`SELECT p.id,COALESCE(c.name,p.client) client
+      FROM projects p LEFT JOIN clients c ON c.id=p.client_id
+      WHERE p.id=? AND p.active=1`, [projectId]);
+    if (!project) throw fail(404, 'That project does not exist');
+    if (!project.client) throw fail(409, 'Assign a client to this project before importing its BOQ.');
+
     const buffer = await readUploadedFile(file.path);
     const isPdf = file.mime === 'application/pdf' || /\.pdf$/i.test(file.filename || '');
     const parsed = isPdf ? await parseBoqPdf(file.path) : parseBoqWorkbook(buffer, { categories: await optionsFor('boq.category') });
     if (!parsed.ok) throw fail(422, parsed.error);
-
-    const projectId = fields.projectId ? Number(fields.projectId) : null;
-    if (projectId) {
-      const project = await getOne('SELECT id FROM projects WHERE id=? AND active=1', [projectId]);
-      if (!project) throw fail(404, 'That project does not exist');
-    }
 
     const problemCount = parsed.items.filter(item => item.problems.length).length;
     const total = parsed.items.reduce((sum, item) => sum + (item.amount || 0), 0);
@@ -79,7 +83,7 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
         [projectId, file.filename.slice(0, 190), stored.key, stored.url, stored.size, stored.mime,
           checksum, parsed.layout?.foreign ? 'Foreign' : 'Template',
           parsed.layout ? JSON.stringify(parsed.layout) : null,
-          parsed.title, parsed.client, parsed.layout?.reference || null, parsed.layout?.location || null,
+          parsed.title, project.client, parsed.layout?.reference || null, parsed.layout?.location || null,
           parsed.layout?.documentDate || null, parsed.layout?.notes?.join(' ') || null,
           parsed.items.length, problemCount, total, req.user.id]);
 
@@ -107,18 +111,21 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
     });
     next(error);
   } finally {
-    await discard();
+    await discard().catch(error => console.error('Could not clean up the temporary BOQ upload', error));
   }
 });
 
 const detail = async importId => {
-  const record = await getOne(`SELECT i.id,i.project_id projectId,i.boq_id boqId,i.filename,i.title,i.client,
+  const record = await getOne(`SELECT i.id,i.project_id projectId,i.boq_id boqId,i.filename,i.title,
+    CASE WHEN i.project_id IS NOT NULL THEN COALESCE(c.name,p.client) ELSE i.client END client,
+    COALESCE(c.name,p.client) projectClient,
     i.status,i.row_count rowCount,i.problem_count problemCount,i.total,i.created_at createdAt,
     i.source,i.layout_json layout,i.file_size fileSize,i.checksum,i.document_reference documentReference,
     i.location,i.document_date documentDate,i.notes,
     u.name uploadedBy,p.name project
     FROM boq_imports i JOIN users u ON u.id=i.uploaded_by
-    LEFT JOIN projects p ON p.id=i.project_id WHERE i.id=?`, [importId]);
+    LEFT JOIN projects p ON p.id=i.project_id LEFT JOIN clients c ON c.id=p.client_id
+    WHERE i.id=?`, [importId]);
   if (!record) return null;
   record.items = await query(`SELECT id,source_row sourceRow,category,description,unit,quantity,rate,amount,
     method,notes,raw_json rawJson,problems,notice,include FROM boq_import_items WHERE import_id=? ORDER BY source_row`, [importId]);
@@ -155,10 +162,13 @@ const relevantProblems = value => String(value || '').split(' · ')
 
 router.get('/boq/imports', auth, permit('qs.boq', 'qs.view'), async (_req, res, next) => {
   try {
-    res.json(await query(`SELECT i.id,i.filename,i.title,i.client,i.status,i.row_count rowCount,
+    res.json(await query(`SELECT i.id,i.filename,i.title,
+      CASE WHEN i.project_id IS NOT NULL THEN COALESCE(c.name,p.client) ELSE i.client END client,
+      i.status,i.row_count rowCount,
       i.problem_count problemCount,i.total,i.created_at createdAt,u.name uploadedBy,p.name project,i.boq_id boqId
       FROM boq_imports i JOIN users u ON u.id=i.uploaded_by
-      LEFT JOIN projects p ON p.id=i.project_id ORDER BY i.id DESC LIMIT 50`));
+      LEFT JOIN projects p ON p.id=i.project_id LEFT JOIN clients c ON c.id=p.client_id
+      ORDER BY i.id DESC LIMIT 50`));
   } catch (error) { next(error); }
 });
 
@@ -170,12 +180,10 @@ router.get('/boq/imports/:id', auth, permit('qs.boq', 'qs.view'), async (req, re
   } catch (error) { next(error); }
 });
 
-/* The document header is editable too: PDFs often have a client/reference typed into a
-   header that is not machine-readable, and the reviewer must be able to correct it without
-   abandoning the staged rows. */
+/* Source document details remain correctable, but the client never comes from an uploaded
+   file. The selected project's client relationship is authoritative. */
 const documentSchema = z.object({
   title: z.string().trim().max(180).nullable().optional(),
-  client: z.string().trim().max(180).nullable().optional(),
   documentReference: z.string().trim().max(120).nullable().optional(),
   location: z.string().trim().max(500).nullable().optional(),
   documentDate: z.string().trim().max(30).nullable().optional(),
@@ -188,10 +196,10 @@ router.patch('/boq/imports/:id', auth, permit('qs.boq'), validate(documentSchema
       const record = await getOne('SELECT status FROM boq_imports WHERE id=?', [req.params.id]);
       if (!record) return res.status(404).json({ error: 'That import was not found' });
       if (record.status !== 'Review') return res.status(409).json({ error: 'This import has already been dealt with' });
-      const existing = await getOne('SELECT title,client,document_reference documentReference,location,document_date documentDate,notes FROM boq_imports WHERE id=?', [req.params.id]);
+      const existing = await getOne('SELECT title,document_reference documentReference,location,document_date documentDate,notes FROM boq_imports WHERE id=?', [req.params.id]);
       const value = key => req.body[key] === undefined ? existing[key] : (req.body[key] || null);
-      await query(`UPDATE boq_imports SET title=?,client=?,document_reference=?,location=?,document_date=?,notes=? WHERE id=?`,
-        [value('title'), value('client'), value('documentReference'), value('location'), value('documentDate'), value('notes'), req.params.id]);
+      await query(`UPDATE boq_imports SET title=?,document_reference=?,location=?,document_date=?,notes=? WHERE id=?`,
+        [value('title'), value('documentReference'), value('location'), value('documentDate'), value('notes'), req.params.id]);
       res.json(await detail(req.params.id));
     } catch (error) { next(error); }
   });
@@ -325,8 +333,11 @@ router.post('/boq/imports/:id/commit', auth, permit('qs.boq'),
       if (!record) return res.status(404).json({ error: 'That import was not found' });
       if (record.status !== 'Review') return res.status(409).json({ error: 'This import has already been dealt with' });
 
-      const project = await getOne('SELECT id,name FROM projects WHERE id=? AND active=1', [req.body.projectId]);
+      const project = await getOne(`SELECT p.id,p.name,COALESCE(c.name,p.client) client
+        FROM projects p LEFT JOIN clients c ON c.id=p.client_id
+        WHERE p.id=? AND p.active=1`, [req.body.projectId]);
       if (!project) return res.status(404).json({ error: 'That project does not exist' });
+      if (!project.client) return res.status(409).json({ error: 'Assign a client to this project before importing its BOQ.' });
 
       const items = await query(
         'SELECT * FROM boq_import_items WHERE import_id=? AND include=1 ORDER BY source_row', [record.id]);
@@ -372,8 +383,8 @@ router.post('/boq/imports/:id/commit', auth, permit('qs.boq'),
         }
         await connection.execute('UPDATE boqs SET import_id=? WHERE id=?', [record.id, created.insertId]);
         await connection.execute(
-          "UPDATE boq_imports SET status='Committed', boq_id=?, committed_by=?, committed_at=NOW() WHERE id=?",
-          [created.insertId, req.user.id, record.id]);
+          "UPDATE boq_imports SET status='Committed', project_id=?, client=?, boq_id=?, committed_by=?, committed_at=NOW() WHERE id=?",
+          [project.id, project.client, created.insertId, req.user.id, record.id]);
         return created.insertId;
       });
 

@@ -47,42 +47,52 @@ export function resolveOvertimeRate(employee, type, policy) {
  */
 export function calculatePayslip(employee, policy, components = []) {
   const dailyRate = Number(employee.daily_rate);
-  const basic = employee.pay_basis === 'Monthly salary' ? Number(employee.basic_salary)
-    : employee.pay_basis === 'Weekly rate' ? Number(employee.weekly_rate)
-      : dailyRate * Number(employee.days_present);
+  const daysPresent = Number(employee.days_present || 0);
+  // GKUC pays salary for days actually worked. The employee profile's monthly
+  // `basic_salary` is a statutory reference amount only; it must never be added
+  // to earnings. Keep `basic` as the persisted payslip column for compatibility,
+  // but its meaning is now unambiguously earned salary.
+  const basic = money(dailyRate * daysPresent);
   const overtimePay = Number(employee.overtime_pay);
   const componentTotal = kind => money(components.filter(row => row.kind === kind)
     .reduce((sum, row) => sum + Number(row.amount), 0));
   const allowanceTotal = componentTotal('Allowance');
   const reimbursementTotal = componentTotal('Reimbursement');
   const otherDeduction = componentTotal('Deduction');
-  const unpaidLeaveDeduction = employee.pay_basis === 'Daily rate'
-    ? 0
-    : money(Number(employee.unpaid_days) * dailyRate);
+  const lateDeduction = money(employee.late_deduction || 0);
+  // An unpaid/absent day is already excluded from days_present, so subtracting it
+  // again would charge the employee twice.
+  const unpaidLeaveDeduction = 0;
   const grossEarnings = money(basic + overtimePay + allowanceTotal);
-  const adjustedBasic = Math.max(0, money(basic - unpaidLeaveDeduction));
-  const adjustedGross = Math.max(0, money(grossEarnings - unpaidLeaveDeduction));
-  // GKUC contributions are based only on earned basic pay (after unpaid leave).
-  // A legacy gross-basis policy must never bring overtime or allowances into EPF/ETF.
+  const storedRules = typeof policy?.statutory_rules === 'string'
+    ? JSON.parse(policy.statutory_rules) : (policy?.statutory_rules || policy?.statutoryRules || {});
+  const standardDays = Math.max(1, Number(storedRules.dailyDaysPerMonth ?? 25));
+  const statutoryMonthlyBasic = Math.max(0, Number(employee.basic_salary || 0));
+  // The configured statutory amount is monthly, so a shorter payroll period uses
+  // only the attended-day share. Never exceed the configured monthly basis.
+  const contributionBase = money(Math.min(statutoryMonthlyBasic,
+    statutoryMonthlyBasic / standardDays * daysPresent));
+  // A legacy gross-basis setting must never bring salary earnings, overtime,
+  // allowances or reimbursements into the EPF/ETF basis.
   const epfEmployeeDeduction = employee.epf_eligible
-    ? money(adjustedBasic * Number(policy.epf_employee_rate) / 100)
+    ? money(contributionBase * Number(policy.epf_employee_rate) / 100)
     : 0;
   const epfEmployerContribution = employee.epf_eligible
-    ? money(adjustedBasic * Number(policy.epf_employer_rate) / 100)
+    ? money(contributionBase * Number(policy.epf_employer_rate) / 100)
     : 0;
   const etfEmployerContribution = employee.etf_eligible
-    ? money(adjustedBasic * Number(policy.etf_employer_rate) / 100)
+    ? money(contributionBase * Number(policy.etf_employer_rate) / 100)
     : 0;
   const beforeAdvance = Math.max(0,
     grossEarnings + reimbursementTotal - unpaidLeaveDeduction - otherDeduction - epfEmployeeDeduction);
   const salaryAdvanceDeduction = money(Math.min(beforeAdvance, Number(employee.salary_advance)));
-  const deductions = money(unpaidLeaveDeduction + otherDeduction + epfEmployeeDeduction + salaryAdvanceDeduction);
+  const deductions = money(unpaidLeaveDeduction + lateDeduction + otherDeduction + epfEmployeeDeduction + salaryAdvanceDeduction);
   const netPay = money(Math.max(0, grossEarnings + reimbursementTotal - deductions));
-  const employerCost = money(adjustedGross + reimbursementTotal + epfEmployerContribution + etfEmployerContribution);
+  const employerCost = money(grossEarnings + reimbursementTotal + epfEmployerContribution + etfEmployerContribution);
 
   return {
-    basic: money(basic), overtimePay: money(overtimePay), allowanceTotal, reimbursementTotal,
+    basic: money(basic), contributionBase, overtimePay: money(overtimePay), allowanceTotal, reimbursementTotal,
     grossEarnings, epfEmployeeDeduction, epfEmployerContribution, etfEmployerContribution,
-    otherDeduction, unpaidLeaveDeduction, salaryAdvanceDeduction, deductions, netPay, employerCost
+    otherDeduction, lateDeduction, unpaidLeaveDeduction, salaryAdvanceDeduction, deductions, netPay, employerCost
   };
 }

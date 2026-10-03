@@ -115,12 +115,12 @@ export default function People({ data, allData, reload, can, companies, companyI
   </Page></RecordScopeProvider>;
 }
 
-const EMPLOYEE_COLUMNS = ['Employee', 'Type', 'Department', 'Designation', 'Basic salary', 'Daily rate', 'Status'];
+const EMPLOYEE_COLUMNS = ['Employee', 'Type', 'Department', 'Designation', 'EPF/ETF basis', 'Daily rate', 'Status'];
 const EMPLOYEE_TEMPLATE = 'minmax(190px,1.4fr) 100px minmax(140px,1fr) minmax(140px,1fr) 130px 110px 100px';
 
 /* The server withholds pay from anyone who does not maintain it, so the columns come and
    go with the data. Showing them as "LKR 0" would read as a wage of nothing. */
-const PAY_COLUMNS = ['Basic salary', 'Daily rate'];
+const PAY_COLUMNS = ['EPF/ETF basis', 'Daily rate'];
 const NO_PAY_COLUMNS = EMPLOYEE_COLUMNS.filter(column => !PAY_COLUMNS.includes(column));
 const NO_PAY_TEMPLATE = 'minmax(190px,1.4fr) 100px minmax(140px,1fr) minmax(140px,1fr) 100px';
 
@@ -217,7 +217,7 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
         <div><strong>Employee EPF</strong><p>{settings.activePolicy?.epfEmployeeRate ?? 'Not set'}%</p></div>
         <div><strong>Employer EPF</strong><p>{settings.activePolicy?.epfEmployerRate ?? 'Not set'}%</p></div>
         <div><strong>Employer ETF</strong><p>{settings.activePolicy?.etfEmployerRate ?? 'Not set'}%</p></div>
-        <p className="form-note wide">Calculated only on earned basic salary, after unpaid leave deductions. Overtime, allowances and reimbursements are excluded. EPF and ETF eligibility remain configurable separately for each employee. Rate changes use an effective date; existing salary sheets are not recalculated automatically.</p>
+        <p className="form-note wide">EPF and ETF use the employee's separate monthly statutory salary basis, prorated by attended days. Daily earnings, overtime, allowances and reimbursements never increase that basis. Eligibility remains configurable separately for each employee. Existing salary sheets are not recalculated automatically.</p>
       </div>
     </section>
     <div className="project-stats">
@@ -296,7 +296,7 @@ function PolicyForm({ companyId, policy, close, reload }) {
       supervisorSiteOtRate: Number(values.supervisorSiteOtRate), supervisorTravelOtRate: Number(values.supervisorTravelOtRate),
       epfEmployeeRate: Number(values.epfEmployeeRate), epfEmployerRate: Number(values.epfEmployerRate),
       etfEmployerRate: Number(values.etfEmployerRate), epfBasis: 'Basic earnings', etfBasis: 'Basic earnings',
-      hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),maxDailyOt:Number(values.maxDailyOt),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),supervisorSiteCharge:Number(values.supervisorSiteCharge),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'},
+      hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,paidHoursPerDay:Number(values.paidHoursPerDay),otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),maxDailyOt:Number(values.maxDailyOt),lateGraceMinutes:Number(values.lateGraceMinutes),lateHalfRateUntilMinutes:Number(values.lateHalfRateUntilMinutes),lateThreeQuarterRateUntilMinutes:Number(values.lateThreeQuarterRateUntilMinutes),lateIncrementMinutes:Number(values.lateIncrementMinutes),lateIncrementFraction:Number(values.lateIncrementFraction),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),supervisorSiteCharge:Number(values.supervisorSiteCharge),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'},
       statutoryRules:{permanentOnly:values.permanentOnly==='true',minimumMonthlySalary:Number(values.minimumMonthlySalary),weeklyWeeksPerMonth:Number(values.weeklyWeeksPerMonth),dailyDaysPerMonth:Number(values.dailyDaysPerMonth)}
     });
     await reload();
@@ -304,26 +304,30 @@ function PolicyForm({ companyId, policy, close, reload }) {
     <div className="payroll-policy-intro wide"><strong>Set how pay is calculated</strong><p>These are company-wide rules, not an employee's salary. Work through each section, then save a dated policy. Existing approved payslips will not change.</p></div>
     <div className="payroll-policy-heading wide"><span>01</span><div><strong>When these rules begin</strong><p>The date determines which policy applies to new payroll calculations.</p></div></div>
     <Field name="effectiveFrom" label="Effective from" type="date" defaultValue={todayInput()} />
-    <div className="payroll-policy-heading wide"><span>02</span><div><strong>Basic pay and contributions</strong><p>EPF and ETF use earned basic pay only, not overtime, allowances or reimbursements.</p></div></div>
+    <div className="payroll-policy-heading wide"><span>02</span><div><strong>Earned salary and contributions</strong><p>Salary is daily rate × attended days. EPF and ETF use the separate statutory salary basis only.</p></div></div>
     <SelectField name="permanentOnly" label="GKUC EPF / ETF policy — permanent employees only" options={[[true,'Yes'],[false,'No']]} defaultValue={String((typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.permanentOnly ?? true)} />
-    <Field name="minimumMonthlySalary" label="Minimum monthly-equivalent basic salary (LKR)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.minimumMonthlySalary ?? 30000} />
+    <Field name="minimumMonthlySalary" label="Minimum monthly EPF/ETF salary basis (LKR)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.minimumMonthlySalary ?? 30000} />
     <Field name="weeklyWeeksPerMonth" label="Weeks per month for weekly-rate comparison" type="number" min="0.01" step="0.000001" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.weeklyWeeksPerMonth ?? 52/12} />
     <Field name="dailyDaysPerMonth" label="Days per month for daily-rate comparison" type="number" min="0.01" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.dailyDaysPerMonth ?? 25} />
     <div className="payroll-policy-heading wide"><span>03</span><div><strong>Working hours and overtime</strong><p>Attendance suggests Site OT. HR must review and confirm it before payroll.</p></div></div>
     {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],otInterval:['OT rounding interval (hours, rounded down)',0.5,'number'],minimumOt:['Minimum payable OT (hours)',0.5,'number'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
+    <div className="payroll-policy-heading wide"><span>04</span><div><strong>Late-arrival deductions</strong><p>The first 30 minutes are free. Later arrivals deduct a configurable fraction of the employee's hourly rate.</p></div></div>
+    <Field name="paidHoursPerDay" label="Paid working hours used to calculate hourly rate" type="number" min="0.01" max="24" step="0.01" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.paidHoursPerDay??8}/>
+    {Object.entries({lateGraceMinutes:['No deduction through (minutes)',30],lateHalfRateUntilMinutes:['50% deduction through (minutes)',45],lateThreeQuarterRateUntilMinutes:['75% deduction until; full hourly rate at (minutes)',60],lateIncrementMinutes:['After one hour, each additional block (minutes)',15],lateIncrementFraction:['Additional hourly-rate fraction per block',0.25]}).map(([name,[label,fallback]])=><Field key={name} name={name} label={label} type="number" min="0" step={name==='lateIncrementFraction'?'0.01':'1'} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
+    <p className="form-note wide">Example: with an LKR 400 hourly rate, 30 minutes late deducts LKR 0; 31–45 minutes deducts LKR 200; 46–59 minutes deducts LKR 300; 60 minutes deducts LKR 400; 61–75 minutes deducts LKR 500.</p>
     <Field name="officeOtRate" label="Office OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.officeOtRate ?? 225} />
     <Field name="siteLabourSiteOtRate" label="Labour site OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.siteLabourSiteOtRate ?? 200} />
     <Field name="siteLabourTravelOtRate" label="Labour travel OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.siteLabourTravelOtRate ?? 100} />
     <Field name="driverOtRate" label="Driver OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.driverOtRate ?? 225} />
     <Field name="supervisorSiteOtRate" label="Supervisor site OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.supervisorSiteOtRate ?? 225} />
     <Field name="supervisorTravelOtRate" label="Supervisor travel OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.supervisorTravelOtRate ?? 100} />
-    <div className="payroll-policy-heading wide"><span>04</span><div><strong>Transport and travel</strong><p>Set when the full transport amount is due and how approved travel is reimbursed.</p></div></div>
+    <div className="payroll-policy-heading wide"><span>05</span><div><strong>Transport and travel</strong><p>Set when the full transport amount is due and how approved travel is reimbursed.</p></div></div>
     {Object.entries({transportDivisor:['Monthly transport proration divisor (days)',25],fullTransportDays:['Full transport after this many eligible days (set by HR)',''],longDistanceKm:['Long-distance threshold (km, greater than)',50],longDistancePayment:['Long-distance allowance per qualifying claim (LKR)',500],mileageRate:['Motorcycle mileage rate (LKR/km)',17],fixedTravelPayment:['Fixed office-travel payment (LKR)',300]}).map(([name,[label,fallback]])=><Field key={name} name={name} label={label} type="number" step="0.01" min="0" required={name!=='fullTransportDays'} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
     <SelectField name="fullTransportComparison" label="Full transport threshold comparison" options={['At least','More than']} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.fullTransportComparison||'At least'}/>
     {['allowMileageAndFixed','countLeaveForTransport','countAbsenceForTransport'].map(name=><SelectField key={name} name={name} label={{allowMileageAndFixed:'Allow mileage and fixed travel together',countLeaveForTransport:'Count leave days for transport',countAbsenceForTransport:'Count absent days for transport'}[name]} options={[[false,'No'],[true,'Yes']]} defaultValue={String((typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]||false)}/>)}
-    <div className="payroll-policy-heading wide"><span>05</span><div><strong>Supervisor site charge</strong><p>HR decides whether a qualifying visit or mobilisation should be claimed. It is never paid just because this rate is set.</p></div></div>
+    <div className="payroll-policy-heading wide"><span>06</span><div><strong>Supervisor site charge</strong><p>HR decides whether a qualifying visit or mobilisation should be claimed. It is never paid just because this rate is set.</p></div></div>
     <Field name="supervisorSiteCharge" label="Approved supervisor site charge (LKR per day)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.supervisorSiteCharge ?? 500} />
-    <div className="payroll-policy-heading wide"><span>06</span><div><strong>EPF and ETF percentages</strong><p>Employee EPF reduces take-home pay; employer EPF and ETF add to company cost.</p></div></div>
+    <div className="payroll-policy-heading wide"><span>07</span><div><strong>EPF and ETF percentages</strong><p>Employee EPF reduces take-home pay; employer EPF and ETF add to company cost.</p></div></div>
     <Field name="epfEmployeeRate" label="EPF employee rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.epfEmployeeRate ?? 0} />
     <Field name="epfEmployerRate" label="EPF employer rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.epfEmployerRate ?? 0} />
     <Field name="etfEmployerRate" label="ETF employer rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.etfEmployerRate ?? 0} />
@@ -353,7 +357,8 @@ function PayProfileForm({ employee, companies, close, reload }) {
     <SelectField name="payFrequency" label="Payment frequency" options={['Daily', 'Weekly', 'Monthly']} defaultValue={employee.payFrequency} />
     <SelectField name="payrollCategory" label="Payroll category" options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} defaultValue={employee.payrollCategory} />
     <Field name="compensationEffectiveFrom" label="Compensation effective from" type="date" defaultValue={inputDate(employee.compensationEffectiveFrom || employee.joinDate)} />
-    <Field name="basicSalary" label="Monthly basic salary (LKR)" type="number" min="0" step="0.01" defaultValue={employee.basicSalary || 0} />
+    <Field name="basicSalary" label="Monthly EPF / ETF salary basis (LKR)" type="number" min="0" step="0.01" defaultValue={employee.basicSalary || 0} />
+    <p className="form-note wide">This amount is only the statutory basis for EPF/ETF. It is not paid as salary. Earned salary is always the daily rate multiplied by attended days.</p>
     <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" step="0.01" defaultValue={employee.weeklyRate || 0} />
     <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" step="0.01" defaultValue={employee.dailyRate || 0} />
     <SelectField name="epfEligible" label="EPF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue={String(Boolean(employee.epfEligible))} />
@@ -387,7 +392,7 @@ function PayComponentForm({ employee, close, reload }) {
 }
 
 function PayrollDetail({ run, close }) {
-  const template = 'minmax(160px,1.3fr) 75px 110px 110px 110px 110px 110px 120px 115px 115px 110px 115px 115px 120px 125px';
+  const template = 'minmax(160px,1.3fr) 75px 110px 110px 110px 110px 110px 110px 120px 115px 110px 110px 115px 115px 120px 125px';
   const advances = run.payslips.flatMap(slip => slip.advanceRecoveries || []);
   const components = run.payslips.flatMap(slip => (slip.components || []).map(component => ({ ...component, employee: slip.employee, employeeCode: slip.employeeCode })));
   const gross = run.payslips.reduce((sum, slip) => sum + Number(slip.grossEarnings), 0);
@@ -404,28 +409,29 @@ function PayrollDetail({ run, close }) {
         <div><span>Total employer cost</span><strong>{rupees(employerCost)}</strong></div>
       </div>
       <div className="payroll-payslip-list wide">
-        <div className="payroll-policy-heading"><span>01</span><div><strong>What each employee receives</strong><p>Read left to right: basic pay and extras, then deductions, then take-home pay. Open the full table only when you need every accounting column.</p></div></div>
+        <div className="payroll-policy-heading"><span>01</span><div><strong>What each employee receives</strong><p>Earned salary is daily rate × attended days. The EPF/ETF basis is shown separately and is not added to pay.</p></div></div>
         {run.payslips.map(slip => <div className="payroll-payslip-card" key={slip.id}>
           <div className="payroll-payslip-person"><strong>{slip.employee}</strong><small>{slip.employeeCode} · {slip.daysPresent} attended days</small></div>
-          <div><span>Basic pay</span><strong>{rupees(slip.basic)}</strong></div>
+          <div><span>Earned salary</span><strong>{rupees(slip.basic)}</strong></div>
           <div><span>OT + allowances</span><strong>{rupees(Number(slip.overtimePay || 0) + Number(slip.allowanceTotal || 0))}</strong></div>
           <div><span>Reimbursements</span><strong>{rupees(slip.reimbursementTotal)}</strong></div>
-          <div><span>Total deductions</span><strong>{rupees(slip.deductions)}</strong></div>
+          <div><span>Total deductions</span><strong>{rupees(slip.deductions)}</strong><small>{Number(slip.lateDeduction)>0?`${slip.lateMinutes} late min · ${rupees(slip.lateDeduction)}`:'No late deduction'}</small></div>
           <div className="payroll-payslip-net"><span>Take-home pay</span><strong>{rupees(slip.netPay)}</strong></div>
         </div>)}
       </div>
       <details className="payroll-breakdown-details wide"><summary>Show full salary calculation table</summary>
-        <Table columns={['Employee', 'Present', 'Basic', 'Office OT', 'Site OT', 'Travel OT', 'Allowances', 'Reimbursements', 'Gross', 'Unpaid leave', 'EPF employee', 'Other deductions', 'Salary advance', 'Net pay', 'Employer cost']} template={template} title="Salary sheet breakdown">
+        <Table columns={['Employee', 'Present', 'Earned salary', 'EPF/ETF basis', 'Office OT', 'Site OT', 'Travel OT', 'Allowances', 'Reimbursements', 'Gross', 'Late deduction', 'EPF employee', 'Other deductions', 'Salary advance', 'Net pay', 'Employer cost']} template={template} title="Salary sheet breakdown">
           {run.payslips.map(slip => <Row template={template} key={slip.id}>
             <div><strong>{slip.employee}</strong><small>{slip.employeeCode}</small></div>
             <span>{slip.daysPresent}</span>
             <span>{rupees(slip.basic)}</span>
+            <span>{rupees(slip.contributionBase)}</span>
             <div><strong>{rupees(slip.officeOtPay)}</strong><small>{slip.officeOtHours} h</small></div>
             <div><strong>{rupees(slip.siteOtPay)}</strong><small>{slip.siteOtHours} h</small></div>
             <div><strong>{rupees(slip.travelOtPay)}</strong><small>{slip.travelOtHours} h</small></div>
             <span>{rupees(slip.allowanceTotal)}</span><span>{rupees(slip.reimbursementTotal)}</span>
             <strong>{rupees(slip.grossEarnings)}</strong>
-            <span>{rupees(slip.unpaidLeaveDeduction)}</span>
+            <span>{rupees(slip.lateDeduction)}<small>{slip.lateMinutes} min</small></span>
             <span>{rupees(slip.epfEmployeeDeduction)}</span><span>{rupees(slip.otherDeduction)}</span>
             <span>{rupees(slip.salaryAdvanceDeduction)}</span>
             <strong>{rupees(slip.netPay)}</strong>
@@ -721,7 +727,8 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
     <SelectField required={false} name="payFrequency" label="Payment frequency" options={['Daily', 'Weekly', 'Monthly']} defaultValue="Monthly" />
     <SelectField required={false} name="payrollCategory" label="Payroll category" options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} defaultValue="Site labourer" />
     <Field required={false} name="compensationEffectiveFrom" label="Compensation effective from" type="date" defaultValue={todayInput()} />
-    <Field required={false} name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue="0" />
+    <Field required={false} name="basicSalary" label="Monthly EPF / ETF salary basis (LKR)" type="number" min="0" defaultValue="0" />
+    <p className="form-note wide">This amount is used only to calculate EPF/ETF. Salary earnings are the daily rate multiplied by attended days.</p>
     <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" required={false} />
     <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" required={false} />
     <SelectField required={false} name="epfEligible" label="EPF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue="true" />

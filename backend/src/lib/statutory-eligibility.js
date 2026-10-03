@@ -12,8 +12,8 @@ export function statutoryRules(policy) {
 }
 
 export function monthlyEquivalent(employee, rules = DEFAULT_STATUTORY_RULES) {
-  if (employee.pay_basis === 'Weekly rate') return Number(employee.weekly_rate || 0) * Number(rules.weeklyWeeksPerMonth);
-  if (employee.pay_basis === 'Daily rate') return Number(employee.daily_rate || 0) * Number(rules.dailyDaysPerMonth);
+  // GKUC explicitly records this amount for statutory contribution decisions.
+  // Daily and weekly earning rates must not silently replace it.
   return Number(employee.basic_salary || 0);
 }
 

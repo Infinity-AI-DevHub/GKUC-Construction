@@ -36,7 +36,7 @@ const person = values => ({
 
 const office = person({
   name: 'Nimali — office administrator', payroll_category: 'Office employee',
-  pay_basis: 'Monthly salary', pay_frequency: 'Monthly', basic_salary: 100000, daily_rate: 4000,
+  pay_basis: 'Monthly salary', pay_frequency: 'Monthly', basic_salary: 100000, daily_rate: 4000, days_present: 25,
   epf_eligible: true, etf_eligible: true
 });
 const labourer = person({
@@ -46,11 +46,12 @@ const labourer = person({
 const driver = person({
   name: 'Ruwan — driver', payroll_category: 'Driver',
   pay_basis: 'Weekly rate', pay_frequency: 'Weekly', weekly_rate: 30000, daily_rate: 5000,
+  basic_salary: 125000, days_present: 6,
   epf_eligible: true
 });
 const supervisor = person({
   name: 'Malinda — site supervisor', payroll_category: 'Supervisor',
-  pay_basis: 'Monthly salary', pay_frequency: 'Monthly', basic_salary: 120000, daily_rate: 6000,
+  pay_basis: 'Monthly salary', pay_frequency: 'Monthly', basic_salary: 150000, daily_rate: 6000, days_present: 20,
   epf_eligible: true, etf_eligible: true
 });
 const specialist = person({
@@ -66,7 +67,7 @@ function overtimePay(employee, policy, entries) {
 const scenarios = [
   { employee: office, name: 'ordinary month', input: {}, expected: { basic: 100000, grossEarnings: 100000, epfEmployeeDeduction: 8000, deductions: 8000, netPay: 92000, employerCost: 115000 } },
   { employee: office, name: 'office overtime', input: { overtime: [['Office', 10]] }, expected: { overtimePay: 2250, grossEarnings: 102250, netPay: 94250, employerCost: 117250 } },
-  { employee: office, name: 'two unpaid-leave days', input: { unpaid_days: 2 }, expected: { unpaidLeaveDeduction: 8000, epfEmployeeDeduction: 7360, deductions: 15360, netPay: 84640, employerCost: 105800 } },
+  { employee: office, name: 'two unpaid-leave days reduce attended earnings once', input: { days_present: 23, unpaid_days: 2 }, expected: { basic: 92000, contributionBase: 92000, unpaidLeaveDeduction: 0, epfEmployeeDeduction: 7360, deductions: 7360, netPay: 84640, employerCost: 105800 } },
   { employee: office, name: 'allowance, reimbursement and deduction', input: { components: [component('Allowance', 5000), component('Reimbursement', 2000), component('Deduction', 1000)] }, expected: { allowanceTotal: 5000, reimbursementTotal: 2000, otherDeduction: 1000, grossEarnings: 105000, deductions: 9000, netPay: 98000, employerCost: 122000 } },
   { employee: office, name: 'advance larger than net salary', input: { salary_advance: 150000 }, expected: { salaryAdvanceDeduction: 92000, deductions: 100000, netPay: 0, employerCost: 115000 } },
 
@@ -79,12 +80,12 @@ const scenarios = [
   { employee: driver, name: 'ordinary week', input: {}, expected: { basic: 30000, epfEmployeeDeduction: 2400, netPay: 27600, employerCost: 33600 } },
   { employee: driver, name: 'office overtime', input: { overtime: [['Office', 4]] }, expected: { overtimePay: 900, grossEarnings: 30900, netPay: 28500, employerCost: 34500 } },
   { employee: driver, name: 'site and travel overtime at driver rate', input: { overtime: [['Site', 2], ['Travel', 3]] }, expected: { overtimePay: 1125, grossEarnings: 31125, netPay: 28725, employerCost: 34725 } },
-  { employee: driver, name: 'one unpaid-leave day', input: { unpaid_days: 1 }, expected: { unpaidLeaveDeduction: 5000, epfEmployeeDeduction: 2000, deductions: 7000, netPay: 23000, employerCost: 28000 } },
+  { employee: driver, name: 'one unpaid-leave day reduces attended earnings once', input: { days_present: 5, unpaid_days: 1 }, expected: { basic: 25000, contributionBase: 25000, unpaidLeaveDeduction: 0, epfEmployeeDeduction: 2000, deductions: 2000, netPay: 23000, employerCost: 28000 } },
   { employee: driver, name: 'allowance, deduction and advance', input: { salary_advance: 10000, components: [component('Allowance', 3000), component('Deduction', 1000)] }, expected: { allowanceTotal: 3000, otherDeduction: 1000, salaryAdvanceDeduction: 10000, deductions: 13400, netPay: 19600, employerCost: 36600 } },
 
   { employee: supervisor, policy: grossPolicy, name: 'ordinary month under legacy gross policy still uses basic', input: {}, expected: { basic: 120000, epfEmployeeDeduction: 9600, epfEmployerContribution: 14400, etfEmployerContribution: 3600, netPay: 110400, employerCost: 138000 } },
   { employee: supervisor, policy: grossPolicy, name: 'site and travel overtime', input: { overtime: [['Site', 5], ['Travel', 3]] }, expected: { overtimePay: 1425, grossEarnings: 121425, epfEmployeeDeduction: 9600, netPay: 111825, employerCost: 139425 } },
-  { employee: supervisor, policy: grossPolicy, name: 'two unpaid-leave days', input: { unpaid_days: 2 }, expected: { unpaidLeaveDeduction: 12000, epfEmployeeDeduction: 8640, deductions: 20640, netPay: 99360, employerCost: 124200 } },
+  { employee: supervisor, policy: grossPolicy, name: 'two unpaid-leave days reduce attended earnings once', input: { days_present: 18, unpaid_days: 2 }, expected: { basic: 108000, contributionBase: 108000, unpaidLeaveDeduction: 0, epfEmployeeDeduction: 8640, deductions: 8640, netPay: 99360, employerCost: 124200 } },
   { employee: supervisor, policy: grossPolicy, name: 'full component mix', input: { components: [component('Allowance', 10000), component('Reimbursement', 5000), component('Deduction', 2000)] }, expected: { grossEarnings: 130000, reimbursementTotal: 5000, epfEmployeeDeduction: 9600, deductions: 11600, netPay: 123400, employerCost: 153000 } },
   { employee: supervisor, policy: grossPolicy, name: 'overtime and salary advance', input: { overtime: [['Site', 10]], salary_advance: 50000 }, expected: { overtimePay: 2250, grossEarnings: 122250, epfEmployeeDeduction: 9600, salaryAdvanceDeduction: 50000, deductions: 59600, netPay: 62650, employerCost: 140250 } },
 
