@@ -223,7 +223,10 @@ export function objectStoreClient() {
     throw Object.assign(new Error('The R2 S3 API endpoint must use HTTPS in production'), { status: 500 });
   }
   r2Client = new S3Client({
-    region: 'auto', endpoint, forcePathStyle: true,
+    /* Keep the SDK's default virtual-host addressing. Cloudflare's documented v3 setup
+       signs requests as <bucket>.<account>.r2.cloudflarestorage.com; forcing path style
+       can be rejected as AccessDenied even when the bucket token itself is correct. */
+    region: 'auto', endpoint,
     credentials: { accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY }
   });
   return r2Client;

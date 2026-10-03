@@ -9,6 +9,7 @@
     "seed": "node src/seed.js",
     "storage:migrate:r2": "node src/scripts/migrate-local-uploads-to-r2.js",
     "storage:migrate:r2:apply": "node src/scripts/migrate-local-uploads-to-r2.js --apply",
+    "storage:diagnose:r2": "node src/scripts/diagnose-r2.js",
     "test": "node --test"
   },
   "dependencies": {
