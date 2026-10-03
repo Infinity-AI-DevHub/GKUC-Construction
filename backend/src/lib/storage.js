@@ -177,28 +177,50 @@ const localDriver = {
   }
 };
 
-const r2Endpoint = () => process.env.R2_S3_ENDPOINT
+const configuredR2Endpoint = () => process.env.R2_S3_ENDPOINT
   || (process.env.R2_ACCOUNT_ID ? `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : '');
+
+/*
+ * Cloudflare shows the S3 API in two forms depending on which dashboard screen copied it:
+ * account endpoint, or account endpoint followed by /<bucket>. The AWS client receives the
+ * bucket separately and would append it again, so accept the latter only when that path is
+ * exactly the configured bucket and normalise it back to the account endpoint.
+ */
+function r2Endpoint() {
+  const configured = configuredR2Endpoint();
+  if (!configured) return '';
+  let parsed;
+  try { parsed = new URL(configured); }
+  catch { throw Object.assign(new Error('The R2 S3 API endpoint is not a valid URL'), { status: 500 }); }
+  const endpointPath = decodeURIComponent(parsed.pathname).replace(/^\/+|\/+$/g, '');
+  if (endpointPath) {
+    if (endpointPath !== process.env.R2_BUCKET) {
+      throw Object.assign(new Error(
+        `The R2 S3 API endpoint path must be empty or match the configured bucket "${process.env.R2_BUCKET}"`
+      ), { status: 500 });
+    }
+    parsed.pathname = '/';
+  }
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString().replace(/\/$/, '');
+}
 
 let r2Client;
 export function objectStoreClient() {
   if (r2Client) return r2Client;
-  const endpoint = r2Endpoint();
+  const configuredEndpoint = configuredR2Endpoint();
   const { R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
-  if (!endpoint || !process.env.R2_BUCKET || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
+  if (!configuredEndpoint || !process.env.R2_BUCKET || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
     throw Object.assign(new Error('Object storage is selected but its endpoint, bucket or credentials are not set'), { status: 500 });
   }
-  let parsedEndpoint;
-  try { parsedEndpoint = new URL(endpoint); }
-  catch { throw Object.assign(new Error('The R2 S3 API endpoint is not a valid URL'), { status: 500 }); }
+  const endpoint = r2Endpoint();
+  const parsedEndpoint = new URL(endpoint);
   if (!['http:', 'https:'].includes(parsedEndpoint.protocol)) {
     throw Object.assign(new Error('The R2 S3 API endpoint must use HTTPS'), { status: 500 });
   }
   if (process.env.NODE_ENV === 'production' && parsedEndpoint.protocol !== 'https:') {
     throw Object.assign(new Error('The R2 S3 API endpoint must use HTTPS in production'), { status: 500 });
-  }
-  if (parsedEndpoint.pathname !== '/' && parsedEndpoint.pathname !== '') {
-    throw Object.assign(new Error('Use the account-level R2 S3 API endpoint without a bucket name or path'), { status: 500 });
   }
   r2Client = new S3Client({
     region: 'auto', endpoint, forcePathStyle: true,
