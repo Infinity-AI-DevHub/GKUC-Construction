@@ -8,6 +8,8 @@ import { boqDocument, documentContext } from '../lib/documents.js';
 import { sendDocument } from '../lib/document-pdf.js';
 import { notify } from '../alerts.js';
 import { publishChange } from '../lib/realtime.js';
+import { readUpload, readUploadedFile } from '../lib/storage.js';
+import { parseDailyCostWorkbook } from '../lib/daily-cost-workbook.js';
 
 const router = Router();
 /* Kept only as the fallback grouping for the cost comparison below; the values people
@@ -188,6 +190,97 @@ const dailyLineSchema = z.object({
 });
 
 const costError = (message, status = 400) => Object.assign(new Error(message), { status });
+
+const importedCostLineSchema = z.object({
+  workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  taskId: z.number().int().positive().nullable().optional(),
+  workTask: z.string().trim().min(2).max(220),
+  source: z.enum(['Material','Labour','Fuel','Equipment','Subcontractor','Overhead','Other']),
+  costType: z.enum(['Expected','Variation','Unexpected']).default('Expected'),
+  description: z.string().trim().min(2).max(400),
+  quantity: z.number().positive().nullable().optional(),
+  unit: z.string().trim().max(30).nullable().optional(),
+  unitRate: z.number().nonnegative().nullable().optional(),
+  amount: z.number().positive(),
+  reference: z.string().trim().max(120).nullable().optional()
+});
+
+router.post('/cost-control/import-preview', auth, permit('qs.costControl'), wrap(async (req, res) => {
+  const { file, discard } = await readUpload(req);
+  try {
+    if (!file || !/\.xlsx$/i.test(file.filename)) return res.status(422).json({ error:'Choose an Excel .xlsx workbook.' });
+    const buffer = await readUploadedFile(file.path);
+    if (buffer.length > 15 * 1024 * 1024) return res.status(413).json({ error:'This workbook is too large. Split it into smaller periods.' });
+    let preview;
+    try { preview = parseDailyCostWorkbook(buffer); }
+    catch { return res.status(422).json({ error:'This workbook could not be read. Open it in Excel, save it as .xlsx, and try again.' }); }
+    res.json({ filename:file.filename, ...preview,
+      total:preview.rows.reduce((sum, row) => sum + Number(row.amount || 0), 0) });
+  } finally { await discard(); }
+}));
+
+router.post('/cost-control/import', auth, permit('qs.costControl'), validate(z.object({
+  projectId:z.number().int().positive(), filename:z.string().trim().max(190).optional(),
+  rows:z.array(importedCostLineSchema).min(1).max(2000)
+})), wrap(async (req,res) => {
+  const { projectId, rows } = req.body;
+  const result = await transaction(async connection => {
+    const [[project]] = await connection.execute('SELECT id FROM projects WHERE id=? AND active=1',[projectId]);
+    if (!project) throw costError('Choose an active project site.');
+    const taskCache = new Map();
+    const sheets = new Map();
+
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      let taskId = row.taskId || null;
+      if (taskId) {
+        const [[task]] = await connection.execute('SELECT id FROM tasks WHERE id=? AND project_id=?',[taskId,projectId]);
+        if (!task) throw costError(`Imported line ${index + 1} has a work task that does not belong to this project.`);
+      } else {
+        const taskKey = row.workTask.toLowerCase();
+        taskId = taskCache.get(taskKey);
+        if (!taskId) {
+          const [[existing]] = await connection.execute('SELECT id FROM tasks WHERE project_id=? AND LOWER(TRIM(title))=LOWER(TRIM(?)) ORDER BY id LIMIT 1',[projectId,row.workTask]);
+          taskId = existing?.id;
+          if (!taskId) {
+            const [createdTask] = await connection.execute(`INSERT INTO tasks
+              (title,project_id,assignee,due,due_date,priority,status,notes)
+              VALUES (?,?,'Historical import',?,?,'Low','Completed',?)`,
+            [row.workTask,projectId,row.workDate,row.workDate,`Created from ${req.body.filename || 'an imported existing-work workbook'}.`]);
+            taskId = createdTask.insertId;
+          }
+          taskCache.set(taskKey,taskId);
+        }
+      }
+      const [[duplicate]] = await connection.execute(`SELECT l.id FROM daily_cost_lines l
+        JOIN daily_cost_sheets s ON s.id=l.sheet_id WHERE s.project_id=? AND s.work_date=?
+        AND s.status IN ('Submitted','Approved') AND l.source=? AND LOWER(TRIM(l.description))=LOWER(TRIM(?))
+        AND ABS(l.amount-?)<0.01 AND COALESCE(l.reference,'')=COALESCE(?,'') LIMIT 1`,
+      [projectId,row.workDate,row.source,row.description,row.amount,row.reference || null]);
+      if (duplicate) throw costError(`Imported line ${index + 1} already exists for ${row.workDate}. Remove it from the review and submit again.`,409);
+
+      let sheetId = sheets.get(row.workDate);
+      if (!sheetId) {
+        const [createdSheet] = await connection.execute(`INSERT INTO daily_cost_sheets
+          (project_id,work_date,status,notes,submitted_by) VALUES (?,?,'Submitted',?,?)`,
+        [projectId,row.workDate,`Imported existing work from ${req.body.filename || 'Excel'}`,req.user.id]);
+        sheetId = createdSheet.insertId;
+        sheets.set(row.workDate,sheetId);
+      }
+      await connection.execute(`INSERT INTO daily_cost_lines
+        (sheet_id,task_id,source,cost_type,description,quantity,unit,unit_rate,amount,reference,quoted_recovery)
+        VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
+      [sheetId,taskId,row.source,row.costType,row.description,row.quantity || null,row.unit || null,row.unitRate ?? null,row.amount,row.reference || null]);
+    }
+    await audit(connection,req.user.id,'IMPORT','daily_cost_sheet','bulk',null,
+      { projectId,filename:req.body.filename || null,lineCount:rows.length,sheetIds:[...sheets.values()] },req.ip);
+    return { sheetIds:[...sheets.values()], lineCount:rows.length, dayCount:sheets.size };
+  });
+  await notify({ audience:'finance.manage',severity:'Info',title:'Imported project costs need review',
+    message:`${result.lineCount} existing cost lines across ${result.dayCount} work day${result.dayCount === 1 ? '' : 's'} are awaiting Finance review.`,
+    referenceType:'daily_cost_sheet',referenceId:result.sheetIds[0] });
+  res.status(201).json({ ...result,status:'Submitted' });
+}));
 
 router.get('/cost-control/options', auth, permit('qs.view','qs.boq','finance.view','finance.manage'), wrap(async (req, res) => {
   const projectId = Number(req.query.projectId);

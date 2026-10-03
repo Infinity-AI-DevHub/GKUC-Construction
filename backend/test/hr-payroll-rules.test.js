@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {INITIAL_HR_RULES,suggestOvertime,intervalsOverlap,calculateTransport,calculateMileage,calculateLongDistance} from '../src/lib/hr-payroll-rules.js';
+import {INITIAL_HR_RULES,suggestOvertime,intervalsOverlap,calculateTransport,calculateMileage,calculateLongDistance,calculateLateDeduction} from '../src/lib/hr-payroll-rules.js';
 import {calculatePayslip} from '../src/lib/payroll-policy.js';
 const rules={...INITIAL_HR_RULES,fullTransportDays:20};
 test('daily rate paid weekly keeps attendance-based basic earnings',()=>assert.equal(calculatePayslip({pay_basis:'Daily rate',daily_rate:2500,days_present:5,overtime_pay:0,unpaid_days:0,salary_advance:0},{},[]).basic,12500));
@@ -18,4 +18,17 @@ test('motorcycle reimbursement uses kilometres × rate',()=>assert.equal(calcula
 test('invalid and negative odometers are rejected',()=>{assert.throws(()=>calculateMileage({startOdometer:100,endOdometer:90},rules));assert.throws(()=>calculateMileage({approvedKm:-1},rules));});
 test('fixed travel conflicts with mileage unless policy permits',()=>{assert.throws(()=>calculateMileage({approvedKm:20,fixedTravel:true},rules));assert.equal(calculateMileage({approvedKm:20,fixedTravel:true},{...rules,allowMileageAndFixed:true}).total,640);});
 test('per-day operator allowance remains separate',()=>assert.equal(calculateTransport(500,5,'Per-day amount',rules).amount,2500));
-test('special duty allowance does not change daily rate or EPF basis',()=>{const employee={pay_basis:'Daily rate',daily_rate:2500,days_present:1,overtime_pay:0,unpaid_days:0,salary_advance:0,epf_eligible:true};const result=calculatePayslip(employee,{epf_employee_rate:8,epf_employer_rate:12,etf_employer_rate:3},[{kind:'Allowance',amount:500}]);assert.equal(result.basic,2500);assert.equal(result.allowanceTotal,500);assert.equal(result.epfEmployeeDeduction,200);assert.equal(employee.daily_rate,2500);});
+test('special duty allowance does not change daily rate or EPF basis',()=>{const employee={pay_basis:'Daily rate',basic_salary:62500,daily_rate:2500,days_present:1,overtime_pay:0,unpaid_days:0,salary_advance:0,epf_eligible:true};const result=calculatePayslip(employee,{epf_employee_rate:8,epf_employer_rate:12,etf_employer_rate:3},[{kind:'Allowance',amount:500}]);assert.equal(result.basic,2500);assert.equal(result.contributionBase,2500);assert.equal(result.allowanceTotal,500);assert.equal(result.epfEmployeeDeduction,200);assert.equal(employee.daily_rate,2500);});
+test('late arrival deduction follows grace, tier and 15-minute increment boundaries',()=>{
+  const amount=checkIn=>calculateLateDeduction({check_in:checkIn,state:'Late'},rules,3200).amount;
+  assert.equal(amount('08:00'),0,'the first 30 minutes are free');
+  assert.equal(amount('08:01'),200,'31–45 minutes deducts 50% of the LKR 400 hourly rate');
+  assert.equal(amount('08:15'),200);
+  assert.equal(amount('08:16'),300,'46–59 minutes deducts 75%');
+  assert.equal(amount('08:29'),300);
+  assert.equal(amount('08:30'),400,'exactly one hour deducts one hourly rate');
+  assert.equal(amount('08:31'),500,'a started additional 15-minute block adds 25%');
+  assert.equal(amount('08:45'),500);
+  assert.equal(amount('08:46'),600);
+});
+test('late deduction is a separate payslip deduction',()=>{const result=calculatePayslip({daily_rate:3200,days_present:1,overtime_pay:0,salary_advance:0,late_deduction:500},{},[]);assert.equal(result.basic,3200);assert.equal(result.lateDeduction,500);assert.equal(result.deductions,500);assert.equal(result.netPay,2700);});

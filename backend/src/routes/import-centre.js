@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { audit, getOne, pool, query, transaction } from '../db.js';
-import { auth, permit, wrap } from '../lib/http.js';
+import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
+import { auth, permit, wrap, fail } from '../lib/http.js';
 import { readUpload, readUploadedFile } from '../lib/storage.js';
 import { readWorkbook, serialToDate } from '../lib/xlsx.js';
+import { parseBoqWorkbook } from '../lib/boq-template.js';
+import { parseBoqPdf } from '../lib/boq-pdf.js';
+import { optionsFor } from '../lib/options.js';
 
 const router = Router();
 const definitions = {
@@ -21,6 +24,53 @@ const asDate = value => typeof value === 'number' ? serialToDate(value) : clean(
 const validDate = value => { const date = asDate(value); return /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(`${date}T00:00:00Z`)); };
 const canImport = (req, kind) => req.user.permissions.includes(definitions[kind].permission);
 const issue = (sheet, row, message) => ({ sheet, row, message });
+
+const boqProblems = row => {
+  const errors = [];
+  if (!clean(row.description)) errors.push('Enter the work description.');
+  if (!clean(row.unit)) errors.push('Enter the unit.');
+  if (!Number.isFinite(Number(row.quantity)) || Number(row.quantity) <= 0) errors.push('Quantity must be more than zero.');
+  if (!Number.isFinite(Number(row.rate)) || Number(row.rate) < 0) errors.push('Rate must be zero or more.');
+  return errors;
+};
+
+async function flexibleBoqPreview(file) {
+  const isPdf = file.mime === 'application/pdf' || /\.pdf$/i.test(file.filename || '');
+  if (!isPdf && !/\.xlsx$/i.test(file.filename || '')) throw fail(422, 'Upload an Excel .xlsx file or a PDF.');
+  const parsed = isPdf
+    ? await parseBoqPdf(file.path)
+    : parseBoqWorkbook(await readUploadedFile(file.path), { categories: await optionsFor('boq.category') });
+  if (!parsed.ok) throw fail(422, parsed.error);
+  const clientName = clean(parsed.client);
+  const matchingClient = clientName
+    ? await getOne('SELECT id,name FROM clients WHERE active=1 AND LOWER(name)=LOWER(?) ORDER BY id LIMIT 1', [clientName])
+    : null;
+  const projectName = clean(parsed.title);
+  const matchingProject = projectName
+    ? await getOne('SELECT id,name,client_id clientId FROM projects WHERE active=1 AND LOWER(name)=LOWER(?) ORDER BY id LIMIT 1', [projectName])
+    : null;
+  const rows = parsed.items.map((item, index) => {
+    const data = { category: item.category || '', description: item.description || '', unit: item.unit || '',
+      quantity: item.quantity ?? '', rate: item.rate ?? '', method: item.method || '', notes: item.notes || '' };
+    const errors = [...new Set([...(item.problems || []), ...boqProblems(data)])];
+    return { sheet: item.sourceSheet || parsed.sheet || (isPdf ? 'PDF' : 'Workbook'),
+      row: item.sheetRow || item.sourceRow || index + 1, code: String(index + 1),
+      action: errors.length ? 'blocked' : 'create', errors, data };
+  });
+  const document = { title: clean(parsed.title) || file.filename.replace(/\.(xlsx|pdf)$/i, ''),
+    reference: clean(parsed.layout?.reference), documentDate: clean(parsed.layout?.documentDate),
+    location: clean(parsed.layout?.location), notes: '', companyId: 1,
+    clientId: matchingClient?.id || null, clientType: 'Organisation', clientName,
+    clientRegistrationNumber: '', clientTin: '', clientVatNumber: '', clientAddress: '',
+    clientPhone: '', clientEmail: '', clientContactPerson: '',
+    projectId: matchingProject?.id || null, projectName, projectSite: clean(parsed.layout?.location),
+    projectManager: '', projectStartDate: clean(parsed.layout?.documentDate) };
+  const counts = { create: rows.filter(row => row.action === 'create').length, skip: 0,
+    blocked: rows.filter(row => row.action === 'blocked').length };
+  return { mode: 'document-review', kind: 'boqs',
+    sheets: parsed.layout?.sheets || [parsed.sheet || (isPdf ? 'PDF' : 'Workbook')], document, rows, counts,
+    sourceTotal: rows.reduce((sum, row) => sum + Number(row.data.quantity || 0) * Number(row.data.rate || 0), 0) };
+}
 
 function readRows(workbook, definition) {
   const sheet = workbook.sheet(definition.sheet);
@@ -88,7 +138,19 @@ async function inspect(kind, rows) {
 
 router.get('/types', auth, wrap(async (req, res) => res.json(Object.entries(definitions)
   .filter(([kind]) => canImport(req, kind))
-  .map(([kind, definition]) => ({ kind, sheet: definition.sheet, importReady: supported.has(kind) })))));
+  .map(([kind, definition]) => ({ kind, sheet: definition.sheet, importReady: supported.has(kind) || kind === 'boqs' })))));
+
+router.get('/review-context', auth, permit('qs.boq'), wrap(async (req, res) => {
+  const [clients, projects, companies] = await Promise.all([
+    query('SELECT id,name FROM clients WHERE active=1 ORDER BY name'),
+    query(`SELECT p.id,p.name,p.client_id clientId,COALESCE(c.name,p.client) client,p.company_id companyId
+      FROM projects p LEFT JOIN clients c ON c.id=p.client_id WHERE p.active=1 ORDER BY p.name`),
+    query('SELECT id,name FROM companies WHERE active=1 ORDER BY id')
+  ]);
+  res.json({ clients, projects, companies,
+    canCreateClient: req.user.permissions.includes('clients.manage'),
+    canCreateProject: req.user.permissions.includes('projects.manage') });
+}));
 
 router.get('/batches', auth, wrap(async (req, res) => {
   const allowed = Object.keys(definitions).filter(kind => canImport(req, kind));
@@ -105,6 +167,16 @@ router.post('/dry-check', auth, wrap(async (req, res) => {
     const kind = clean(fields.kind);
     if (!definitions[kind]) return res.status(400).json({ error: 'Choose one of the seven GKUC historical templates.' });
     if (!canImport(req, kind)) return res.status(403).json({ error: 'You do not have access to import this register.' });
+    if (kind === 'boqs') {
+      const preview = await flexibleBoqPreview(file);
+      const source = await readUploadedFile(file.path);
+      const checksum = crypto.createHash('sha256').update(source).digest('hex');
+      const result = await query('INSERT INTO historical_import_batches (kind,filename,checksum,preview_json,uploaded_by) VALUES (?,?,?,?,?)',
+        [kind, file.filename.slice(0, 190), checksum, JSON.stringify(preview), req.user.id]);
+      await audit(pool, req.user.id, 'IMPORT_DRY_CHECK', 'historical_import', result.insertId, null,
+        { kind, counts: preview.counts, checksum, mode: preview.mode }, req.ip);
+      return res.status(201).json({ id: result.insertId, ...preview });
+    }
     if (!/\.xlsx$/i.test(file.filename)) return res.status(422).json({ error: 'Use an Excel .xlsx template.' });
     const buffer = await readUploadedFile(file.path);
     if (buffer.length > 15 * 1024 * 1024) return res.status(413).json({ error: 'This workbook is too large. Split it into smaller periods.' });
@@ -123,7 +195,31 @@ router.post('/dry-check', auth, wrap(async (req, res) => {
       [kind, file.filename.slice(0, 190), checksum, JSON.stringify(preview), req.user.id]);
     await audit(pool, req.user.id, 'IMPORT_DRY_CHECK', 'historical_import', result.insertId, null, { kind, counts, checksum }, req.ip);
     res.status(201).json({ id: result.insertId, ...preview });
-  } finally { await discard(); }
+  } finally { await discard().catch(error => console.error('Could not clean up historical import upload', error)); }
+}));
+
+router.patch('/batches/:id/review', auth, permit('qs.boq'), wrap(async (req, res) => {
+  const batch = await getOne('SELECT * FROM historical_import_batches WHERE id=?', [req.params.id]);
+  if (!batch || batch.kind !== 'boqs') return res.status(404).json({ error: 'BOQ import review not found.' });
+  if (batch.status !== 'Review') return res.status(409).json({ error: 'This import has already been completed.' });
+  const current = JSON.parse(batch.preview_json);
+  if (current.mode !== 'document-review') return res.status(409).json({ error: 'Upload this older source document again to use the editable review.' });
+  const document = { ...current.document, ...(req.body.document || {}) };
+  if (!clean(document.title)) throw fail(400, 'Enter the BOQ title.');
+  const rows = Array.isArray(req.body.rows) ? req.body.rows.map((row, index) => {
+    const data = { category: clean(row.data?.category), description: clean(row.data?.description), unit: clean(row.data?.unit),
+      quantity: row.data?.quantity, rate: row.data?.rate, method: clean(row.data?.method), notes: clean(row.data?.notes) };
+    const errors = boqProblems(data);
+    return { sheet: clean(row.sheet) || 'Document', row: Number(row.row) || index + 1,
+      code: String(index + 1), action: errors.length ? 'blocked' : 'create', errors, data };
+  }) : current.rows;
+  const counts = { create: rows.filter(row => row.action === 'create').length, skip: 0,
+    blocked: rows.filter(row => row.action === 'blocked').length };
+  const preview = { ...current, document, rows, counts,
+    sourceTotal: rows.reduce((sum, row) => sum + Number(row.data.quantity || 0) * Number(row.data.rate || 0), 0) };
+  await query('UPDATE historical_import_batches SET preview_json=? WHERE id=?', [JSON.stringify(preview), batch.id]);
+  await audit(pool, req.user.id, 'UPDATE_REVIEW', 'historical_import', batch.id, null, { kind: 'boqs', counts }, req.ip);
+  res.json({ id: batch.id, status: batch.status, ...preview });
 }));
 
 router.get('/batches/:id', auth, wrap(async (req, res) => {
@@ -133,13 +229,98 @@ router.get('/batches/:id', auth, wrap(async (req, res) => {
   res.json({ ...batch, preview: JSON.parse(batch.preview) });
 }));
 
+async function confirmFlexibleBoq(req, batch, preview) {
+  if (preview.rows.some(row => boqProblems(row.data || {}).length))
+    throw fail(409, 'Correct every highlighted BOQ line and save the review before importing.');
+  if (!preview.rows.length) throw fail(400, 'Add at least one BOQ line.');
+  const d = preview.document || {};
+  if (!clean(d.title)) throw fail(400, 'Enter the BOQ title.');
+  const mayCreateClient = req.user.permissions.includes('clients.manage');
+  const mayCreateProject = req.user.permissions.includes('projects.manage');
+  const reference = await nextReference('BOQ', 'boqs');
+  return transaction(async connection => {
+    const [[locked]] = await connection.execute('SELECT status FROM historical_import_batches WHERE id=? FOR UPDATE', [batch.id]);
+    if (locked?.status !== 'Review') throw fail(409, 'This document was already imported.');
+    let project;
+    if (Number(d.projectId)) {
+      const [[found]] = await connection.execute(`SELECT p.id,p.name,p.client_id clientId,COALESCE(c.name,p.client) client
+        FROM projects p LEFT JOIN clients c ON c.id=p.client_id WHERE p.id=? AND p.active=1`, [Number(d.projectId)]);
+      if (!found) throw fail(400, 'Choose an active project.');
+      project = found;
+    } else {
+      if (!mayCreateProject) throw fail(403, 'This BOQ needs a new project. Ask a project administrator to create it, then select it here.');
+      let client;
+      if (Number(d.clientId)) {
+        const [[found]] = await connection.execute('SELECT id,name FROM clients WHERE id=? AND active=1', [Number(d.clientId)]);
+        if (!found) throw fail(400, 'Choose an active client.');
+        client = found;
+      } else {
+        if (!mayCreateClient) throw fail(403, 'This BOQ needs a new client. Ask a client administrator to create it, then select it here.');
+        if (!clean(d.clientName)) throw fail(400, 'Enter the new client name or choose an existing client.');
+        const [[existing]] = await connection.execute('SELECT id,name FROM clients WHERE LOWER(name)=LOWER(?) ORDER BY id LIMIT 1', [clean(d.clientName)]);
+        if (existing) client = existing;
+        else {
+          const [created] = await connection.execute(`INSERT INTO clients
+            (type,name,registration_number,tin,vat_number,billing_address,phone,email,contact_person,active)
+            VALUES (?,?,?,?,?,?,?,?,?,1)`, [clean(d.clientType) === 'Individual' ? 'Private' : 'Organisation', clean(d.clientName),
+            clean(d.clientRegistrationNumber) || null, clean(d.clientTin) || null, clean(d.clientVatNumber) || null,
+            clean(d.clientAddress) || '', clean(d.clientPhone) || null, clean(d.clientEmail) || null,
+            clean(d.clientContactPerson) || null]);
+          client = { id: created.insertId, name: clean(d.clientName) };
+        }
+      }
+      if (!clean(d.projectName)) throw fail(400, 'Enter the new project name or choose an existing project.');
+      const companyId = Number(d.companyId) || 1;
+      const [[company]] = await connection.execute('SELECT id FROM companies WHERE id=? AND active=1', [companyId]);
+      if (!company) throw fail(400, 'Choose the operating company for this project.');
+      const [[existingProject]] = await connection.execute(
+        'SELECT id,name,client_id clientId,client FROM projects WHERE active=1 AND company_id=? AND LOWER(name)=LOWER(?) ORDER BY id LIMIT 1',
+        [companyId, clean(d.projectName)]);
+      if (existingProject) project = existingProject;
+      else {
+        const [created] = await connection.execute(`INSERT INTO projects
+          (name,client,client_id,manager,progress,budget,health,stage,site,start_date,active,company_id)
+          VALUES (?,?,?,?,0,0,'On track','Historical import',?,?,1,?)`,
+        [clean(d.projectName), client.name, client.id, clean(d.projectManager) || req.user.name,
+          clean(d.projectSite) || clean(d.location) || 'Not specified', validDate(d.projectStartDate) ? asDate(d.projectStartDate) : null, companyId]);
+        project = { id: created.insertId, name: clean(d.projectName), clientId: client.id, client: client.name };
+      }
+    }
+    const total = preview.rows.reduce((sum, row) => sum + Number(row.data.quantity) * Number(row.data.rate), 0);
+    const sourceNotes = [batch.filename ? `Imported from ${batch.filename}` : null,
+      clean(d.reference) ? `Source reference: ${clean(d.reference)}` : null,
+      clean(d.documentDate) ? `Source date: ${clean(d.documentDate)}` : null,
+      clean(d.notes)].filter(Boolean).join('\n').slice(0, 1000) || null;
+    const [createdBoq] = await connection.execute(`INSERT INTO boqs
+      (project_id,reference,title,status,total,prepared_by,notes) VALUES (?,?,?,'Draft',?,?,?)`,
+    [project.id, reference, clean(d.title), total, req.user.id, sourceNotes]);
+    for (const row of preview.rows) {
+      const item = row.data;
+      await connection.execute(`INSERT INTO boq_items
+        (boq_id,category,description,unit,quantity,rate,amount,method,notes) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [createdBoq.insertId, clean(item.category) || null, clean(item.description), clean(item.unit), Number(item.quantity),
+        Number(item.rate), Number(item.quantity) * Number(item.rate), clean(item.method) || null, clean(item.notes) || null]);
+    }
+    await connection.execute("UPDATE historical_import_batches SET status='Imported',confirmed_by=?,confirmed_at=NOW() WHERE id=?",
+      [req.user.id, batch.id]);
+    await connection.execute('INSERT INTO historical_import_links (kind,source_code,target_id,batch_id) VALUES (?,?,?,?)',
+      ['boqs', `DOCUMENT-${batch.id}`, createdBoq.insertId, batch.id]);
+    await audit(connection, req.user.id, 'IMPORT_CONFIRM', 'historical_import', batch.id, null,
+      { kind: 'boqs', boqId: createdBoq.insertId, projectId: project.id, reference, rows: preview.rows.length, total }, req.ip);
+    return { id: batch.id, status: 'Imported', created: 1, skipped: 0, boqId: createdBoq.insertId,
+      projectId: project.id, reference };
+  });
+}
+
 router.post('/batches/:id/confirm', auth, wrap(async (req, res) => {
   const batch = await getOne('SELECT * FROM historical_import_batches WHERE id=?', [req.params.id]);
   if (!batch) return res.status(404).json({ error: 'Import review not found.' });
   if (!canImport(req, batch.kind)) return res.status(403).json({ error: 'You cannot confirm this import.' });
-  if (!supported.has(batch.kind)) return res.status(409).json({ error: 'This template is available for checking, but importing it is not yet safe. No records were changed.' });
   if (batch.status !== 'Review') return res.status(409).json({ error: 'This workbook has already been imported.' });
   const preview = JSON.parse(batch.preview_json);
+  if (batch.kind === 'boqs' && preview.mode === 'document-review')
+    return res.json(await confirmFlexibleBoq(req, batch, preview));
+  if (!supported.has(batch.kind)) return res.status(409).json({ error: 'This template is available for checking, but importing it is not yet safe. No records were changed.' });
   if (preview.rows.some(row => row.action === 'blocked')) return res.status(409).json({ error: 'Resolve every issue in the dry-check report and upload the corrected workbook first.' });
   const checked = await inspect(batch.kind, preview.rows.map(({ sheet, row, data }) => ({ sheet, row, data })));
   if (checked.some(row => row.action === 'blocked')) return res.status(409).json({ error: 'The data changed since the dry check. Run a new dry check before confirming.', rows: checked });

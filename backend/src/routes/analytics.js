@@ -25,7 +25,7 @@ const builders = {
       .map(row => [row.employee, row.role, row.present, row.late, row.absent])
   }),
   employees: async () => ({
-    columns: ['Code', 'Employee', 'Department', 'Designation', 'Status', 'Basic salary'],
+    columns: ['Code', 'Employee', 'Department', 'Designation', 'Status', 'EPF/ETF salary basis'],
     rows: (await query(`SELECT e.code,e.name,d.name department,e.designation,e.status,e.basic_salary salary
       FROM employees e LEFT JOIN departments d ON d.id=e.department_id ORDER BY e.code`))
       .map(row => [row.code, row.name, row.department || '—', row.designation, row.status, row.salary])

@@ -118,6 +118,12 @@ test('BOQ Excel upload and commit accept an empty Category cell', async () => {
   const staged = await uploaded.json();
   assert.equal(uploaded.status, 201, JSON.stringify(staged));
   assert.equal(staged.problemCount, 0, JSON.stringify(staged));
+  assert.equal(staged.client, projects.body[0].client);
+  const clientEdit = await call(qs, 'PATCH', `/boq/imports/${staged.id}`, {
+    client: 'Client name supplied by an untrusted workbook', title: staged.title
+  });
+  assert.equal(clientEdit.status, 200, JSON.stringify(clientEdit.body));
+  assert.equal(clientEdit.body.client, projects.body[0].client);
   assert.equal(staged.items[0].category, null);
   const added = await call(qs, 'POST', `/boq/imports/${staged.id}/items`, {
     description: 'Added during review', unit: 'item', quantity: 3, rate: 10,
@@ -139,6 +145,77 @@ test('BOQ Excel upload and commit accept an empty Category cell', async () => {
   assert.equal((await call(qs, 'POST', `/boq/imports/${staged.id}/items`, {
     description: 'Too late', unit: 'item', quantity: 1, rate: 1
   })).status, 409);
+});
+
+test('Import Centre accepts a foreign BOQ workbook and creates it only after editable review', async () => {
+  const owner = await login();
+  const projects = await call(owner, 'GET', '/projects');
+  const project = projects.body[0];
+  assert.ok(project?.id);
+  const xlsx = writeWorkbook([{ name: 'Consultant Estimate', rows: [
+    ['External bill supplied by the consultant'],
+    ['Item No', 'Particulars', 'Unit', 'Qty', 'Unit Price', 'Total'],
+    ['A-1', 'Excavate drain trench', 'm3', 4, 1250, 5000],
+    ['A-2', 'Concrete bedding', 'm3', 2, 3000, 6000]
+  ] }]);
+  const form = new FormData();
+  form.append('kind', 'boqs');
+  form.append('file', new Blob([xlsx], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'consultant-format.xlsx');
+  const checkedResponse = await fetch(`${base}/import-centre/dry-check`, {
+    method: 'POST', headers: { authorization: `Bearer ${owner}` }, body: form
+  });
+  const checked = await checkedResponse.json();
+  assert.equal(checkedResponse.status, 201, JSON.stringify(checked));
+  assert.equal(checked.mode, 'document-review');
+  assert.equal(checked.rows.length, 2);
+  const reviewed = await call(owner, 'PATCH', `/import-centre/batches/${checked.id}/review`, {
+    document: { ...checked.document, title: 'Verified consultant BOQ', projectId: project.id },
+    rows: checked.rows
+  });
+  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  assert.equal(reviewed.body.counts.blocked, 0);
+  const confirmed = await call(owner, 'POST', `/import-centre/batches/${checked.id}/confirm`, {});
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
+  const boq = await call(owner, 'GET', `/boq/${confirmed.body.boqId}`);
+  assert.equal(boq.status, 200, JSON.stringify(boq.body));
+  assert.equal(boq.body.title, 'Verified consultant BOQ');
+  assert.equal(boq.body.client, project.client);
+  assert.equal(boq.body.items.length, 2);
+});
+
+test('BOQ document review can create its missing client and project without duplicates', async () => {
+  const owner = await login();
+  const suffix = Date.now();
+  const xlsx = writeWorkbook([{ name: 'Priced Work', rows: [
+    ['Description', 'Unit', 'Quantity', 'Rate', 'Amount'],
+    ['Historical drainage work', 'm', 10, 750, 7500]
+  ] }]);
+  const form = new FormData();
+  form.append('kind', 'boqs');
+  form.append('file', new Blob([xlsx], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'historical-boq.xlsx');
+  const response = await fetch(`${base}/import-centre/dry-check`, {
+    method: 'POST', headers: { authorization: `Bearer ${owner}` }, body: form
+  });
+  const review = await response.json();
+  assert.equal(response.status, 201, JSON.stringify(review));
+  const clientName = `Imported Client ${suffix}`;
+  const projectName = `Imported Project ${suffix}`;
+  const saved = await call(owner, 'PATCH', `/import-centre/batches/${review.id}/review`, {
+    document: { ...review.document, title: 'Historical BOQ', projectId: null, projectName,
+      companyId: 1, projectSite: 'Imported site', clientId: null, clientName,
+      clientType: 'Organisation', clientAddress: 'Imported after document review' },
+    rows: review.rows
+  });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  const confirmed = await call(owner, 'POST', `/import-centre/batches/${review.id}/confirm`, {});
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
+  const project = await call(owner, 'GET', `/projects/${confirmed.body.projectId}`);
+  assert.equal(project.status, 200, JSON.stringify(project.body));
+  assert.equal(project.body.name, projectName);
+  assert.equal(project.body.client, clientName);
+  const boq = await call(owner, 'GET', `/boq/${confirmed.body.boqId}`);
+  assert.equal(boq.body.projectId, confirmed.body.projectId);
+  assert.equal(boq.body.client, clientName);
 });
 
 test('only the Managing Director resets another user password and old sessions are revoked', async () => {
@@ -2697,15 +2774,17 @@ test('payroll is calculated from recorded attendance and approved overtime', asy
   assert.equal(Number(slip.overtimePay), 1000, 'each overtime category keeps its approved rate');
   assert.equal(Number(slip.allowanceTotal), 3000);
   assert.equal(Number(slip.reimbursementTotal), 1000);
-  assert.equal(Number(slip.epfEmployeeDeduction), 7840);
-  assert.equal(Number(slip.epfEmployerContribution), 11760);
-  assert.equal(Number(slip.etfEmployerContribution), 2940);
+  assert.equal(Number(slip.basic), 26400, 'earned salary is daily rate × six attended days');
+  assert.equal(Number(slip.contributionBase), 23520, 'the monthly statutory basis is prorated over the same attended days');
+  assert.equal(Number(slip.epfEmployeeDeduction), 1881.6);
+  assert.equal(Number(slip.epfEmployerContribution), 2822.4);
+  assert.equal(Number(slip.etfEmployerContribution), 705.6);
   assert.equal(Number(slip.otherDeduction), 500);
   assert.equal(Number(slip.unpaidLeaveDeduction), 0);
   assert.equal(Number(slip.salaryAdvanceDeduction), 4000, 'the named worker advance is recovered');
-  assert.equal(Number(slip.deductions), 12340, 'the salary sheet reconciles statutory, recurring and advance deductions');
-  assert.equal(Number(slip.netPay), 90660);
-  assert.equal(Number(slip.employerCost), 117700);
+  assert.equal(Number(slip.deductions), 6381.6, 'the salary sheet reconciles statutory, recurring and advance deductions');
+  assert.equal(Number(slip.netPay), 25018.4);
+  assert.equal(Number(slip.employerCost), 34928);
   assert.equal(slip.components.length, 4, 'the payslip preserves recurring components and the linked travel allowance calculation');
   assert.equal(Number(slip.advanceRecoveries[0].amount), 4000);
   const advances = (await call(owner, 'GET', `/receivables/petty-cash/${advanceFloat}/entries`)).body;

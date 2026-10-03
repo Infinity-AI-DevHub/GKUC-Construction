@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
 import { auth, permit, permissionsFor, validate, wrap } from '../lib/http.js';
 import { PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES, calculatePayslip, payProfileError } from '../lib/payroll-policy.js';
-import {rulesFor,calculateTransport,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
+import {rulesFor,calculateTransport,calculateLateDeduction,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
 import { contributionEligibility, DEFAULT_STATUTORY_RULES } from '../lib/statutory-eligibility.js';
 
 const router = Router();
@@ -62,7 +62,7 @@ const policySchema = z.object({
     permanentOnly: z.boolean(), minimumMonthlySalary: z.number().nonnegative(),
     weeklyWeeksPerMonth: z.number().positive(), dailyDaysPerMonth: z.number().positive()
   }).default(DEFAULT_STATUTORY_RULES),
-  hrRules:z.object({normalStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),normalEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),otInterval:z.number().positive().max(4),minimumOt:z.number().nonnegative().max(24),maxDailyOt:z.number().positive().max(24),transportDivisor:z.number().positive().max(366),fullTransportDays:z.number().int().min(0).max(366).nullable(),fullTransportComparison:z.enum(['At least','More than']),longDistanceKm:z.number().nonnegative(),longDistancePayment:z.number().nonnegative(),supervisorSiteCharge:z.number().nonnegative().default(500),mileageRate:z.number().nonnegative(),fixedTravelPayment:z.number().nonnegative(),allowMileageAndFixed:z.boolean(),countLeaveForTransport:z.boolean(),countAbsenceForTransport:z.boolean(),separateApproval:z.boolean().default(false)}).refine(r=>r.normalEnd>r.normalStart,'Normal shift end must be after its start').default(INITIAL_HR_RULES)
+  hrRules:z.object({normalStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),normalEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),paidHoursPerDay:z.number().positive().max(24).default(8),otInterval:z.number().positive().max(4),minimumOt:z.number().nonnegative().max(24),maxDailyOt:z.number().positive().max(24),lateGraceMinutes:z.number().int().nonnegative().default(30),lateHalfRateUntilMinutes:z.number().int().positive().default(45),lateThreeQuarterRateUntilMinutes:z.number().int().positive().default(60),lateIncrementMinutes:z.number().int().positive().default(15),lateIncrementFraction:z.number().positive().max(10).default(0.25),transportDivisor:z.number().positive().max(366),fullTransportDays:z.number().int().min(0).max(366).nullable(),fullTransportComparison:z.enum(['At least','More than']),longDistanceKm:z.number().nonnegative(),longDistancePayment:z.number().nonnegative(),supervisorSiteCharge:z.number().nonnegative().default(500),mileageRate:z.number().nonnegative(),fixedTravelPayment:z.number().nonnegative(),allowMileageAndFixed:z.boolean(),countLeaveForTransport:z.boolean(),countAbsenceForTransport:z.boolean(),separateApproval:z.boolean().default(false)}).refine(r=>r.normalEnd>r.normalStart,'Normal shift end must be after its start').refine(r=>r.lateGraceMinutes<r.lateHalfRateUntilMinutes&&r.lateHalfRateUntilMinutes<r.lateThreeQuarterRateUntilMinutes,'Late deduction thresholds must increase from grace to 50%, 75% and one hour').default(INITIAL_HR_RULES)
 });
 
 const policySelect = `SELECT p.id,p.company_id companyId,c.name company,p.effective_from effectiveFrom,p.office_ot_rate officeOtRate,
@@ -191,7 +191,7 @@ router.get('/:id', auth, permit('hr.payroll'), wrap(async (req, res) => {
   const run = await getOne(`${select} WHERE r.id=?`, [req.params.id]);
   if (!run) return res.status(404).json({ error: 'Payroll run not found' });
   const payslips = await query(`SELECT s.id,s.days_present daysPresent,s.days_absent daysAbsent,s.overtime_hours overtimeHours,
-    s.basic,s.overtime_pay overtimePay,s.unpaid_leave_deduction unpaidLeaveDeduction,
+    s.basic,s.contribution_base contributionBase,s.overtime_pay overtimePay,s.late_minutes lateMinutes,s.late_deduction lateDeduction,s.unpaid_leave_deduction unpaidLeaveDeduction,
     s.office_ot_hours officeOtHours,s.office_ot_pay officeOtPay,s.site_ot_hours siteOtHours,s.site_ot_pay siteOtPay,
     s.travel_ot_hours travelOtHours,s.travel_ot_pay travelOtPay,s.allowance_total allowanceTotal,
     s.reimbursement_total reimbursementTotal,s.gross_earnings grossEarnings,
@@ -267,10 +267,16 @@ export async function generatePayroll(req, res) {
   [...Array.from({ length: 11 }, () => [periodStart, periodEnd]).flat(), periodEnd, companyId, payFrequency, periodEnd]);
 
   if (!employees.length) return res.status(409).json({ error: `No active ${payFrequency.toLowerCase()}-paid employees fall inside this period` });
+  const attendanceRows=await query(`SELECT employee_id,employee_name,check_in,state FROM attendance WHERE work_date BETWEEN ? AND ? AND check_in IS NOT NULL`,[periodStart,periodEnd]);
+  const activeRules=rulesFor(policy);
   for (const row of employees) {
     const eligibility = contributionEligibility(row, policy, periodEnd);
     row.epf_eligible = eligibility.epf;
     row.etf_eligible = eligibility.etf;
+    const late=attendanceRows.filter(a=>Number(a.employee_id)===Number(row.id)||!a.employee_id&&a.employee_name===row.name)
+      .map(a=>calculateLateDeduction(a,activeRules,row.daily_rate));
+    row.late_minutes=late.reduce((sum,item)=>sum+item.lateMinutes,0);
+    row.late_deduction=money(late.reduce((sum,item)=>sum+item.amount,0));
   }
   const covered=await getOne(`SELECT ps.employee_id FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1`,[...employees.map(e=>e.id),periodEnd,periodStart]);
   if(covered)return res.status(409).json({error:'An employee is already included in another payroll run for these dates. Changing payment frequency must not pay the same period twice.'});
@@ -307,16 +313,16 @@ export async function generatePayroll(req, res) {
         const calculation = calculatePayslip(employee, policy, employeeComponents);
         total += calculation.netPay;
         const [slip] = await connection.execute(`INSERT INTO payslips
-          (run_id,employee_id,days_present,days_absent,overtime_hours,basic,overtime_pay,
+          (run_id,employee_id,days_present,days_absent,overtime_hours,basic,contribution_base,overtime_pay,
            office_ot_hours,office_ot_pay,site_ot_hours,site_ot_pay,travel_ot_hours,travel_ot_pay,
-           allowance_total,reimbursement_total,gross_earnings,epf_employee_deduction,
+           allowance_total,reimbursement_total,gross_earnings,late_minutes,late_deduction,epf_employee_deduction,
            epf_employer_contribution,etf_employer_contribution,other_deduction,
            unpaid_leave_deduction,salary_advance_deduction,deductions,net_pay,employer_cost)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [run.insertId, employee.id, employee.days_present, employee.days_absent, employee.overtime_hours,
-          calculation.basic, calculation.overtimePay, employee.office_ot_hours, employee.office_ot_pay, employee.site_ot_hours,
+          calculation.basic, calculation.contributionBase, calculation.overtimePay, employee.office_ot_hours, employee.office_ot_pay, employee.site_ot_hours,
           employee.site_ot_pay, employee.travel_ot_hours, employee.travel_ot_pay, calculation.allowanceTotal,
-          calculation.reimbursementTotal, calculation.grossEarnings, calculation.epfEmployeeDeduction,
+          calculation.reimbursementTotal, calculation.grossEarnings, employee.late_minutes, calculation.lateDeduction, calculation.epfEmployeeDeduction,
           calculation.epfEmployerContribution, calculation.etfEmployerContribution, calculation.otherDeduction,
           calculation.unpaidLeaveDeduction, calculation.salaryAdvanceDeduction, calculation.deductions,
           calculation.netPay, calculation.employerCost]);

@@ -249,7 +249,7 @@ export default function EmployeeProfile({ employeeId, close, canManage, canPayro
           {employee.contributionStartDate !== undefined && <div><dt>Contribution start date</dt><dd>{employee.contributionStartDate ? shortDate(employee.contributionStartDate) : 'Employment start date'}</dd></div>}
           {employee.payBasis !== undefined && <div><dt>Pay arrangement</dt><dd>{employee.payBasis} · {employee.payFrequency}</dd></div>}
           {employee.payrollCategory !== undefined && <div><dt>Overtime policy</dt><dd>{employee.payrollCategory}</dd></div>}
-          {employee.basicSalary !== undefined && <div><dt>Monthly basic</dt><dd>{rupees(employee.basicSalary)}</dd></div>}
+          {employee.basicSalary !== undefined && <div><dt>Monthly EPF / ETF salary basis</dt><dd>{rupees(employee.basicSalary)}<small>Not added to salary</small></dd></div>}
           {employee.weeklyRate !== undefined && Number(employee.weeklyRate) > 0 && <div><dt>Weekly rate</dt><dd>{rupees(employee.weeklyRate)}</dd></div>}
           {employee.dailyRate !== undefined && <div><dt>Daily rate</dt><dd>{rupees(employee.dailyRate)}</dd></div>}
           {employee.epfEligible !== undefined && <div><dt>Contribution switches</dt><dd>EPF {employee.epfEligible ? 'enabled' : 'disabled'} · ETF {employee.etfEligible ? 'enabled' : 'disabled'} (GKUC policy is checked at payroll)</dd></div>}
@@ -386,7 +386,7 @@ function PersonalDetailsForm({ employee, departments, companies, close, reload }
       options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} />
     <Field required={false} name="compensationEffectiveFrom" label="Compensation effective from" type="date"
       defaultValue={inputDate(employee.compensationEffectiveFrom || employee.joinDate)} />
-    <Field required={false} name="basicSalary" label="Basic salary (LKR)" type="number" min="0" defaultValue={employee.basicSalary || 0} />
+    <Field required={false} name="basicSalary" label="Monthly EPF / ETF salary basis (LKR)" type="number" min="0" defaultValue={employee.basicSalary || 0} />
     <Field required={false} name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" defaultValue={employee.weeklyRate || 0} />
     <Field required={false} name="dailyRate" label="Daily rate (LKR)" type="number" min="0" defaultValue={employee.dailyRate || 0} />
     <Field name="overtimeRate" label="Legacy/custom OT rate (LKR/h)" type="number" min="0" defaultValue={employee.overtimeRate || 0} required={false} />

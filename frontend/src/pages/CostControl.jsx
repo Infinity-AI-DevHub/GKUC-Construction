@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, BarChart3, CircleDollarSign, Plus, Trash2, TrendingDown, TrendingUp, WalletCards } from 'lucide-react';
+import { AlertTriangle, BarChart3, CircleDollarSign, FileSpreadsheet, Plus, Trash2, TrendingDown, TrendingUp, WalletCards } from 'lucide-react';
 import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, SelectField, Summary, TextArea } from '../ui.jsx';
 
@@ -67,13 +67,16 @@ export default function CostControl({ projects, can }) {
 
       <section className="cost-ledger-panel"><div className="cost-section-heading"><div><span>Budget movement</span><h2>Variations and unexpected additions</h2></div></div><div className="cost-table-scroll"><table><thead><tr><th>Reference</th><th>Description</th><th>Value</th><th>Status</th><th>Raised</th></tr></thead><tbody>{data.variations.map(row => <tr key={row.id}><td><strong>{row.reference}</strong></td><td>{row.description}</td><td><Money value={row.amount} signed /></td><td><Badge tone={slug(row.status)}>{row.status}</Badge></td><td>{shortDate(row.createdAt)}</td></tr>)}{!data.variations.length && <tr><td colSpan="5">No variation orders have been raised.</td></tr>}</tbody></table></div></section>
     </>}
-    {open === 'expense' && data && <ExpenseForm projectId={Number(projectId)} items={data.items} initial={rework} close={() => {setOpen('');setRework(null);}} reload={load} />}
+    {open === 'expense' && data && <ExpenseForm projectId={Number(projectId)} items={data.items} initial={rework}
+      onImport={() => setOpen('expense-import')} close={() => {setOpen('');setRework(null);}} reload={load} />}
+    {open === 'expense-import' && data && <ExistingCostImport projectId={Number(projectId)}
+      close={() => setOpen('')} back={() => setOpen('expense')} reload={load} />}
     {typeof open === 'number' && <DailySheetDetail id={open} close={() => setOpen('')} onCorrect={can.costControl ? sheet => {setRework(sheet);setOpen('expense');} : null} />}
     {forecastItem && <ForecastForm projectId={Number(projectId)} item={forecastItem} close={() => setForecastItem(null)} reload={load} />}
   </div>;
 }
 
-function ExpenseForm({ projectId, items, initial, close, reload }) {
+function ExpenseForm({ projectId, items, initial, close, reload, onImport }) {
   const [options, setOptions] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [lines, setLines] = useState(initial?.lines?.map(line => ({source:line.source,costType:line.cost_type,
@@ -101,6 +104,7 @@ function ExpenseForm({ projectId, items, initial, close, reload }) {
         quotationItemId:id(line.quotationItemId), quotedRecovery:Number(line.quotedRecovery || 0),
         reference:line.reference || null })) }); await reload();
   }}>
+    {!initial && <div className="cost-import-callout wide"><FileSpreadsheet size={22} /><div><strong>Adding work already kept in Excel?</strong><span>Upload the existing workbook, review every detected line, correct it, and only then send it to Finance.</span></div><button className="secondary" type="button" onClick={onImport}>Import existing Excel</button></div>}
     <p className="form-note wide">Use one line per cost and select the completed work task it belongs to. The same task is also visible in <a href="/tasks">Tasks</a>; update it there rather than creating a second task. Finance reviews this sheet before costs are posted. Fleet-recorded station fuel is linked, not charged again; see <a href="/fleet?section=fuel">Fleet fuel records</a>. For labour, you may select an employee or enter an unassigned cost; either way, enter the actual amount. These lines allocate project cost and do not create a salary payment. For a new station purchase, Finance deducts the approved amount from the selected fuel float.</p>
     {loadError && <p className="form-error wide">{loadError}</p>}
     <Field name="workDate" label="Work date" type="date" defaultValue={initial?.work_date || todayInput()} />
@@ -125,6 +129,38 @@ function ExpenseForm({ projectId, items, initial, close, reload }) {
       <label>Receipt / reference<input value={line.reference || ''} onChange={event => update(index,{reference:event.target.value})} /></label>
       {line.costType !== 'Unexpected' && <><label>Accepted quotation item<select value={line.quotationItemId || ''} onChange={event => update(index,{quotationItemId:event.target.value,quotedRecovery:''})}><option value="">No quoted recovery assigned</option>{options?.quotationItems.map(item => <option key={item.id} value={item.id}>{item.reference} · {item.description} · {rupees(item.amount)}</option>)}</select></label>{line.quotationItemId && <label>Quoted recovery allocated to this day (LKR)<input type="number" min="0" step="0.01" value={line.quotedRecovery || ''} onChange={event => update(index,{quotedRecovery:event.target.value})} /></label>}</>}
     </div>)}<button className="secondary" type="button" onClick={() => setLines(old => [...old,{source:'Material',costType:'Expected',taskId:'',description:'',amount:''}])}><Plus size={14} /> Add cost line</button></div>
+  </FormModal>;
+}
+
+function ExistingCostImport({ projectId, close, back, reload }) {
+  const [preview,setPreview]=useState(null),[rows,setRows]=useState([]),[error,setError]=useState(''),[loading,setLoading]=useState(false);
+  const update=(index,changes)=>setRows(current=>current.map((row,at)=>at===index?{...row,...changes}:row));
+  const read=async file=>{
+    if(!file)return;
+    setLoading(true);setError('');setPreview(null);setRows([]);
+    try{
+      const form=new FormData();form.append('file',file);
+      const result=await api('/boq/cost-control/import-preview',{method:'POST',body:form});
+      setPreview(result);setRows(result.rows.map((row,index)=>({...row,include:true,key:`${row.sourceSheet}-${row.sourceRow}-${index}`})));
+      if(!result.rows.length)setError(result.warnings?.[0]||'No project cost lines were found in this workbook.');
+    }catch(failure){setError(failure.message);}finally{setLoading(false);}
+  };
+  const included=rows.filter(row=>row.include);
+  const total=included.reduce((sum,row)=>sum+number(row.amount),0);
+  return <FormModal title="Import existing project costs" close={close} label={`Send ${included.length} line${included.length===1?'':'s'} to Finance`} wide onSubmit={async()=>{
+    if(!preview)throw new Error('Choose and review an Excel workbook first.');
+    if(!included.length)throw new Error('Keep at least one cost line before submitting.');
+    await post('/boq/cost-control/import',{projectId,filename:preview.filename,rows:included.map(({include,key,sourceSheet,sourceRow,...row})=>({
+      ...row,quantity:row.quantity===''?null:Number(row.quantity),unitRate:row.unitRate===''?null:Number(row.unitRate),amount:Number(row.amount),taskId:null
+    }))});
+    await reload();
+  }}>
+    <div className="cost-import-intro wide"><button type="button" className="status-button" onClick={back}>← Back to manual entry</button><div><strong>1. Choose the old workbook</strong><span>The system separates vehicle, additional, labour and material columns. Daily totals and running totals are ignored to prevent duplicates.</span></div><label className="cost-import-picker"><FileSpreadsheet size={18}/><span>{loading?'Reading workbook…':'Choose Excel file'}</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event=>read(event.target.files?.[0])}/></label></div>
+    {error&&<p className="form-error wide">{error}</p>}
+    {preview&&<><div className="cost-import-summary wide"><div><span>Workbook</span><strong>{preview.filename}</strong></div><div><span>Detected</span><strong>{rows.length} lines · {new Set(rows.map(row=>row.workDate)).size} days</strong></div><div><span>Included total</span><strong>{rupees(total)}</strong></div></div>
+      <div className="cost-import-review wide"><div className="cost-import-review-heading"><div><strong>2. Review and correct before submitting</strong><span>Untick anything that should not be imported. Every field below remains editable.</span></div><button type="button" className="secondary" onClick={()=>setRows(current=>[...current,{include:true,key:`new-${Date.now()}`,workDate:todayInput(),workTask:'',source:'Other',costType:'Expected',description:'',quantity:'',unit:'',unitRate:'',amount:'',reference:'Manual import row'}])}><Plus size={14}/>Add row</button></div>
+        <div className="cost-import-table"><table><thead><tr><th>Use</th><th>Date</th><th>Work performed</th><th>Category</th><th>Cost item</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Reference</th><th/></tr></thead><tbody>{rows.map((row,index)=><tr key={row.key} className={row.include?'':'excluded'}><td><input aria-label={`Include line ${index+1}`} type="checkbox" checked={row.include} onChange={event=>update(index,{include:event.target.checked})}/></td><td><input type="date" value={row.workDate} onChange={event=>update(index,{workDate:event.target.value})}/></td><td><input value={row.workTask} onChange={event=>update(index,{workTask:event.target.value})}/></td><td><select value={row.source} onChange={event=>update(index,{source:event.target.value})}>{SOURCES.map(source=><option key={source}>{source}</option>)}</select></td><td><input value={row.description} onChange={event=>update(index,{description:event.target.value})}/></td><td><input type="number" min="0.001" step="0.001" value={row.quantity??''} onChange={event=>update(index,{quantity:event.target.value})}/></td><td><input value={row.unit??''} onChange={event=>update(index,{unit:event.target.value})}/></td><td><input type="number" min="0" step="0.01" value={row.unitRate??''} onChange={event=>update(index,{unitRate:event.target.value})}/></td><td><input type="number" min="0.01" step="0.01" value={row.amount} onChange={event=>update(index,{amount:event.target.value})}/></td><td><input value={row.reference??''} onChange={event=>update(index,{reference:event.target.value})}/></td><td><button type="button" className="icon-btn" aria-label={`Remove line ${index+1}`} onClick={()=>setRows(current=>current.filter((_,at)=>at!==index))}><Trash2 size={14}/></button></td></tr>)}</tbody></table></div>
+      </div><p className="form-note wide">Submitting creates one Finance-review sheet per work date. If an imported work description is not already a project task, SiteOps records it as completed historical work so the cost keeps a traceable source.</p></>}
   </FormModal>;
 }
 
