@@ -68,6 +68,15 @@ files as a rollback copy. It is safe to rerun.
 Restart the backend with its updated environment. For PM2, use the deployment's normal
 restart command with environment refresh. Then verify all of these with an authorised user:
 
+First run the credential diagnostic. It prints only the endpoint host, bucket and credential
+lengths; it never prints either secret:
+
+```bash
+pnpm --filter @gkuc/backend storage:diagnose:r2
+```
+
+The result must show `WRITE`, `READ` and `DELETE` as successful before testing the UI.
+
 1. Upload and open an employee attachment.
 2. Upload and open a project/gallery image and its thumbnail.
 3. Upload and download a tender, subcontractor quotation and BOQ workbook.
