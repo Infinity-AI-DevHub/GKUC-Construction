@@ -195,6 +195,23 @@ For production, create a dedicated MySQL user restricted to `gkuc_siteops`; do n
 with the MySQL `root` account. Use scheduled `mysqldump --single-transaction` backups and
 test restoration regularly.
 
+### Production update
+
+The frontend is compiled by Vite. Vite is intentionally a development dependency because
+the running Express server only serves the finished `frontend/dist` files. A server with
+`NODE_ENV=production` skips development dependencies during a plain `npm install`, so use
+the production build command below rather than installing the frontend normally:
+
+```bash
+npm install --prefix backend --omit=dev
+npm run build:production
+pm2 restart gkuc-siteops --update-env
+```
+
+`build:production` explicitly installs the frontend build tools and then creates the
+production bundle. This avoids `vite: command not found` without moving Vite into the
+application's runtime dependencies.
+
 ## Tests
 
 ```bash
