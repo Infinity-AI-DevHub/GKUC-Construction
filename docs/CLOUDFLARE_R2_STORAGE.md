@@ -25,7 +25,15 @@ UPLOAD_TMP_DIR=/www/wwwroot/gkuc-construction/uploads/.tmp
 
 Use the complete value shown as **S3 API** by Cloudflare for `R2_S3_ENDPOINT`. The API token
 needs Object Read and Write access to this bucket. Restrict it to this bucket when creating
-the token.
+the token. SiteOps accepts both forms Cloudflare currently displays:
+
+```text
+https://ACCOUNT_ID.r2.cloudflarestorage.com
+https://ACCOUNT_ID.r2.cloudflarestorage.com/BUCKET_NAME
+```
+
+If the bucket is present in the URL, it must match `R2_BUCKET`; SiteOps removes that final
+segment before connecting so the SDK does not append the bucket twice.
 
 `uploads.gkucconstruction.com` should not be connected directly to this confidential bucket.
 A normal R2 custom domain makes an object public to anyone with its URL, bypassing SiteOps

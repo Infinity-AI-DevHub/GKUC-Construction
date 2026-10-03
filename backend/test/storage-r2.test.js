@@ -30,7 +30,8 @@ before(async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
   Object.assign(process.env, {
-    STORAGE_DRIVER: 'r2', R2_S3_ENDPOINT: origin, R2_BUCKET: 'test-bucket',
+    /* Cloudflare may copy the S3 API with the bucket as its final path segment. */
+    STORAGE_DRIVER: 'r2', R2_S3_ENDPOINT: `${origin}/test-bucket`, R2_BUCKET: 'test-bucket',
     R2_ACCESS_KEY_ID: 'test-access', R2_SECRET_ACCESS_KEY: 'test-secret',
     UPLOAD_DIR: temporary, UPLOAD_TMP_DIR: path.join(temporary, '.tmp')
   });
