@@ -10,15 +10,19 @@ import DailyExpenses from './DailyExpenses.jsx';
 import ExpectedOutflows from './ExpectedOutflows.jsx';
 import CashComparison from './CashComparison.jsx';
 import Cheques from './Cheques.jsx';
+import SupplierStatements from './SupplierStatements.jsx';
+import VatClearance from './VatClearance.jsx';
+import VehicleExpenseReport from './VehicleExpenseReport.jsx';
+import VatSchedules from './VatSchedules.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
-const TABS = ['Financial reports','Management accounts','Cash comparison','Daily expenses','Expected outflows','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Categories'];
+const TABS = ['Financial reports','Management accounts','Cash comparison','Daily expenses','Vehicle expenses','Expected outflows','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Supplier statements','Categories'];
 const TAB_GROUPS = [
-  { label: 'Overview & review', tabs: ['Financial reports', 'Management accounts', 'Cash comparison', 'Daily expenses', 'Daily cost review', 'Budget monitoring'] },
+  { label: 'Overview & review', tabs: ['Financial reports', 'Management accounts', 'Cash comparison', 'Daily expenses', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
   { label: 'Money in', tabs: ['Invoices', 'Income', 'VAT ledger'] },
-  { label: 'Money out', tabs: ['Expected outflows', 'Bills', 'Supplier invoices', 'Expenses', 'Petty cash', 'Credit cards'] },
-  { label: 'Controls', tabs: ['Cheques', 'Bonds', 'Categories'] }
+  { label: 'Money out', tabs: ['Expected outflows', 'Bills', 'Supplier invoices', 'Supplier statements', 'Expenses', 'Petty cash', 'Credit cards'] },
+  { label: 'Controls', tabs: ['VAT clearance', 'Cheques', 'Bonds', 'Categories'] }
 ];
 
 /** PID 2.10 — costs, payments and profitability in one view, watched continuously. */
@@ -36,12 +40,14 @@ export default function Finance({ data, reload, can, companyId, company }) {
     'Management accounts': null,
     'Cash comparison': null,
     'Daily expenses': null,
+    'Vehicle expenses': null,
     'Expected outflows': null,
     'Budget monitoring': null,
     'Daily cost review': null,
     Bills: can.finance&&'Record bill',
     'Credit cards': null,
     'VAT ledger': null,
+    'VAT clearance': null,
     Invoices: null,
     Cheques: null,
     Bonds: null,
@@ -49,6 +55,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     Expenses: can.finance && 'Record expense',
     Income: can.finance && 'Record income',
     'Supplier invoices': can.finance && 'Record invoice',
+    'Supplier statements': null,
     Categories: can.finance && 'Add category'
   };
 
@@ -62,12 +69,14 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {tab === 'Management accounts' && <ManagementAccounts projects={data.projects.filter(project => Number(project.companyId) === Number(companyId))} companyId={companyId} company={company} can={can} />}
     {tab === 'Cash comparison' && <CashComparison companyId={companyId} company={company} can={can} />}
     {tab === 'Daily expenses' && <DailyExpenses companyId={companyId} company={company} can={can} />}
+    {tab === 'Vehicle expenses' && <VehicleExpenseReport companyId={companyId} company={company} />}
     {tab === 'Expected outflows' && <ExpectedOutflows companyId={companyId} company={company} can={can} projects={data.projects} />}
     {tab === 'Budget monitoring' && <BudgetMonitoring summary={summary} />}
     {tab === 'Daily cost review' && <DailyCostReview companyId={companyId} can={can} />}
     {tab === 'Bills' && <Bills data={data} can={can} companyId={companyId} open={open==='Bills'} close={()=>setOpen('')} />}
     {tab === 'Credit cards' && <CreditCards can={can} companyId={companyId} />}
-    {tab === 'VAT ledger' && <VatLedger companyId={companyId} />}
+    {tab === 'VAT ledger' && <VatSchedules companyId={companyId} company={company} can={can} />}
+    {tab === 'VAT clearance' && <VatClearance companyId={companyId} company={company} can={can} />}
     {tab === 'Invoices' && <ClientInvoices data={data} can={can} companyId={companyId} />}
     {tab === 'Cheques' && <Cheques can={can} data={data} companyId={companyId} />}
     {tab === 'Bonds' && <Bonds data={data} can={can} companyId={companyId} />}
@@ -75,6 +84,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {tab === 'Expenses' && <Expenses companyId={companyId} can={can} />}
     {tab === 'Income' && <Income companyId={companyId} />}
     {tab === 'Supplier invoices' && <Invoices can={can} refresh={refresh} companyId={companyId} />}
+    {tab === 'Supplier statements' && <SupplierStatements companyId={companyId} />}
     {tab === 'Categories' && <Categories companyId={companyId} />}
 
     {open === 'Expenses' && <ExpenseForm data={data} close={() => setOpen('')} reload={refresh} />}
@@ -134,8 +144,6 @@ function CreditCards({can,companyId}){const [data,setData]=useState({cards:[],st
 function CardForm({companyId,close,reload}){return <FormModal title="Add a company credit card" close={close} label="Save card" onSubmit={async v=>{await post('/finance/credit-cards',{companyId,name:v.name,bank:v.bank,lastFour:v.lastFour,cardholder:v.cardholder,creditLimit:Number(v.creditLimit||0),defaultReminderDays:Number(v.defaultReminderDays||5)});await reload();}}><Field name="name" label="Card name" placeholder="Operations Visa"/><Field name="bank" label="Bank"/><Field name="lastFour" label="Last four digits" pattern="[0-9]{4}"/><Field name="cardholder" label="Cardholder"/><Field name="creditLimit" label="Credit limit (LKR)" type="number" min="0"/><Field name="defaultReminderDays" label="Default reminder (days before)" type="number" min="0" max="90" defaultValue="5"/></FormModal>}
 function StatementForm({cards,close,reload}){return <FormModal title="Record a card statement" close={close} label="Save statement" onSubmit={async v=>{await post('/finance/credit-card-statements',{cardId:Number(v.cardId),statementDate:v.statementDate,periodFrom:v.periodFrom||undefined,periodTo:v.periodTo||undefined,dueDate:v.dueDate,amount:Number(v.amount),minimumDue:Number(v.minimumDue||0),reminderDays:v.reminderDays===''?undefined:Number(v.reminderDays),notes:v.notes||undefined});await reload();}}><SelectField name="cardId" label="Card" options={cards.map(c=>[c.id,`${c.name} — ${c.bank} •••• ${c.lastFour}`])}/><Field name="statementDate" label="Statement date" type="date" defaultValue={todayInput()}/><Field name="dueDate" label="Payment deadline" type="date"/><Field name="amount" label="Statement amount (LKR)" type="number" min="0" step="0.01"/><Field name="minimumDue" label="Minimum due (LKR)" type="number" min="0" step="0.01" defaultValue="0"/><Field name="periodFrom" label="Period from" type="date" required={false}/><Field name="periodTo" label="Period to" type="date" required={false}/><Field name="reminderDays" label="Remind before (optional override)" type="number" min="0" max="90" required={false}/></FormModal>}
 function CardPayment({statement,close,reload}){return <FormModal title={`Pay ${statement.card} statement`} close={close} label="Record payment" onSubmit={async v=>{await post(`/finance/credit-card-statements/${statement.id}/payments`,{amount:Number(v.amount),paidDate:v.paidDate,method:v.method,reference:v.reference||undefined});await reload();}}><Field name="amount" label="Payment amount (LKR)" type="number" min="0" step="0.01" defaultValue={Number(statement.amount)-Number(statement.paidAmount)}/><Field name="paidDate" label="Paid on" type="date" defaultValue={todayInput()}/><SelectField name="method" label="Method" options={['Bank transfer','Cheque','Cash']}/><Field name="reference" label="Payment reference" required={false}/></FormModal>}
-
-function VatLedger({companyId}){const [vat,setVat]=useState(null);const load=()=>api(`/finance/vat?companyId=${companyId}`).then(setVat).catch(()=>setVat(null));useLiveList(load);useEffect(()=>{load();},[companyId]);if(!vat)return <p className="empty-state">Loading VAT ledger…</p>;return <><div className="attendance-summary"><Summary label="Output VAT collected" value={rupees(vat.outputVat)} icon={TrendingUp}/><Summary label="Input VAT paid" value={rupees(vat.inputVat)} icon={CircleDollarSign}/><Summary label="Net VAT payable" value={rupees(vat.netVatPayable)} icon={Wallet}/></div><Table columns={['Date','Direction','Invoice / bill','Counterparty','Net amount','VAT','Total']} template="120px 100px 150px minmax(180px,1.3fr) 130px 130px 130px" title="VAT calculated automatically from paid invoices and bills" empty="No paid VAT-bearing documents.">{vat.entries.map((r,i)=><Row template="120px 100px 150px minmax(180px,1.3fr) 130px 130px 130px" key={`${r.direction}-${r.reference}-${i}`}><span>{shortDate(r.date)}</span><Badge tone={r.direction==='Output'?'active':'pending'}>{r.direction}</Badge><strong>{r.reference}</strong><span>{r.counterparty}</span><span>{rupees(r.netAmount)}</span><strong>{rupees(r.vatAmount)}</strong><span>{rupees(r.totalAmount)}</span></Row>)}</Table></>}
 
 const BUDGET_COLUMNS = ['Project', 'Approved budget', 'Recorded cost', 'Variance', 'Used', 'Income', 'Margin'];
 const BUDGET_TEMPLATE = 'minmax(170px,1.3fr) 140px 140px 140px 130px 140px 140px';

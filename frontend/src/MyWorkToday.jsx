@@ -60,7 +60,7 @@ export function buildWorkQueues({ data, queue, can, user }) {
   for (const item of queue.work || []) {
     const card = { ...item, key: `${item.kind}-${item.id}` };
     if (['purchase-request','order-approval','leave','overtime','attendance','integrity'].includes(item.kind)) needsApproval.push(card);
-    else if (['approved-request','purchase-order','invoice-verification','offboarding-assets','offboarding-store','offboarding-vehicle','offboarding-access','offboarding-payroll','payroll-step','project-start','project-closeout','accepted-quotation','onboarding','daily-site-close','low-stock','client-followup','milestone','tender','tender-document','insurance','vehicle-renewal','returned-cheque','retention','bond'].includes(item.kind)) dueToday.push(card);
+    else if (['approved-request','purchase-order','invoice-verification','offboarding-assets','offboarding-store','offboarding-vehicle','offboarding-access','offboarding-payroll','payroll-step','project-start','project-closeout','accepted-quotation','onboarding','daily-site-close','low-stock','client-followup','milestone','tender','tender-document','insurance','vehicle-renewal','returned-cheque','retention','bond','company-compliance'].includes(item.kind)) dueToday.push(card);
   }
   const urgency = (a, b) => {
     const left = datePart(a.deadline) || '9999-12-31';

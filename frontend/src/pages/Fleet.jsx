@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, CalendarDays, Fuel, Gauge, QrCode, Truck, Users, Wrench } from 'lucide-react';
 import { api, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { allowedTabs, Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { allowedTabs, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { toSvg } from '../qr.js';
 import { useOptions } from '../options.js';
 import { RecordScopeProvider } from '../record-scope.jsx';
@@ -179,6 +179,7 @@ function MaintenanceForm({ vehicle, data, close, reload }) {
   return <FormModal title={`Log service or repair — ${vehicle.reg}`} close={close} label="Save work" onSubmit={async values => {
     await post(`/fleet/${vehicle.id}/maintenance`, {
       kind:values.kind,
+      companyId:data.companyId,
       serviceDate: values.serviceDate,
       description: values.description,
       cost: Number(values.cost || 0),
@@ -194,7 +195,8 @@ function MaintenanceForm({ vehicle, data, close, reload }) {
     <Field name="odometer" label="Odometer reading" type="number" min="0" defaultValue={vehicle.odometer} />
     <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" defaultValue="0" required={false} />
     <Field name="garage" label="Garage" required={false} />
-    <SelectField name="projectId" label="Charge to project" options={[["",'Company fleet / not project-specific'],...data.projects.map(project=>[project.id,project.name])]} defaultValue={vehicle.projectId||''}/>
+    <p className="form-note wide">This cost will be posted to the currently selected operating company, even though the vehicle is shared.</p>
+    <SelectField name="projectId" label="Charge to project" options={[["",'Company fleet / not project-specific'],...data.projects.filter(project=>Number(project.companyId)===Number(data.companyId)).map(project=>[project.id,project.name])]} defaultValue={vehicle.projectId||''}/>
     <SelectField name="setStatus" label="Vehicle status" options={[["",'Leave unchanged'],'Repair','Available']}/>
     <TextArea name="description" label="Work carried out" />
   </FormModal>;
@@ -248,17 +250,24 @@ function Compliance() {
 
 function FuelAndService({ data }) {
   const [rows, setRows] = useState([]);
+  const [period,setPeriod]=useState(()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Colombo',year:'numeric',month:'2-digit'}).format(new Date())),[report,setReport]=useState(null),[reportError,setReportError]=useState('');
   const template = 'minmax(180px,1.3fr) 120px 110px 130px 110px minmax(140px,1fr)';
   useEffect(() => {
     Promise.all(data.fleet.map(vehicle => api(`/fleet/${vehicle.id}`)))
       .then(vehicles => setRows(vehicles.flatMap(vehicle => vehicle.fuel.map(record => ({ ...record, vehicle: vehicle.vehicle, reg: vehicle.reg })))))
       .catch(() => setRows([]));
   }, [data.fleet]);
+  useEffect(()=>{setReport(null);api(`/fleet/monthly-report?companyId=${data.companyId}&period=${period}`).then(value=>{setReport(value);setReportError('');}).catch(failure=>setReportError(failure.message));},[data.companyId,period]);
   useEffect(() => { const id = new URLSearchParams(window.location.search).get('record');
     if (id && rows.some(row => String(row.id) === id)) document.getElementById(`fuel-${id}`)?.scrollIntoView({ block: 'center' });
   }, [rows]);
 
-  return <Table columns={['Vehicle', 'Date', 'Litres', 'Cost', 'Odometer', 'Project']} template={template}
+  const reportTemplate='minmax(170px,1.2fr) minmax(150px,1fr) 90px 120px 110px 110px 100px 120px';
+  return <><section className="workspace-surface"><div className="workspace-section-heading"><div><span className="section-kicker">{report?.company?.name||'Selected company'}</span><h2>Monthly vehicle and fuel expenses</h2><p>Shared vehicles; only costs incurred by this company are included.</p></div><label>Reporting month<input type="month" value={period} onChange={event=>setPeriod(event.target.value)}/></label></div>
+    {reportError&&<p className="form-error">{reportError}</p>}{report&&<><div className="attendance-summary"><Summary label="Fuel used" value={`${Number(report.totals.fuelLitres).toLocaleString('en-LK')} L`} icon={Fuel}/><Summary label="Fuel cost" value={rupees(report.totals.fuelCost)} icon={Fuel}/><Summary label="Repairs & service" value={rupees(Number(report.totals.repairCost)+Number(report.totals.serviceCost)+Number(report.totals.inspectionCost))} icon={Wrench}/><Summary label="Cost per kilometre" value={report.totals.costPerKm===null?'Need two readings':rupees(report.totals.costPerKm)} icon={Gauge}/></div>
+      <Table columns={['Vehicle','Project / cost centre','Litres','Fuel','Repairs','Service','Distance','Cost / km']} template={reportTemplate} title={`${period} operating cost`} empty="No attributed fuel, repair or service costs were recorded for this company and month.">{report.rows.map(row=><Row template={reportTemplate} key={`${row.vehicleId}-${row.projectId||0}`}><div><strong>{row.vehicle}</strong><small>{row.registration}</small></div><span>{row.project}</span><span>{Number(row.fuelLitres).toLocaleString('en-LK')}</span><span>{rupees(row.fuelCost)}</span><span>{rupees(row.repairCost)}</span><span>{rupees(Number(row.serviceCost)+Number(row.inspectionCost))}</span><span>{Number(row.distanceKm).toLocaleString('en-LK')} km</span><strong>{row.costPerKm===null?'—':rupees(row.costPerKm)}</strong></Row>)}</Table></>}
+    </section><div style={{height:16}}/>
+  <Table columns={['Vehicle', 'Date', 'Litres', 'Cost', 'Odometer', 'Project']} template={template}
     title="Fuel records" empty="No fuel recorded yet.">
     {rows.map(row => <Row template={template} key={row.id} id={`fuel-${row.id}`} className={new URLSearchParams(window.location.search).get('record') === String(row.id) ? 'linked-record' : ''}>
       <div><strong>{row.vehicle}</strong><small>{row.reg}</small></div>
@@ -268,7 +277,7 @@ function FuelAndService({ data }) {
       <span>{row.odometer}</span>
       <span>{row.project || '—'}{row.fuelFloat ? <small>Paid from {row.fuelFloat}</small> : null}<small>Also visible in <a href="/finance/petty-cash">Finance petty cash</a>. This Fleet fuel record is the source; do not enter the spend again.</small></span>
     </Row>)}
-  </Table>;
+  </Table></>;
 }
 
 const EQUIPMENT_COLUMNS = ['Code', 'Equipment', 'Category', 'Assigned to', 'Due back', 'Status', ''];
@@ -478,7 +487,7 @@ function FuelForm({ data, vehicle, close, reload }) {
     </select></label>
     {!floats.length && <p className="form-note wide">There is no fuel float for this company. Open and top up one in Finance → Petty cash first.</p>}
     {selectedFloat && <p className="form-note wide">Available in this float: {rupees(selectedFloat.balance)}. The amount entered below cannot exceed it.</p>}
-    <SelectField name="projectId" label="Charge to project" options={[["",'Not project-specific'], ...data.projects.map(project => [project.id, project.name])]} defaultValue={vehicle?.projectId||''}/>
+    <SelectField name="projectId" label="Charge to project" options={[["",'Not project-specific'], ...data.projects.filter(project=>Number(project.companyId)===Number(data.companyId)).map(project => [project.id, project.name])]} defaultValue={vehicle?.projectId||''}/>
     <Field name="fuelDate" label="Date" type="date" defaultValue={todayInput()} />
     <Field name="litres" label="Litres" type="number" step="any" min="0" />
     <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" max={selectedFloat ? Number(selectedFloat.balance) : undefined} />

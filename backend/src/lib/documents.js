@@ -516,6 +516,30 @@ export function receiptDocument({ company, receipt, settings: given, design: giv
     heading: 'Payment Receipt', reference: receiptReference, date: receipt.receivedDate });
 }
 
+export function purchaseOrderDocument({ company, order, items, settings: given, design: givenDesign }) {
+  const settings=settingsFor(given),design=normaliseDesign(givenDesign);
+  const direct=order.procurementRoute==='Direct delivery';
+  const rows=items.map((item,index)=>`<tr><td class="ref">${index+1}</td><td>${escape(item.description)}</td>
+    <td class="unit">${escape(item.unit)}</td><td class="qty num">${quantity(item.quantity)}</td>
+    <td class="rate num">${money(item.rate)}</td><td class="amount num">${money(Number(item.quantity)*Number(item.rate))}</td></tr>`).join('');
+  const blocks={
+    letterhead:letterhead(company,direct?'Direct Delivery Instruction':'Purchase Order',order.reference,order.orderDate,design),
+    parties:`<div class="parties" data-block="parties"><div class="party"><h3>Supplier</h3><strong>${escape(order.supplier)}</strong>
+      ${order.supplierAddress?`<p>${lines(order.supplierAddress).join('<br>')}</p>`:''}${order.supplierPhone?`<p>Telephone: ${escape(order.supplierPhone)}</p>`:''}</div>
+      <div class="party"><h3>Deliver to</h3><strong>${escape(order.project)}</strong><p>${escape(order.site||'Project site')}</p>
+      <p><strong>Route:</strong> ${escape(order.procurementRoute)}</p><p><strong>Status:</strong> ${escape(order.status)}</p></div></div>`,
+    subject:`<p class="subject" data-block="subject"><strong>${direct?'Direct site delivery':'Approved material purchase'}</strong><br>
+      ${direct?'Deliver the listed material directly to the named project site. The site must record the actual quantity received before Finance verifies the invoice.':'Supply the following materials against this approved purchase order.'}</p>`,
+    items:`<table data-block="items"><thead><tr><th>#</th><th>Description</th><th>Unit</th><th class="num">Quantity</th><th class="num">Rate (LKR)</th><th class="num">Amount (LKR)</th></tr></thead><tbody>${rows}</tbody>
+      <tfoot><tr class="grand"><td colspan="5" class="num">Total</td><td class="num">${money(order.total)}</td></tr></tfoot></table>`,
+    notes:`<div class="notes" data-block="notes"><h3>Control trail</h3><p>Prepared by: ${escape(order.issuedBy||'—')}</p>
+      <p>Approval: ${direct?'Direct-delivery route — quantity receipt and invoice verification remain mandatory':order.status==='Pending approval'?'Awaiting approval':'Approved for issue'}</p></div>`,
+    signatures:settings.showSignatures?`<div class="signatures" data-block="signatures"><div><span>Prepared by</span></div><div><span>${direct?'Site acknowledgement':'Authorised by'}</span></div></div>`:'',
+    footer:`<div class="footer" data-block="footer">${escape(settings.footerNote||'')}<span>${BUILDER}</span></div>`
+  };
+  return page({design,company,title:order.reference,heading:direct?'Direct Delivery Instruction':'Purchase Order',reference:order.reference,date:order.orderDate,blocks,settings});
+}
+
 export function boqDocument({ company, boq, items, variations = [], settings: given, design: givenDesign }) {
   const settings = settingsFor(given);
   const design = normaliseDesign(givenDesign);

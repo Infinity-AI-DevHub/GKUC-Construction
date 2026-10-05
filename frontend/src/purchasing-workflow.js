@@ -19,15 +19,16 @@ export function requestSteps(request) {
 
 export function orderSteps(order) {
   const invoices = order.invoices || [];
+  const direct = order.procurementRoute === 'Direct delivery';
   const received = (order.receipts || []).length > 0;
   const fullyReceived = order.status === 'Received';
   const paid = invoices.length > 0 && invoices.every(invoice => invoice.status === 'Paid');
   const verified = invoices.length > 0 && invoices.every(invoice => Boolean(invoice.verifiedAt));
   return [
-    { label: 'Purchase request', owner: 'Store', done: Boolean(order.requestId), skipped: !order.requestId, detail: order.requestId ? 'Linked to a request' : 'Direct purchase — no request linked' },
-    { label: 'Approval', owner: 'Project management', done: order.status !== 'Pending approval', detail: order.status === 'Pending approval' ? 'Independent approval is required' : 'Order authorised' },
+    { label: 'Purchase request', owner: 'Store', done: Boolean(order.requestId), skipped: !order.requestId, detail: order.requestId ? 'Linked to a request' : direct ? 'Concrete direct-delivery route' : 'Direct purchase — no request linked' },
+    { label: 'Approval', owner: 'Project management', done: order.status !== 'Pending approval', skipped:direct, detail: direct?'The configured concrete route does not issue a normal PO':order.status === 'Pending approval' ? 'Independent approval is required' : 'Order authorised' },
     { label: 'Supplier quotations', owner: 'Purchasing', done: Boolean(order.requestId), skipped: !order.requestId, detail: order.requestId ? 'See the linked request for supplier offers' : 'No supplier quotation was linked' },
-    { label: 'Purchase order', owner: 'Purchasing', done: order.status !== 'Pending approval', detail: order.reference },
+    { label: direct?'Delivery instruction':'Purchase order', owner: 'Purchasing', done: order.status !== 'Pending approval', detail: order.reference },
     { label: 'Goods received', owner: 'Store', done: received && fullyReceived, detail: fullyReceived ? 'All ordered quantities received' : received ? 'Partially received — record the rest' : 'No goods receipt recorded' },
     { label: 'Invoice verified', owner: 'Finance', done: verified, detail: verified ? `${invoices.length} supplier invoice${invoices.length === 1 ? '' : 's'} independently verified` : invoices.length ? 'Verify each linked invoice against the order and goods receipt' : 'Match invoice, order and goods receipt', href: '/finance/supplier-invoices', action: 'Verify invoice' },
     { label: 'Payment', owner: 'Finance', done: paid, detail: paid ? 'Supplier invoices paid' : 'Pay only after invoice verification', href: '/finance/supplier-invoices', action: 'Open payables' }

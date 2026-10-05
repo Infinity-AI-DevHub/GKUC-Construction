@@ -511,6 +511,7 @@ export async function runAlertScan() {
   await runBirthdayReminderScan();
   await runEmployeeLetterReminderScan();
   await runInsuranceReminderScan();
+  await runCompanyComplianceReminderScan();
   const stamp = today();
   const alerts = [];
   await Promise.all([
@@ -711,6 +712,23 @@ export async function runInsuranceReminderScan(stamp=today()) {
       if(due>stamp)continue;
       await raise({key:`insurance:${policy.id}:${policy.expiry}:${due}`,caseKey:`insurance:${policy.id}:${policy.expiry}`,audience:'hr.insurance',severity:'Warning',
         title:`Insurance reminder — ${policy.name}`,message:`${policy.kind} policy ${policy.policy_number||policy.name} with ${policy.insurer||'insurer not recorded'} expires on ${policy.expiry}. Reminder scheduled for ${due}. Review renewal or extension.`,referenceType:'insurance',referenceId:policy.id});
+    }
+  }
+}
+
+export async function runCompanyComplianceReminderScan(stamp=today()) {
+  const records=await query(`SELECT c.*,co.name company FROM company_compliance_records c
+    JOIN companies co ON co.id=c.company_id WHERE c.status='Active'`);
+  for(const record of records){
+    const reminders=typeof record.reminders==='string'?JSON.parse(record.reminders):record.reminders;
+    for(const reminder of reminders||[]){
+      const due=insuranceReminderDate(record.expiry_date,reminder);
+      if(due>stamp)continue;
+      await raise({key:`company-compliance:${record.id}:${record.expiry_date}:${due}`,
+        caseKey:`company-compliance:${record.id}:${record.expiry_date}`,audience:'finance.manage',severity:'Warning',
+        title:`VAT clearance renewal — ${record.company}`,
+        message:`VAT clearance ${record.reference||'certificate'} expires on ${record.expiry_date}. Reminder scheduled for ${due}. Upload the renewed certificate and record its new expiry date.`,
+        referenceType:'company_compliance',referenceId:record.id});
     }
   }
 }

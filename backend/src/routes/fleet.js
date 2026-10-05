@@ -69,6 +69,48 @@ router.get('/fuel-floats', auth, permit('transport.view','transport.manage'), wr
   res.json(floats);
 }));
 
+router.get('/monthly-report',auth,permit('transport.view','transport.manage','finance.view','finance.manage'),wrap(async(req,res)=>{
+  const companyId=Number(req.query.companyId),period=String(req.query.period||'');
+  if(!Number.isInteger(companyId)||companyId<1||!/^\d{4}-(0[1-9]|1[0-2])$/.test(period))
+    return res.status(400).json({error:'Choose a company and reporting month.'});
+  const company=await getOne('SELECT id,name FROM companies WHERE id=? AND active=1',[companyId]);
+  if(!company)return res.status(404).json({error:'Company not found.'});
+  const from=`${period}-01`;
+  const [fuel,maintenance,readings]=await Promise.all([
+    query(`SELECT r.vehicle_id vehicleId,r.project_id projectId,v.vehicle,v.registration,p.name project,
+      SUM(r.litres) fuelLitres,SUM(r.cost) fuelCost,COUNT(*) fuelEntries
+      FROM fuel_records r JOIN fleet v ON v.id=r.vehicle_id LEFT JOIN projects p ON p.id=r.project_id
+      WHERE r.company_id=? AND r.fuel_date>=? AND r.fuel_date<DATE_ADD(?,INTERVAL 1 MONTH)
+      GROUP BY r.vehicle_id,r.project_id,v.vehicle,v.registration,p.name`,[companyId,from,from]),
+    query(`SELECT m.vehicle_id vehicleId,m.project_id projectId,v.vehicle,v.registration,p.name project,
+      SUM(CASE WHEN m.maintenance_kind='Repair' THEN m.cost ELSE 0 END) repairCost,
+      SUM(CASE WHEN m.maintenance_kind='Service' THEN m.cost ELSE 0 END) serviceCost,
+      SUM(CASE WHEN m.maintenance_kind='Inspection' THEN m.cost ELSE 0 END) inspectionCost,
+      COUNT(*) maintenanceEntries FROM vehicle_maintenance m JOIN fleet v ON v.id=m.vehicle_id
+      LEFT JOIN projects p ON p.id=m.project_id WHERE m.company_id=? AND m.service_date>=?
+      AND m.service_date<DATE_ADD(?,INTERVAL 1 MONTH)
+      GROUP BY m.vehicle_id,m.project_id,v.vehicle,v.registration,p.name`,[companyId,from,from]),
+    query(`SELECT r.vehicle_id vehicleId,r.project_id projectId,MIN(r.odometer) firstOdometer,MAX(r.odometer) lastOdometer
+      FROM vehicle_odometer_readings r WHERE r.company_id=? AND r.reading_date>=?
+      AND r.reading_date<DATE_ADD(?,INTERVAL 1 MONTH) GROUP BY r.vehicle_id,r.project_id`,[companyId,from,from])
+  ]);
+  const rows=new Map(),key=row=>`${row.vehicleId}:${row.projectId||0}`;
+  const ensure=row=>{const id=key(row);if(!rows.has(id))rows.set(id,{vehicleId:row.vehicleId,vehicle:row.vehicle,
+    registration:row.registration,projectId:row.projectId||null,project:row.project||'Company fleet',fuelLitres:0,
+    fuelCost:0,repairCost:0,serviceCost:0,inspectionCost:0,distanceKm:0,fuelEntries:0,maintenanceEntries:0});return rows.get(id);};
+  for(const row of fuel)Object.assign(ensure(row),{fuelLitres:Number(row.fuelLitres),fuelCost:Number(row.fuelCost),fuelEntries:Number(row.fuelEntries)});
+  for(const row of maintenance)Object.assign(ensure(row),{repairCost:Number(row.repairCost),serviceCost:Number(row.serviceCost),inspectionCost:Number(row.inspectionCost),maintenanceEntries:Number(row.maintenanceEntries)});
+  for(const reading of readings){const row=rows.get(key(reading));if(row)row.distanceKm=Math.max(0,Number(reading.lastOdometer)-Number(reading.firstOdometer));}
+  const result=[...rows.values()].map(row=>{const totalCost=row.fuelCost+row.repairCost+row.serviceCost+row.inspectionCost;
+    return {...row,totalCost,costPerKm:row.distanceKm>0?Math.round(totalCost/row.distanceKm*100)/100:null};});
+  const totals=result.reduce((sum,row)=>({fuelLitres:sum.fuelLitres+row.fuelLitres,fuelCost:sum.fuelCost+row.fuelCost,
+    repairCost:sum.repairCost+row.repairCost,serviceCost:sum.serviceCost+row.serviceCost,
+    inspectionCost:sum.inspectionCost+row.inspectionCost,distanceKm:sum.distanceKm+row.distanceKm,totalCost:sum.totalCost+row.totalCost}),
+    {fuelLitres:0,fuelCost:0,repairCost:0,serviceCost:0,inspectionCost:0,distanceKm:0,totalCost:0});
+  res.json({company,period,rows:result.sort((a,b)=>a.registration.localeCompare(b.registration)||a.project.localeCompare(b.project)),
+    totals:{...totals,costPerKm:totals.distanceKm>0?Math.round(totals.totalCost/totals.distanceKm*100)/100:null}});
+}));
+
 router.get('/:id', auth, permit('transport.view','transport.manage'), wrap(async (req, res) => {
   const vehicle = await getOne(`${select} WHERE f.id=?`, [req.params.id]);
   if (!vehicle) return res.status(404).json({ error: 'Asset not found' });
@@ -305,16 +347,16 @@ router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
     if(Number(body.cost)>Number(balance)+0.001)throw Object.assign(new Error(
       `The ${fuelFloat.name} fuel float has ${money(balance)} available. Top it up in Finance or enter an amount within the balance.`),{status:409});
     const [result]=await connection.execute(`INSERT INTO fuel_records
-      (vehicle_id,project_id,fuel_date,litres,cost,odometer,driver,created_by) VALUES (?,?,?,?,?,?,?,?)`,
-      [vehicle.id,projectId,body.fuelDate,body.litres,body.cost,body.odometer,body.driver||vehicle.driver,req.user.id]);
+      (vehicle_id,company_id,project_id,fuel_date,litres,cost,odometer,driver,created_by) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [vehicle.id,fuelFloat.companyId,projectId,body.fuelDate,body.litres,body.cost,body.odometer,body.driver||vehicle.driver,req.user.id]);
     await connection.execute(`INSERT INTO petty_cash_entries
       (float_id,kind,amount,entry_date,description,category,project_id,fuel_record_id,payee,recorded_by)
       VALUES (?,'Spend',?,?,?,'Fuel',?,?,?,?)`,
       [fuelFloat.id,-body.cost,body.fuelDate,`Fuel — ${vehicle.vehicle} (${vehicle.registration})`,projectId,result.insertId,body.vendor||null,req.user.id]);
     await connection.execute('UPDATE fleet SET odometer=GREATEST(odometer,?) WHERE id=?',[body.odometer,vehicle.id]);
     await connection.execute(`INSERT INTO vehicle_odometer_readings
-      (vehicle_id,reading_date,odometer,source,source_id,recorded_by) VALUES (?,?,?,'Fuel',?,?)`,
-      [vehicle.id,body.fuelDate,body.odometer,result.insertId,req.user.id]);
+      (vehicle_id,company_id,project_id,reading_date,odometer,source,source_id,recorded_by) VALUES (?,?,?,?,?,'Fuel',?,?)`,
+      [vehicle.id,fuelFloat.companyId,projectId,body.fuelDate,body.odometer,result.insertId,req.user.id]);
     if(projectId)await connection.execute(`INSERT INTO expenses
       (project_id,source,description,amount,expense_date,origin_type,origin_id,created_by)
       VALUES (?,'Fuel',?,?,?,'fuel_record',?,?)`,
@@ -329,6 +371,7 @@ router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
 }));
 
 router.post('/:id/maintenance', auth, permit('transport.manage'), validate(z.object({
+  companyId:z.number().int().positive().optional(),
   kind:z.enum(['Service','Repair','Inspection']).default('Service'),
   serviceDate: isoDate,
   description: z.string().min(3).max(400),
@@ -343,19 +386,25 @@ router.post('/:id/maintenance', auth, permit('transport.manage'), validate(z.obj
     const [[vehicle]]=await connection.execute('SELECT * FROM fleet WHERE id=? FOR UPDATE',[req.params.id]);
     if(!vehicle)throw Object.assign(new Error('Vehicle not found'),{status:404});
     if(body.odometer<Number(vehicle.odometer))throw Object.assign(new Error('Odometer cannot go backwards'),{status:409});
-    if(body.projectId){const [[project]]=await connection.execute('SELECT id FROM projects WHERE id=? AND active=1',[body.projectId]);
-      if(!project)throw Object.assign(new Error('Project site not found'),{status:400});}
+    let companyId=body.companyId||null;
+    if(body.projectId){const [[project]]=await connection.execute('SELECT id,company_id companyId FROM projects WHERE id=? AND active=1',[body.projectId]);
+      if(!project)throw Object.assign(new Error('Project site not found'),{status:400});
+      if(companyId&&Number(project.companyId)!==Number(companyId))throw Object.assign(new Error('The selected project belongs to a different company.'),{status:400});
+      companyId=project.companyId;}
+    if(!companyId&&vehicle.project_id){const [[assignedProject]]=await connection.execute('SELECT company_id companyId FROM projects WHERE id=?',[vehicle.project_id]);companyId=assignedProject?.companyId||null;}
+    const [[company]]=companyId?await connection.execute('SELECT id FROM companies WHERE id=? AND active=1',[companyId]):[[null]];
+    if(!company)throw Object.assign(new Error('Operating company not found'),{status:400});
     const [result]=await connection.execute(`INSERT INTO vehicle_maintenance
-      (vehicle_id,project_id,service_date,maintenance_kind,description,cost,garage,odometer,created_by) VALUES (?,?,?,?,?,?,?,?,?)`,
-      [vehicle.id,body.projectId||null,body.serviceDate,body.kind,body.description,body.cost,body.garage||null,body.odometer,req.user.id]);
+      (vehicle_id,company_id,project_id,service_date,maintenance_kind,description,cost,garage,odometer,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [vehicle.id,companyId,body.projectId||null,body.serviceDate,body.kind,body.description,body.cost,body.garage||null,body.odometer,req.user.id]);
     if(body.kind==='Service')await connection.execute(`UPDATE fleet SET last_service_date=?,last_service_odometer=?,
       odometer=GREATEST(odometer,?),status=COALESCE(?,status) WHERE id=?`,
       [body.serviceDate,body.odometer,body.odometer,body.setStatus||null,vehicle.id]);
     else await connection.execute('UPDATE fleet SET odometer=GREATEST(odometer,?),status=COALESCE(?,status) WHERE id=?',
       [body.odometer,body.setStatus||null,vehicle.id]);
     await connection.execute(`INSERT INTO vehicle_odometer_readings
-      (vehicle_id,reading_date,odometer,source,source_id,recorded_by) VALUES (?,?,?,?,?,?)`,
-      [vehicle.id,body.serviceDate,body.odometer,body.kind,result.insertId,req.user.id]);
+      (vehicle_id,company_id,project_id,reading_date,odometer,source,source_id,recorded_by) VALUES (?,?,?,?,?,?,?,?)`,
+      [vehicle.id,companyId,body.projectId||null,body.serviceDate,body.odometer,body.kind,result.insertId,req.user.id]);
     if(body.projectId&&body.cost>0)await connection.execute(`INSERT INTO expenses
       (project_id,source,description,amount,expense_date,origin_type,origin_id,created_by)
       VALUES (?,'Equipment',?,?,?,'vehicle_maintenance',?,?)`,

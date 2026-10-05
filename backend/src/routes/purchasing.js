@@ -5,12 +5,14 @@ import { auth, can, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { notify } from '../alerts.js';
 import { controlNumber, invoiceWarnings, orderWarnings, paymentMatch } from '../lib/procurement-controls.js';
 import { raise as raiseFinding } from '../lib/integrity.js';
+import { documentContext, purchaseOrderDocument } from '../lib/documents.js';
+import { sendDocument } from '../lib/document-pdf.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 /* Suppliers */
-router.get('/suppliers', auth, permit('store.view','store.manage','finance.pay'), wrap(async (req, res) => {
+router.get('/suppliers', auth, permit('store.view','store.manage','finance.view','finance.pay'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 0);
   const canSeeBank = can(req, 'finance.pay');
   res.json(await query(`SELECT s.id,s.name,s.contact_person contact,s.phone,s.email,s.address,
@@ -21,6 +23,71 @@ router.get('/suppliers', auth, permit('store.view','store.manage','finance.pay')
     (SELECT COALESCE(SUM(i.amount-i.paid_amount),0) FROM supplier_invoices i
       WHERE i.supplier_id=s.id AND i.status<>'Paid' ${companyId ? 'AND i.company_id=?' : ''}) outstanding
     FROM suppliers s WHERE s.active=1 ORDER BY s.name`, companyId ? [companyId, companyId] : []));
+}));
+
+router.get('/suppliers/:id/statement', auth, permit('finance.view','finance.pay'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId || 0);
+  if (!companyId) return res.status(400).json({ error: 'Choose a company before opening a supplier statement.' });
+  const supplier = await getOne('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE id=? AND active=1', [req.params.id]);
+  if (!supplier) return res.status(404).json({ error: 'Supplier not found' });
+
+  const deliveries = await query(`SELECT gri.id,DATE(gr.created_at) date,po.reference orderReference,
+    poi.description material,poi.unit,gri.quantity,poi.rate,(gri.quantity*poi.rate) deliveryValue,
+    p.name project,p.site destination,
+    GROUP_CONCAT(DISTINCT si.invoice_no ORDER BY si.invoice_date SEPARATOR ', ') invoiceNo
+    FROM goods_receipt_items gri JOIN goods_receipts gr ON gr.id=gri.receipt_id
+    JOIN purchase_order_items poi ON poi.id=gri.order_item_id
+    JOIN purchase_orders po ON po.id=poi.order_id JOIN projects p ON p.id=po.project_id
+    LEFT JOIN supplier_invoices si ON si.order_id=po.id
+    WHERE po.supplier_id=? AND p.company_id=?
+    GROUP BY gri.id,gr.created_at,po.reference,poi.description,poi.unit,gri.quantity,poi.rate,p.name,p.site
+    ORDER BY gr.created_at,gri.id`, [supplier.id, companyId]);
+
+  /* Older receipts pre-date receipt-line tracking. Preserve their cumulative quantity as
+     an explicitly labelled opening delivery instead of pretending an exact receipt split. */
+  const legacyDeliveries = await query(`SELECT poi.id,
+    COALESCE((SELECT DATE(MAX(gr.created_at)) FROM goods_receipts gr WHERE gr.order_id=po.id),po.order_date) date,
+    po.reference orderReference,poi.description material,poi.unit,
+    GREATEST(0,poi.received_quantity-COALESCE((SELECT SUM(gri.quantity) FROM goods_receipt_items gri WHERE gri.order_item_id=poi.id),0)) quantity,poi.rate,
+    GREATEST(0,poi.received_quantity-COALESCE((SELECT SUM(gri.quantity) FROM goods_receipt_items gri WHERE gri.order_item_id=poi.id),0))*poi.rate deliveryValue,
+    p.name project,p.site destination,
+    (SELECT GROUP_CONCAT(si.invoice_no ORDER BY si.invoice_date SEPARATOR ', ') FROM supplier_invoices si WHERE si.order_id=po.id) invoiceNo
+    FROM purchase_order_items poi JOIN purchase_orders po ON po.id=poi.order_id JOIN projects p ON p.id=po.project_id
+    WHERE po.supplier_id=? AND p.company_id=?
+    HAVING quantity>0`, [supplier.id, companyId]);
+  const invoices = await query(`SELECT i.id,i.invoice_date date,i.invoice_no invoiceNo,i.amount,
+    i.due_date dueDate,i.status,o.reference orderReference,p.name project,p.site destination
+    FROM supplier_invoices i LEFT JOIN purchase_orders o ON o.id=i.order_id
+    LEFT JOIN projects p ON p.id=o.project_id
+    WHERE i.supplier_id=? AND i.company_id=? ORDER BY i.invoice_date,i.id`, [supplier.id, companyId]);
+  const payments = await query(`SELECT sp.id,sp.paid_date date,sp.amount,sp.method,sp.reference,
+    i.invoice_no invoiceNo,o.reference orderReference,p.name project,p.site destination
+    FROM supplier_payments sp JOIN supplier_invoices i ON i.id=sp.invoice_id
+    LEFT JOIN purchase_orders o ON o.id=i.order_id LEFT JOIN projects p ON p.id=o.project_id
+    WHERE i.supplier_id=? AND i.company_id=? ORDER BY sp.paid_date,sp.id`, [supplier.id, companyId]);
+  const pendingCheques = await query(`SELECT c.id,c.issue_date date,c.amount,c.cheque_number reference,c.status,
+    i.invoice_no invoiceNo,p.name project,p.site destination
+    FROM issued_cheques c LEFT JOIN supplier_invoices i ON i.id=c.invoice_id
+    LEFT JOIN purchase_orders o ON o.id=i.order_id LEFT JOIN projects p ON p.id=o.project_id
+    WHERE c.supplier_id=? AND c.company_id=? AND c.status<>'Cleared'
+    ORDER BY c.issue_date,c.id`, [supplier.id, companyId]);
+
+  const rows = [
+    ...legacyDeliveries.map(row => ({...row,id:`legacy-${row.id}`,type:'Historical delivery',debit:0,credit:0,
+      note:'Received before detailed receipt-line tracking'})),
+    ...deliveries.map(row => ({...row,id:`delivery-${row.id}`,type:'Delivery',debit:0,credit:0,note:null})),
+    ...invoices.map(row => ({...row,id:`invoice-${row.id}`,type:'Invoice',debit:Number(row.amount),credit:0,
+      note:row.dueDate?`Due ${String(row.dueDate).slice(0,10)} · ${row.status}`:row.status})),
+    ...payments.map(row => ({...row,id:`payment-${row.id}`,type:row.method==='Cheque'?'Cheque cleared':'Payment',
+      debit:0,credit:Number(row.amount),note:[row.method,row.reference].filter(Boolean).join(' · ')})),
+    ...pendingCheques.map(row => ({...row,id:`cheque-${row.id}`,type:'Cheque pending',debit:0,credit:0,
+      note:`${row.status} · ${row.reference}`,pendingAmount:Number(row.amount)}))
+  ].sort((a,b)=>String(a.date).localeCompare(String(b.date))||({Delivery:0,'Historical delivery':0,Invoice:1,Payment:2,'Cheque cleared':2,'Cheque pending':3}[a.type]??4)-({Delivery:0,'Historical delivery':0,Invoice:1,Payment:2,'Cheque cleared':2,'Cheque pending':3}[b.type]??4));
+  let balance=0;
+  for(const row of rows){balance+=Number(row.debit||0)-Number(row.credit||0);row.balance=balance;}
+  res.json({supplier,companyId,rows,summary:{invoiced:invoices.reduce((n,row)=>n+Number(row.amount),0),
+    paid:payments.reduce((n,row)=>n+Number(row.amount),0),outstanding:balance,
+    pendingCheques:pendingCheques.reduce((n,row)=>n+Number(row.amount),0)}});
 }));
 
 router.post('/suppliers', auth, permit('store.manage', 'finance.pay'), validate(z.object({
@@ -175,8 +242,8 @@ router.post('/requests/:id/quotations', auth, permit('store.manage', 'finance.pa
 }));
 
 /* Purchase orders */
-const orderList = `SELECT o.id,o.reference,o.status,o.order_date orderDate,o.total,o.project_id projectId,
-  p.company_id companyId,p.name project,s.name supplier,s.id supplierId,u.name issuedBy,
+const orderList = `SELECT o.id,o.reference,o.status,o.order_date orderDate,o.total,o.project_id projectId,o.procurement_route procurementRoute,
+  p.company_id companyId,p.name project,p.site,s.name supplier,s.id supplierId,s.address supplierAddress,s.phone supplierPhone,u.name issuedBy,
   o.issued_by issuedById,o.first_approved_by firstApprovedBy,o.second_approved_by secondApprovedBy,
   o.request_id requestId
   FROM purchase_orders o JOIN projects p ON p.id=o.project_id JOIN suppliers s ON s.id=o.supplier_id JOIN users u ON u.id=o.issued_by`;
@@ -198,6 +265,16 @@ router.get('/orders/:id', auth, permit('store.view','store.manage','finance.pay'
   res.json({ ...order, items, invoices, receipts });
 }));
 
+router.get('/orders/:id/document',auth,permit('store.view','store.manage','finance.view','finance.pay'),wrap(async(req,res)=>{
+  const order=await getOne(`${orderList} WHERE o.id=?`,[req.params.id]);
+  if(!order)return res.status(404).json({error:'Purchase order not found'});
+  const [items,context]=await Promise.all([
+    query('SELECT description,unit,quantity,rate FROM purchase_order_items WHERE order_id=? ORDER BY id',[order.id]),
+    documentContext(getOne,order.companyId)
+  ]);
+  await sendDocument(req,res,purchaseOrderDocument({...context,order,items}),`${order.reference}.pdf`);
+}));
+
 const orderSchema=z.object({
   requestId: z.number().int().positive().optional(),
   supplierId: z.number().int().positive(),
@@ -216,7 +293,12 @@ router.post('/orders/check',auth,permit('store.manage','finance.pay'),validate(o
 }));
 router.post('/orders', auth, permit('store.manage', 'finance.pay'), validate(orderSchema), wrap(async (req, res) => {
   const body = req.body;
-  const reference = await nextReference('PO', 'purchase_orders');
+  const materialIds=[...new Set(body.items.map(item=>item.materialId).filter(Boolean))];
+  const materials=materialIds.length?await query(`SELECT id,name,category,procurement_route procurementRoute FROM materials WHERE id IN (${materialIds.map(()=>'?').join(',')})`,materialIds):[];
+  const routes=new Set(materials.map(material=>material.procurementRoute==='Direct delivery'||String(material.category).toLowerCase()==='concrete'||/concrete/i.test(material.name)?'Direct delivery':'Purchase order'));
+  if(routes.size>1)return res.status(409).json({error:'Concrete direct deliveries and purchase-order materials must be recorded separately.'});
+  const procurementRoute=routes.has('Direct delivery')?'Direct delivery':'Purchase order';
+  const reference = await nextReference(procurementRoute==='Direct delivery'?'DD':'PO', 'purchase_orders');
   const total = body.items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
   const warnings=await orderWarnings(body);
   if(warnings.length&&(!body.riskAccepted||!body.riskReason||body.riskReason.length<10))
@@ -224,18 +306,18 @@ router.post('/orders', auth, permit('store.manage', 'finance.pay'), validate(ord
   const request=body.requestId?await getOne('SELECT * FROM purchase_requests WHERE id=?',[body.requestId]):null;
   if(body.requestId&&(!request||request.status!=='Approved'||Number(request.project_id)!==body.projectId))
     return res.status(409).json({error:'The linked purchase request must be approved and belong to this project.'});
-  const dual=total>=await controlNumber('approval.two.person.threshold',1000000);
-  const status=request&&!dual?'Issued':'Pending approval';
+  const dual=procurementRoute==='Purchase order'&&total>=await controlNumber('approval.two.person.threshold',1000000);
+  const status=procurementRoute==='Direct delivery'?'Issued':request&&!dual?'Issued':'Pending approval';
   const id = await transaction(async connection => {
-    const [result] = await connection.execute(`INSERT INTO purchase_orders (reference,request_id,supplier_id,project_id,order_date,total,issued_by,status)
-      VALUES (?,?,?,?,?,?,?,?)`, [reference, body.requestId || null, body.supplierId, body.projectId, body.orderDate, total, req.user.id,status]);
+    const [result] = await connection.execute(`INSERT INTO purchase_orders (reference,request_id,supplier_id,project_id,order_date,total,issued_by,status,procurement_route)
+      VALUES (?,?,?,?,?,?,?,?,?)`, [reference, body.requestId || null, body.supplierId, body.projectId, body.orderDate, total, req.user.id,status,procurementRoute]);
     for (const item of body.items) {
       await connection.execute('INSERT INTO purchase_order_items (order_id,material_id,description,unit,quantity,rate) VALUES (?,?,?,?,?,?)',
         [result.insertId, item.materialId || null, item.description, item.unit, item.quantity, item.rate]);
     }
     if (body.requestId) await connection.execute("UPDATE purchase_requests SET status='Ordered' WHERE id=?", [body.requestId]);
     await audit(connection, req.user.id, 'CREATE', 'purchase_order', result.insertId, null,
-      {reference,total,status,warnings,riskReason:body.riskReason||null,...body},req.ip);
+      {reference,total,status,procurementRoute,warnings,riskReason:body.riskReason||null,...body},req.ip);
     return result.insertId;
   });
   for(const warning of warnings)await raiseFinding({rule:`precommit_${warning.code}`,category:'Control',severity:'High',
@@ -289,6 +371,7 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
       if (current.status === 'Cancelled'||current.status==='Pending approval') throw Object.assign(new Error('This order is cancelled or still awaiting approval'), { status: 409 });
 
       let receivedValue = 0;
+      const receiptLines = [];
       for (const line of req.body.lines) {
         const [items] = await connection.execute('SELECT * FROM purchase_order_items WHERE id=? AND order_id=? FOR UPDATE', [line.itemId, current.id]);
         const item = items[0];
@@ -296,6 +379,7 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
         const outstanding = Number(item.quantity) - Number(item.received_quantity);
         if (line.quantity > outstanding) throw Object.assign(new Error(`Cannot receive more than the ${outstanding} ${item.unit} outstanding on "${item.description}"`), { status: 409 });
         await connection.execute('UPDATE purchase_order_items SET received_quantity=received_quantity+? WHERE id=?', [line.quantity, item.id]);
+        receiptLines.push({ itemId:item.id, quantity:line.quantity });
         if (!item.material_id) receivedValue += line.quantity * Number(item.rate);
         if (item.material_id) {
           await connection.execute('UPDATE materials SET stock=stock+?, unit_cost=? WHERE id=?', [line.quantity, item.rate, item.material_id]);
@@ -307,7 +391,10 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
       const [remaining] = await connection.execute('SELECT SUM(quantity-received_quantity) outstanding FROM purchase_order_items WHERE order_id=?', [current.id]);
       const status = Number(remaining[0].outstanding) <= 0 ? 'Received' : 'Partially received';
       await connection.execute('UPDATE purchase_orders SET status=? WHERE id=?', [status, current.id]);
-      await connection.execute('INSERT INTO goods_receipts (order_id,received_by,notes) VALUES (?,?,?)', [current.id, req.user.id, req.body.notes || null]);
+      const [receipt] = await connection.execute('INSERT INTO goods_receipts (order_id,received_by,notes) VALUES (?,?,?)', [current.id, req.user.id, req.body.notes || null]);
+      for(const line of receiptLines) await connection.execute(
+        'INSERT INTO goods_receipt_items (receipt_id,order_item_id,quantity) VALUES (?,?,?)',
+        [receipt.insertId,line.itemId,line.quantity]);
       if (receivedValue > 0) {
         await connection.execute(`INSERT INTO expenses (project_id,source,description,amount,expense_date,reference,origin_type,origin_id,created_by)
           VALUES (?,'Material',?,?,CURDATE(),?, 'purchase_order', ?, ?)`,
