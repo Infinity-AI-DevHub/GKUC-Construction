@@ -19,7 +19,8 @@ const WRITERS = {
   vehicle: 'transport.manage',
   equipment: 'store.lending',
   incoming_letter: 'enquiries.manage',
-  risk_finding: 'admin.audit'
+  risk_finding: 'admin.audit',
+  company_compliance: 'finance.manage'
 };
 
 /**
@@ -38,7 +39,8 @@ const READERS = {
   vehicle: ['transport.view', 'transport.manage'],
   equipment: ['store.view', 'store.manage'],
   incoming_letter: ['enquiries.manage'],
-  risk_finding: ['admin.audit']
+  risk_finding: ['admin.audit'],
+  company_compliance: ['finance.view','finance.manage']
 };
 
 /*
@@ -58,7 +60,7 @@ const OWNER_TABLES = {
   candidate:'hiring_candidates',
   task: 'tasks', project: 'projects', employee: 'employees',
   report: 'daily_reports', vehicle: 'fleet', equipment: 'equipment', incoming_letter: 'incoming_letters',
-  risk_finding:'risk_findings'
+  risk_finding:'risk_findings',company_compliance:'company_compliance_records'
 };
 
 const metaSchema = z.object({

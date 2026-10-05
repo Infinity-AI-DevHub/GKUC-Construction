@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Check, PackageCheck } from 'lucide-react';
-import { api, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { Check, FileText, PackageCheck } from 'lucide-react';
+import { api, openDocument, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
 import WorkflowChecklist from '../WorkflowChecklist.jsx';
@@ -39,8 +39,8 @@ export default function Materials({ data, reload, can, companyId, company }) {
   </Page></RecordScopeProvider>;
 }
 
-const STOCK_COLUMNS = ['Material', 'Kind', 'Store', 'In stock', 'Minimum', 'Stock value', 'Status'];
-const STOCK_TEMPLATE = 'minmax(190px,1.4fr) 115px minmax(140px,1fr) 110px 110px 130px 100px';
+const STOCK_COLUMNS = ['Material', 'Category / route', 'Kind', 'Store', 'In stock', 'Minimum', 'Stock value', 'Status'];
+const STOCK_TEMPLATE = 'minmax(190px,1.4fr) minmax(150px,1fr) 115px minmax(140px,1fr) 110px 110px 130px 100px';
 
 function Stock({ data, reload, can }) {
   const low = data.materials.filter(material => material.state !== 'Available').length;
@@ -56,6 +56,7 @@ function Stock({ data, reload, can }) {
     <Table columns={STOCK_COLUMNS} template={STOCK_TEMPLATE} title="Stock overview">
       {data.materials.map(material => <Row template={STOCK_TEMPLATE} key={material.id} id={`material-${material.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(material.id) ? 'linked-record' : ''}>
         <div><strong>{material.name}</strong><small>MAT-{String(material.id).padStart(4, '0')}</small></div>
+        <div><strong>{material.category||'General'}</strong><small>{material.procurementRoute||material.procurement_route||'Purchase order'}</small></div>
         <Badge tone={slug(material.stock_kind||'Consumable')}>{material.stock_kind||'Consumable'}</Badge>
         <span>{material.site}</span>
         <strong>{material.stock} <small>{material.unit}</small></strong>
@@ -267,6 +268,7 @@ function OrderDetail({ order, close, done, can }) {
       {error && <p className="form-error">{error}</p>}
       <div className="form-actions">
         <button type="button" className="secondary" onClick={close}>Close</button>
+        <button type="button" className="secondary" onClick={()=>openDocument(`/purchasing/orders/${order.id}/document`)}><FileText size={16}/>Print / PDF</button>
         {can.projects && order.status === 'Pending approval' && (
           <button type="button" className="primary" onClick={approve} disabled={busy}>Approve order</button>
         )}
@@ -323,14 +325,17 @@ function MaterialForm({ close, reload }) {
       stock: Number(values.stock || 0),
       minimum: Number(values.minimum),
       site: values.site,
-      unitCost: Number(values.unitCost || 0)
-      ,stockKind:values.stockKind
+      unitCost: Number(values.unitCost || 0),stockKind:values.stockKind,
+      category:values.category,procurementRoute:values.procurementRoute
     });
     await reload();
   }}>
     <Field name="name" label="Material name" wide />
     <Field name="unit" label="Unit" placeholder="bags, m³, sheets" />
     <SelectField name="stockKind" label="Stock type" options={['Consumable','Returnable']}/>
+    <SelectField name="category" label="Material category" options={['General','Concrete','Aggregate','Cement','Steel','Timber','Fuel','Other']}/>
+    <SelectField name="procurementRoute" label="Purchasing route" options={['Purchase order','Direct delivery']} defaultValue="Purchase order"/>
+    <p className="form-note wide">Use <strong>Direct delivery</strong> for concrete supplied straight to a project site. Other materials should normally remain on <strong>Purchase order</strong>.</p>
     <Field name="site" label="Store" />
     <Field name="stock" label="Opening stock" type="number" step="any" min="0" defaultValue="0" />
     <Field name="minimum" label="Minimum level" type="number" step="any" min="0" />
@@ -395,8 +400,9 @@ function OrderForm({ data, close, reload }) {
   const [material, setMaterial] = useState(data.materials[0]?.id || '');
   useEffect(() => { api('/purchasing/suppliers').then(setSuppliers).catch(() => setSuppliers([])); }, []);
   const selected = data.materials.find(row => String(row.id) === String(material));
+  const direct=(selected?.procurementRoute||selected?.procurement_route)==='Direct delivery'||String(selected?.category||'').toLowerCase()==='concrete'||/concrete/i.test(selected?.name||'');
 
-  return <FormModal title="Create purchase order" close={close} label="Issue order" onSubmit={async values => {
+  return <FormModal title={direct?'Create direct delivery instruction':'Create purchase order'} close={close} label={direct?'Issue delivery instruction':'Issue order'} onSubmit={async values => {
     const payload = {
       supplierId: Number(values.supplierId),
       projectId: Number(values.projectId),
@@ -427,6 +433,7 @@ function OrderForm({ data, close, reload }) {
         {data.materials.map(row => <option value={row.id} key={row.id}>{row.name}</option>)}
       </select>
     </label>
+    <p className="form-note wide"><strong>{direct?'Direct delivery route':'Purchase order route'}</strong><br/>{direct?'Concrete is delivered to the selected project site. The site must record the quantity received and Finance must link and verify the supplier invoice.':'This material follows the purchase-order approval workflow before it can be received.'}</p>
     <Field name="quantity" label={`Quantity${selected ? ` (${selected.unit})` : ''}`} type="number" step="any" min="0" />
     <Field name="rate" label="Agreed rate (LKR)" type="number" step="any" min="0" defaultValue={selected?.unit_cost || 0} />
   </FormModal>;

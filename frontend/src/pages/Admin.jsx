@@ -120,7 +120,7 @@ const casePath = row => {
     insurance:'/people/insurance',milestone:'/projects/milestones',supplier_invoice:'/finance/supplier-invoices',
     operating_bill:'/finance/bills',credit_card_statement:'/finance/credit-cards',client_invoice:'/finance/invoices',
     invoice:'/finance/invoices',cheque:'/finance/cheques',received_cheque:'/finance/cheques',bond:'/finance/bonds',
-    retention:'/quantity-surveying/retentions',tender:'/quantity-surveying/tenders',
+    retention:'/quantity-surveying/retentions',tender:'/quantity-surveying/tenders',company_compliance:'/finance/vat-clearance',
     subcontract_quotation:'/projects',purchase_request:'/materials'}[row.referenceType];
   return section ? `${section}?record=${encodeURIComponent(row.referenceId)}` : null;
 };

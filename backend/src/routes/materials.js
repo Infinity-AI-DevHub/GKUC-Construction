@@ -42,7 +42,7 @@ router.get('/movements', auth, permit('store.view','store.manage'), wrap(async (
 
 router.get('/inventory',auth,permit('store.view','store.manage','projects.view'),wrap(async(req,res)=>{
   const [materials,loans,siteIssues,consumed,counts,allowances,quoted,planned,vehicles,equipment]=await Promise.all([
-    query('SELECT id,name,unit,stock,minimum,site,stock_kind stockKind,unit_cost unitCost FROM materials WHERE active=1 ORDER BY name'),
+    query('SELECT id,name,unit,stock,minimum,site,stock_kind stockKind,category,procurement_route procurementRoute,unit_cost unitCost FROM materials WHERE active=1 ORDER BY name'),
     query(`SELECT l.id,l.material_id materialId,l.project_id projectId,p.name project,m.name material,m.unit,
       l.quantity,l.returned_quantity returnedQuantity,(l.quantity-l.returned_quantity) outstanding,
       l.taken_by takenBy,l.handed_over_by handedOverBy,l.received_back_by receivedBackBy,
@@ -205,11 +205,13 @@ router.post('/', auth, permit('store.manage'), validate(z.object({
   site: z.string().min(2).max(180),
   unitCost: z.number().nonnegative().default(0),
   supplier: z.string().max(180).optional()
-  ,stockKind:z.enum(['Consumable','Returnable']).default('Consumable')
+  ,stockKind:z.enum(['Consumable','Returnable']).default('Consumable'),
+  category:z.string().trim().min(2).max(80).default('General'),
+  procurementRoute:z.enum(['Purchase order','Direct delivery']).default('Purchase order')
 })), wrap(async (req, res) => {
   const body = req.body;
-  const result = await query('INSERT INTO materials (name,unit,stock,minimum,site,supplier,unit_cost,stock_kind) VALUES (?,?,?,?,?,?,?,?)',
-    [body.name, body.unit, body.stock, body.minimum, body.site, body.supplier || null, body.unitCost,body.stockKind]);
+  const result = await query('INSERT INTO materials (name,unit,stock,minimum,site,supplier,unit_cost,stock_kind,category,procurement_route) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    [body.name, body.unit, body.stock, body.minimum, body.site, body.supplier || null, body.unitCost,body.stockKind,body.category,body.procurementRoute]);
   const row = await getOne('SELECT * FROM materials WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'material', row.id, null, row, req.ip);
   res.status(201).json({ ...row, state: stockState(row) });
@@ -220,11 +222,12 @@ router.patch('/:id', auth, permit('store.manage'), validate(z.object({
   site: z.string().min(2).max(180).optional(),
   unitCost: z.number().nonnegative().optional(),
   supplier: z.string().max(180).optional()
-  ,stockKind:z.enum(['Consumable','Returnable']).optional()
+  ,stockKind:z.enum(['Consumable','Returnable']).optional(),category:z.string().trim().min(2).max(80).optional(),
+  procurementRoute:z.enum(['Purchase order','Direct delivery']).optional()
 })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM materials WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Material not found' });
-  const columns = { unitCost: 'unit_cost',stockKind:'stock_kind' };
+  const columns = { unitCost: 'unit_cost',stockKind:'stock_kind',procurementRoute:'procurement_route' };
   const entries = Object.entries(req.body);
   if (entries.length) {
     await query(`UPDATE materials SET ${entries.map(([key]) => `${columns[key] || key}=?`).join(',')} WHERE id=?`,

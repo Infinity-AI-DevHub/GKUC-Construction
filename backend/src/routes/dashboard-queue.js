@@ -145,6 +145,10 @@ router.get('/queue', auth, wrap(async (req, res) => {
       b.created_at createdAt,u.name owner FROM bank_bonds b JOIN users u ON u.id=b.created_by
       LEFT JOIN projects p ON p.id=b.project_id WHERE (p.company_id=? OR b.project_id IS NULL) AND b.status='Live'
       AND b.expiry_date<=DATE_ADD(CURDATE(),INTERVAL 30 DAY) ORDER BY b.expiry_date LIMIT 60`,[companyId],r=>({kind:'bond',id:r.id,title:`Bond expiring · ${r.reference}`,detail:r.beneficiary,owner:r.owner,deadline:r.deadline,createdAt:r.createdAt,risk:'Contract security may lapse',action:'Review bond',escalation:'Finance management',target:['Finance','Bonds',r.id]})),
+    add(can(req,'finance.view')||can(req,'finance.manage'), `SELECT c.id,c.reference,DATE_FORMAT(c.expiry_date,'%Y-%m-%d') deadline,
+      c.created_at createdAt,u.name owner FROM company_compliance_records c JOIN users u ON u.id=c.created_by
+      WHERE c.company_id=? AND c.status='Active' AND c.expiry_date<=DATE_ADD(CURDATE(),INTERVAL 60 DAY)
+      ORDER BY c.expiry_date LIMIT 10`,[companyId],r=>({kind:'company-compliance',id:r.id,title:'VAT clearance renewal',detail:r.reference||'Certificate reference not recorded',owner:r.owner,deadline:r.deadline,createdAt:r.createdAt,risk:'The company may operate with an expired VAT clearance',action:'Review or renew clearance',escalation:'Finance management',target:['Finance','VAT clearance',r.id]})),
     add(can(req,'store.manage'), `SELECT m.id,m.name,m.stock,m.minimum,m.site,m.created_at createdAt
       FROM materials m WHERE m.active=1 AND m.stock<=m.minimum ORDER BY m.stock-m.minimum LIMIT 60`,[],r=>({kind:'low-stock',id:r.id,title:`Low stock · ${r.name}`,detail:`${r.stock} available · minimum ${r.minimum} · ${r.site}`,owner:'Store',deadline:null,createdAt:r.createdAt,risk:'Work may stop without replenishment',action:'Raise purchase request',escalation:'Purchasing',target:['Materials','Stock',r.id]})),
     add(can(req,'admin.audit'), `SELECT f.id,f.title,f.severity,f.created_at createdAt,p.name project

@@ -260,6 +260,8 @@ const createInvoice = async (req, res, next) => {
       if (!Number.isInteger(companyId) || companyId < 1) throw fail(400, 'Choose GKUC Construction or GKUC Readymix');
       if (req.body.companyId && Number(req.body.companyId) !== companyId)
         throw fail(400, 'The project belongs to the other operating company');
+      if (req.body.taxTreatment === 'SVAT' && req.body.invoiceDate > '2025-09-30')
+        throw fail(409, 'SVAT was repealed from 1 October 2025. Use Standard VAT for a current tax invoice; SVAT remains available only for historical documents dated on or before 30 September 2025.');
       const documentType = req.body.documentType || (req.body.taxTreatment === 'Exempt' ? 'Invoice' : 'Tax Invoice');
       if (documentType === 'Invoice' && req.body.taxTreatment !== 'Exempt')
         throw fail(400, 'A standard invoice must not charge VAT. Choose a tax invoice to charge or suspend VAT.');

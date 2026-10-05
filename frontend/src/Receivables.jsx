@@ -283,6 +283,7 @@ function CertificateForm({ data, companyId, close, reload }) {
     api(`/receivables/boq-lines?projectId=${projectId}`).then(setBoqLines).catch(()=>setBoqLines([]));
   },[projectId]);
   const [documentType,setDocumentType]=useState('Tax Invoice');
+  const [invoiceDate,setInvoiceDate]=useState(todayInput());
   const [terms, setTerms] = useState({
     taxTreatment: 'Standard', vatRate: '18', retentionPercent: '0', advanceRecovery: '', otherDeductions: ''
   });
@@ -364,7 +365,10 @@ function CertificateForm({ data, companyId, close, reload }) {
     }}><option value="Tax Invoice">VAT tax invoice</option><option value="Invoice">Standard invoice — no VAT</option></select></label>
     <SelectField name="kind" label="Billing type" options={['Interim', 'Final', 'Advance', 'Variation', 'Other']} />
     <Field name="title" label="Title" wide placeholder="IPA No. 3 — works to 25 August" />
-    <Field name="invoiceDate" label="Invoice date" type="date" defaultValue={todayInput()} />
+    <label>Invoice date *<input name="invoiceDate" type="date" required value={invoiceDate} onChange={event=>{
+      const value=event.target.value;setInvoiceDate(value);
+      if(value>'2025-09-30'&&terms.taxTreatment==='SVAT')setTerm('taxTreatment','Standard');
+    }}/></label>
     <Field name="deliveryDate" label="Date of delivery" type="date" required={false} />
     <Field name="placeOfSupply" label="Place of supply" required={false} placeholder="Defaults to the client's site or project site" />
     <SelectField name="paymentMode" label="Expected payment mode" options={['Bank transfer', 'Cheque', 'Cash', 'Card', 'Other']} />
@@ -408,9 +412,12 @@ function CertificateForm({ data, companyId, close, reload }) {
     <div className="qs-form-section wide"><span>03</span><div><h3>Tax, retention and payment</h3><p>Review deductions and the calculated net amount.</p></div></div>
     {documentType === 'Tax Invoice' && <label>Tax treatment
       <select value={terms.taxTreatment} onChange={event => setTerm('taxTreatment', event.target.value)}>
-        {Object.entries(TAX_LABELS).filter(([value]) => value !== 'Exempt').map(([value, text]) => <option value={value} key={value}>{text}</option>)}
+        {Object.entries(TAX_LABELS).filter(([value]) => value !== 'Exempt' && (value !== 'SVAT' || invoiceDate <= '2025-09-30')).map(([value, text]) => <option value={value} key={value}>{text}</option>)}
       </select>
     </label>}
+    {documentType === 'Tax Invoice' && invoiceDate > '2025-09-30' && <p className="invoice-note wide">
+      SVAT ended on 30 September 2025. Current tax invoices use Standard VAT; historical SVAT records remain in the VAT schedules.
+    </p>}
     {terms.taxTreatment !== 'Exempt' && <label>VAT rate (%)
       <input type="number" step="any" min="0" max="100" value={terms.vatRate}
         onChange={event => setTerm('vatRate', event.target.value)} />

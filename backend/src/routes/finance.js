@@ -6,6 +6,7 @@ import { assertUniqueManualEntry } from '../lib/ledger-duplicates.js';
 import { managementPack } from '../lib/management-accounts.js';
 import { cashOutflows } from '../lib/cash-outflows.js';
 import { cashComparison } from '../lib/cash-comparison.js';
+import { SVAT_LAST_DATE, vatSchedule, vatWorkbook } from '../lib/vat-schedules.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -349,16 +350,86 @@ router.post('/credit-card-statements/:id/payments',auth,permit('finance.manage')
     [s.id,req.body.amount,req.body.paidDate,req.body.method,req.body.reference||null,req.user.id]);return{paidAmount:paid,status};});res.status(201).json(result);
 }));
 
-router.get('/vat',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{const companyId=companyParam(req)||1;
-  const [output,inputSupplier,inputBills]=await Promise.all([
-    query(`SELECT i.reference,i.client counterparty,i.invoice_date date,i.gross netAmount,i.vat_amount vatAmount,i.net_payable totalAmount,'Output' direction
-      FROM client_invoices i WHERE i.company_id=? AND i.status='Paid' AND i.tax_treatment='Standard' ORDER BY i.invoice_date`,[companyId]),
-    query(`SELECT i.invoice_no reference,s.name counterparty,i.invoice_date date,i.net_amount netAmount,i.vat_amount vatAmount,i.amount totalAmount,'Input' direction
-      FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id WHERE i.company_id=? AND i.status='Paid' AND i.tax_treatment='Standard' ORDER BY i.invoice_date`,[companyId]),
-    query(`SELECT b.reference,b.provider counterparty,b.bill_date date,b.net_amount netAmount,b.vat_amount vatAmount,b.total_amount totalAmount,'Input' direction
-      FROM operating_bills b WHERE b.company_id=? AND b.status='Paid' AND b.tax_treatment='Standard' ORDER BY b.bill_date`,[companyId])]);
-  const inputs=[...inputSupplier,...inputBills],sum=rows=>rows.reduce((n,row)=>n+Number(row.vatAmount),0),outputVat=sum(output),inputVat=sum(inputs);
-  res.json({outputVat,inputVat,netVatPayable:outputVat-inputVat,entries:[...output,...inputs].sort((a,b)=>String(b.date).localeCompare(String(a.date)))});
+/* Older dashboard clients asked for the whole ledger without a range. Keep that read-only
+   view working while the tax workspace always sends an explicit filing period. */
+const vatRange = req => ({ start: String(req.query.start || '1900-01-01'), end: String(req.query.end || '2999-12-31') });
+router.get('/vat',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{
+  const companyId=companyParam(req),{start,end}=vatRange(req);
+  if(!companyId||!isoDate.safeParse(start).success||!isoDate.safeParse(end).success||start>end)
+    return res.status(400).json({error:'Choose a company and a valid VAT period.'});
+  const schedule=await vatSchedule(companyId,start,end);
+  if(!schedule)return res.status(404).json({error:'Company not found.'});
+  res.json({...schedule,outputVat:schedule.totals.outputVat,inputVat:schedule.totals.inputVat,
+    netVatPayable:schedule.totals.netVatPayable,entries:[
+      ...schedule.output.map(row=>({...row,date:row.documentDate,reference:row.documentNumber,netAmount:row.taxableAmount,direction:'Output'})),
+      ...schedule.input.map(row=>({...row,date:row.documentDate,reference:row.documentNumber,netAmount:row.taxableAmount,direction:'Input'}))
+    ].sort((a,b)=>String(b.date).localeCompare(String(a.date)))});
+}));
+
+router.put('/vat/period',auth,permit('finance.manage'),validate(z.object({
+  companyId:z.number().int().positive(),start:isoDate,end:isoDate,
+  status:z.enum(['Draft','Reconciled','Filed']).default('Draft'),
+  outputAdjustment:z.number().finite().default(0),inputAdjustment:z.number().finite().default(0),
+  adjustmentNote:z.string().trim().max(600).nullable().optional(),
+  filingReference:z.string().trim().max(160).nullable().optional()
+})),wrap(async(req,res)=>{
+  const b=req.body;
+  if(b.start>b.end)return res.status(400).json({error:'The VAT period end cannot be before its start.'});
+  if((b.outputAdjustment||b.inputAdjustment)&&!b.adjustmentNote)
+    return res.status(400).json({error:'Explain every manual VAT adjustment before reconciling the period.'});
+  if(b.status==='Filed'&&!b.filingReference)
+    return res.status(400).json({error:'Enter the filing reference before marking this period as filed.'});
+  if(!await getOne('SELECT id FROM companies WHERE id=?',[b.companyId]))return res.status(404).json({error:'Company not found.'});
+  const prior=await getOne('SELECT * FROM vat_periods WHERE company_id=? AND period_start=? AND period_end=?',[b.companyId,b.start,b.end]);
+  if(prior?.status==='Filed'&&b.status!=='Filed')return res.status(409).json({error:'A filed VAT period cannot be reopened from this screen. Record a correcting adjustment in a new period.'});
+  await query(`INSERT INTO vat_periods
+    (company_id,period_start,period_end,status,output_adjustment,input_adjustment,adjustment_note,filing_reference,
+     updated_by,reconciled_at,filed_at) VALUES (?,?,?,?,?,?,?,?,?,IF(? IN ('Reconciled','Filed'),NOW(),NULL),IF(?='Filed',NOW(),NULL))
+    ON DUPLICATE KEY UPDATE status=VALUES(status),output_adjustment=VALUES(output_adjustment),
+      input_adjustment=VALUES(input_adjustment),adjustment_note=VALUES(adjustment_note),filing_reference=VALUES(filing_reference),
+      updated_by=VALUES(updated_by),reconciled_at=IF(VALUES(status) IN ('Reconciled','Filed'),COALESCE(reconciled_at,NOW()),NULL),
+      filed_at=IF(VALUES(status)='Filed',COALESCE(filed_at,NOW()),NULL)`,
+    [b.companyId,b.start,b.end,b.status,b.outputAdjustment,b.inputAdjustment,b.adjustmentNote||null,
+      b.filingReference||null,req.user.id,b.status,b.status]);
+  const after=await getOne('SELECT * FROM vat_periods WHERE company_id=? AND period_start=? AND period_end=?',[b.companyId,b.start,b.end]);
+  await audit(pool,req.user.id,prior?'UPDATE':'CREATE','vat_period',after.id,prior,after,req.ip);
+  res.json(await vatSchedule(b.companyId,b.start,b.end));
+}));
+
+router.get('/vat/export',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{
+  const companyId=companyParam(req),{start,end}=vatRange(req);
+  if(!companyId||!isoDate.safeParse(start).success||!isoDate.safeParse(end).success||start>end)
+    return res.status(400).json({error:'Choose a valid company VAT period before exporting.'});
+  const schedule=await vatSchedule(companyId,start,end);
+  if(!schedule)return res.status(404).json({error:'Company not found.'});
+  res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition',`attachment; filename="VAT-${start}-to-${end}.xlsx"`);
+  res.send(vatWorkbook(schedule));
+}));
+
+router.post('/vat/svat-entries',auth,permit('finance.manage'),validate(z.object({
+  companyId:z.number().int().positive(),periodStart:isoDate,periodEnd:isoDate,
+  direction:z.enum(['Output','Input']),scheduleType:z.enum(['SVAT 05','SVAT 05a','SVAT 05b','SVAT 06','SVAT 07']),
+  documentDate:isoDate,documentNumber:z.string().trim().min(1).max(120),counterparty:z.string().trim().min(2).max(180),
+  counterpartyVatNumber:z.string().trim().max(100).nullable().optional(),counterpartySvatNumber:z.string().trim().max(100).nullable().optional(),
+  taxableAmount:z.number().nonnegative(),suspendedVat:z.number().nonnegative(),creditVoucherNumber:z.string().trim().max(120).nullable().optional(),
+  notes:z.string().trim().max(600).nullable().optional()
+})),wrap(async(req,res)=>{
+  const b=req.body;
+  if(b.periodStart>b.periodEnd||b.documentDate<b.periodStart||b.documentDate>b.periodEnd)
+    return res.status(400).json({error:'The document date must fall inside the selected SVAT period.'});
+  if(b.periodEnd>SVAT_LAST_DATE)return res.status(409).json({error:'SVAT schedules are historical only. Sri Lanka repealed SVAT from 1 October 2025; choose a period ending on or before 30 September 2025.'});
+  try{
+    const result=await query(`INSERT INTO svat_schedule_entries
+      (company_id,period_start,period_end,direction,schedule_type,document_date,document_number,counterparty,
+       counterparty_vat_number,counterparty_svat_number,taxable_amount,suspended_vat,credit_voucher_number,notes,created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[b.companyId,b.periodStart,b.periodEnd,b.direction,b.scheduleType,b.documentDate,
+      b.documentNumber,b.counterparty,b.counterpartyVatNumber||null,b.counterpartySvatNumber||null,b.taxableAmount,b.suspendedVat,
+      b.creditVoucherNumber||null,b.notes||null,req.user.id]);
+    const row=await getOne('SELECT * FROM svat_schedule_entries WHERE id=?',[result.insertId]);
+    await audit(pool,req.user.id,'CREATE','svat_schedule_entry',row.id,null,row,req.ip);
+    res.status(201).json(row);
+  }catch(error){if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'That SVAT document is already recorded for this company.'});throw error;}
 }));
 
 router.get('/categories', auth, permit('finance.view', 'finance.manage'),

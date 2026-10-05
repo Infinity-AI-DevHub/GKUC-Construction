@@ -692,6 +692,14 @@ async function createPurchasingTables() {
     CONSTRAINT fk_grn_order FOREIGN KEY(order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE,
     CONSTRAINT fk_grn_user FOREIGN KEY(received_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS goods_receipt_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, receipt_id BIGINT UNSIGNED NOT NULL,
+    order_item_id BIGINT UNSIGNED NOT NULL, quantity DECIMAL(14,3) NOT NULL,
+    CONSTRAINT fk_grni_receipt FOREIGN KEY(receipt_id) REFERENCES goods_receipts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_grni_order_item FOREIGN KEY(order_item_id) REFERENCES purchase_order_items(id),
+    CONSTRAINT chk_grni_quantity CHECK(quantity > 0),
+    INDEX idx_grni_receipt(receipt_id), INDEX idx_grni_order_item(order_item_id)
+  ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS supplier_invoices (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, order_id BIGINT UNSIGNED NULL, supplier_id BIGINT UNSIGNED NOT NULL,
     invoice_no VARCHAR(80) NOT NULL, amount DECIMAL(15,2) NOT NULL, paid_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
@@ -896,7 +904,7 @@ async function createAttachmentTables() {
     CONSTRAINT fk_upload_user FOREIGN KEY(uploaded_by) REFERENCES users(id),
     INDEX idx_attachment_owner(owner_type,owner_id), INDEX idx_attachment_expiry(expiry_date)
   ) ENGINE=InnoDB`);
-  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter','risk_finding') NOT NULL");
+  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter','risk_finding','company_compliance') NOT NULL");
 }
 
 /** 2.2 payroll and performance, and PID section 3 step 1 (customer inquiry). */
@@ -2559,6 +2567,9 @@ async function createConstructionOperationsTables() {
   await addForeignKey('quotation_items','fk_quoteitem_material',
     'CONSTRAINT fk_quoteitem_material FOREIGN KEY(material_id) REFERENCES materials(id)');
   await addColumn('materials','stock_kind',"ENUM('Consumable','Returnable') NOT NULL DEFAULT 'Consumable'");
+  await addColumn('materials','category',"VARCHAR(80) NOT NULL DEFAULT 'General'");
+  await addColumn('materials','procurement_route',"ENUM('Purchase order','Direct delivery') NOT NULL DEFAULT 'Purchase order'");
+  await addColumn('purchase_orders','procurement_route',"ENUM('Purchase order','Direct delivery') NOT NULL DEFAULT 'Purchase order'");
   await addColumn('subcontractors','address','VARCHAR(400) NULL');
   await addColumn('subcontractors','business_id','VARCHAR(100) NULL');
   await addColumn('subcontractors','contact_type',"ENUM('Company','Individual') NOT NULL DEFAULT 'Company'");
@@ -2631,8 +2642,12 @@ async function createConstructionOperationsTables() {
 }
 
 async function createFleetHistoryTables() {
+  await addColumn('fuel_records','company_id','TINYINT UNSIGNED NULL');
+  await addForeignKey('fuel_records','fk_fuel_company','CONSTRAINT fk_fuel_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await addColumn('vehicle_maintenance','maintenance_kind',"ENUM('Service','Repair','Inspection') NOT NULL DEFAULT 'Service'");
   await addColumn('vehicle_maintenance','project_id','BIGINT UNSIGNED NULL');
+  await addColumn('vehicle_maintenance','company_id','TINYINT UNSIGNED NULL');
+  await addForeignKey('vehicle_maintenance','fk_vehmaint_company','CONSTRAINT fk_vehmaint_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await addForeignKey('vehicle_maintenance','fk_vehmaint_project',
     'CONSTRAINT fk_vehmaint_project FOREIGN KEY(project_id) REFERENCES projects(id)');
   await query(`CREATE TABLE IF NOT EXISTS vehicle_driver_assignments (
@@ -2656,6 +2671,10 @@ async function createFleetHistoryTables() {
     CONSTRAINT fk_vodo_user FOREIGN KEY(recorded_by) REFERENCES users(id),
     INDEX idx_vodo_vehicle(vehicle_id,reading_date,id),UNIQUE KEY uq_vodo_source(source,source_id)
   ) ENGINE=InnoDB`);
+  await addColumn('vehicle_odometer_readings','company_id','TINYINT UNSIGNED NULL');
+  await addColumn('vehicle_odometer_readings','project_id','BIGINT UNSIGNED NULL');
+  await addForeignKey('vehicle_odometer_readings','fk_vodo_company','CONSTRAINT fk_vodo_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addForeignKey('vehicle_odometer_readings','fk_vodo_project','CONSTRAINT fk_vodo_project FOREIGN KEY(project_id) REFERENCES projects(id)');
   await query(`CREATE TABLE IF NOT EXISTS vehicle_document_renewals (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,vehicle_id BIGINT UNSIGNED NOT NULL,
     doc_type VARCHAR(60) NOT NULL,reference VARCHAR(120) NULL,
@@ -2686,6 +2705,16 @@ async function createFleetHistoryTables() {
     FROM vehicle_maintenance m WHERE m.odometer>0 AND NOT EXISTS
       (SELECT 1 FROM vehicle_odometer_readings r WHERE r.source_id=m.id
         AND r.source IN ('Service','Repair','Inspection'))`);
+  await query(`UPDATE fuel_records f LEFT JOIN projects p ON p.id=f.project_id
+    LEFT JOIN petty_cash_entries e ON e.fuel_record_id=f.id LEFT JOIN petty_cash_floats pf ON pf.id=e.float_id
+    SET f.company_id=COALESCE(p.company_id,pf.company_id) WHERE f.company_id IS NULL`);
+  await query(`UPDATE vehicle_maintenance m JOIN projects p ON p.id=m.project_id
+    SET m.company_id=p.company_id WHERE m.company_id IS NULL`);
+  await query(`UPDATE vehicle_odometer_readings r JOIN fuel_records f ON r.source='Fuel' AND r.source_id=f.id
+    SET r.company_id=f.company_id,r.project_id=f.project_id WHERE r.company_id IS NULL`);
+  await query(`UPDATE vehicle_odometer_readings r JOIN vehicle_maintenance m
+    ON r.source IN ('Service','Repair','Inspection') AND r.source_id=m.id
+    SET r.company_id=m.company_id,r.project_id=m.project_id WHERE r.company_id IS NULL`);
 }
 
 /** Non-destructive upgrades for databases created by an earlier version. */
@@ -3192,6 +3221,40 @@ export async function migrate() {
     FOREIGN KEY(company_id) REFERENCES companies(id), FOREIGN KEY(updated_by) REFERENCES users(id),
     UNIQUE KEY uq_cash_comparison_period(company_id,period)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS vat_periods (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    company_id TINYINT UNSIGNED NOT NULL,
+    period_start DATE NOT NULL, period_end DATE NOT NULL,
+    status ENUM('Draft','Reconciled','Filed') NOT NULL DEFAULT 'Draft',
+    output_adjustment DECIMAL(15,2) NOT NULL DEFAULT 0,
+    input_adjustment DECIMAL(15,2) NOT NULL DEFAULT 0,
+    adjustment_note VARCHAR(600) NULL,
+    filing_reference VARCHAR(160) NULL,
+    updated_by BIGINT UNSIGNED NOT NULL,
+    reconciled_at DATETIME NULL, filed_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY(company_id) REFERENCES companies(id), FOREIGN KEY(updated_by) REFERENCES users(id),
+    UNIQUE KEY uq_vat_period(company_id,period_start,period_end),
+    INDEX idx_vat_period_company(company_id,period_end)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS svat_schedule_entries (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    company_id TINYINT UNSIGNED NOT NULL,
+    period_start DATE NOT NULL, period_end DATE NOT NULL,
+    direction ENUM('Output','Input') NOT NULL,
+    schedule_type ENUM('SVAT 05','SVAT 05a','SVAT 05b','SVAT 06','SVAT 07') NOT NULL,
+    document_date DATE NOT NULL, document_number VARCHAR(120) NOT NULL,
+    counterparty VARCHAR(180) NOT NULL, counterparty_vat_number VARCHAR(100) NULL,
+    counterparty_svat_number VARCHAR(100) NULL,
+    taxable_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    suspended_vat DECIMAL(15,2) NOT NULL DEFAULT 0,
+    credit_voucher_number VARCHAR(120) NULL, notes VARCHAR(600) NULL,
+    created_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(company_id) REFERENCES companies(id), FOREIGN KEY(created_by) REFERENCES users(id),
+    UNIQUE KEY uq_svat_historical_document(company_id,direction,document_number),
+    INDEX idx_svat_period(company_id,period_start,period_end)
+  ) ENGINE=InnoDB`);
   await createReportDetailTables();
   await createAttachmentTables();
   await createLifecycleTables();
@@ -3304,6 +3367,35 @@ export async function migrate() {
     kind VARCHAR(40) NOT NULL, source_code VARCHAR(120) NOT NULL,
     target_id BIGINT UNSIGNED NOT NULL, batch_id BIGINT UNSIGNED NOT NULL,
     PRIMARY KEY(kind,source_code), FOREIGN KEY(batch_id) REFERENCES historical_import_batches(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS company_compliance_records (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    company_id TINYINT UNSIGNED NOT NULL,
+    compliance_type VARCHAR(80) NOT NULL DEFAULT 'VAT clearance',
+    reference VARCHAR(120) NULL,
+    issue_date DATE NULL,
+    expiry_date DATE NOT NULL,
+    reminders JSON NOT NULL,
+    status ENUM('Active','Expired','Archived') NOT NULL DEFAULT 'Active',
+    notes TEXT NULL,
+    created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_company_compliance(company_id,compliance_type,status),
+    FOREIGN KEY(company_id) REFERENCES companies(id), FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS company_compliance_renewals (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    compliance_id BIGINT UNSIGNED NOT NULL,
+    reference VARCHAR(120) NULL,
+    issue_date DATE NULL,
+    expiry_date DATE NOT NULL,
+    notes TEXT NULL,
+    recorded_by BIGINT UNSIGNED NOT NULL,
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(compliance_id) REFERENCES company_compliance_records(id) ON DELETE CASCADE,
+    FOREIGN KEY(recorded_by) REFERENCES users(id),
+    INDEX idx_compliance_renewal(compliance_id,expiry_date)
   ) ENGINE=InnoDB`);
   await seedWorkMethods();
   await seedAccessControl();

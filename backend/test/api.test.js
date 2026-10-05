@@ -839,7 +839,7 @@ test('authenticates and returns database-backed operational data', async () => {
   const token = await login();
   const { status, body } = await call(token, 'GET', '/bootstrap');
   assert.equal(status, 200);
-  assert.equal(body.data.projects.length, 3);
+  assert.ok(body.data.projects.length >= 3, 'seed projects remain available after earlier tests add projects');
   assert.equal(body.data.tasks.length, 5);
   assert.ok(body.data.employees.length >= 8, 'seed employees remain available after earlier tests add staff');
   assert.ok(body.data.employees.some(employee => employee.code === 'ATT-NO-ROLE-QA'));
@@ -911,6 +911,14 @@ test('purchase request, order, goods receipt and stock stay in step', async () =
   assert.equal((await call(owner, 'POST', `/purchasing/invoices/${invoice.body.id}/verify`, {})).status, 200);
   const verifiedOrder = await call(owner, 'GET', `/purchasing/orders/${order.body.id}`);
   assert.ok(verifiedOrder.body.invoices.some(row => row.id === invoice.body.id && row.verifiedAt));
+  const supplierStatement = await call(owner, 'GET', '/purchasing/suppliers/1/statement?companyId=1');
+  assert.equal(supplierStatement.status, 200, JSON.stringify(supplierStatement.body));
+  assert.ok(supplierStatement.body.rows.some(row => row.type === 'Delivery' && row.material === 'Portland cement 50kg'
+    && Number(row.quantity) === 100 && Number(row.rate) === 2500 && row.project));
+  assert.ok(supplierStatement.body.rows.some(row => row.type === 'Invoice' && row.invoiceNo === invoice.body.invoice_no));
+  const statementDebits = supplierStatement.body.rows.reduce((sum,row)=>sum+Number(row.debit||0),0);
+  const statementCredits = supplierStatement.body.rows.reduce((sum,row)=>sum+Number(row.credit||0),0);
+  assert.equal(Number(supplierStatement.body.summary.outstanding), statementDebits-statementCredits);
 
   const after = (await call(owner, 'GET', '/materials')).body.find(material => material.id === 1);
   assert.equal(Number(after.stock), Number(before.stock) + 100);
@@ -2017,6 +2025,92 @@ test('concurrent petty-cash spends cannot overdraw the float or duplicate projec
   assert.equal(expense[0].originType, 'petty_cash');
 });
 
+test('concrete uses a numbered direct-delivery route with document and receipt trail', async () => {
+  const store=await login('store@gkuc.lk');
+  const owner=lastOwnerToken||await login();
+  const material=await call(store,'POST','/materials',{
+    name:`Ready-mix concrete ${Date.now()}`,unit:'m3',stock:0,minimum:0,site:'Direct to site',unitCost:24500,
+    stockKind:'Consumable',category:'Concrete',procurementRoute:'Direct delivery'
+  });
+  assert.equal(material.status,201,JSON.stringify(material.body));
+  const order=await call(store,'POST','/purchasing/orders',{
+    supplierId:1,projectId:1,orderDate:today(),items:[{materialId:material.body.id,
+      description:material.body.name,unit:'m3',quantity:5,rate:24500}]
+  });
+  assert.equal(order.status,201,JSON.stringify(order.body));
+  assert.match(order.body.reference,/^DD-/);
+  assert.equal(order.body.procurementRoute,'Direct delivery');
+  assert.equal(order.body.status,'Issued');
+  const detail=await call(owner,'GET',`/purchasing/orders/${order.body.id}`);
+  assert.equal(detail.status,200);
+  assert.equal((await call(store,'POST',`/purchasing/orders/${order.body.id}/receive`,{
+    lines:[{itemId:detail.body.items[0].id,quantity:5}],notes:'Delivered directly to project site'
+  })).status,200);
+  const document=await fetch(`${base}/purchasing/orders/${order.body.id}/document`,{headers:{authorization:`Bearer ${owner}`}});
+  assert.equal(document.status,200);
+  const html=await document.text();
+  assert.match(html,/Direct Delivery Instruction/);
+  assert.match(html,/Delivered directly|Direct site delivery/);
+});
+
+test('VAT clearance is company-specific with reminders, renewal history and a work-queue deadline',async()=>{
+  const owner=lastOwnerToken||await login();
+  const created=await call(owner,'POST','/company-compliance',{
+    companyId:1,reference:`VAT-CLEAR-${Date.now()}`,issueDate:today(),expiryDate:shift(20),
+    reminders:[{unit:'Days',value:30},{unit:'Days',value:7},{unit:'Days',value:0}],notes:'Original clearance'
+  });
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const records=await call(owner,'GET','/company-compliance?companyId=1');
+  assert.equal(records.status,200);
+  const record=records.body.find(row=>row.id===created.body.id);
+  assert.equal(record.reminders.length,3);
+  assert.equal(record.renewals.length,1);
+  const queue=await call(owner,'GET','/dashboard/queue?companyId=1');
+  assert.ok(queue.body.work.some(item=>item.kind==='company-compliance'&&item.id===created.body.id));
+  assert.equal((await call(owner,'POST','/notifications/scan',{})).status,200);
+  const [[alert]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.notifications
+    WHERE reference_type='company_compliance' AND reference_id=?`,[created.body.id]);
+  assert.ok(Number(alert.total)>=1,'configured clearance reminder raises an actionable notification');
+  const renewed=await call(owner,'PUT',`/company-compliance/${created.body.id}/renew`,{
+    reference:`VAT-RENEW-${Date.now()}`,issueDate:shift(15),expiryDate:shift(380),
+    reminders:[{unit:'Months',value:1}],notes:'Renewed clearance'
+  });
+  assert.equal(renewed.status,200,JSON.stringify(renewed.body));
+  const history=(await call(owner,'GET','/company-compliance?companyId=1')).body.find(row=>row.id===created.body.id);
+  assert.equal(history.renewals.length,2);
+  assert.equal(history.reminders[0].unit,'Months');
+  assert.equal((await call(owner,'GET','/company-compliance?companyId=2')).body.length,0,'other company remains separate');
+});
+
+test('VAT periods reconcile accrual schedules, export Excel and keep SVAT historical',async()=>{
+  const owner=lastOwnerToken||await login();
+  const date=today(),start=`${date.slice(0,7)}-01`;
+  const schedule=await call(owner,'GET',`/finance/vat?companyId=1&start=${start}&end=${date}`);
+  assert.equal(schedule.status,200,JSON.stringify(schedule.body));
+  assert.equal(schedule.body.basis,'Invoice date (accrual)');
+  assert.ok(Array.isArray(schedule.body.output));
+  assert.ok(Array.isArray(schedule.body.input));
+  const saved=await call(owner,'PUT','/finance/vat/period',{companyId:1,start,end:date,status:'Reconciled',
+    outputAdjustment:25,inputAdjustment:5,adjustmentNote:'Verified rounding difference against source tax invoices'});
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  assert.equal(saved.body.period.status,'Reconciled');
+  assert.equal(saved.body.totals.netVatPayable,saved.body.totals.outputVat+25-saved.body.totals.inputVat-5);
+  const exportResponse=await fetch(`${base}/finance/vat/export?companyId=1&start=${start}&end=${date}`,{headers:{authorization:`Bearer ${owner}`}});
+  assert.equal(exportResponse.status,200);
+  const bytes=Buffer.from(await exportResponse.arrayBuffer());
+  assert.equal(bytes.subarray(0,2).toString(),'PK','VAT export is an Excel workbook');
+  const invalidSvat=await call(owner,'POST','/finance/vat/svat-entries',{companyId:1,periodStart:start,periodEnd:date,
+    direction:'Output',scheduleType:'SVAT 05',documentDate:date,documentNumber:`SVAT-CURRENT-${Date.now()}`,
+    counterparty:'Current customer',taxableAmount:1000,suspendedVat:180});
+  assert.equal(invalidSvat.status,409);
+  const historical=await call(owner,'POST','/finance/vat/svat-entries',{companyId:1,periodStart:'2025-07-01',periodEnd:'2025-09-30',
+    direction:'Output',scheduleType:'SVAT 05',documentDate:'2025-09-15',documentNumber:`SVAT-HIST-${Date.now()}`,
+    counterparty:'Historical customer',taxableAmount:1000,suspendedVat:180});
+  assert.equal(historical.status,201,JSON.stringify(historical.body));
+  const oldSchedule=await call(owner,'GET','/finance/vat?companyId=1&start=2025-07-01&end=2025-09-30');
+  assert.ok(oldSchedule.body.historicalSvat.some(row=>row.documentNumber===historical.body.document_number));
+});
+
 test('equipment cannot be assigned twice without a return', async () => {
   const owner = await login();
   assert.equal((await call(owner, 'POST', '/equipment/3/assign', { projectId: 1, assignedTo: 'Tharushi Wickrama', assignedAt: today() })).status, 201);
@@ -2831,6 +2925,9 @@ test('logging a service resets the vehicle service schedule', async () => {
   vehicle = (await call(transport, 'GET', '/fleet/1')).body;
   assert.equal(Number(vehicle.lastServiceOdometer), 150000, 'the schedule restarts from this service');
   assert.equal(vehicle.service.kmRemaining, 5000);
+  const report=await call(transport,'GET',`/fleet/monthly-report?companyId=1&period=${today().slice(0,7)}`);
+  assert.ok(report.body.rows.some(row=>row.vehicleId===1&&row.projectId===null&&row.serviceCost>=32000),
+    'company fleet service appears in the selected company monthly report');
 });
 
 test('fleet fuel draws one funded float movement and one project expense without double entry', async () => {
@@ -2889,6 +2986,13 @@ test('fleet fuel draws one funded float movement and one project expense without
   const balanceAfter = (await call(owner, 'GET', '/receivables/petty-cash?companyId=1')).body
     .find(row => row.id === floatId).balance;
   assert.equal(Number(balanceAfter), 1000);
+  const monthly=await call(transport,'GET',`/fleet/monthly-report?companyId=1&period=${today().slice(0,7)}`);
+  assert.equal(monthly.status,200);
+  const vehicleMonth=monthly.body.rows.find(row=>row.vehicleId===vehicle.body.id&&row.projectId===1);
+  assert.equal(vehicleMonth.fuelLitres,40);
+  assert.equal(vehicleMonth.fuelCost,14000);
+  assert.equal(vehicleMonth.distanceKm,10);
+  assert.equal(vehicleMonth.costPerKm,1400);
 
   const otherCompany = await call(owner, 'POST', '/receivables/petty-cash', {
     companyId: 2, name: `Other company fuel ${Date.now()}`, accountType: 'Fuel',
@@ -2903,6 +3007,8 @@ test('fleet fuel draws one funded float movement and one project expense without
   });
   assert.equal(wrongCompany.status, 400);
   assert.match(wrongCompany.body.error, /different company/);
+  const otherReport=await call(transport,'GET',`/fleet/monthly-report?companyId=2&period=${today().slice(0,7)}`);
+  assert.ok(!otherReport.body.rows.some(row=>row.vehicleId===vehicle.body.id),'shared vehicle costs stay with the company that paid them');
 });
 
 test('fleet histories preserve driver handovers, odometer, repairs and renewals',async()=>{
