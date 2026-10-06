@@ -59,13 +59,13 @@ const NAV = [
   ['Materials', Warehouse, ['store.view', 'store.manage', 'projects.manage']],
   ['Stock locations', Warehouse, ['store.view', 'store.manage', 'projects.view']],
   ['Fleet', Truck, ['transport.view', 'transport.manage', 'store.lending']],
-  ['Finance', CircleDollarSign, ['finance.view', 'finance.manage', 'finance.invoice', 'finance.pay', 'finance.costReview']],
+  ['Finance', CircleDollarSign, ['finance.view', 'finance.manage', 'finance.invoice', 'finance.pay', 'finance.costReview', 'finance.reports', 'finance.managementAccounts', 'finance.managementAccountsManage', 'finance.cashComparison', 'finance.dailyExpenses', 'finance.vehicleExpenses', 'finance.expectedOutflows', 'finance.vatSchedules', 'finance.vatClearance', 'finance.supplierStatements']],
   ['Daily reports', FileText, ['projects.view']],
   ['Site Today', ClipboardList, ['site.reports']],
   ['Chat', MessageSquare, ['chat.use']],
   ['Drive', HardDrive, ['drive.use']],
   ['Reports', ClipboardList, []],
-  ['Administration', ShieldCheck, ['admin.users', 'admin.roles', 'admin.audit', 'admin.lists', 'admin.notifications', 'admin.company','admin.documents', 'clients.manage', 'subcontractors.manage', 'projects.manage', 'qs.boq', 'qs.quotation', 'qs.costControl', 'qs.retention']]
+  ['Administration', ShieldCheck, ['admin.users', 'admin.roles', 'admin.audit', 'admin.integrity', 'admin.importCentre', 'admin.lists', 'admin.notifications', 'admin.company','admin.documents', 'clients.manage', 'subcontractors.manage', 'projects.manage', 'qs.boq', 'qs.quotation', 'qs.costControl', 'qs.retention']]
 ];
 
 /**
@@ -89,6 +89,7 @@ const capabilities = permissions => {
     manage: any('admin.users'),
     roles: any('admin.roles'),
     audit: any('admin.audit'),
+    integrity: any('admin.integrity'),
     messages: any('messages.send'),
     lists: any('admin.lists'),
     chat: any('chat.use'),
@@ -120,6 +121,9 @@ const capabilities = permissions => {
     qs: any('qs.boq'),
     boq: any('qs.boq'),
     quotation: any('qs.quotation'),
+    quotationRevise: any('qs.quotationRevise'),
+    quotationFinalize: any('qs.quotationFinalize'),
+    qsApprove: any('qs.approve'),
     tender: any('qs.tender'),
     retention: any('qs.retention'),
     subcontractors: any('subcontractors.manage'),

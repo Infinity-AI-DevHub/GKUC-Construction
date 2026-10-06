@@ -25,7 +25,7 @@ router.get('/suppliers', auth, permit('store.view','store.manage','finance.view'
     FROM suppliers s WHERE s.active=1 ORDER BY s.name`, companyId ? [companyId, companyId] : []));
 }));
 
-router.get('/suppliers/:id/statement', auth, permit('finance.view','finance.pay'), wrap(async (req, res) => {
+router.get('/suppliers/:id/statement', auth, permit('finance.supplierStatements'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 0);
   if (!companyId) return res.status(400).json({ error: 'Choose a company before opening a supplier statement.' });
   const supplier = await getOne('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE id=? AND active=1', [req.params.id]);

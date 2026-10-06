@@ -268,6 +268,19 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
 
   const included = staged.items.filter(item => item.include);
   const total = included.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  /* The category is the BOQ section. First appearance controls section order while rows
+     keep their source order inside that section, so reviewing never loses traceability. */
+  const groups = [...staged.items.reduce((result, item) => {
+    const category = item.category || 'Uncategorised';
+    if (!result.has(category)) result.set(category, []);
+    result.get(category).push(item);
+    return result;
+  }, new Map())].map(([category, items]) => ({
+    category,
+    items,
+    subtotal: items.filter(item => item.include)
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0)
+  }));
   const selectedProject = projects.find(project => String(project.id) === String(projectId));
   const projectClient = selectedProject?.client
     || (String(staged.projectId || '') === String(projectId) ? staged.projectClient : '') || '';
@@ -386,7 +399,9 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
           </tr>
         </thead>
         <tbody>
-          {staged.items.map(item => (
+          {groups.map(group => <React.Fragment key={group.category}>
+            <tr className="boq-category-row"><th colSpan="8"><span>{group.category}</span><strong>{rupees(group.subtotal)}</strong></th></tr>
+            {group.items.map(item => (
             <tr key={item.id} className={item.problems && item.include ? 'has-problem' : ''}>
               <td className="boq-use">
                 {/* The label wraps the box, so the whole cell toggles it. A bare checkbox is
@@ -422,7 +437,8 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
                 onSave={value => patch(item.id, { rate: value })} /></td>
               <td className="num">{item.amount === null ? '—' : rupees(item.amount)}</td>
             </tr>
-          ))}
+            ))}
+          </React.Fragment>)}
         </tbody>
         <tfoot>
           <tr><td colSpan={7}>Total of the lines being used</td><td className="num"><strong>{rupees(total)}</strong></td></tr>

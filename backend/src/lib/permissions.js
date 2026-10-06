@@ -19,6 +19,8 @@ export const PRIVILEGED_KEYS = [
   'hr.settings','hr.conduct','finance.costReview','admin.company','admin.documents',
   'admin.users', 'admin.roles', 'admin.audit', 'admin.notifications',
   'finance.pay', 'finance.invoice', 'hr.payroll',
+  'finance.managementAccountsManage', 'finance.cashComparison', 'finance.expectedOutflows',
+  'finance.vatSchedules', 'finance.vatClearance', 'admin.integrity', 'admin.importCentre',
   'messages.send', 'qs.boqAmend', 'admin.lists'
 ];
 
@@ -66,6 +68,8 @@ export const PERMISSIONS = [
   { key: 'qs.view', department: 'Quantity Surveying', label: 'View BOQs, quotations and tenders' },
   { key: 'qs.boq', department: 'Quantity Surveying', label: 'Prepare bills of quantities' },
   { key: 'qs.quotation', department: 'Quantity Surveying', label: 'Create client quotations' },
+  { key: 'qs.quotationRevise', department: 'Quantity Surveying', label: 'Revise quotations while preserving earlier versions' },
+  { key: 'qs.quotationFinalize', department: 'Quantity Surveying', label: 'Finalize draft quotations for issue to clients' },
   { key: 'qs.tender', department: 'Quantity Surveying', label: 'File and track tender submissions' },
   { key: 'qs.approve', department: 'Quantity Surveying', label: 'Approve a BOQ or variation (sets the budget)' },
   { key: 'qs.retention', department: 'Quantity Surveying', label: 'Manage retention amounts and release dates' },
@@ -75,6 +79,16 @@ export const PERMISSIONS = [
   { key: 'finance.manage', department: 'Finance', label: 'Manage expenses, income, utility bills, credit cards, VAT and petty-cash floats' },
   { key: 'finance.invoice', department: 'Finance', label: 'Create normal/tax invoices, quotation term plans, partial receipts, received cheques and bonds' },
   { key: 'finance.pay', department: 'Finance', label: 'Record supplier invoices and payments' },
+  { key: 'finance.reports', department: 'Finance', label: 'View financial reports and project profitability' },
+  { key: 'finance.managementAccounts', department: 'Finance', label: 'View monthly management accounts and period history' },
+  { key: 'finance.managementAccountsManage', department: 'Finance', label: 'Post management-account adjustments and close or reopen periods' },
+  { key: 'finance.cashComparison', department: 'Finance', label: 'View and reconcile monthly cash comparisons' },
+  { key: 'finance.dailyExpenses', department: 'Finance', label: 'View the combined daily expense register and record office payments' },
+  { key: 'finance.vehicleExpenses', department: 'Finance', label: 'View monthly vehicle and fuel expense reports' },
+  { key: 'finance.expectedOutflows', department: 'Finance', label: 'Manage expected cash outflows and planned payments' },
+  { key: 'finance.vatSchedules', department: 'Finance', label: 'Manage VAT and historical SVAT schedules and exports' },
+  { key: 'finance.vatClearance', department: 'Finance', label: 'Manage VAT clearance certificates, reminders and renewals' },
+  { key: 'finance.supplierStatements', department: 'Finance', label: 'View supplier delivery, invoice, payment and balance statements' },
 
   /* Human Resources */
   { key: 'hr.view', department: 'Human Resources', label: 'View employee records' },
@@ -96,6 +110,8 @@ export const PERMISSIONS = [
   { key: 'admin.users', department: 'Administration', label: 'Create and deactivate user accounts' },
   { key: 'admin.roles', department: 'Administration', label: 'Create roles and change what each role can do' },
   { key: 'admin.audit', department: 'Administration', label: 'Read the audit trail' },
+  { key: 'admin.integrity', department: 'Administration', label: 'Investigate fraud and integrity findings, evidence and resolution' },
+  { key: 'admin.importCentre', department: 'Administration', label: 'Use the historical Excel and PDF Import Centre' },
   { key: 'admin.notifications', department: 'Administration', label: 'Run the deadline scan and manage alerts' },
   /* Sending to a person's phone is a different act from reading an alert on screen: it
      reaches them wherever they are, it costs money per message, and it goes out under the
@@ -128,7 +144,15 @@ export const FEATURE_PERMISSION_PARENTS = {
   'clients.view':'projects.view','clients.manage':'projects.manage',
   'hr.conduct':'hr.manage','hr.settings':'hr.payroll','qs.templates':'qs.quotation',
   'qs.costControl':'qs.boq','finance.costReview':'finance.manage',
-  'admin.company':'admin.users','admin.documents':'admin.users'
+  'admin.company':'admin.users','admin.documents':'admin.users',
+  'finance.reports':'finance.view','finance.managementAccounts':'finance.view',
+  'finance.managementAccountsManage':'finance.manage',
+  'finance.cashComparison':'finance.manage','finance.dailyExpenses':'finance.manage',
+  'finance.vehicleExpenses':'finance.view','finance.expectedOutflows':'finance.manage',
+  'finance.vatSchedules':'finance.manage','finance.vatClearance':'finance.manage',
+  'finance.supplierStatements':'finance.pay','admin.integrity':'admin.audit',
+  'admin.importCentre':['clients.manage','subcontractors.manage','projects.manage','qs.boq','qs.quotation','qs.costControl','qs.retention']
+  ,'qs.quotationRevise':'qs.quotation','qs.quotationFinalize':'qs.quotation'
 };
 export const isPermission = key => PERMISSION_KEYS.includes(key);
 

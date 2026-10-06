@@ -9,7 +9,7 @@ import { notify } from '../alerts.js';
 const router = Router();
 
 /** What the watch has found, worst first. */
-router.get('/integrity/findings', auth, permit('admin.audit'), async (req, res, next) => {
+router.get('/integrity/findings', auth, permit('admin.integrity'), async (req, res, next) => {
   try {
     const status = ['Open', 'Confirmed', 'Dismissed', 'Resolved'].includes(req.query.status)
       ? req.query.status : 'Open';
@@ -37,7 +37,7 @@ router.get('/integrity/findings', auth, permit('admin.audit'), async (req, res, 
 });
 
 /** A count per severity, for the dashboard. */
-router.get('/integrity/summary', auth, permit('admin.audit'), async (_req, res, next) => {
+router.get('/integrity/summary', auth, permit('admin.integrity'), async (_req, res, next) => {
   try {
     const bySeverity = await query(`
       SELECT severity, COUNT(*) count FROM risk_findings WHERE status='Open' GROUP BY severity`);
@@ -62,7 +62,7 @@ router.get('/integrity/summary', auth, permit('admin.audit'), async (_req, res, 
  * later whether it was checked or simply cleared to tidy the list — which is precisely the
  * situation the watch exists to prevent.
  */
-router.post('/integrity/findings/:id/review', auth, permit('admin.audit'),
+router.post('/integrity/findings/:id/review', auth, permit('admin.integrity'),
   validate(z.object({
     status: z.enum(['Confirmed', 'Dismissed', 'Resolved']),
     note: z.string().trim().max(1000).optional(),
@@ -98,7 +98,7 @@ router.post('/integrity/findings/:id/review', auth, permit('admin.audit'),
         throw fail(409, 'Confirm the finding before marking its investigation resolved');
       if (req.body.assignedUserId) {
         const owner = await getOne('SELECT id,role_id roleId FROM users WHERE id=? AND active=1', [req.body.assignedUserId]);
-        if (!owner || !(await permissionsFor(owner.id, owner.roleId)).includes('admin.audit'))
+        if (!owner || !(await permissionsFor(owner.id, owner.roleId)).includes('admin.integrity'))
           throw fail(400, 'Choose an active investigator with access to the integrity workspace');
       }
       await query(`UPDATE risk_findings SET status=?, reviewed_by=?, reviewed_at=NOW(), review_note=?,
@@ -122,25 +122,25 @@ router.post('/integrity/findings/:id/review', auth, permit('admin.audit'),
     } catch (error) { next(error); }
   });
 
-router.get('/integrity/investigators', auth, permit('admin.audit'), async (_req, res, next) => {
+router.get('/integrity/investigators', auth, permit('admin.integrity'), async (_req, res, next) => {
   try {
     const users = await query('SELECT id,name,role_id roleId FROM users WHERE active=1 ORDER BY name');
     const eligible = [];
-    for (const user of users) if ((await permissionsFor(user.id, user.roleId)).includes('admin.audit'))
+    for (const user of users) if ((await permissionsFor(user.id, user.roleId)).includes('admin.integrity'))
       eligible.push({ id: user.id, name: user.name });
     res.json(eligible);
   }
   catch (error) { next(error); }
 });
 
-router.get('/integrity/findings/:id/comments', auth, permit('admin.audit'), async (req, res, next) => {
+router.get('/integrity/findings/:id/comments', auth, permit('admin.integrity'), async (req, res, next) => {
   try {
     res.json(await query(`SELECT c.id,c.body,c.created_at createdAt,u.name author FROM risk_finding_comments c
       JOIN users u ON u.id=c.user_id WHERE c.finding_id=? ORDER BY c.id`, [req.params.id]));
   } catch (error) { next(error); }
 });
 
-router.post('/integrity/findings/:id/comments', auth, permit('admin.audit'),
+router.post('/integrity/findings/:id/comments', auth, permit('admin.integrity'),
   validate(z.object({ body: z.string().trim().min(1).max(2000) })), async (req, res, next) => {
     try {
       if (!await getOne('SELECT id FROM risk_findings WHERE id=?', [req.params.id])) throw fail(404, 'Finding not found');
@@ -153,7 +153,7 @@ router.post('/integrity/findings/:id/comments', auth, permit('admin.audit'),
   });
 
 /** Runs the whole sweep now rather than waiting for the timer. */
-router.post('/integrity/scan', auth, permit('admin.audit'), async (_req, res, next) => {
+router.post('/integrity/scan', auth, permit('admin.integrity'), async (_req, res, next) => {
   try {
     res.json(await runIntegritySweep());
   } catch (error) { next(error); }
@@ -161,7 +161,7 @@ router.post('/integrity/scan', auth, permit('admin.audit'), async (_req, res, ne
 
 /* ---- what the company considers normal ---------------------------------- */
 
-router.get('/integrity/settings', auth, permit('admin.audit'), async (_req, res, next) => {
+router.get('/integrity/settings', auth, permit('admin.integrity'), async (_req, res, next) => {
   try {
     res.json(await query(
       'SELECT setting_key settingKey,value,label,help,updated_at updatedAt FROM risk_settings ORDER BY setting_key'));

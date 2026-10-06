@@ -30,7 +30,7 @@ const selectRecord = `SELECT c.id,c.company_id companyId,co.name company,c.compl
   FROM company_compliance_records c JOIN companies co ON co.id=c.company_id JOIN users u ON u.id=c.created_by`;
 const map = row => ({ ...row, reminders: typeof row.reminders === 'string' ? JSON.parse(row.reminders) : row.reminders });
 
-router.get('/', auth, permit('finance.view','finance.manage'), wrap(async (req,res) => {
+router.get('/', auth, permit('finance.vatClearance'), wrap(async (req,res) => {
   const companyId=Number(req.query.companyId);
   if(!Number.isInteger(companyId)||companyId<1)return res.status(400).json({error:'Choose an operating company.'});
   const records=(await query(`${selectRecord} WHERE c.company_id=? ORDER BY c.status='Active' DESC,c.expiry_date DESC`,[companyId])).map(map);
@@ -41,7 +41,7 @@ router.get('/', auth, permit('finance.view','finance.manage'), wrap(async (req,r
   res.json(records);
 }));
 
-router.post('/',auth,permit('finance.manage'),validate(bodySchema),wrap(async(req,res)=>{
+router.post('/',auth,permit('finance.vatClearance'),validate(bodySchema),wrap(async(req,res)=>{
   const body=req.body;
   if(!await getOne('SELECT id FROM companies WHERE id=? AND active=1',[body.companyId]))return res.status(404).json({error:'Company not found.'});
   if(await getOne("SELECT id FROM company_compliance_records WHERE company_id=? AND compliance_type='VAT clearance' AND status='Active'",[body.companyId]))
@@ -59,7 +59,7 @@ router.post('/',auth,permit('finance.manage'),validate(bodySchema),wrap(async(re
   res.status(201).json({id});
 }));
 
-router.put('/:id/renew',auth,permit('finance.manage'),validate(renewalSchema),wrap(async(req,res)=>{
+router.put('/:id/renew',auth,permit('finance.vatClearance'),validate(renewalSchema),wrap(async(req,res)=>{
   const before=await getOne('SELECT * FROM company_compliance_records WHERE id=?',[req.params.id]);
   if(!before)return res.status(404).json({error:'VAT clearance record not found.'});
   const body=req.body;

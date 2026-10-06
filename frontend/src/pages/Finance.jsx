@@ -18,6 +18,17 @@ import { DailySheetDetail } from './CostControl.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS = ['Financial reports','Management accounts','Cash comparison','Daily expenses','Vehicle expenses','Expected outflows','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Supplier statements','Categories'];
+const TAB_PERMISSIONS = {
+  'Financial reports':['finance.reports'], 'Management accounts':['finance.managementAccounts'],
+  'Cash comparison':['finance.cashComparison'], 'Daily expenses':['finance.dailyExpenses'],
+  'Vehicle expenses':['finance.vehicleExpenses'], 'Expected outflows':['finance.expectedOutflows'],
+  'VAT ledger':['finance.vatSchedules'], 'VAT clearance':['finance.vatClearance'],
+  'Supplier statements':['finance.supplierStatements'], 'Daily cost review':['finance.costReview'],
+  'Budget monitoring':['finance.view'], Invoices:['finance.invoice'], Cheques:['finance.invoice'],
+  Bonds:['finance.invoice'], 'Petty cash':['finance.manage'], Bills:['finance.manage'],
+  'Credit cards':['finance.manage'], Expenses:['finance.manage'], Income:['finance.manage'],
+  'Supplier invoices':['finance.pay'], Categories:['finance.manage']
+};
 const TAB_GROUPS = [
   { label: 'Overview & review', tabs: ['Financial reports', 'Management accounts', 'Cash comparison', 'Daily expenses', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
   { label: 'Money in', tabs: ['Invoices', 'Income', 'VAT ledger'] },
@@ -30,10 +41,14 @@ export default function Finance({ data, reload, can, companyId, company }) {
   const [tab, setTab] = useState(() => TABS.find(section => slug(section) === window.location.pathname.split('/')[2]) || TABS[0]);
   const [open, setOpen] = useState('');
   const [summary, setSummary] = useState(null);
+  const visibleTabs = TABS.filter(name => (TAB_PERMISSIONS[name] || []).some(key => can.has(key)));
+  const visibleGroups = TAB_GROUPS.map(group => ({...group, tabs:group.tabs.filter(name => visibleTabs.includes(name))})).filter(group => group.tabs.length);
+  const featureCan = permission => ({...can, finance:can.has(permission)});
 
   const load = () => api(`/finance/summary?companyId=${companyId}`).then(setSummary).catch(() => setSummary(null));
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
+  useEffect(() => { if (!visibleTabs.includes(tab) && visibleTabs.length) setTab(visibleTabs[0]); }, [tab, visibleTabs.join('|')]);
 
   const actions = {
     'Financial reports': null,
@@ -63,20 +78,20 @@ export default function Finance({ data, reload, can, companyId, company }) {
 
   return <RecordScopeProvider scope={{ kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Finance" subtitle={`Project costs, payments and profitability for ${company?.name || 'the selected company'}.`}
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
-    <Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} />
+    <Tabs tabs={visibleTabs} active={tab} onChange={setTab} groups={visibleGroups} />
 
     {tab === 'Financial reports' && <FinanceReports projects={data.projects} companyId={companyId} company={company} />}
-    {tab === 'Management accounts' && <ManagementAccounts projects={data.projects.filter(project => Number(project.companyId) === Number(companyId))} companyId={companyId} company={company} can={can} />}
-    {tab === 'Cash comparison' && <CashComparison companyId={companyId} company={company} can={can} />}
-    {tab === 'Daily expenses' && <DailyExpenses companyId={companyId} company={company} can={can} />}
+    {tab === 'Management accounts' && <ManagementAccounts projects={data.projects.filter(project => Number(project.companyId) === Number(companyId))} companyId={companyId} company={company} can={featureCan('finance.managementAccountsManage')} />}
+    {tab === 'Cash comparison' && <CashComparison companyId={companyId} company={company} can={featureCan('finance.cashComparison')} />}
+    {tab === 'Daily expenses' && <DailyExpenses companyId={companyId} company={company} can={featureCan('finance.dailyExpenses')} />}
     {tab === 'Vehicle expenses' && <VehicleExpenseReport companyId={companyId} company={company} />}
-    {tab === 'Expected outflows' && <ExpectedOutflows companyId={companyId} company={company} can={can} projects={data.projects} />}
+    {tab === 'Expected outflows' && <ExpectedOutflows companyId={companyId} company={company} can={featureCan('finance.expectedOutflows')} projects={data.projects} />}
     {tab === 'Budget monitoring' && <BudgetMonitoring summary={summary} />}
     {tab === 'Daily cost review' && <DailyCostReview companyId={companyId} can={can} />}
     {tab === 'Bills' && <Bills data={data} can={can} companyId={companyId} open={open==='Bills'} close={()=>setOpen('')} />}
     {tab === 'Credit cards' && <CreditCards can={can} companyId={companyId} />}
-    {tab === 'VAT ledger' && <VatSchedules companyId={companyId} company={company} can={can} />}
-    {tab === 'VAT clearance' && <VatClearance companyId={companyId} company={company} can={can} />}
+    {tab === 'VAT ledger' && <VatSchedules companyId={companyId} company={company} can={featureCan('finance.vatSchedules')} />}
+    {tab === 'VAT clearance' && <VatClearance companyId={companyId} company={company} can={featureCan('finance.vatClearance')} />}
     {tab === 'Invoices' && <ClientInvoices data={data} can={can} companyId={companyId} />}
     {tab === 'Cheques' && <Cheques can={can} data={data} companyId={companyId} />}
     {tab === 'Bonds' && <Bonds data={data} can={can} companyId={companyId} />}

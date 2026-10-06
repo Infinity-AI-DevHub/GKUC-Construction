@@ -581,7 +581,7 @@ export async function runIntegritySweep() {
     "SELECT id,title,detail FROM risk_findings WHERE status='Open' AND severity='Critical' AND created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)");
   for (const finding of critical) {
     await notify({
-      audience: 'admin.audit', severity: 'Critical',
+      audience: 'admin.integrity', severity: 'Critical',
       title: `Possible fraud or serious error — ${finding.title}`,
       message: finding.detail.slice(0, 500),
       referenceType: 'risk_finding', referenceId: finding.id

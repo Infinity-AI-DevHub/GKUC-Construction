@@ -19,8 +19,8 @@ const WRITERS = {
   vehicle: 'transport.manage',
   equipment: 'store.lending',
   incoming_letter: 'enquiries.manage',
-  risk_finding: 'admin.audit',
-  company_compliance: 'finance.manage'
+  risk_finding: 'admin.integrity',
+  company_compliance: 'finance.vatClearance'
 };
 
 /**
@@ -39,8 +39,8 @@ const READERS = {
   vehicle: ['transport.view', 'transport.manage'],
   equipment: ['store.view', 'store.manage'],
   incoming_letter: ['enquiries.manage'],
-  risk_finding: ['admin.audit'],
-  company_compliance: ['finance.view','finance.manage']
+  risk_finding: ['admin.integrity'],
+  company_compliance: ['finance.vatClearance']
 };
 
 /*

@@ -69,7 +69,7 @@ router.get('/fuel-floats', auth, permit('transport.view','transport.manage'), wr
   res.json(floats);
 }));
 
-router.get('/monthly-report',auth,permit('transport.view','transport.manage','finance.view','finance.manage'),wrap(async(req,res)=>{
+router.get('/monthly-report',auth,permit('finance.vehicleExpenses','transport.view','transport.manage'),wrap(async(req,res)=>{
   const companyId=Number(req.query.companyId),period=String(req.query.period||'');
   if(!Number.isInteger(companyId)||companyId<1||!/^\d{4}-(0[1-9]|1[0-2])$/.test(period))
     return res.status(400).json({error:'Choose a company and reporting month.'});

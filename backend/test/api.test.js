@@ -31,7 +31,13 @@ before(async () => {
   admin = await mysql.createConnection({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: process.env.DB_USER, password: process.env.DB_PASSWORD });
   await admin.query(`DROP DATABASE IF EXISTS \`${testDatabase}\``);
   await admin.query(`CREATE DATABASE \`${testDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-  server = spawn(process.execPath, ['src/index.js'], { cwd: new URL('..', import.meta.url), env: { ...process.env, PORT: String(port), DB_NAME: testDatabase, UPLOAD_DIR: testUploadDir }, stdio: ['ignore','pipe','pipe'] });
+  server = spawn(process.execPath, ['src/index.js'], { cwd: new URL('..', import.meta.url), env: {
+    ...process.env, PORT: String(port), DB_NAME: testDatabase, UPLOAD_DIR: testUploadDir,
+    /* The integration suite deliberately signs in repeatedly as different roles. Keep
+       production throttles intact while preventing the test runner itself from becoming
+       the 121st anonymous write from one loopback address. */
+    RATE_MAX_REQUESTS: '100000', RATE_MAX_WRITES: '100000'
+  }, stdio: ['ignore','pipe','pipe'] });
   for (const stream of [server.stdout, server.stderr]) stream.on('data', chunk => { serverOutput += chunk.toString(); });
   /* A cold schema build can take more than nine seconds on the bundled MySQL runtime.
      Give it enough room without weakening the health check itself. */
@@ -1008,7 +1014,7 @@ test('project coordination, subcontract rates and site stock custody stay linked
   const subcontractLine=quoted.items.find(row=>row.category==='Subcontract'&&Number(row.rate)===850);
   assert.ok(subcontractLine,
     'the agreed rate flows through the BOQ into the quotation snapshot');
-  assert.equal((await call(qs,'PATCH',`/qs/quotations/${quote.body.id}`,{status:'Accepted'})).status,200);
+  assert.equal((await call(owner,'PATCH',`/qs/quotations/${quote.body.id}`,{status:'Accepted'})).status,200);
   const invoice=await call(owner,'POST','/receivables/invoices',{projectId,kind:'Interim',title:'Certified membrane works',
     invoiceDate:today(),taxTreatment:'Exempt',retentionPercent:0,advanceRecovery:0,otherDeductions:0,
     items:[{description:'Membrane installation',unit:'m2',quantity:2,rate:1,quotationItemId:subcontractLine.id}]});
@@ -1341,7 +1347,7 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
     headers: { authorization: `Bearer ${qs}` }
   });
   const html = await document.text();
-  assert.match(html, /<th class="ref">Area<\/th>/);
+  assert.match(html, /<th class="ref">Item \/ surfacing<\/th>/);
   assert.match(html, /Payment terms/);
   assert.match(html, /70% upfront/);
   assert.match(html, /Test Bank/);
@@ -1364,10 +1370,54 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
   const revisedHtml = await revisedDocument.text();
   assert.match(revisedHtml, /original-client@example.lk/);
   assert.doesNotMatch(revisedHtml, /077 999 9999/);
-  assert.equal((await call(qs, 'PATCH', `/qs/quotations/${quotation.body.id}`, { status: 'Accepted' })).status, 200);
+  assert.equal((await call(owner, 'PATCH', `/qs/quotations/${quotation.body.id}`, { status: 'Accepted' })).status, 200);
   assert.equal((await call(qs, 'PATCH', `/qs/quotations/${quotation.body.id}`, { visibility })).status, 409);
   const acceptedProject = await call(owner, 'GET', `/projects/${project.body.id}`);
   assert.equal(Number(acceptedProject.body.budget), 51920);
+});
+
+test('quotation revisions preserve the original and finalization is independently authorised', async () => {
+  const owner = await login();
+  const supervisor = await login('supervisor@gkuc.lk');
+  const clients = await call(owner, 'GET', '/clients');
+  const client = clients.body[0];
+  assert.ok(client);
+  const identity = await call(owner, 'GET', `/qs/quotation-identity?companyId=1&clientId=${client.id}`);
+  const show = {
+    company: { logo:true,name:true,address:true,telephone:true,email:true,registrationNumber:true,tin:true,vatNumber:true,svatNumber:true,bankDetails:false },
+    client: { name:true,billingAddress:true,siteAddress:true,contactPerson:true,phone:true,alternatePhone:true,email:true,
+      city:true,district:true,province:true,country:true,registrationNumber:true,tin:true,vatNumber:true,project:true }
+  };
+  const created = await call(owner, 'POST', '/qs/quotations/manual', { companyId:1, clientId:client.id,
+    title:'Revision workflow test', quoteDate:today(), markupPercent:0, vatPercent:18,
+    calculationMode:'Separate Category Totals', preparedByName:'Test Preparer', preparedByDesignation:'Quantity Surveyor',
+    visibility:show, lines:[
+      { category:'Tar', area:'T-01', description:'Tar item', unit:'m2', quantity:1, rate:100 },
+      { category:'Concrete', area:'C-01', description:'Concrete item', unit:'m3', quantity:1, rate:200 }
+    ] });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal((await call(supervisor, 'POST', `/qs/quotations/${created.body.id}/finalize`, {})).status, 403);
+  const revised = await call(owner, 'POST', `/qs/quotations/${created.body.id}/revisions`, {
+    title:'Revision workflow test', clientId:client.id, quoteDate:today(), markupPercent:0, vatPercent:18,
+    calculationMode:'Separate Category Totals', preparedByName:'Another Preparer', preparedByDesignation:'Managing Director',
+    visibility:show, lines:[
+      { category:'Tar', area:'T-02', description:'Tar item revised', unit:'m2', quantity:2, rate:150 },
+      { category:'Concrete', area:'C-01', description:'Concrete item', unit:'m3', quantity:1, rate:200 }
+    ] });
+  assert.equal(revised.status, 201, JSON.stringify(revised.body));
+  assert.equal(revised.body.revisionNumber, 1);
+  assert.equal(revised.body.revisedFromId, created.body.id);
+  assert.match(revised.body.reference, /-R1$/);
+  const original = await call(owner, 'GET', `/qs/quotations/${created.body.id}`);
+  assert.equal(Number(original.body.total), 354);
+  assert.equal(Number(revised.body.total), 590);
+  assert.equal((await call(owner, 'POST', `/qs/quotations/${revised.body.id}/finalize`, {})).status, 200);
+  const final = await call(owner, 'GET', `/qs/quotations/${revised.body.id}`);
+  assert.equal(final.body.status, 'Sent');
+  assert.equal(final.body.preparedBy, 'Another Preparer');
+  assert.equal(final.body.preparedByDesignation, 'Managing Director');
+  assert.ok(final.body.revisions.some(row => Number(row.id) === Number(created.body.id)));
+  assert.ok(identity.body.company);
 });
 
 test('quotation templates prefill traceable lines and project subcontractor amounts stay authoritative', async () => {
@@ -1767,8 +1817,24 @@ test('QS tracks daily actual costs, item overruns, forecasts and unexpected expe
   assert.ok(item);
   const options = await call(qs,'GET','/boq/cost-control/options?projectId=2');
   assert.equal(options.status,200);
-  const taskId = options.body.tasks[0]?.id;
-  assert.ok(taskId,'project work must be selected from Tasks');
+  const workerIds = options.body.employees.slice(0,2).map(employee => Number(employee.id));
+  assert.ok(workerIds.length,'active employees must be available for completed project work');
+  const completedTask = await call(qs,'POST','/boq/cost-control/tasks',{
+    projectId:2,title:'Roof installation completed from daily costs',workDate:today(),priority:'High',
+    notes:'Recorded by QS while preparing the daily cost sheet',employeeIds:workerIds
+  });
+  assert.equal(completedTask.status,201,JSON.stringify(completedTask.body));
+  assert.deepEqual(completedTask.body.assigneeEmployeeIds,workerIds);
+  const visibleTask = (await call(owner,'GET','/tasks?projectId=2')).body.find(task=>task.id===completedTask.body.id);
+  assert.ok(visibleTask,'a completed task created from daily costs must appear on Tasks');
+  assert.equal(visibleTask.status,'Completed');
+  const editedTask = await call(qs,'PATCH',`/boq/cost-control/tasks/${completedTask.body.id}`,{
+    projectId:2,title:'Roof installation completed and checked',workDate:today(),priority:'Medium',
+    notes:'Workers and completion details checked on site',employeeIds:workerIds
+  });
+  assert.equal(editedTask.status,200,JSON.stringify(editedTask.body));
+  assert.equal(editedTask.body.title,'Roof installation completed and checked');
+  const taskId = editedTask.body.id;
   const submitted = await call(qs,'POST','/boq/cost-control/daily-sheets',{
     projectId:2,workDate:today(),lines:[
       {taskId,boqItemId:item.id,source:'Material',costType:'Expected',description:'Roof sheets installed to date',
