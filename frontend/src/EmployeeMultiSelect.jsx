@@ -1,15 +1,15 @@
 import React, { useState } from 'react';
 
-export default function EmployeeMultiSelect({ employees, selected, onChange, label = 'Assigned to' }) {
+export default function EmployeeMultiSelect({ employees, selected, onChange, label = 'Assigned to', required = true }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const available = employees.filter(employee => ['Active', 'On leave'].includes(employee.status) || selected.includes(Number(employee.id)));
   const matches = available.filter(employee => `${employee.name} ${employee.designation || ''} ${employee.code || ''}`.toLowerCase().includes(search.toLowerCase()));
   const names = selected.map(id => employees.find(employee => Number(employee.id) === id)?.name).filter(Boolean);
   return <div className="project-team-picker">
-    <label>{label} <span>*</span></label>
+    <label>{label} {required ? <span>*</span> : <small>(optional)</small>}</label>
     <button type="button" className="project-team-trigger" aria-expanded={open} onClick={() => setOpen(value => !value)}>
-      {names.length ? `${names.length} employee${names.length === 1 ? '' : 's'} selected: ${names.join(', ')}` : 'Choose employees…'}
+      {names.length ? `${names.length} employee${names.length === 1 ? '' : 's'} selected: ${names.join(', ')}` : required ? 'Choose employees…' : 'No employees selected'}
     </button>
     {open && <div className="project-team-options">
       <input aria-label="Search task assignees" placeholder="Search by name or role" value={search} onChange={event => setSearch(event.target.value)} />

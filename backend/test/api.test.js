@@ -1819,6 +1819,13 @@ test('QS tracks daily actual costs, item overruns, forecasts and unexpected expe
   assert.equal(options.status,200);
   const workerIds = options.body.employees.slice(0,2).map(employee => Number(employee.id));
   assert.ok(workerIds.length,'active employees must be available for completed project work');
+  const unassignedTask = await call(qs,'POST','/boq/cost-control/tasks',{
+    projectId:2,title:'Completed work awaiting worker allocation',workDate:today(),priority:'Low',
+    notes:'Workers can be assigned later from the task record',employeeIds:[]
+  });
+  assert.equal(unassignedTask.status,201,JSON.stringify(unassignedTask.body));
+  assert.deepEqual(unassignedTask.body.assigneeEmployeeIds,[]);
+  assert.equal(unassignedTask.body.assignee,'Unassigned');
   const completedTask = await call(qs,'POST','/boq/cost-control/tasks',{
     projectId:2,title:'Roof installation completed from daily costs',workDate:today(),priority:'High',
     notes:'Recorded by QS while preparing the daily cost sheet',employeeIds:workerIds

@@ -313,7 +313,7 @@ const completedTaskSchema = z.object({
   workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   priority: z.enum(['Low','Medium','High']).default('Medium'),
   notes: z.string().trim().max(3000).default(''),
-  employeeIds: z.array(z.number().int().positive()).min(1).max(50)
+  employeeIds: z.array(z.number().int().positive()).max(50).default([])
 });
 
 async function validateCompletedTask(connection, body) {
@@ -321,6 +321,7 @@ async function validateCompletedTask(connection, body) {
   if (!project) throw costError('Choose an active project site.');
   const ids = [...new Set(body.employeeIds)];
   if (ids.length !== body.employeeIds.length) throw costError('Each employee can be selected only once.');
+  if (!ids.length) return { ids, names: new Map(), display: 'Unassigned' };
   const [employees] = await connection.execute(`SELECT id,name FROM employees WHERE id IN (${ids.map(() => '?').join(',')})
     AND status IN ('Active','On leave')`, ids);
   if (employees.length !== ids.length) throw costError('One or more selected employees are not active. Refresh the employee list and try again.');
@@ -333,7 +334,7 @@ router.post('/cost-control/tasks', auth, permit('qs.costControl'), validate(comp
     const team = await validateCompletedTask(connection, req.body);
     const [created] = await connection.execute(`INSERT INTO tasks
       (title,project_id,assignee,assignee_employee_id,due,due_date,priority,status,notes)
-      VALUES (?,?,?,?,?,?,?,'Completed',?)`, [req.body.title,req.body.projectId,team.display,team.ids[0],
+      VALUES (?,?,?,?,?,?,?,'Completed',?)`, [req.body.title,req.body.projectId,team.display,team.ids[0] || null,
       req.body.workDate,req.body.workDate,req.body.priority,req.body.notes]);
     for (const employeeId of team.ids) await connection.execute(
       'INSERT INTO task_assignees (task_id,employee_id) VALUES (?,?)', [created.insertId,employeeId]);
@@ -357,7 +358,7 @@ router.patch('/cost-control/tasks/:id', auth, permit('qs.costControl'), validate
   await transaction(async connection => {
     const team = await validateCompletedTask(connection, req.body);
     await connection.execute(`UPDATE tasks SET title=?,assignee=?,assignee_employee_id=?,due=?,due_date=?,priority=?,notes=? WHERE id=?`,
-      [req.body.title,team.display,team.ids[0],req.body.workDate,req.body.workDate,req.body.priority,req.body.notes,taskId]);
+      [req.body.title,team.display,team.ids[0] || null,req.body.workDate,req.body.workDate,req.body.priority,req.body.notes,taskId]);
     await connection.execute('DELETE FROM task_assignees WHERE task_id=?', [taskId]);
     for (const employeeId of team.ids) await connection.execute(
       'INSERT INTO task_assignees (task_id,employee_id) VALUES (?,?)', [taskId,employeeId]);

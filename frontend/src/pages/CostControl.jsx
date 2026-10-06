@@ -3,6 +3,7 @@ import { AlertTriangle, BarChart3, CircleDollarSign, FileSpreadsheet, Plus, Tras
 import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, SelectField, Summary, TextArea } from '../ui.jsx';
 import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
+import { suggestedCost } from '../cost-suggestion.js';
 
 const SOURCES = ['Material', 'Labour', 'Fuel', 'Equipment', 'Subcontractor', 'Overhead', 'Other'];
 const number = value => Number(value || 0);
@@ -12,6 +13,24 @@ function Money({ value, signed = false }) {
   const amount = number(value); return <span className={amount > 0 && signed ? 'cost-negative' : amount < 0 ? 'cost-positive' : ''}>
     {signed && amount > 0 ? '+' : ''}{rupees(amount)}
   </span>;
+}
+
+function CostAmountField({ line, index, update }) {
+  const locked = line.source === 'Fuel' && (line.fuelOrigin === 'Reserve' || line.stationMode === 'Existing');
+  const suggestion = locked ? null : suggestedCost(line.quantity, line.unitRate);
+  const usingSuggestion = suggestion !== null && Number(line.amount) === suggestion;
+  return <div className="cost-amount-field">
+    <label>Cost (LKR) *<input type="number" required min="0.01" step="0.01" value={line.amount}
+      readOnly={locked} onChange={event => update(index,{amount:event.target.value})} /></label>
+    {suggestion !== null && <div className="cost-suggestion">
+      <span><small>Quantity × unit rate suggests</small><strong>{rupees(suggestion)}</strong></span>
+      <button type="button" className="status-button" disabled={usingSuggestion}
+        onClick={() => update(index, { amount: suggestion.toFixed(2) })}>
+        {usingSuggestion ? 'Suggestion applied' : 'Use this amount'}
+      </button>
+      <small>Optional — keep or enter a different actual cost.</small>
+    </div>}
+  </div>;
 }
 
 export default function CostControl({ projects, can }) {
@@ -128,7 +147,7 @@ function ExpenseForm({ projectId, items, initial, close, reload, onImport }) {
       </>}
       {line.costType !== 'Unexpected' && <label>BOQ item (optional)<select value={line.boqItemId || ''} onChange={event => update(index,{boqItemId:event.target.value})}><option value="">No BOQ item</option>{items.map(item => <option value={item.id} key={item.id}>{item.boqReference} · {item.description}</option>)}</select></label>}
       {line.source !== 'Labour' && !(line.fuelOrigin === 'Station' && line.stationMode === 'Existing') && <><label>{line.source==='Fuel'?'Litres *':'Quantity'}<input type="number" required={line.source==='Fuel'} min="0.001" step="0.001" value={line.quantity || ''} onChange={event => { const quantity=event.target.value; update(index,{quantity,amount:line.source === 'Fuel' && line.fuelOrigin === 'Reserve' ? Number((number(quantity)*number(line.unitRate)).toFixed(2)) : line.amount}); }} /></label><label>Unit<input value={line.unit || ''} onChange={event => update(index,{unit:event.target.value})} placeholder="m³, kg, day" /></label><label>Unit rate (LKR)<input type="number" min="0" step="0.01" value={line.unitRate ?? ''} readOnly={line.source==='Fuel'&&line.fuelOrigin==='Reserve'} onChange={event => { const unitRate=event.target.value; update(index,{unitRate,amount:line.source === 'Fuel' && line.fuelOrigin === 'Reserve' ? Number((number(line.quantity)*number(unitRate)).toFixed(2)) : line.amount}); }} /></label></>}
-      <label>Cost (LKR) *<input type="number" required min="0.01" step="0.01" value={line.amount} readOnly={line.source === 'Fuel' && (line.fuelOrigin === 'Reserve' || line.stationMode === 'Existing')} onChange={event => update(index,{amount:event.target.value})} /></label>
+      <CostAmountField line={line} index={index} update={update} />
       <label>Receipt / reference<input value={line.reference || ''} onChange={event => update(index,{reference:event.target.value})} /></label>
       {line.costType !== 'Unexpected' && <><label>Accepted quotation item<select value={line.quotationItemId || ''} onChange={event => update(index,{quotationItemId:event.target.value,quotedRecovery:''})}><option value="">No quoted recovery assigned</option>{options?.quotationItems.map(item => <option key={item.id} value={item.id}>{item.reference} · {item.description} · {rupees(item.amount)}</option>)}</select></label>{line.quotationItemId && <label>Quoted recovery allocated to this day (LKR)<input type="number" min="0" step="0.01" value={line.quotedRecovery || ''} onChange={event => update(index,{quotedRecovery:event.target.value})} /></label>}</>}
     </div>)}<button className="secondary" type="button" onClick={() => setLines(old => [...old,{source:'Material',costType:'Expected',taskId:'',description:'',amount:''}])}><Plus size={14} /> Add cost line</button></div>
@@ -141,7 +160,6 @@ function CompletedTaskForm({ projectId, employees, task, defaultDate, close, sav
   const [selected,setSelected] = useState(task?.assigneeEmployeeIds?.map(Number) || []);
   return <FormModal title={task ? 'Edit completed task and workers' : 'Record completed task'} close={close}
     label={task ? 'Save task changes' : 'Record completed task'} wide onSubmit={async values => {
-      if (!selected.length) throw new Error('Select at least one employee who worked on this task.');
       const payload = { projectId,title:values.title,workDate:values.workDate,priority:values.priority,
         notes:values.notes || '',employeeIds:selected };
       const result = task ? await patch(`/boq/cost-control/tasks/${task.id}`,payload) : await post('/boq/cost-control/tasks',payload);
@@ -151,7 +169,8 @@ function CompletedTaskForm({ projectId, employees, task, defaultDate, close, sav
     <Field name="title" label="Completed work" defaultValue={task?.title || ''} wide placeholder="For example: Ground-floor slab poured" />
     <Field name="workDate" label="Date completed" type="date" defaultValue={task?.dueDate?.slice?.(0,10) || task?.due || defaultDate} />
     <SelectField name="priority" label="Priority" options={['Low','Medium','High']} defaultValue={task?.priority || 'Medium'} />
-    <div className="wide"><EmployeeMultiSelect employees={employees} selected={selected} onChange={setSelected} label="Employees who worked here" /></div>
+    <div className="wide"><EmployeeMultiSelect employees={employees} selected={selected} onChange={setSelected}
+      label="Employees who worked here" required={false} /></div>
     <TextArea name="notes" label="Work notes" required={false} defaultValue={task?.notes || ''} wide placeholder="Optional completion details or site reference" />
   </FormModal>;
 }
