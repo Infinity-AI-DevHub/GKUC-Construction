@@ -10,6 +10,7 @@ import { notify } from '../alerts.js';
 import { publishChange } from '../lib/realtime.js';
 import { readUpload, readUploadedFile } from '../lib/storage.js';
 import { parseDailyCostWorkbook } from '../lib/daily-cost-workbook.js';
+import { withTaskAssignees } from '../lib/task-assignees.js';
 
 const router = Router();
 /* Kept only as the fallback grouping for the cost comparison below; the values people
@@ -282,13 +283,13 @@ router.post('/cost-control/import', auth, permit('qs.costControl'), validate(z.o
   res.status(201).json({ ...result,status:'Submitted' });
 }));
 
-router.get('/cost-control/options', auth, permit('qs.view','qs.boq','finance.view','finance.manage'), wrap(async (req, res) => {
+router.get('/cost-control/options', auth, permit('qs.view','qs.boq','qs.costControl','finance.view','finance.manage'), wrap(async (req, res) => {
   const projectId = Number(req.query.projectId);
   const project = await getOne('SELECT id,company_id companyId FROM projects WHERE id=? AND active=1', [projectId]);
   if (!project) return res.status(404).json({ error: 'Choose an active project site.' });
   const [tasks, employees, vehicles, reserves, fuel, quotationItems, fuelFloats] = await Promise.all([
-    query('SELECT id,title,status FROM tasks WHERE project_id=? ORDER BY title', [projectId]),
-    query("SELECT id,name,code,daily_rate dailyRate FROM employees WHERE status IN ('Active','On leave') ORDER BY name"),
+    withTaskAssignees(await query('SELECT id,title,status,due,due_date dueDate,priority,notes,assignee_employee_id assigneeEmployeeId,assignee FROM tasks WHERE project_id=? ORDER BY title', [projectId])),
+    query("SELECT id,name,code,designation,status,daily_rate dailyRate FROM employees WHERE status IN ('Active','On leave') ORDER BY name"),
     query('SELECT id,vehicle,registration FROM fleet WHERE status<>\'Inactive\' ORDER BY vehicle'),
     query("SELECT id,name,unit,stock,unit_cost unitCost,site FROM materials WHERE active=1 AND LOWER(unit) IN ('l','litre','litres','liter','liters') ORDER BY name"),
     query(`SELECT f.id,f.vehicle_id vehicleId,f.fuel_date fuelDate,f.litres,f.cost,v.vehicle,v.registration
@@ -304,6 +305,67 @@ router.get('/cost-control/options', auth, permit('qs.view','qs.boq','finance.vie
       GROUP BY f.id,f.name ORDER BY f.name`, [project.companyId])
   ]);
   res.json({ tasks, employees, vehicles, reserves, fuel, quotationItems, fuelFloats });
+}));
+
+const completedTaskSchema = z.object({
+  projectId: z.number().int().positive(),
+  title: z.string().trim().min(3).max(220),
+  workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  priority: z.enum(['Low','Medium','High']).default('Medium'),
+  notes: z.string().trim().max(3000).default(''),
+  employeeIds: z.array(z.number().int().positive()).min(1).max(50)
+});
+
+async function validateCompletedTask(connection, body) {
+  const [[project]] = await connection.execute('SELECT id FROM projects WHERE id=? AND active=1', [body.projectId]);
+  if (!project) throw costError('Choose an active project site.');
+  const ids = [...new Set(body.employeeIds)];
+  if (ids.length !== body.employeeIds.length) throw costError('Each employee can be selected only once.');
+  const [employees] = await connection.execute(`SELECT id,name FROM employees WHERE id IN (${ids.map(() => '?').join(',')})
+    AND status IN ('Active','On leave')`, ids);
+  if (employees.length !== ids.length) throw costError('One or more selected employees are not active. Refresh the employee list and try again.');
+  const names = new Map(employees.map(employee => [Number(employee.id), employee.name]));
+  return { ids, names, display: ids.map(id => names.get(id)).join(', ') };
+}
+
+router.post('/cost-control/tasks', auth, permit('qs.costControl'), validate(completedTaskSchema), wrap(async (req, res) => {
+  const taskId = await transaction(async connection => {
+    const team = await validateCompletedTask(connection, req.body);
+    const [created] = await connection.execute(`INSERT INTO tasks
+      (title,project_id,assignee,assignee_employee_id,due,due_date,priority,status,notes)
+      VALUES (?,?,?,?,?,?,?,'Completed',?)`, [req.body.title,req.body.projectId,team.display,team.ids[0],
+      req.body.workDate,req.body.workDate,req.body.priority,req.body.notes]);
+    for (const employeeId of team.ids) await connection.execute(
+      'INSERT INTO task_assignees (task_id,employee_id) VALUES (?,?)', [created.insertId,employeeId]);
+    await audit(connection,req.user.id,'CREATE','task',created.insertId,null,
+      { ...req.body,status:'Completed',createdFrom:'Daily cost sheet' },req.ip);
+    return created.insertId;
+  });
+  const task = await withTaskAssignees(await getOne(`SELECT id,title,status,due,due_date dueDate,priority,notes,
+    assignee_employee_id assigneeEmployeeId,assignee FROM tasks WHERE id=?`, [taskId]));
+  await notify({ audience:'projects.manage',severity:req.body.priority === 'High' ? 'Warning' : 'Info',
+    title:`Completed work needs approval — ${task.title}`,
+    message:`${task.assignee} recorded completed project work on ${task.due}.`,referenceType:'task',referenceId:task.id });
+  res.status(201).json(task);
+}));
+
+router.patch('/cost-control/tasks/:id', auth, permit('qs.costControl'), validate(completedTaskSchema), wrap(async (req, res) => {
+  const taskId = Number(req.params.id);
+  const before = await getOne('SELECT * FROM tasks WHERE id=? AND project_id=?', [taskId,req.body.projectId]);
+  if (!before) return res.status(404).json({ error:'Completed task not found for this project.' });
+  if (before.status !== 'Completed') return res.status(409).json({ error:'Only work still awaiting approval can be edited here. Open Tasks to review its current status.' });
+  await transaction(async connection => {
+    const team = await validateCompletedTask(connection, req.body);
+    await connection.execute(`UPDATE tasks SET title=?,assignee=?,assignee_employee_id=?,due=?,due_date=?,priority=?,notes=? WHERE id=?`,
+      [req.body.title,team.display,team.ids[0],req.body.workDate,req.body.workDate,req.body.priority,req.body.notes,taskId]);
+    await connection.execute('DELETE FROM task_assignees WHERE task_id=?', [taskId]);
+    for (const employeeId of team.ids) await connection.execute(
+      'INSERT INTO task_assignees (task_id,employee_id) VALUES (?,?)', [taskId,employeeId]);
+    await audit(connection,req.user.id,'UPDATE','task',taskId,before,
+      { ...req.body,status:'Completed',updatedFrom:'Daily cost sheet' },req.ip);
+  });
+  res.json(await withTaskAssignees(await getOne(`SELECT id,title,status,due,due_date dueDate,priority,notes,
+    assignee_employee_id assigneeEmployeeId,assignee FROM tasks WHERE id=?`, [taskId])));
 }));
 
 router.get('/cost-control/review-queue', auth, permit('finance.view','finance.manage','finance.costReview'), wrap(async (req, res) => {

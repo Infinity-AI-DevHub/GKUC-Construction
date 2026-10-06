@@ -1,5 +1,6 @@
 import { amountInWords } from './amount-in-words.js';
 import { DEFAULT_DESIGN, fontStack, normaliseDesign, orderedBlocks, shows } from './document-design.js';
+import { calculateQuotation } from './quotation-calculations.js';
 
 /**
  * Renders a client-facing document as a self-contained printable page.
@@ -9,7 +10,7 @@ import { DEFAULT_DESIGN, fontStack, normaliseDesign, orderedBlocks, shows } from
  * budget and the project can never quietly disagree.
  *
  * The same HTML powers the on-screen preview and server-generated PDF. Print rules enforce
- * A4 pages and repeat the letterhead without relying on a client's browser settings.
+ * A4 pages with document-specific letterhead pagination, without relying on a client's browser settings.
  */
 
 const escape = value => String(value ?? '')
@@ -257,7 +258,7 @@ function letterhead(company, heading, reference, date, design = DEFAULT_DESIGN, 
 }
 
 /** Wraps saved document sections in reading order; the letterhead always leads. */
-function page({ design, company, title, heading, reference, date, blocks, settings, headerVisibility }) {
+function page({ design, company, title, heading, reference, date, blocks, settings, headerVisibility, firstPageLetterhead = false }) {
   /*
    * Position is applied here rather than baked into each block, so a block does not need to
    * know where in the document it ended up. Space is added above whatever the layout already
@@ -297,7 +298,8 @@ function page({ design, company, title, heading, reference, date, blocks, settin
 </div>
 <div class="sheet">
   ${watermark}
-  <table class="print-pages"><thead><tr><td>${blocks.letterhead || ''}</td></tr></thead>
+  ${firstPageLetterhead ? (blocks.letterhead || '') : ''}
+  <table class="print-pages">${firstPageLetterhead ? '' : `<thead><tr><td>${blocks.letterhead || ''}</td></tr></thead>`}
     <tbody><tr><td>${drawn}</td></tr></tbody></table>
 </div>
 </body></html>`;
@@ -316,11 +318,15 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
 
   const markup = Number(quotation.markupPercent || 0);
   const vat = Number(quotation.vatPercent || 0);
-  const subtotal = Number(quotation.subtotal || 0);
-  const withMarkup = subtotal * (1 + markup / 100);
-  const vatAmount = withMarkup * (vat / 100);
+  const calculationMode = quotation.calculationMode || 'Combined Total';
+  const calculated = calculateQuotation(items.filter(item => !item.isSection), {
+    markupPercent: markup, vatPercent: vat, calculationMode
+  });
+  const subtotal = calculated.subtotal;
+  const withMarkup = subtotal + calculated.markup;
+  const vatAmount = calculated.vat;
 
-  const rows = items.map((item, index) => (item.isSection
+  const lineRow = (item, index) => (item.isSection
     ? `<tr class="section"><td colspan="6">${escape(item.description)}</td></tr>`
     : `<tr>
         <td class="ref">${escape(item.area || item.category || item.reference || index + 1)}</td>
@@ -329,7 +335,18 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
         <td class="qty num">${quantity(item.quantity)}</td>
         <td class="rate num">${item.rate === null || item.rate === undefined ? '' : money(item.rate)}</td>
         <td class="amount num">${money(item.amount)}</td>
-      </tr>`)).join('');
+      </tr>`);
+  const rows = calculationMode === 'Separate Category Totals'
+    ? calculated.categoryTotals.map(group => {
+      const categoryItems = items.filter(item => !item.isSection && String(item.category || 'Uncategorised') === group.category);
+      return `<tr class="section"><td colspan="6">${escape(group.category)}</td></tr>
+        ${categoryItems.map((item, index) => lineRow(item, index)).join('')}
+        <tr class="subtotal"><td colspan="5" class="num">${escape(group.category)} subtotal</td><td class="num">${money(group.subtotal)}</td></tr>
+        ${markup ? `<tr class="subtotal"><td colspan="5" class="num">Overheads &amp; profit @ ${markup}%</td><td class="num">${money(group.markup)}</td></tr>` : ''}
+        ${vat ? `<tr class="subtotal"><td colspan="5" class="num">VAT @ ${vat}%</td><td class="num">${money(group.vat)}</td></tr>` : ''}
+        <tr class="category-total"><td colspan="5" class="num">${escape(group.category)} total</td><td class="num">${money(group.total)}</td></tr>`;
+    }).join('')
+    : items.map(lineRow).join('');
 
   const commonNotes = lines(settings.quotationNotes || '');
   const quotationNotes = lines(quotation.notes || '');
@@ -348,7 +365,9 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
 
   /* Totals belong to the table, so they travel with it rather than as a block of their own
      — a total floating away from the figures it sums would be worse than useless. */
-  const totals = `<tfoot>
+  const totals = calculationMode === 'Separate Category Totals' ? `<tfoot>
+      <tr class="grand"><td colspan="5" class="num">Grand total</td><td class="num">${money(calculated.total)}</td></tr>
+    </tfoot>` : `<tfoot>
       <tr><td colspan="5" class="num">Subtotal</td><td class="num">${money(subtotal)}</td></tr>
       ${markup ? `<tr><td colspan="5" class="num">Overheads &amp; profit @ ${markup}%</td>
         <td class="num">${money(withMarkup - subtotal)}</td></tr>` : ''}
@@ -382,7 +401,8 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
         <h3>Details</h3>
         ${quotation.validUntil ? `<p><strong>Valid until:</strong> ${escape(longDate(quotation.validUntil))}</p>` : ''}
         ${quotation.boqReference ? `<p><strong>Based on BOQ:</strong> ${escape(quotation.boqReference)}</p>` : ''}
-        <p><strong>Prepared by:</strong> ${escape(quotation.preparedBy || '')}</p>
+        <p><strong>Prepared by:</strong> ${escape(quotation.preparedBy || '')}${quotation.preparedByDesignation ? `<br>${escape(quotation.preparedByDesignation)}` : ''}</p>
+        ${Number(quotation.revisionNumber || 0) > 0 ? `<p><strong>Revision:</strong> ${Number(quotation.revisionNumber)}</p>` : ''}
       </div>
     </div>`,
 
@@ -391,7 +411,7 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
 
     table: `<table data-block="table">
       <thead><tr>
-        <th class="ref">Area</th><th>Description</th><th class="unit">Unit</th>
+        <th class="ref">Item / surfacing</th><th>Description</th><th class="unit">Unit</th>
         <th class="qty num">Qty</th><th class="rate num">Rate (Rs.)</th><th class="amount num">Amount (Rs.)</th>
       </tr></thead>
       <tbody>${rows}</tbody>
@@ -429,7 +449,7 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
   return page({
     design, company: issuer, blocks, settings, heading: 'Quotation', reference: quotation.reference, date: quotation.quoteDate,
     headerVisibility: issuerShow,
-    title: `${quotation.reference} — ${quotation.clientName || 'Quotation'}`
+    title: `${quotation.reference} — ${quotation.clientName || 'Quotation'}`, firstPageLetterhead: true
   });
 }
 

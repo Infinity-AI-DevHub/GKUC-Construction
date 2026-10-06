@@ -115,8 +115,8 @@ const REPORT_PERMISSIONS = {
   purchases: ['store.view', 'store.manage', 'finance.pay'],
   vehicles: ['transport.view', 'transport.manage'],
   equipment: ['store.view', 'store.manage'],
-  budget: ['finance.view', 'finance.manage', 'qs.view'],
-  profit: ['finance.view', 'finance.manage'],
+  budget: ['finance.reports', 'qs.view'],
+  profit: ['finance.reports'],
   progress: ['projects.view', 'site.reports']
 };
 

@@ -1104,7 +1104,7 @@ async function createCompanyTable() {
      from day one and the MD fills in the tax numbers when they have them. */
   await query(`INSERT IGNORE INTO company_settings (id,name,address,telephone,email,quotation_terms)
     VALUES (1,'G.K.U.C. Construction (Pvt) Ltd','','','',?)`,
-  ['Validity: 30 days from the date of this quotation.\nPayment: as per the agreed payment schedule.\nThis quotation is subject to the conditions of contract agreed between both parties.']);
+  ['Validity: 30 days from the date of this quotation.\nPayment: as per the agreed payment schedule.']);
 }
 
 /**
@@ -1370,9 +1370,25 @@ async function createMethodTables() {
   await addColumn('quotations_client', 'additional_notes', 'TEXT NULL');
   await addColumn('quotations_client', 'bank_account_id', 'BIGINT UNSIGNED NULL');
   await addColumn('quotations_client', 'presentation', 'JSON NULL');
+  await addColumn('quotations_client', 'calculation_mode', "ENUM('Combined Total','Separate Category Totals') NOT NULL DEFAULT 'Combined Total'");
+  await addColumn('quotations_client', 'revision_number', 'INT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn('quotations_client', 'root_quotation_id', 'BIGINT UNSIGNED NULL');
+  await addColumn('quotations_client', 'revised_from_id', 'BIGINT UNSIGNED NULL');
+  await addColumn('quotations_client', 'revised_by', 'BIGINT UNSIGNED NULL');
+  await addColumn('quotations_client', 'prepared_by_user_id', 'BIGINT UNSIGNED NULL');
+  await addColumn('quotations_client', 'prepared_by_name', 'VARCHAR(180) NULL');
+  await addColumn('quotations_client', 'prepared_by_designation', 'VARCHAR(180) NULL');
+  await addColumn('quotations_client', 'finalized_at', 'DATETIME NULL');
+  await addColumn('quotations_client', 'finalized_by', 'BIGINT UNSIGNED NULL');
+  await addColumn('quotations_client', 'updated_at', 'TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
   await addColumn('quotation_items', 'method_id', 'BIGINT UNSIGNED NULL');
   await addColumn('quotation_items', 'area', 'VARCHAR(120) NULL');
   await addColumn('quotation_items', 'method_statement', 'TEXT NULL');
+
+  /* Remove only the exact legacy closing sentence. Custom terms remain untouched. */
+  await query(`UPDATE document_settings SET quotation_terms=TRIM(TRAILING '\n' FROM REPLACE(quotation_terms,
+    'This quotation is subject to the conditions of contract agreed between both parties.',''))
+    WHERE quotation_terms LIKE '%This quotation is subject to the conditions of contract agreed between both parties.%'`);
 }
 
 async function createQsTables() {
@@ -2999,7 +3015,7 @@ async function seedAccessControl() {
       const result = await query('INSERT INTO roles (name,description,is_system) VALUES (?,?,?)',
         [role.name, role.description, role.system ? 1 : 0]);
       const defaults=role.permissions();
-      const featureDefaults=Object.entries(FEATURE_PERMISSION_PARENTS).filter(([,parent])=>defaults.includes(parent)).map(([feature])=>feature);
+      const featureDefaults=Object.entries(FEATURE_PERMISSION_PARENTS).filter(([,parents])=>(Array.isArray(parents)?parents:[parents]).some(parent=>defaults.includes(parent))).map(([feature])=>feature);
       for (const key of [...new Set([...defaults,...featureDefaults])]) {
         await query('INSERT IGNORE INTO role_permissions (role_id,permission_key) VALUES (?,?)', [result.insertId, key]);
       }
@@ -3010,16 +3026,18 @@ async function seedAccessControl() {
      everything else — this keeps the MD's "full access" role genuinely full. */
   const systemRoles = await query('SELECT id FROM roles WHERE is_system=1');
   await query('CREATE TABLE IF NOT EXISTS permission_catalogue_migrations (permission_key VARCHAR(100) PRIMARY KEY) ENGINE=InnoDB');
-  for(const [feature,parent] of Object.entries(FEATURE_PERMISSION_PARENTS)) {
+  for(const [feature,parentValue] of Object.entries(FEATURE_PERMISSION_PARENTS)) {
+    const parents=Array.isArray(parentValue)?parentValue:[parentValue];
     const migrated=await query('SELECT permission_key FROM permission_catalogue_migrations WHERE permission_key=?',[feature]);
     if(!migrated.length){
-      await query('INSERT IGNORE INTO role_permissions(role_id,permission_key) SELECT role_id,? FROM role_permissions WHERE permission_key=?',[feature,parent]);
+      const placeholders=parents.map(()=>'?').join(',');
+      await query(`INSERT IGNORE INTO role_permissions(role_id,permission_key) SELECT DISTINCT role_id,? FROM role_permissions WHERE permission_key IN (${placeholders})`,[feature,...parents]);
       await query('INSERT IGNORE INTO permission_catalogue_migrations(permission_key) VALUES(?)',[feature]);
     }
     const delegationKey=`delegation:${feature}`;
     if(!(await query('SELECT permission_key FROM permission_catalogue_migrations WHERE permission_key=?',[delegationKey])).length){
       await query(`INSERT IGNORE INTO user_permissions(user_id,permission_key,effect,reason,expires_at,granted_by)
-        SELECT user_id,?,effect,reason,expires_at,granted_by FROM user_permissions WHERE permission_key=?`,[feature,parent]);
+        SELECT user_id,?,effect,reason,expires_at,granted_by FROM user_permissions WHERE permission_key IN (${parents.map(()=>'?').join(',')})`,[feature,...parents]);
       await query('INSERT IGNORE INTO permission_catalogue_migrations(permission_key) VALUES(?)',[delegationKey]);
     }
   }

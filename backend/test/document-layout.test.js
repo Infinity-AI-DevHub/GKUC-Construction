@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
-import { quotationDocument, invoiceDocument, receiptDocument } from '../src/lib/documents.js';
+import { boqDocument, quotationDocument, invoiceDocument, receiptDocument } from '../src/lib/documents.js';
 import { renderDocumentPdf } from '../src/lib/document-pdf.js';
 
 const exec = promisify(execFile);
@@ -28,6 +28,47 @@ test('saved small letterhead sizes cannot flatten company and document headings'
   assert.match(html, /data-piece="docTitle"/);
   assert.match(html, /data-piece=companyName\]\{[^}]*font-size:18px!important/);
   assert.match(html, /data-piece=docTitle\]\{[^}]*font-size:19px!important/);
+});
+
+test('quotation HTML reflects separate totals, optional notes, bank snapshot, item value and prepared-by snapshot', () => {
+  const html = quotationDocument({ company, quotation: {
+    reference: 'QUO-FIELDS-TEST-R1', revisionNumber: 1, quoteDate: '2026-10-06', clientName: 'Test Client',
+    subtotal: 300, total: 354, title: 'Category quotation', calculationMode: 'Separate Category Totals',
+    vatPercent: 18, notes: 'Bring delivery evidence', preparedBy: 'Kasun Perera',
+    preparedByDesignation: 'Quantity Surveyor', presentation: { company, client: { name: 'Test Client' },
+      show: { company: { bankDetails: true }, client: {} }, bank: { label: 'Construction', bankName: 'Test Bank',
+        accountName: 'GKUC', accountNumber: '123', branch: 'Colombo' } }
+  }, items: [{ category: 'Tar', area: 'T-01', description: 'Tar work', unit: 'm2', quantity: 1, rate: 100, amount: 100 },
+    { category: 'Concrete', area: 'C-02', description: 'Concrete work', unit: 'm3', quantity: 1, rate: 200, amount: 200 }] });
+  assert.match(html, /Tar subtotal/);
+  assert.match(html, /Concrete total/);
+  assert.match(html, /T-01/);
+  assert.match(html, /Bring delivery evidence/);
+  assert.match(html, /Kasun Perera/);
+  assert.match(html, /Quantity Surveyor/);
+  assert.match(html, /Test Bank/);
+  assert.match(html, /Revision:<\/strong> 1/);
+
+  const withoutOptional = quotationDocument({ company, quotation: { reference: 'QUO-NONE', quoteDate: '2026-10-06',
+    clientName: 'Test Client', subtotal: 100, total: 100, title: 'No optional blocks', presentation: {
+      company, client: { name: 'Test Client' }, show: { company: { bankDetails: false }, client: {} }, bank: null
+    } }, items: [{ category: 'Work', area: '1', description: 'Work', unit: 'sum', quantity: 1, rate: 100, amount: 100 }] });
+  assert.doesNotMatch(withoutOptional, /<h4>Notes<\/h4>/);
+  assert.doesNotMatch(withoutOptional, /<h4>Bank details<\/h4>/);
+});
+
+test('BOQ document prints each category once as a section with its own lines and subtotal', () => {
+  const html = boqDocument({ company, boq: { reference: 'BOQ-SECTIONS', createdAt: '2026-10-07',
+    project: 'Sectioned project', title: 'Measured works', status: 'Draft', preparedBy: 'QS' }, items: [
+    { category: 'Preliminaries', description: 'Road name board', unit: 'PS', quantity: 1, rate: 100, amount: 100 },
+    { category: 'Civil Works', description: 'Clear site', unit: 'Days', quantity: 2, rate: 50, amount: 100 },
+    { category: 'Preliminaries', description: 'Laboratory testing', unit: 'PS', quantity: 1, rate: 75, amount: 75 }
+  ] });
+  assert.equal((html.match(/<tr class="section"><td colspan="6">Preliminaries<\/td><\/tr>/g) || []).length, 1);
+  assert.equal((html.match(/<tr class="section"><td colspan="6">Civil Works<\/td><\/tr>/g) || []).length, 1);
+  assert.ok(html.indexOf('Road name board') < html.indexOf('Laboratory testing'));
+  assert.match(html, /Sub-total — Preliminaries[\s\S]*175\.00/);
+  assert.match(html, /Sub-total — Civil Works[\s\S]*100\.00/);
 });
 
 test('quotation, invoice and receipt PDF layouts retain company, type and reference', async t => {
@@ -66,7 +107,7 @@ test('quotation, invoice and receipt PDF layouts retain company, type and refere
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
-test('long quotations and invoices print on A4 with a letterhead on every page', async t => {
+test('long quotations print the full letterhead only on page one while invoices keep their existing behavior', async t => {
   try {
     await access('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
     await exec('pdfinfo', ['-v']);
@@ -96,18 +137,45 @@ test('long quotations and invoices print on A4 with a letterhead on every page',
       assert.match(info, /Page size:\s+59[45](?:\.\d+)? x 84[12](?:\.\d+)? pts \(A4\)/);
       const { stdout: text } = await exec('pdftotext', ['-layout', file, '-']);
       assert.equal(text.split('\f').filter(page => page.trim()).length, pages);
-      for (const page of text.split('\f').filter(page => page.trim())) {
-        assert.match(page, /GKUC Construction/, 'each printed page repeats the company letterhead');
+      for (const [pageIndex, page] of text.split('\f').filter(page => page.trim()).entries()) {
+        if (index === 0 && pageIndex > 0) {
+          assert.doesNotMatch(page, /Address line 1 with additional company information/, 'quotation continuation pages omit the full letterhead');
+          continue;
+        }
+        assert.match(page, /GKUC Construction/, 'the first page retains the company letterhead');
         const compact = page.toUpperCase().replace(/\s+/g, '');
         assert.ok(compact.includes(index === 0 ? 'QUOTATION' : 'INVOICE'),
-          'every page repeats the same document title');
+          'the applicable page retains the document title');
         assert.ok(page.includes(index === 0 ? 'QUO-LAYOUT-TEST' : 'INV-LAYOUT-TEST'),
-          'every page repeats the document reference');
+          'the applicable page retains the document reference');
         assert.ok(page.includes('Address line 1 with additional company information'),
-          'every page repeats the company details');
+          'the applicable page retains the company details');
       }
       assert.equal((text.match(index === 0 ? /Subtotal/g : /Net payable/g) || []).length, 1,
         'document totals must not repeat on every page');
+    }
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test('quotation pagination is verified at one, two and three A4 pages with one full letterhead', async t => {
+  try { await access('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'); await exec('pdfinfo', ['-v']); await exec('pdftotext', ['-v']); }
+  catch { t.skip('Local Chromium and Poppler are needed for pagination verification'); return; }
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'gkuc-quotation-pages-'));
+  try {
+    for (const [count, expectedPages] of [[1, 1], [15, 2], [35, 3]]) {
+      const sampleItems = items.slice(0, count);
+      const html = quotationDocument({ company: { ...company, address: 'Head office road' }, quotation: {
+        reference: `QUO-${expectedPages}-PAGE`, quoteDate: '2026-10-06', clientName: 'Pagination client',
+        subtotal: count * 2000, total: count * 2000, title: `${expectedPages}-page quotation`
+      }, items: sampleItems });
+      const file = path.join(temporary, `${expectedPages}-page.pdf`);
+      await writeFile(file, await renderDocumentPdf(html));
+      const { stdout: info } = await exec('pdfinfo', [file]);
+      assert.equal(Number(info.match(/^Pages:\s+(\d+)/m)?.[1]), expectedPages);
+      const { stdout: text } = await exec('pdftotext', ['-layout', file, '-']);
+      const pages = text.split('\f').filter(page => page.trim());
+      assert.match(pages[0], /Head office road/);
+      for (const continuation of pages.slice(1)) assert.doesNotMatch(continuation, /Head office road/);
     }
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });

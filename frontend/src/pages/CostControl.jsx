@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, BarChart3, CircleDollarSign, FileSpreadsheet, Plus, Trash2, TrendingDown, TrendingUp, WalletCards } from 'lucide-react';
 import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, SelectField, Summary, TextArea } from '../ui.jsx';
+import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
 
 const SOURCES = ['Material', 'Labour', 'Fuel', 'Equipment', 'Subcontractor', 'Overhead', 'Other'];
 const number = value => Number(value || 0);
@@ -79,6 +80,7 @@ export default function CostControl({ projects, can }) {
 function ExpenseForm({ projectId, items, initial, close, reload, onImport }) {
   const [options, setOptions] = useState(null);
   const [loadError, setLoadError] = useState('');
+  const [taskEditor, setTaskEditor] = useState(null);
   const [lines, setLines] = useState(initial?.lines?.map(line => ({source:line.source,costType:line.cost_type,
     taskId:line.task_id,boqItemId:line.boq_item_id || '',description:line.description,quantity:line.quantity || '',
     unit:line.unit || '',unitRate:line.unit_rate ?? '',amount:line.amount,employeeId:line.employee_id || '',
@@ -87,12 +89,13 @@ function ExpenseForm({ projectId, items, initial, close, reload, onImport }) {
     reserveMaterialId:line.reserve_material_id || '',quotationItemId:line.quotation_item_id || '',
     quotedRecovery:line.quoted_recovery || '',reference:line.reference || '' })) ||
     [{ source:'Material', costType:'Expected', taskId:'', description:'', amount:'' }]);
-  useEffect(() => { api(`/boq/cost-control/options?projectId=${projectId}`).then(setOptions).catch(error => setLoadError(error.message)); }, [projectId]);
+  const loadOptions = () => api(`/boq/cost-control/options?projectId=${projectId}`).then(setOptions).catch(error => setLoadError(error.message));
+  useEffect(() => { loadOptions(); }, [projectId]);
   const update = (index, changes) => setLines(previous => previous.map((line, at) => at === index ? { ...line, ...changes } : line));
   const id = value => value ? Number(value) : null;
-  return <FormModal title="Submit daily project costs" close={close} label="Send to Finance for review" wide onSubmit={async values => {
+  return <><FormModal title="Submit daily project costs" close={close} label="Send to Finance for review" wide onSubmit={async values => {
     if (!options) throw new Error(loadError || 'Wait for the project work and cost options to load.');
-    if (!options.tasks.length) throw new Error('Add the work tasks on the Tasks page before submitting project costs.');
+    if (!options.tasks.some(task => task.status === 'Completed')) throw new Error('Record or select completed work before submitting project costs.');
     await post('/boq/cost-control/daily-sheets', { projectId, workDate:values.workDate, notes:values.notes || null,
       lines: lines.map(line => ({ taskId:Number(line.taskId), boqItemId:id(line.boqItemId), source:line.source,
         costType:line.costType, description:line.description.trim(), quantity:line.quantity ? Number(line.quantity) : null,
@@ -105,14 +108,14 @@ function ExpenseForm({ projectId, items, initial, close, reload, onImport }) {
         reference:line.reference || null })) }); await reload();
   }}>
     {!initial && <div className="cost-import-callout wide"><FileSpreadsheet size={22} /><div><strong>Adding work already kept in Excel?</strong><span>Upload the existing workbook, review every detected line, correct it, and only then send it to Finance.</span></div><button className="secondary" type="button" onClick={onImport}>Import existing Excel</button></div>}
-    <p className="form-note wide">Use one line per cost and select the completed work task it belongs to. The same task is also visible in <a href="/tasks">Tasks</a>; update it there rather than creating a second task. Finance reviews this sheet before costs are posted. Fleet-recorded station fuel is linked, not charged again; see <a href="/fleet?section=fuel">Fleet fuel records</a>. For labour, you may select an employee or enter an unassigned cost; either way, enter the actual amount. These lines allocate project cost and do not create a salary payment. For a new station purchase, Finance deducts the approved amount from the selected fuel float.</p>
+    <p className="form-note wide">Use one line per cost and select the completed work task it belongs to. If the work is not listed, record it here and assign everyone who worked on it. SiteOps creates one shared task that is immediately visible in <a href="/tasks">Tasks</a>. Finance reviews this sheet before costs are posted. Fleet-recorded station fuel is linked, not charged again; see <a href="/fleet?section=fuel">Fleet fuel records</a>. For labour, you may select an employee or enter an unassigned cost; either way, enter the actual amount. These lines allocate project cost and do not create a salary payment. For a new station purchase, Finance deducts the approved amount from the selected fuel float.</p>
     {loadError && <p className="form-error wide">{loadError}</p>}
     <Field name="workDate" label="Work date" type="date" defaultValue={initial?.work_date || todayInput()} />
     <Field name="notes" label="Daily notes" required={false} defaultValue={initial?.notes || ''} />
     <div className="daily-cost-editor wide">{lines.map((line, index) => <div className="daily-cost-line" key={index}>
       <div className="daily-cost-line-title"><strong>Cost line {index + 1}</strong>{lines.length > 1 && <button type="button" className="status-button" onClick={() => setLines(old => old.filter((_, at) => at !== index))}><Trash2 size={14} /> Remove</button>}</div>
-      <label>Work task *<select value={line.taskId} required onChange={event => update(index,{taskId:event.target.value})}><option value="">Choose a completed task…</option>{options?.tasks.filter(task => task.status === 'Completed').map(task => <option key={task.id} value={task.id}>{task.title} · {task.status}</option>)}</select></label>
-      {options && !options.tasks.some(task => task.status === 'Completed') && <p className="form-note">No completed tasks are available for this project. Mark the finished work as Completed in Tasks before recording its daily cost.</p>}
+      <div className="cost-task-picker"><label>Work task *<select value={line.taskId} required onChange={event => update(index,{taskId:event.target.value})}><option value="">Choose completed work…</option>{options?.tasks.filter(task => task.status === 'Completed').map(task => <option key={task.id} value={task.id}>{task.title} · {task.assignee || 'Team not assigned'}</option>)}</select></label><div><button type="button" className="secondary" onClick={() => setTaskEditor({ lineIndex:index, task:null })}><Plus size={14}/> Record completed task</button>{line.taskId && <button type="button" className="status-button" onClick={() => setTaskEditor({ lineIndex:index, task:options.tasks.find(task => Number(task.id) === Number(line.taskId)) })}>Edit task &amp; workers</button>}</div></div>
+      {options && !options.tasks.some(task => task.status === 'Completed') && <p className="form-note">No completed work is available yet. Use “Record completed task” to add the work and its employees without leaving this form.</p>}
       <label>Category *<select value={line.source} onChange={event => update(index,{source:event.target.value,employeeId:'',vehicleId:'',fuelOrigin:'',fuelRecordId:'',fuelFloatId:'',odometer:'',reserveMaterialId:'',amount:''})}>{SOURCES.map(source => <option key={source}>{source}</option>)}</select></label>
       <label>Cost classification<select value={line.costType} onChange={event => update(index,{costType:event.target.value,boqItemId:'',quotationItemId:'',quotedRecovery:''})}>{['Expected','Variation','Unexpected'].map(type => <option key={type}>{type}</option>)}</select></label>
       <label>What was used or paid for *<input value={line.description} required minLength={2} onChange={event => update(index,{description:event.target.value})} /></label>
@@ -129,6 +132,27 @@ function ExpenseForm({ projectId, items, initial, close, reload, onImport }) {
       <label>Receipt / reference<input value={line.reference || ''} onChange={event => update(index,{reference:event.target.value})} /></label>
       {line.costType !== 'Unexpected' && <><label>Accepted quotation item<select value={line.quotationItemId || ''} onChange={event => update(index,{quotationItemId:event.target.value,quotedRecovery:''})}><option value="">No quoted recovery assigned</option>{options?.quotationItems.map(item => <option key={item.id} value={item.id}>{item.reference} · {item.description} · {rupees(item.amount)}</option>)}</select></label>{line.quotationItemId && <label>Quoted recovery allocated to this day (LKR)<input type="number" min="0" step="0.01" value={line.quotedRecovery || ''} onChange={event => update(index,{quotedRecovery:event.target.value})} /></label>}</>}
     </div>)}<button className="secondary" type="button" onClick={() => setLines(old => [...old,{source:'Material',costType:'Expected',taskId:'',description:'',amount:''}])}><Plus size={14} /> Add cost line</button></div>
+  </FormModal>{taskEditor && options && <CompletedTaskForm projectId={projectId} employees={options.employees}
+    task={taskEditor.task} defaultDate={initial?.work_date || todayInput()} close={() => setTaskEditor(null)}
+    saved={async task => { await loadOptions(); update(taskEditor.lineIndex,{taskId:String(task.id)}); setTaskEditor(null); }} />}</>;
+}
+
+function CompletedTaskForm({ projectId, employees, task, defaultDate, close, saved }) {
+  const [selected,setSelected] = useState(task?.assigneeEmployeeIds?.map(Number) || []);
+  return <FormModal title={task ? 'Edit completed task and workers' : 'Record completed task'} close={close}
+    label={task ? 'Save task changes' : 'Record completed task'} wide onSubmit={async values => {
+      if (!selected.length) throw new Error('Select at least one employee who worked on this task.');
+      const payload = { projectId,title:values.title,workDate:values.workDate,priority:values.priority,
+        notes:values.notes || '',employeeIds:selected };
+      const result = task ? await patch(`/boq/cost-control/tasks/${task.id}`,payload) : await post('/boq/cost-control/tasks',payload);
+      await saved(result);
+    }}>
+    <p className="form-note wide">This is the same project task shown on the Tasks page. It is recorded as completed and awaiting approval—not as a separate cost-only activity.</p>
+    <Field name="title" label="Completed work" defaultValue={task?.title || ''} wide placeholder="For example: Ground-floor slab poured" />
+    <Field name="workDate" label="Date completed" type="date" defaultValue={task?.dueDate?.slice?.(0,10) || task?.due || defaultDate} />
+    <SelectField name="priority" label="Priority" options={['Low','Medium','High']} defaultValue={task?.priority || 'Medium'} />
+    <div className="wide"><EmployeeMultiSelect employees={employees} selected={selected} onChange={setSelected} label="Employees who worked here" /></div>
+    <TextArea name="notes" label="Work notes" required={false} defaultValue={task?.notes || ''} wide placeholder="Optional completion details or site reference" />
   </FormModal>;
 }
 

@@ -110,6 +110,16 @@ function Quotations({ can, reload, companyId }) {
     try { setDetail(await api(`/qs/quotations/${id}`)); }
     catch (failure) { setError(failure.message); }
   };
+  const reviseQuotation = async id => {
+    setError('');
+    try { setEditing(await api(`/qs/quotations/${id}`)); }
+    catch (failure) { setError(failure.message); }
+  };
+  const finalizeQuotation = async id => {
+    setError('');
+    try { await post(`/qs/quotations/${id}/finalize`, {}); await load(); await reload(); }
+    catch (failure) { setError(failure.message); }
+  };
 
   return <>
     {error && <p className="form-error">{error}</p>}
@@ -128,11 +138,14 @@ function Quotations({ can, reload, companyId }) {
             onClick={() => openDocument(`/qs/quotations/${row.id}/document`)}>
             <FileText size={13} />PDF
           </button>
-          {can.quotation && row.status !== 'Accepted' && (
-            <button className="status-button" title="Change the wording on the document"
-              onClick={() => setEditing(row)}>Edit</button>
+          {can.quotationRevise && (
+            <button className="status-button" title="Create a traceable revision without changing this version"
+              onClick={() => reviseQuotation(row.id)}>Revise</button>
           )}
-          {can.quotation && row.status !== 'Accepted' && (
+          {can.quotationFinalize && row.status === 'Draft' && (
+            <button className="status-button" onClick={() => finalizeQuotation(row.id)}>Finalize</button>
+          )}
+          {can.qsApprove && row.status !== 'Accepted' && (
             <button className="status-button" onClick={() => setStatus(row.id, 'Accepted')}>Accept</button>
           )}
         </span>
@@ -239,6 +252,9 @@ function QuotationDetail({ quotation, close }) {
     link.click();
     URL.revokeObjectURL(url);
   };
+  const categoryTotals = Object.entries(quotation.items.reduce((groups, item) => ({ ...groups,
+    [item.category || 'Uncategorised']: (groups[item.category || 'Uncategorised'] || 0) + Number(item.amount || 0)
+  }), {}));
 
   return <Modal title={`${quotation.reference} — ${quotation.title}`} close={close}>
     <div className="report-form">
@@ -249,6 +265,8 @@ function QuotationDetail({ quotation, close }) {
       <div className="project-stats wide">
         <div><span>Built from</span><strong>{quotation.boqReference || 'Manual'}</strong></div>
         <div><span>Quoted</span><strong>{shortDate(quotation.quoteDate)}</strong></div>
+        <div><span>Calculation</span><strong>{quotation.calculationMode || 'Combined Total'}</strong></div>
+        <div><span>Revision</span><strong>Rev {quotation.revisionNumber || 0}</strong></div>
       </div>
       <div className="wide">
         <Table columns={['Category', 'Description', 'Quantity', 'Rate', 'Amount']} template={template}
@@ -266,6 +284,13 @@ function QuotationDetail({ quotation, close }) {
         <div><span>Subtotal</span><strong>{rupees(quotation.subtotal)}</strong></div>
         <div><span>Total incl. markup and VAT</span><strong>{rupees(quotation.total)}</strong></div>
       </div>
+      {quotation.calculationMode === 'Separate Category Totals' && <div className="project-stats wide">
+        {categoryTotals.map(([category, subtotal]) => { const marked = subtotal * (1 + Number(quotation.markupPercent || 0) / 100);
+          return <div key={category}><span>{category} · subtotal / VAT / total</span>
+            <strong>{rupees(subtotal)} / {rupees(marked * Number(quotation.vatPercent || 0) / 100)} / {rupees(marked * (1 + Number(quotation.vatPercent || 0) / 100))}</strong></div>; })}
+      </div>}
+      {quotation.revisions?.length > 1 && <div className="wide"><strong>Revision history</strong>
+        <p>{quotation.revisions.map(row => `${row.reference} · ${shortDate(row.quoteDate)} · ${row.status}`).join('  |  ')}</p></div>}
       <div className="form-actions">
         <button type="button" className="secondary" onClick={close}>Close</button>
         <button type="button" className="primary" onClick={download}><Download size={16} />Download quotation</button>
@@ -1084,6 +1109,9 @@ function QuotationForm({ data, companyId, close, reload }) {
   const [clients, setClients] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [bankAccountId, setBankAccountId] = useState('');
+  const [calculationMode, setCalculationMode] = useState('Combined Total');
+  const [preparers, setPreparers] = useState([]);
+  const [preparedByUserId, setPreparedByUserId] = useState('');
   const [identity, setIdentity] = useState(null);
   const [identityError, setIdentityError] = useState('');
   const [visibility, setVisibility] = useState(defaultQuotationVisibility);
@@ -1098,7 +1126,7 @@ function QuotationForm({ data, companyId, close, reload }) {
   const [boqId, setBoqId] = useState('');
   const [projectId, setProjectId] = useState('');
   const blankLine = () => ({ methodId: '', subQuotationId: '', subcontractMarkupPercent: 0,
-    area: '', description: '', methodStatement: '', unit: '', quantity: '', rate: '' });
+    category: 'Work', area: '', description: '', methodStatement: '', unit: '', quantity: '', rate: '' });
   const [lines, setLines] = useState([blankLine()]);
   useEffect(() => {
     api(`/boq?companyId=${companyId}`).then(setBoqs).catch(() => setBoqs([]));
@@ -1106,6 +1134,7 @@ function QuotationForm({ data, companyId, close, reload }) {
     api(`/company-bank-accounts?companyId=${companyId}`).then(setBankAccounts).catch(() => setBankAccounts([]));
     api('/qs/methods').then(setTemplates).catch(() => setTemplates([]));
     api('/qs/quotation-note-templates').then(setNoteTemplates).catch(() => setNoteTemplates([]));
+    api('/qs/quotation-preparers').then(setPreparers).catch(() => setPreparers([]));
   }, [companyId]);
   useEffect(() => {
     if (!clientId) { setIdentity(null); setIdentityError(''); return; }
@@ -1145,13 +1174,13 @@ function QuotationForm({ data, companyId, close, reload }) {
     if (kind === 'template') {
       const template = templates.find(row => String(row.id) === id);
       return setLines(current => current.map((line, position) => position === index ? {
-        ...blankLine(), methodId: id, area: template.category, description: template.description || template.name,
+        ...blankLine(), methodId: id, category: template.category, area: '', description: template.description || template.name,
         methodStatement: template.methodStatement || '', unit: template.unit, quantity: 1, rate: template.defaultRate
       } : line));
     }
     const quote = subQuotes.find(row => String(row.id) === id);
     setLines(current => current.map((line, position) => position === index ? {
-      ...blankLine(), subQuotationId: id, area: 'Subcontract', description: `${quote.package} — ${quote.subcontractor}`,
+      ...blankLine(), subQuotationId: id, category: 'Subcontract', area: '', description: `${quote.package} — ${quote.subcontractor}`,
       unit: 'sum', quantity: 1, rate: quote.total
     } : line));
   };
@@ -1173,7 +1202,11 @@ function QuotationForm({ data, companyId, close, reload }) {
       notes: notes || undefined, paymentTerms: values.paymentTerms || undefined,
       additionalNotes: values.additionalNotes || undefined,
       bankAccountId: bankAccountId ? Number(bankAccountId) : undefined,
-      visibility
+      calculationMode,
+      preparedByUserId: preparedByUserId ? Number(preparedByUserId) : undefined,
+      preparedByName: values.preparedByName || undefined,
+      preparedByDesignation: values.preparedByDesignation || undefined,
+      visibility: { ...visibility, company: { ...visibility.company, bankDetails: Boolean(bankAccountId) } }
     };
     if (mode === 'boq') await post('/qs/quotations', {
       ...common, boqId: Number(boqId), title: values.title || undefined
@@ -1188,7 +1221,7 @@ function QuotationForm({ data, companyId, close, reload }) {
         lines: lines.map(line => ({ methodId: line.methodId ? Number(line.methodId) : undefined,
           subQuotationId: line.subQuotationId ? Number(line.subQuotationId) : undefined,
           subcontractMarkupPercent: line.subQuotationId ? Number(line.subcontractMarkupPercent || 0) : undefined,
-          category: line.area.trim() || 'Work', area: line.area.trim() || 'Work',
+          category: line.category.trim() || 'Work', area: line.area.trim() || undefined,
           description: line.description.trim(), methodStatement: line.methodStatement.trim() || undefined,
           unit: line.unit.trim(), quantity: Number(line.quantity), rate: Number(line.rate) }))
       });
@@ -1214,8 +1247,14 @@ function QuotationForm({ data, companyId, close, reload }) {
     <div className="qs-form-section wide"><span>02</span><div><h3>Pricing & document details</h3><p>Set the pricing adjustments, bank account and information to print.</p></div></div>
     <Field name="markupPercent" label="Markup %" type="number" step="0.01" min="0" max="100" defaultValue="10" required={false} />
     <Field name="vatPercent" label="VAT %" type="number" step="0.01" min="0" max="100" defaultValue="18" required={false} />
-    <label>Bank account<select name="bankAccountId" value={bankAccountId} onChange={event => setBankAccountId(event.target.value)}>
-      <option value="">Use legacy company bank details</option>{bankAccounts.map(account => <option key={account.id} value={account.id}>
+    <label>Calculation mode<select value={calculationMode} onChange={event => setCalculationMode(event.target.value)}>
+      <option>Combined Total</option><option>Separate Category Totals</option>
+    </select><small>Separate mode prints a subtotal, VAT and total under every category.</small></label>
+    <label>Bank account<select name="bankAccountId" value={bankAccountId} onChange={event => {
+      setBankAccountId(event.target.value);
+      setVisibility(current => ({ ...current, company: { ...current.company, bankDetails: Boolean(event.target.value) } }));
+    }}>
+      <option value="">Do not show bank details</option>{bankAccounts.map(account => <option key={account.id} value={account.id}>
         {account.label} — {account.bankName} · {account.accountNumber}</option>)}
     </select></label>
     {identityError && <p className="form-error wide" role="alert">{identityError}</p>}
@@ -1224,6 +1263,14 @@ function QuotationForm({ data, companyId, close, reload }) {
         : clientProjects.find(project => String(project.id) === projectId)?.name}
       bankName={(() => { const bank = bankAccounts.find(account => String(account.id) === bankAccountId);
         return bank ? `${bank.label} · ${bank.bankName} · ${bank.accountNumber}` : ''; })()} />
+    <label>Prepared by (saved staff)<select value={preparedByUserId} onChange={event => {
+      setPreparedByUserId(event.target.value);
+      const person = preparers.find(row => String(row.id) === event.target.value);
+      const form = event.currentTarget.form;
+      if (person && form) { form.elements.preparedByName.value = person.name; form.elements.preparedByDesignation.value = person.designation || ''; }
+    }}><option value="">Enter manually</option>{preparers.map(person => <option key={person.id} value={person.id}>{person.name} — {person.designation}</option>)}</select></label>
+    <Field name="preparedByName" label="Prepared by name" required={false} placeholder="Name shown on this quotation" />
+    <Field name="preparedByDesignation" label="Prepared by designation" required={false} placeholder="Quantity Surveyor / Managing Director" />
     {mode === 'manual' && <div className="manual-quotation-lines wide">
       <div className="manual-quotation-heading"><div><strong>Quoted items</strong><span>Amounts are calculated automatically.</span></div>
         <button type="button" className="secondary" onClick={() => setLines(current => [...current,
@@ -1237,7 +1284,8 @@ function QuotationForm({ data, companyId, close, reload }) {
             {projectId && subQuotes.length > 0 && <optgroup label="Subcontractor quotations for this project">{subQuotes.map(quote => <option key={`s-${quote.id}`} value={`sub:${quote.id}`}>{quote.subcontractor} · {quote.package} · {rupees(quote.total)}</option>)}</optgroup>}
           </select>
         </label>
-        <input aria-label={`Item ${index + 1} area`} placeholder="Area" value={line.area} onChange={event => updateLine(index, 'area', event.target.value)} />
+        <input aria-label={`Item ${index + 1} category`} placeholder="Category" value={line.category} onChange={event => updateLine(index, 'category', event.target.value)} />
+        <input aria-label={`Item ${index + 1} item number or surfacing`} placeholder="Item no. / surfacing" value={line.area} onChange={event => updateLine(index, 'area', event.target.value)} />
         <input aria-label={`Item ${index + 1} description`} placeholder="Description" value={line.description} onChange={event => updateLine(index, 'description', event.target.value)} />
         <input aria-label={`Item ${index + 1} unit`} placeholder="Unit" value={line.unit} onChange={event => updateLine(index, 'unit', event.target.value)} />
         <input aria-label={`Item ${index + 1} quantity`} type="number" min="0.001" step="0.001" placeholder="Qty" value={line.quantity} disabled={Boolean(line.subQuotationId)} onChange={event => updateLine(index, 'quantity', event.target.value)} />
@@ -1278,16 +1326,17 @@ function QuotationForm({ data, companyId, close, reload }) {
   </WorkflowForm>;
 }
 
-/**
- * The wording that appears on one quotation's document — not the figures, which come from
- * the BOQ, and not the standing terms every other document carries.
- */
 function QuotationWording({ quotation, close, reload }) {
   const savedPresentation = asPresentation(quotation.presentation);
   const [clients, setClients] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [clientId, setClientId] = useState(String(quotation.clientId || ''));
   const [bankAccountId, setBankAccountId] = useState(String(quotation.bankAccountId || ''));
+  const [calculationMode, setCalculationMode] = useState(quotation.calculationMode || 'Combined Total');
+  const [preparers, setPreparers] = useState([]);
+  const [preparedByUserId, setPreparedByUserId] = useState(String(quotation.preparedByUserId || ''));
+  const [lines, setLines] = useState(() => quotation.items.map(item => ({ ...item,
+    quantity: String(item.quantity), rate: String(item.rate), area: item.area || '' })));
   const [identity, setIdentity] = useState(savedPresentation
     ? { company: savedPresentation.company, client: savedPresentation.client } : null);
   const [identityError, setIdentityError] = useState('');
@@ -1295,6 +1344,7 @@ function QuotationWording({ quotation, close, reload }) {
   useEffect(() => {
     api('/clients').then(setClients).catch(() => setClients([]));
     api(`/company-bank-accounts?companyId=${quotation.companyId}`).then(setBankAccounts).catch(() => setBankAccounts([]));
+    api('/qs/quotation-preparers').then(setPreparers).catch(() => setPreparers([]));
   }, [quotation.companyId]);
   useEffect(() => {
     if (savedPresentation && String(quotation.clientId) === clientId) {
@@ -1310,18 +1360,29 @@ function QuotationWording({ quotation, close, reload }) {
       .catch(error => { if (!cancelled) setIdentityError(error.message); });
     return () => { cancelled = true; };
   }, [quotation.companyId, quotation.clientId, clientId]);
-  return <FormModal title={`Edit ${quotation.reference}`} close={close} label="Save wording" wide onSubmit={async values => {
+  const updateLine = (index, key, value) => setLines(current => current.map((line, position) =>
+    position === index ? { ...line, [key]: value } : line));
+  return <FormModal title={`Revise ${quotation.reference}`} close={close} label="Save as new revision" wide onSubmit={async values => {
     if (!identity) throw new Error(identityError || 'Wait for the client details to load before saving.');
-    await patch(`/qs/quotations/${quotation.id}`, {
-      title: values.title,
-      clientId: Number(clientId),
-      validUntil: values.validUntil || null,
+    if (lines.some(line => !line.category.trim() || !line.description.trim() || !line.unit.trim() || Number(line.quantity) <= 0 || Number(line.rate) < 0))
+      throw new Error('Complete every line with a category, description, unit, positive quantity and valid rate.');
+    await post(`/qs/quotations/${quotation.id}/revisions`, {
+      title: values.title, clientId: Number(clientId), quoteDate: values.quoteDate,
+      validUntil: values.validUntil || null, markupPercent: Number(values.markupPercent || 0),
+      vatPercent: Number(values.vatPercent || 0), calculationMode,
       notes: values.notes || null,
       terms: values.terms || null,
       paymentTerms: values.paymentTerms || null,
       additionalNotes: values.additionalNotes || null,
       bankAccountId: bankAccountId ? Number(bankAccountId) : null,
-      visibility
+      visibility: { ...visibility, company: { ...visibility.company, bankDetails: Boolean(bankAccountId) } },
+      preparedByUserId: preparedByUserId ? Number(preparedByUserId) : undefined,
+      preparedByName: values.preparedByName || undefined,
+      preparedByDesignation: values.preparedByDesignation || undefined,
+      lines: lines.map(line => ({ methodId: line.methodId || undefined, category: line.category.trim(),
+        area: line.area.trim() || undefined, description: line.description.trim(),
+        methodStatement: line.methodStatement || undefined, unit: line.unit.trim(),
+        quantity: Number(line.quantity), rate: Number(line.rate) }))
     });
     await reload();
   }}>
@@ -1329,11 +1390,19 @@ function QuotationWording({ quotation, close, reload }) {
     <label>Client<select name="clientId" value={clientId} required onChange={event => setClientId(event.target.value)}>
       <option value="">Choose saved client…</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
     </select></label>
+    <Field name="quoteDate" label="Revision date" type="date" defaultValue={todayInput()} />
     <Field name="validUntil" label="Valid until" type="date" required={false}
       defaultValue={quotation.validUntil ? quotation.validUntil.slice(0, 10) : ''} />
+    <Field name="markupPercent" label="Markup %" type="number" min="0" max="100" step="0.01" defaultValue={quotation.markupPercent || 0} />
+    <Field name="vatPercent" label="VAT %" type="number" min="0" max="100" step="0.01" defaultValue={quotation.vatPercent || 0} />
+    <label>Calculation mode<select value={calculationMode} onChange={event => setCalculationMode(event.target.value)}>
+      <option>Combined Total</option><option>Separate Category Totals</option></select></label>
     <TextArea name="notes" label="Note to the client" rows={3} required={false} defaultValue={quotation.notes || ''} />
-    <label>Bank account<select name="bankAccountId" value={bankAccountId} onChange={event => setBankAccountId(event.target.value)}>
-      <option value="">Use legacy company bank details</option>
+    <label>Bank account<select name="bankAccountId" value={bankAccountId} onChange={event => {
+      setBankAccountId(event.target.value);
+      setVisibility(current => ({ ...current, company: { ...current.company, bankDetails: Boolean(event.target.value) } }));
+    }}>
+      <option value="">Do not show bank details</option>
       {bankAccounts.map(account => <option key={account.id} value={account.id}>{account.label} — {account.accountNumber}</option>)}
     </select></label>
     {identityError && <p className="form-error wide" role="alert">{identityError}</p>}
@@ -1341,15 +1410,32 @@ function QuotationWording({ quotation, close, reload }) {
       projectName={savedPresentation?.client?.project || quotation.project}
       bankName={(() => { const bank = bankAccounts.find(account => String(account.id) === bankAccountId);
         return bank ? `${bank.label} · ${bank.bankName} · ${bank.accountNumber}` : ''; })()} />
+    <label>Prepared by (saved staff)<select value={preparedByUserId} onChange={event => {
+      setPreparedByUserId(event.target.value); const person = preparers.find(row => String(row.id) === event.target.value);
+      const form = event.currentTarget.form;
+      if (person && form) { form.elements.preparedByName.value = person.name; form.elements.preparedByDesignation.value = person.designation || ''; }
+    }}><option value="">Enter manually</option>{preparers.map(person => <option key={person.id} value={person.id}>{person.name} — {person.designation}</option>)}</select></label>
+    <Field name="preparedByName" label="Prepared by name" defaultValue={quotation.preparedBy || ''} />
+    <Field name="preparedByDesignation" label="Prepared by designation" defaultValue={quotation.preparedByDesignation || ''} />
+    <div className="manual-quotation-lines wide">
+      <div className="manual-quotation-heading"><div><strong>Revision items</strong><span>The original quotation remains unchanged.</span></div>
+        <button type="button" className="secondary" onClick={() => setLines(current => [...current, { category: 'Work', area: '', description: '', unit: '', quantity: '1', rate: '0' }])}><Plus size={15}/>Add item</button></div>
+      {lines.map((line, index) => <div className="manual-quotation-line" key={line.id || `new-${index}`}>
+        <input aria-label={`Item ${index + 1} category`} placeholder="Category" value={line.category} onChange={event => updateLine(index, 'category', event.target.value)} />
+        <input aria-label={`Item ${index + 1} item number or surfacing`} placeholder="Item no. / surfacing" value={line.area} onChange={event => updateLine(index, 'area', event.target.value)} />
+        <input aria-label={`Item ${index + 1} description`} placeholder="Description" value={line.description} onChange={event => updateLine(index, 'description', event.target.value)} />
+        <input aria-label={`Item ${index + 1} unit`} placeholder="Unit" value={line.unit} onChange={event => updateLine(index, 'unit', event.target.value)} />
+        <input aria-label={`Item ${index + 1} quantity`} type="number" min="0.001" step="0.001" value={line.quantity} onChange={event => updateLine(index, 'quantity', event.target.value)} />
+        <input aria-label={`Item ${index + 1} rate`} type="number" min="0" step="0.01" value={line.rate} onChange={event => updateLine(index, 'rate', event.target.value)} />
+        <strong>{rupees(Number(line.quantity || 0) * Number(line.rate || 0))}</strong>
+        <button type="button" className="icon-btn" disabled={lines.length === 1} onClick={() => setLines(current => current.filter((_, position) => position !== index))}><Trash2 size={15}/></button>
+      </div>)}
+    </div>
     <TextArea name="paymentTerms" label="Payment terms" rows={3} required={false} defaultValue={quotation.paymentTerms || ''} />
     <TextArea name="additionalNotes" label="Additional notes" rows={3} required={false} defaultValue={quotation.additionalNotes || ''} />
     <TextArea name="terms" label="Terms for this quotation only (leave blank to use the standing terms)"
       rows={3} required={false} defaultValue={quotation.terms || ''} />
-    <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
-      {quotation.boqId ? 'The priced lines come from the BOQ and are not edited here.'
-        : 'The manually priced lines are preserved as issued and are not edited here.'}
-      {' '}An accepted quotation can no longer be reworded — raise a new one instead.
-    </p>
+    <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>Saving creates Revision {Number(quotation.revisionNumber || 0) + 1}. It never overwrites this version.</p>
   </FormModal>;
 }
 

@@ -33,7 +33,7 @@ router.get('/', auth, wrap(async (req, res) => {
   const [companies, projects, tasks, attendance, materials, fleet, reports, employees, departments, equipment,
     suppliers, purchaseRequests, boqs, milestones, notifications, finance, inquiries, weekly] = await Promise.all([
     query('SELECT id,code,name FROM companies WHERE active=1 ORDER BY id'),
-    gated(['projects.view','site.reports'], () => can(req,'projects.view') ? query(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,
+    gated(['projects.view','site.reports','finance.reports','finance.managementAccounts','finance.dailyExpenses','finance.expectedOutflows'], () => can(req,'projects.view') ? query(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,
       COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,c.name company,c.code companyCode FROM projects p
       JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id
       LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.active=1 ORDER BY p.id`)
@@ -81,7 +81,7 @@ router.get('/', auth, wrap(async (req, res) => {
       (SELECT DATEDIFF(CURDATE(), a.due_back) FROM equipment_assignments a
         WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) daysOverdue
       FROM equipment e ORDER BY e.code`)),
-    gated(['store.view','store.manage','finance.pay'], () => query('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE active=1 ORDER BY name')),
+    gated(['store.view','store.manage','finance.pay','finance.supplierStatements'], () => query('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE active=1 ORDER BY name')),
     gated(['store.view','store.manage'], () => query(`SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,p.name project,p.company_id companyId,u.name requestedBy,
       (SELECT COUNT(*) FROM purchase_request_items i WHERE i.request_id=r.id) lineCount,
       (SELECT COALESCE(SUM(i.quantity*i.estimated_rate),0) FROM purchase_request_items i WHERE i.request_id=r.id) estimate
@@ -104,7 +104,7 @@ router.get('/', auth, wrap(async (req, res) => {
         ORDER BY (c.snoozed_until>NOW()),FIELD(c.severity,'Critical','Warning','Info'),c.due_at LIMIT 40`,
         [req.user.id,req.user.id,...perms,Number(perms.includes('admin.notifications'))]);
     })(),
-    gated(['finance.view','finance.manage'], () => query(`SELECT p.id projectId,p.company_id companyId,p.name project,p.budget,
+    gated(['finance.view','finance.manage','finance.reports','finance.managementAccounts'], () => query(`SELECT p.id projectId,p.company_id companyId,p.name project,p.budget,
       ${spendSql('p')} expenses,
       COALESCE((SELECT SUM(i.amount) FROM incomes i WHERE i.project_id=p.id),0) income
       FROM projects p WHERE p.active=1 ORDER BY p.id`)),

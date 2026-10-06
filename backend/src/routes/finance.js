@@ -16,7 +16,7 @@ const companyParam = req => {
   return Number.isInteger(value) && value > 0 ? value : null;
 };
 
-router.get('/cash-comparison',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{
+router.get('/cash-comparison',auth,permit('finance.cashComparison'),wrap(async(req,res)=>{
   const companyId=companyParam(req),period=String(req.query.period||'');
   if(!companyId||!accountPeriod.safeParse(period).success)return res.status(400).json({error:'Choose a company and a month in YYYY-MM format.'});
   const company=await getOne('SELECT id,name FROM companies WHERE id=?',[companyId]);
@@ -24,7 +24,7 @@ router.get('/cash-comparison',auth,permit('finance.view','finance.manage'),wrap(
   res.json({company,...await cashComparison(companyId,period)});
 }));
 
-router.put('/cash-comparison/period',auth,permit('finance.manage'),validate(z.object({
+router.put('/cash-comparison/period',auth,permit('finance.cashComparison'),validate(z.object({
   companyId:z.number().int().positive(),period:accountPeriod,
   budgetReceipts:z.number().nonnegative().nullable(),budgetPayments:z.number().nonnegative().nullable(),
   openingBalance:z.number().finite().nullable(),verifiedClosingBalance:z.number().finite().nullable(),
@@ -50,7 +50,7 @@ router.put('/cash-comparison/period',auth,permit('finance.manage'),validate(z.ob
   res.json({id:after.id});
 }));
 
-router.get('/expected-outflows',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{
+router.get('/expected-outflows',auth,permit('finance.expectedOutflows'),wrap(async(req,res)=>{
   const companyId=companyParam(req);
   if(!companyId)return res.status(400).json({error:'Choose a company to view its expected payments.'});
   const company=await getOne('SELECT id,name FROM companies WHERE id=?',[companyId]);
@@ -58,7 +58,7 @@ router.get('/expected-outflows',auth,permit('finance.view','finance.manage'),wra
   res.json({company,...await cashOutflows(companyId)});
 }));
 
-router.post('/expected-outflows/plans',auth,permit('finance.manage'),validate(z.object({
+router.post('/expected-outflows/plans',auth,permit('finance.expectedOutflows'),validate(z.object({
   companyId:z.number().int().positive(),sourceType:z.string().trim().min(2).max(40).nullable().optional(),
   sourceId:z.number().int().positive().nullable().optional(),projectId:z.number().int().positive().nullable().optional(),
   payee:z.string().trim().min(2).max(180).nullable().optional(),description:z.string().trim().min(2).max(400).nullable().optional(),
@@ -92,7 +92,7 @@ router.post('/expected-outflows/plans',auth,permit('finance.manage'),validate(z.
   res.status(201).json({id:result.insertId});
 }));
 
-router.patch('/expected-outflows/plans/:id',auth,permit('finance.manage'),validate(z.object({
+router.patch('/expected-outflows/plans/:id',auth,permit('finance.expectedOutflows'),validate(z.object({
   companyId:z.number().int().positive(),status:z.enum(['Planned','Committed','Paid','Cancelled'])
 })),wrap(async(req,res)=>{
   const prior=await getOne('SELECT * FROM cash_outflow_plans WHERE id=? AND company_id=?',[req.params.id,req.body.companyId]);
@@ -103,7 +103,7 @@ router.patch('/expected-outflows/plans/:id',auth,permit('finance.manage'),valida
   res.json({id:prior.id,status:req.body.status});
 }));
 
-router.patch('/expected-outflows/plans/:id/details',auth,permit('finance.manage'),validate(z.object({
+router.patch('/expected-outflows/plans/:id/details',auth,permit('finance.expectedOutflows'),validate(z.object({
   companyId:z.number().int().positive(),projectId:z.number().int().positive().nullable().optional(),
   payee:z.string().trim().min(2).max(180),description:z.string().trim().min(2).max(400),amount:z.number().positive(),
   expectedDate:isoDate,confidence:z.enum(['High','Medium','Low']),notes:z.string().trim().max(600).nullable().optional()
@@ -119,7 +119,7 @@ router.patch('/expected-outflows/plans/:id/details',auth,permit('finance.manage'
   res.json({id:prior.id});
 }));
 
-router.post('/office-expense-payments',auth,permit('finance.manage'),validate(z.object({
+router.post('/office-expense-payments',auth,permit('finance.dailyExpenses'),validate(z.object({
   companyId:z.number().int().positive(),paymentDate:isoDate,category:z.string().trim().min(2).max(100),
   payee:z.string().trim().min(2).max(180),paymentMethod:z.enum(['Bank transfer','Card','Cash','Cheque']),
   description:z.string().trim().min(2).max(400),reference:z.string().trim().min(2).max(120),
@@ -136,7 +136,7 @@ router.post('/office-expense-payments',auth,permit('finance.manage'),validate(z.
   }catch(error){if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'That office payment reference is already recorded for this company. Open the existing entry instead of entering it twice.'});throw error;}
 }));
 
-router.get('/daily-expenses',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{
+router.get('/daily-expenses',auth,permit('finance.dailyExpenses'),wrap(async(req,res)=>{
   const companyId=companyParam(req),date=String(req.query.date||'');
   if(!companyId||!isoDate.safeParse(date).success)return res.status(400).json({error:'Choose a company and a valid day.'});
   const [company,petty,supplierPayments,bills,direct,office,unverified]=await Promise.all([
@@ -198,7 +198,7 @@ router.get('/daily-expenses',auth,permit('finance.view','finance.manage'),wrap(a
     note:'Each recorded payment appears once. Linked Fleet fuel and project-cost rows are not counted a second time. Salary advances, float top-ups and card-statement settlements are not operating expenses. Older manual expenses without payment details are excluded until verified.'});
 }));
 
-router.get('/management-accounts', auth, permit('finance.view','finance.manage'), wrap(async (req,res) => {
+router.get('/management-accounts', auth, permit('finance.managementAccounts'), wrap(async (req,res) => {
   const companyId=companyParam(req), period=String(req.query.period||'');
   if (!companyId || !accountPeriod.safeParse(period).success) return res.status(400).json({error:'Choose a company and a month in YYYY-MM format.'});
   const latest=await getOne(`SELECT id,version,status,snapshot,close_note closeNote,closed_at closedAt,
@@ -212,7 +212,7 @@ router.get('/management-accounts', auth, permit('finance.view','finance.manage')
         changedSinceClose:JSON.stringify(live)!==JSON.stringify(typeof latest.snapshot==='string'?JSON.parse(latest.snapshot):latest.snapshot)}}:{}) });
 }));
 
-router.post('/management-accounts/adjustments',auth,permit('finance.manage'),validate(z.object({
+router.post('/management-accounts/adjustments',auth,permit('finance.managementAccountsManage'),validate(z.object({
   companyId:z.number().int().positive(),period:accountPeriod,
   category:z.enum(['Revenue','Cost','WIP','Receivable','Payable']),amount:z.number().finite().refine(value=>value!==0),
   explanation:z.string().trim().min(10).max(600),reference:z.string().trim().min(2).max(120),
@@ -231,7 +231,7 @@ router.post('/management-accounts/adjustments',auth,permit('finance.manage'),val
   res.status(201).json({id:result.insertId});
 }));
 
-router.post('/management-accounts/close',auth,permit('finance.manage'),validate(z.object({
+router.post('/management-accounts/close',auth,permit('finance.managementAccountsManage'),validate(z.object({
   companyId:z.number().int().positive(),period:accountPeriod,note:z.string().trim().min(10).max(600)
 })),wrap(async(req,res)=>{
   const {companyId,period,note}=req.body;
@@ -252,7 +252,7 @@ router.post('/management-accounts/close',auth,permit('finance.manage'),validate(
   res.status(201).json({...result,status:'Closed'});
 }));
 
-router.post('/management-accounts/reopen',auth,permit('finance.manage'),validate(z.object({
+router.post('/management-accounts/reopen',auth,permit('finance.managementAccountsManage'),validate(z.object({
   companyId:z.number().int().positive(),period:accountPeriod,reason:z.string().trim().min(10).max(600)
 })),wrap(async(req,res)=>{
   const {companyId,period,reason}=req.body;
@@ -353,7 +353,7 @@ router.post('/credit-card-statements/:id/payments',auth,permit('finance.manage')
 /* Older dashboard clients asked for the whole ledger without a range. Keep that read-only
    view working while the tax workspace always sends an explicit filing period. */
 const vatRange = req => ({ start: String(req.query.start || '1900-01-01'), end: String(req.query.end || '2999-12-31') });
-router.get('/vat',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{
+router.get('/vat',auth,permit('finance.vatSchedules'),wrap(async(req,res)=>{
   const companyId=companyParam(req),{start,end}=vatRange(req);
   if(!companyId||!isoDate.safeParse(start).success||!isoDate.safeParse(end).success||start>end)
     return res.status(400).json({error:'Choose a company and a valid VAT period.'});
@@ -366,7 +366,7 @@ router.get('/vat',auth,permit('finance.view','finance.manage'),wrap(async(req,re
     ].sort((a,b)=>String(b.date).localeCompare(String(a.date)))});
 }));
 
-router.put('/vat/period',auth,permit('finance.manage'),validate(z.object({
+router.put('/vat/period',auth,permit('finance.vatSchedules'),validate(z.object({
   companyId:z.number().int().positive(),start:isoDate,end:isoDate,
   status:z.enum(['Draft','Reconciled','Filed']).default('Draft'),
   outputAdjustment:z.number().finite().default(0),inputAdjustment:z.number().finite().default(0),
@@ -396,7 +396,7 @@ router.put('/vat/period',auth,permit('finance.manage'),validate(z.object({
   res.json(await vatSchedule(b.companyId,b.start,b.end));
 }));
 
-router.get('/vat/export',auth,permit('finance.view','finance.manage'),wrap(async(req,res)=>{
+router.get('/vat/export',auth,permit('finance.vatSchedules'),wrap(async(req,res)=>{
   const companyId=companyParam(req),{start,end}=vatRange(req);
   if(!companyId||!isoDate.safeParse(start).success||!isoDate.safeParse(end).success||start>end)
     return res.status(400).json({error:'Choose a valid company VAT period before exporting.'});
@@ -407,7 +407,7 @@ router.get('/vat/export',auth,permit('finance.view','finance.manage'),wrap(async
   res.send(vatWorkbook(schedule));
 }));
 
-router.post('/vat/svat-entries',auth,permit('finance.manage'),validate(z.object({
+router.post('/vat/svat-entries',auth,permit('finance.vatSchedules'),validate(z.object({
   companyId:z.number().int().positive(),periodStart:isoDate,periodEnd:isoDate,
   direction:z.enum(['Output','Input']),scheduleType:z.enum(['SVAT 05','SVAT 05a','SVAT 05b','SVAT 06','SVAT 07']),
   documentDate:isoDate,documentNumber:z.string().trim().min(1).max(120),counterparty:z.string().trim().min(2).max(180),

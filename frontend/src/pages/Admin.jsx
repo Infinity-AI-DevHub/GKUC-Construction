@@ -15,7 +15,7 @@ export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Import 
 
 /** PID 2.14 and 2.13 — who can do what, and everything the system has alerted on. */
 export default function Admin({ can, user, reload, companyId, initialTab = TABS[0], onTabChange }) {
-  const allowed = TABS.filter(name => ({Users:can.manage,'Access control':can.roles,Company:can.companySettings,Documents:can.documentSettings,'Import centre':['clients.manage','subcontractors.manage','projects.manage','qs.boq','qs.quotation','qs.costControl','qs.retention'].some(key=>can.has(key)),Notifications:true,'Evening summary':can.audit,Messages:can.messages,Lists:can.lists,'Fraud watch':can.audit,'Audit log':can.audit,'My account':true})[name]);
+  const allowed = TABS.filter(name => ({Users:can.manage,'Access control':can.roles,Company:can.companySettings,Documents:can.documentSettings,'Import centre':can.has('admin.importCentre'),Notifications:true,'Evening summary':can.audit,Messages:can.messages,Lists:can.lists,'Fraud watch':can.integrity,'Audit log':can.audit,'My account':true})[name]);
   const [selectedTab, setTab] = useState(initialTab);
   const tab = allowed.includes(selectedTab) ? selectedTab : allowed[0];
   const [creating, setCreating] = useState(false);
@@ -41,7 +41,7 @@ export default function Admin({ can, user, reload, companyId, initialTab = TABS[
       ? <Messaging />
       : <p className="empty-state">You do not have permission to send messages.</p>)}
     {tab === 'Lists' && <OptionLists can={can} />}
-    {tab === 'Fraud watch' && (can.audit
+    {tab === 'Fraud watch' && (can.integrity
       ? <Integrity can={can} />
       : <p className="empty-state">You do not have permission to see the fraud watch.</p>)}
     {tab === 'Audit log' && <AuditLog />}

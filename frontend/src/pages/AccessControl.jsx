@@ -19,6 +19,8 @@ export default function AccessControl({ user }) {
   const [delegating, setDelegating] = useState(null);
   const [saving, setSaving] = useState('');
   const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [department, setDepartment] = useState('All departments');
   const matrixRef = useRef(null);
 
   const load = async () => {
@@ -66,6 +68,11 @@ export default function AccessControl({ user }) {
    * it belonged to. Fixed widths resolve identically no matter what a row contains.
    */
   const template = `260px repeat(${roles.length}, 128px)`;
+  const matchingPermissions = catalogue.permissions.filter(permission =>
+    (department === 'All departments' || permission.department === department) &&
+    `${permission.label} ${permission.key}`.toLowerCase().includes(query.trim().toLowerCase())
+  );
+  const visibleDepartments = catalogue.departments.filter(name => matchingPermissions.some(permission => permission.department === name));
 
   return <>
     <div className="access-intro">
@@ -80,6 +87,12 @@ export default function AccessControl({ user }) {
     </div>
 
     {error && <p className="form-error">{error}</p>}
+
+    <div className="access-filters" aria-label="Filter permissions">
+      <label>Find a feature<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search permissions or keys" /></label>
+      <label>Department<select value={department} onChange={event => setDepartment(event.target.value)}><option>All departments</option>{catalogue.departments.map(name => <option key={name}>{name}</option>)}</select></label>
+      <strong>{matchingPermissions.length} permission{matchingPermissions.length === 1 ? '' : 's'} shown</strong>
+    </div>
 
     <div className="access-scroll-controls" aria-label="Move across role columns">
       <span>Scroll across to see and edit every role</span>
@@ -103,12 +116,12 @@ export default function AccessControl({ user }) {
         ))}
       </div>
 
-      {catalogue.departments.map(department => (
-        <React.Fragment key={department}>
+      {visibleDepartments.map(departmentName => (
+        <React.Fragment key={departmentName}>
           <div className="access-group" style={{ gridTemplateColumns: template }}>
-            <span>{department}</span>
+            <span>{departmentName}</span>
           </div>
-          {catalogue.permissions.filter(item => item.department === department).map(permission => (
+          {matchingPermissions.filter(item => item.department === departmentName).map(permission => (
             <div className="table-row" style={{ gridTemplateColumns: template }} key={permission.key}>
               <div><strong>{permission.label}</strong><small>{permission.key}</small></div>
               {roles.map(role => {
@@ -133,6 +146,7 @@ export default function AccessControl({ user }) {
           ))}
         </React.Fragment>
       ))}
+      {!matchingPermissions.length && <p className="empty-state">No permissions match this filter.</p>}
     </section>
 
     <div style={{ height: '16px' }} />

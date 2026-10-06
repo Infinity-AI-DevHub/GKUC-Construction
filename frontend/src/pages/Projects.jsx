@@ -194,6 +194,7 @@ function BoqWording({ boq, close, reload }) {
 }
 
 function BoqDetail({ boq, close, decide, can, edit }) {
+  const groups = groupBoqItems(boq.items);
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
     <div className="modal">
       <div className="modal-title"><h2>{boq.reference} — {boq.title}</h2><button className="icon-btn" onClick={close}>✕</button></div>
@@ -203,15 +204,20 @@ function BoqDetail({ boq, close, decide, can, edit }) {
           <div><span>Status</span><strong>{boq.status}</strong></div>
         </div>
         <div className="wide">
-          <Table columns={['Category', 'Description', 'Quantity', 'Rate', 'Amount']} template="minmax(90px,.7fr) minmax(120px,1.5fr) minmax(70px,.7fr) minmax(70px,.8fr) minmax(80px,.9fr)">
-            {boq.items.map(item => <Row template="minmax(90px,.7fr) minmax(120px,1.5fr) minmax(70px,.7fr) minmax(70px,.8fr) minmax(80px,.9fr)" key={item.id}>
-              <Badge tone={slug(item.category || 'uncategorised')}>{item.category || 'Uncategorised'}</Badge>
-              <span>{item.description}</span>
-              <span>{item.quantity} {item.unit}</span>
-              <span>{rupees(item.rate)}</span>
-              <strong>{rupees(item.amount)}</strong>
-            </Row>)}
-          </Table>
+          <div className="boq-section-list">
+            {groups.map(group => <section className="boq-section" key={group.category}>
+              <header><div><span>BOQ section</span><h3>{group.category}</h3></div><strong>{rupees(group.subtotal)}</strong></header>
+              <Table columns={['Item', 'Description', 'Quantity', 'Rate', 'Amount']} template="70px minmax(150px,1.7fr) minmax(90px,.7fr) minmax(90px,.8fr) minmax(100px,.9fr)">
+                {group.rows.map(({ item }, position) => <Row template="70px minmax(150px,1.7fr) minmax(90px,.7fr) minmax(90px,.8fr) minmax(100px,.9fr)" key={item.id}>
+                  <strong>{position + 1}</strong>
+                  <span>{item.description}</span>
+                  <span>{item.quantity} {item.unit}</span>
+                  <span>{rupees(item.rate)}</span>
+                  <strong>{rupees(item.amount)}</strong>
+                </Row>)}
+              </Table>
+            </section>)}
+          </div>
         </div>
         <div className="wide">
           <Table columns={['Category', 'Estimated', 'Actual to date', 'Variance']} template="repeat(4,1fr)" title="Estimate against actual">
@@ -442,6 +448,20 @@ function MilestoneForm({ data, close, reload }) {
 
 const CATEGORIES = ['Material', 'Labour', 'Equipment', 'Subcontract', 'Overhead'];
 
+/* Keep the category order chosen by the estimator: the first time a category appears
+   establishes its section position, and later lines join that section. */
+const groupBoqItems = items => [...items.reduce((groups, item, index) => {
+  const category = item.category || 'Uncategorised';
+  if (!groups.has(category)) groups.set(category, []);
+  groups.get(category).push({ item, index });
+  return groups;
+}, new Map())].map(([category, rows]) => ({
+  category,
+  rows,
+  subtotal: rows.reduce((sum, row) => sum + Number(row.item.amount
+    ?? (Number(row.item.quantity || 0) * Number(row.item.rate || 0))), 0)
+}));
+
 /** A BOQ is created with its first priced line; further lines are added from the detail view. */
 export function BoqForm({ data, close, reload }) {
   const boqCategories = useOptions('boq.category');
@@ -483,8 +503,9 @@ export function BoqForm({ data, close, reload }) {
    */
   const started = line => Boolean(line.description || line.unit || line.quantity || line.rate);
   const mustComplete = (line, index) => index === 0 || started(line);
+  const startedGroups = groupBoqItems(lines.filter(started));
 
-  return <WorkflowForm title="Create BOQ" close={close} label="Create BOQ" summary={[["Project", data.projects.find(project => String(project.id) === String(projectId))?.name || 'Choose a project'], ["Priced lines", String(lines.filter(started).length)], ["Estimated total", rupees(total)]]} reviewContent={<><h3>Measured items</h3>{lines.filter(started).map((line,index)=><div key={index}><span>{line.category || 'Uncategorised'} · {line.description}<small>{line.quantity} {line.unit} × {rupees(line.rate)}</small></span><strong>{rupees(Number(line.quantity)*Number(line.rate))}</strong></div>)}</>} onSubmit={async values => {
+  return <WorkflowForm title="Create BOQ" close={close} label="Create BOQ" summary={[["Project", data.projects.find(project => String(project.id) === String(projectId))?.name || 'Choose a project'], ["Priced lines", String(lines.filter(started).length)], ["Estimated total", rupees(total)]]} reviewContent={<><h3>Measured items by section</h3>{startedGroups.map(group=><section className="workflow-boq-section" key={group.category}><header><strong>{group.category}</strong><span>{rupees(group.subtotal)}</span></header>{group.rows.map(({item:line,index})=><div key={index}><span>{line.description}<small>{line.quantity} {line.unit} × {rupees(line.rate)}</small></span><strong>{rupees(Number(line.quantity)*Number(line.rate))}</strong></div>)}</section>)}</>} onSubmit={async values => {
     await post('/boq', {
       projectId: Number(values.projectId),
       title: values.title,
@@ -511,7 +532,9 @@ export function BoqForm({ data, close, reload }) {
     <div className="qs-form-section wide"><span>02</span><div><h3>Priced work</h3><p>Add each measured item, quantity and rate.</p></div></div>
     <div className="wide boq-category-tools"><span>Categories are optional. Use one to group related work.</span><button type="button" className="status-button" onClick={()=>setCategoryEditor(value=>!value)}>{categoryEditor?'Hide category manager':'Add or edit categories'}</button></div>
     {categoryEditor&&<div className="wide boq-category-manager"><div className="boq-category-manager-list">{categoryRecords.filter(row=>row.active).map(row=><span key={row.id}>{row.value}<button type="button" className="status-button" onClick={()=>{setEditingCategory(row.id);setCategoryName(row.value);setCategoryError('');}}>Edit</button></span>)}</div><div className="boq-category-manager-entry"><label>{editingCategory?'Rename category':'New category'}<input type="text" maxLength={60} value={categoryName} onChange={event=>setCategoryName(event.target.value)}/></label><button type="button" className="status-button" onClick={saveCategory}>{editingCategory?'Save name':'Add category'}</button>{editingCategory&&<button type="button" className="status-button" onClick={()=>{setEditingCategory(null);setCategoryName('');setCategoryError('');}}>Cancel edit</button>}</div>{categoryError&&<p className="form-error" role="alert">{categoryError}</p>}</div>}
-    {lines.map((line, index) => <div className="wide boq-line" key={index}>
+    <div className="wide boq-entry-sections">{groupBoqItems(lines).map(group => <section className="boq-entry-section" key={group.category}>
+      <header><div><span>Section</span><h4>{group.category}</h4></div><strong>{rupees(group.subtotal)}</strong></header>
+      {group.rows.map(({ item: line, index }) => <div className="boq-line" key={index}>
       <label>Category (optional)
         <select value={line.category}
           onChange={event => update(index, 'category', event.target.value)}>
@@ -529,7 +552,8 @@ export function BoqForm({ data, close, reload }) {
         onChange={event => update(index, 'rate', event.target.value)} /></label>
       {line.category==='Material'&&<label>Tracked material<select value={line.materialId||''} onChange={event=>{const material=data.materials.find(m=>String(m.id)===event.target.value);setLines(current=>current.map((row,pos)=>pos===index?{...row,materialId:event.target.value,description:material?.name||row.description,unit:material?.unit||row.unit,rate:material?.unit_cost??row.rate}:row));}}><option value="">Not linked to stock</option>{data.materials.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>}
       {line.category==='Subcontract'&&<label>Agreed subcontract rate<select value={line.subcontractRateId||''} onChange={event=>{const rate=subRates.find(r=>String(r.id)===event.target.value);setLines(current=>current.map((row,pos)=>pos===index?{...row,subcontractRateId:event.target.value,description:rate?.workItem||row.description,unit:rate?.unit||row.unit,rate:rate?.rate??row.rate}:row));}}><option value="">Manual rate</option>{subRates.map(r=><option key={r.id} value={r.id}>{r.subcontractor} · {r.workItem} · {rupees(r.rate)}/{r.unit}</option>)}</select></label>}
-    </div>)}
+      </div>)}
+    </section>)}</div>
     {/* The units the company keeps, offered as suggestions without preventing a new one. */}
     <datalist id="boq-units">{units.map(unit => <option key={unit} value={unit} />)}</datalist>
     <div className="wide" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

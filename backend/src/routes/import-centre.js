@@ -9,6 +9,7 @@ import { parseBoqPdf } from '../lib/boq-pdf.js';
 import { optionsFor } from '../lib/options.js';
 
 const router = Router();
+router.use(auth, permit('admin.importCentre'));
 const definitions = {
   clients: { sheet: 'Clients', key: 'CLIENT_CODE', required: ['CLIENT_TYPE', 'CLIENT_NAME', 'BILLING_ADDRESS', 'ACTIVE'], permission: 'clients.manage' },
   subcontractors: { sheet: 'Subcontractors', key: 'SUBCONTRACTOR_CODE', required: ['NAME', 'CONTACT_TYPE', 'TRADE', 'PHONE', 'ACTIVE'], permission: 'subcontractors.manage' },
