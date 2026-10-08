@@ -688,6 +688,48 @@ test('employee needs only name and code and personal details remain editable', a
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
 });
 
+test('HR previews, corrects and atomically imports employees from Excel', async () => {
+  const owner = await login();
+  const qs = await login('qs@gkuc.lk');
+  const forbidden = await fetch(`${base}/employees/import/template`, { headers: { authorization: `Bearer ${qs}` } });
+  assert.equal(forbidden.status, 403);
+
+  const template = await fetch(`${base}/employees/import/template`, { headers: { authorization: `Bearer ${owner}` } });
+  assert.equal(template.status, 200);
+  assert.match(template.headers.get('content-type'), /spreadsheetml/);
+
+  const suffix = Date.now();
+  const xlsx = writeWorkbook([{ name: 'Employees', rows: [
+    ['Employee code *', 'Full name *', 'Employment start date *', 'Employee type', 'Employment classification',
+      'Pay basis', 'Payment frequency', 'Payroll category', 'Daily rate (LKR)', 'EPF eligible', 'ETF eligible'],
+    [`BULK-${suffix}-1`, 'Name to correct', '2018-03-12', 'Site', 'Permanent', 'Daily rate', 'Monthly', 'Site labourer', 3250, 'Yes', 'Yes'],
+    [`BULK-${suffix}-2`, 'Historical Employee Two', '2014-07-01', 'Office', 'Contract', 'Monthly salary', 'Monthly', 'Office employee', 0, 'No', 'No']
+  ] }]);
+  const form = new FormData();
+  form.append('file', new Blob([xlsx], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'employees.xlsx');
+  const response = await fetch(`${base}/employees/import/preview`, { method: 'POST', headers: { authorization: `Bearer ${owner}` }, body: form });
+  const preview = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(preview));
+  assert.equal(preview.rows.length, 2);
+  assert.equal(preview.counts.blocked, 0, JSON.stringify(preview));
+  assert.equal(preview.rows[0].data.joinDate, '2018-03-12');
+
+  preview.rows[0].data.name = 'Corrected Historical Employee';
+  const confirmed = await call(owner, 'POST', '/employees/import/confirm', { rows: preview.rows });
+  assert.equal(confirmed.status, 201, JSON.stringify(confirmed.body));
+  assert.equal(confirmed.body.created, 2);
+  const employees = await call(owner, 'GET', '/employees');
+  const imported = employees.body.filter(row => row.code.startsWith(`BULK-${suffix}`));
+  assert.equal(imported.length, 2);
+  assert.equal(imported.find(row => row.code.endsWith('-1')).name, 'Corrected Historical Employee');
+  assert.equal(imported.find(row => row.code.endsWith('-1')).joinDate, '2018-03-12');
+
+  const duplicate = await call(owner, 'POST', '/employees/import/confirm', { rows: preview.rows });
+  assert.equal(duplicate.status, 422);
+  assert.match(duplicate.body.error, /Correct/);
+  await admin.query(`DELETE FROM ${testDatabase}.employees WHERE code LIKE ?`, [`BULK-${suffix}-%`]);
+});
+
 test('creating system access creates or links an employee without duplicating their profile', async () => {
   const owner = await login();
   const roles = await call(owner, 'GET', '/users/roles');

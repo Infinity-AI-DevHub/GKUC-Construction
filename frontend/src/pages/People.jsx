@@ -4,8 +4,8 @@ import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFiel
 import Hiring from './Hiring.jsx';
 import Insurance from './Insurance.jsx';
 import PayrollInputs from './PayrollInputs.jsx';
-import { ArrowDownToLine, Check, Clock3, PencilLine, Search, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react';
-import { api, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { ArrowDownToLine, Check, Clock3, FileSpreadsheet, PencilLine, Search, ShieldCheck, Upload, UserRoundCheck, XCircle } from 'lucide-react';
+import { api, fetchDownload, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { allowedTabs, Avatar, Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import BiometricImport from './BiometricImport.jsx';
@@ -88,7 +88,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={tabs} active={tab} onChange={setTab} groups={TAB_GROUPS} />
 
-    {tab === 'Employees' && <Employees data={data} can={can} onOpen={openEmployee} focusRequest={employeeSearchRequest} />}
+    {tab === 'Employees' && <Employees data={data} can={can} onOpen={openEmployee} onImport={() => setOpen('Employee import')} focusRequest={employeeSearchRequest} />}
     {tab === 'Hiring' && <Hiring companies={companies} companyId={companyId} reload={reload} />}
     {tab === 'Insurance' && <Insurance />}
     {tab === 'Payroll Inputs' && <PayrollInputs data={data}/>}
@@ -106,6 +106,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     {tab === 'Departments' && <Departments data={data} />}
 
     {open === 'Employees' && <EmployeeForm data={data} companies={companies} companyId={companyId} close={() => setOpen('')} reload={reload} />}
+    {open === 'Employee import' && <EmployeeImport close={() => setOpen('')} reload={reload} />}
     {open === 'Attendance' && <AttendanceForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Leave' && <LeaveForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Overtime' && <OvertimeForm data={data} close={() => setOpen('')} reload={reload} />}
@@ -124,7 +125,7 @@ const PAY_COLUMNS = ['EPF/ETF basis', 'Daily rate'];
 const NO_PAY_COLUMNS = EMPLOYEE_COLUMNS.filter(column => !PAY_COLUMNS.includes(column));
 const NO_PAY_TEMPLATE = 'minmax(190px,1.4fr) 100px minmax(140px,1fr) minmax(140px,1fr) 100px';
 
-function Employees({ data, onOpen, focusRequest }) {
+function Employees({ data, can, onOpen, onImport, focusRequest }) {
   const [search, setSearch] = useState('');
   const searchInput = useRef(null);
   useEffect(() => { if (focusRequest) searchInput.current?.focus(); }, [focusRequest]);
@@ -143,11 +144,11 @@ function Employees({ data, onOpen, focusRequest }) {
     </div>
     <Table columns={columns} template={template} title="Employee register"
       empty={term ? `No employees match “${search.trim()}”.` : 'No employees have been added yet.'}
-      tools={<label className="employee-search"><Search size={16} aria-hidden="true" />
+      tools={<div className="employee-register-tools"><label className="employee-search"><Search size={16} aria-hidden="true" />
         <input ref={searchInput} type="search" value={search} onChange={event => setSearch(event.target.value)}
           placeholder="Search name, code or department" aria-label="Search employees by name, code or department" />
         <span aria-live="polite">{employees.length} of {data.employees.length}</span>
-      </label>}>
+      </label>{can.hr && <button className="secondary" type="button" onClick={onImport}><FileSpreadsheet size={16}/>Import employees</button>}</div>}>
       {employees.map(employee => <Row template={template} key={employee.id}
         onClick={() => onOpen(employee.id)}>
         <div className="person"><Avatar name={employee.name} /><div><strong>{employee.name}</strong><small>{employee.code}</small></div></div>
@@ -160,6 +161,102 @@ function Employees({ data, onOpen, focusRequest }) {
       </Row>)}
     </Table>
   </>;
+}
+
+const EMPLOYMENT_TYPES = ['Permanent','Probation','Temporary','Casual','Contract'];
+const PAY_BASES_IMPORT = ['Monthly salary', 'Weekly rate', 'Daily rate'];
+const PAY_FREQUENCIES_IMPORT = ['Daily', 'Weekly', 'Monthly'];
+const PAYROLL_CATEGORIES_IMPORT = ['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom'];
+const EMPLOYEE_STATUSES = ['Active', 'On leave', 'Suspended', 'Left'];
+
+function EmployeeImport({ close, reload }) {
+  const [review, setReview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const download = async () => {
+    setError('');
+    try {
+      const url = await fetchDownload('/employees/import/template');
+      const link = document.createElement('a'); link.href = url; link.download = 'GKUC-employee-import-template.xlsx'; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (failure) { setError(failure.message); }
+  };
+  const uploadWorkbook = async file => {
+    if (!file) return;
+    setBusy(true); setError(''); setReview(null);
+    try {
+      const form = new FormData(); form.append('file', file);
+      setReview(await api('/employees/import/preview', { method: 'POST', body: form }));
+    } catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  };
+  const update = (index, change) => setReview(current => ({ ...current, rows: current.rows.map((row, rowIndex) => rowIndex === index
+    ? { ...row, data: { ...row.data, ...change }, errors: [] } : row) }));
+  const toggle = index => setReview(current => ({ ...current, rows: current.rows.map((row, rowIndex) => rowIndex === index
+    ? { ...row, include: !row.include } : row) }));
+  const submit = async () => {
+    const selected = review.rows.filter(row => row.include);
+    if (!selected.length) return setError('Select at least one employee to import.');
+    if (selected.some(row => row.errors.length)) return setError('Correct the highlighted rows, or exclude them, before importing.');
+    if (!window.confirm(`Create ${selected.length} employee record${selected.length === 1 ? '' : 's'}?`)) return;
+    setBusy(true); setError('');
+    try {
+      await post('/employees/import/confirm', { rows: review.rows });
+      await reload(); close();
+    } catch (failure) {
+      if (failure.details?.rows) setReview(current => ({ ...current, rows: current.rows.map((row, index) => ({ ...row, errors: failure.details.rows[index]?.errors || row.errors })) }));
+      setError(failure.message);
+    } finally { setBusy(false); }
+  };
+  const selected = review?.rows.filter(row => row.include) || [];
+  return <Modal title="Import employees from Excel" close={close} wide>
+    <div className="employee-import">
+      <section className="employee-import-steps">
+        <div><span>1</span><strong>Download the employee template</strong><small>It includes the accepted names, dates, payroll fields and an example on a separate sheet.</small></div>
+        <button type="button" className="secondary" onClick={download}><ArrowDownToLine size={16}/>Download template</button>
+        <div><span>2</span><strong>Upload the completed workbook</strong><small>SiteOps reads it into a review only. Nothing is created yet.</small></div>
+        <label className="secondary employee-import-picker"><Upload size={16}/>{busy ? 'Reading workbook…' : 'Choose Excel file'}
+          <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={busy} onChange={event => uploadWorkbook(event.target.files?.[0])}/></label>
+      </section>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {review && <>
+        <div className="employee-import-summary"><div><span>Workbook</span><strong>{review.filename}</strong></div><div><span>Rows found</span><strong>{review.rows.length}</strong></div><div><span>Selected</span><strong>{selected.length}</strong></div><div><span>Need correction</span><strong>{selected.filter(row => row.errors.length).length}</strong></div></div>
+        <section className="employee-import-review"><div className="employee-import-review-heading"><div><h3>3. Verify every employee</h3><p>Edit any field below. Exclude a row if it should not be imported.</p></div></div>
+          {review.rows.map((row, index) => <EmployeeImportRow key={`${row.sheetRow}-${index}`} row={row} index={index}
+            departments={review.departments} companies={review.companies} update={update} toggle={toggle}/>)}</section>
+      </>}
+      <div className="form-actions"><button type="button" className="secondary" onClick={close}>Cancel</button>
+        {review && <button type="button" className="primary" onClick={submit} disabled={busy || !selected.length}>{busy ? 'Importing…' : `Import ${selected.length} employee${selected.length === 1 ? '' : 's'}`}</button>}</div>
+    </div>
+  </Modal>;
+}
+
+function EmployeeImportRow({ row, index, departments, companies, update, toggle }) {
+  const d = row.data;
+  const field = (name, type = 'text', props = {}) => <input type={type} value={d[name] ?? ''} onChange={event => update(index, { [name]: type === 'number' ? event.target.value : event.target.value })} {...props}/>;
+  const select = (name, options, numeric = false) => <select value={String(d[name] ?? '')} onChange={event => update(index, { [name]:
+    ['epfEligible','etfEligible'].includes(name) ? event.target.value === 'true' : numeric && event.target.value ? Number(event.target.value) : event.target.value })}>{options.map(option => {
+    const pair = Array.isArray(option) ? option : [option, option]; return <option key={pair[0]} value={pair[0]}>{pair[1]}</option>;
+  })}</select>;
+  return <article className={`employee-import-row ${row.include ? '' : 'excluded'} ${row.errors.length ? 'has-errors' : ''}`}>
+    <header><label><input type="checkbox" checked={row.include} onChange={() => toggle(index)}/><span>Include row {row.sheetRow}</span></label><Badge tone={row.errors.length ? 'critical' : 'completed'}>{row.errors.length ? 'Needs correction' : 'Ready'}</Badge></header>
+    {row.errors.length > 0 && <ul className="employee-import-errors">{row.errors.map(message => <li key={message}>{message}</li>)}</ul>}
+    <div className="employee-import-grid">
+      <label>Employee code *{field('code')}</label><label>Full name *{field('name')}</label><label>Employment start date *{field('joinDate', 'date')}</label>
+      <label>Department{select('departmentId', [['','Not recorded'], ...departments.map(item => [item.id, item.name])], true)}</label>
+      <label>Designation / trade{field('designation')}</label><label>Employee type{select('workerType', ['Office','Site'])}</label>
+      <label>Employment classification{select('employmentType', EMPLOYMENT_TYPES)}</label><label>Phone{field('phone')}</label><label>Email{field('email', 'email')}</label>
+      <label>Birth date{field('birthDate', 'date')}</label><label>NIC number{field('nicNumber')}</label><label>Additional phone 1{field('additionalPhone1')}</label>
+      <label>Additional phone 2{field('additionalPhone2')}</label><label className="span-2">Residential address{field('residentialAddress')}</label><label className="span-2">Permanent address{field('permanentAddress')}</label>
+      <label>Salary paid by *{select('payrollCompanyId', companies.map(item => [item.id, item.name]), true)}</label><label>Pay basis{select('payBasis', PAY_BASES_IMPORT)}</label>
+      <label>Payment frequency{select('payFrequency', PAY_FREQUENCIES_IMPORT)}</label><label>Payroll category{select('payrollCategory', PAYROLL_CATEGORIES_IMPORT)}</label>
+      <label>Compensation effective from{field('compensationEffectiveFrom', 'date')}</label><label>EPF / ETF salary basis (LKR){field('basicSalary', 'number', { min: 0, step: '0.01' })}</label>
+      <label>Weekly rate (LKR){field('weeklyRate', 'number', { min: 0, step: '0.01' })}</label><label>Daily rate (LKR){field('dailyRate', 'number', { min: 0, step: '0.01' })}</label>
+      <label>EPF eligible{select('epfEligible', [[true,'Yes'],[false,'No']])}</label><label>ETF eligible{select('etfEligible', [[true,'Yes'],[false,'No']])}</label>
+      <label>Contributions start date{field('contributionStartDate', 'date')}</label><label>Legacy/custom OT rate{field('overtimeRate', 'number', { min: 0, step: '0.01' })}</label>
+      <label>Status{select('status', EMPLOYEE_STATUSES)}</label><label className="span-2">Notes{field('notes')}</label>
+    </div>
+  </article>;
 }
 
 const PAYROLL_TEMPLATE = 'minmax(130px,.9fr) 105px 130px 130px 100px 140px 110px 130px';
