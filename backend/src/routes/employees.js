@@ -10,6 +10,9 @@ import { OVERTIME_TYPES, PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES,
 import { employeeLetterHtml, letterDue, letterMilestone, LETTER_TYPES } from '../lib/employee-letters.js';
 import { addCalendarMonths } from '../lib/leave-policy.js';
 import { sendDocument } from '../lib/document-pdf.js';
+import { readUpload, readUploadedFile } from '../lib/storage.js';
+import { readWorkbook, serialToDate } from '../lib/xlsx.js';
+import { STYLE, writeWorkbook } from '../lib/xlsx-write.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -48,6 +51,108 @@ const employeeSchema = z.object({
   status: z.enum(['Active', 'On leave', 'Suspended', 'Left']).default('Active'),
   notes: z.string().max(600).optional()
 });
+
+const IMPORT_HEADERS = [
+  'Employee code *', 'Full name *', 'Employment start date *', 'Department', 'Designation / trade',
+  'Employee type', 'Employment classification', 'Phone', 'Email', 'Birth date', 'NIC number',
+  'Additional phone 1', 'Additional phone 2', 'Residential address', 'Permanent address',
+  'Salary paid by', 'Pay basis', 'Payment frequency', 'Payroll category',
+  'Compensation effective from', 'Monthly EPF / ETF salary basis (LKR)', 'Weekly rate (LKR)',
+  'Daily rate (LKR)', 'EPF eligible', 'ETF eligible', 'Contributions start date',
+  'Legacy/custom OT rate (LKR/h)', 'Status', 'Notes'
+];
+const importKey = value => String(value ?? '').trim().toLowerCase().replace(/\s*\*$/, '');
+const importText = value => String(value ?? '').trim();
+const importDate = value => typeof value === 'number' ? serialToDate(value) : importText(value).slice(0, 10);
+const importMoney = value => value === '' || value === null || value === undefined ? 0 : Number(value);
+const importBoolean = (value, fallback = true) => {
+  if (value === '' || value === null || value === undefined) return fallback;
+  return ['yes', 'true', '1', 'y'].includes(importText(value).toLowerCase());
+};
+
+function employeeImportWorkbook({ departments, companies }) {
+  const header = IMPORT_HEADERS.map(value => ({ value, style: STYLE.HEADER }));
+  const example = [
+    'EMP-0001', 'Nimal Perera', '2020-01-15', departments[0]?.name || '', 'Site Supervisor',
+    'Site', 'Permanent', '0771234567', 'nimal@example.com', '1990-05-20', '901234567V', '', '',
+    'Colombo', 'Colombo', companies[0]?.name || '', 'Daily rate', 'Monthly', 'Supervisor',
+    '2020-01-15', 50000, 0, 3500, 'Yes', 'Yes', '2020-01-15', 0, 'Active', 'Example row — replace or delete'
+  ].map(value => ({ value, style: typeof value === 'number' ? STYLE.MONEY : STYLE.CELL }));
+  const blank = IMPORT_HEADERS.map(() => ({ value: ' ', style: STYLE.CELL }));
+  return writeWorkbook([
+    { name: 'Employees', freeze: 1, columns: [18, 28, 22, 22, 24, 18, 24, 18, 28, 16, 18, 18, 18, 30, 30, 25, 20, 20, 22, 25, 23, 18, 18, 15, 15, 22, 25, 16, 32], rows: [header, blank, blank, blank, blank, blank] },
+    { name: 'Example', freeze: 1, columns: [18, 28, 22, 22, 24, 18, 24, 18, 28, 16, 18, 18, 18, 30, 30, 25, 20, 20, 22, 25, 23, 18, 18, 15, 15, 22, 25, 16, 32], rows: [header, example] },
+    { name: 'Instructions', columns: [28, 95], rows: [
+      [{ value: 'Employee import guide', style: STYLE.HEADER }, { value: 'Complete the Employees sheet, then upload it in People → Employees. Nothing is created until HR reviews and confirms the rows.', style: STYLE.HEADER }],
+      ['Required fields', 'Employee code, full name and employment start date. Codes must be unique.'],
+      ['Dates', 'Use YYYY-MM-DD, for example 2020-01-15. Historical employment dates are allowed.'],
+      ['Employee type', 'Office or Site'], ['Employment classification', 'Permanent, Probation, Temporary, Casual or Contract'],
+      ['Pay basis', 'Monthly salary, Weekly rate or Daily rate'], ['Payment frequency', 'Daily, Weekly or Monthly. Monthly salary must be Monthly; Weekly rate must be Weekly.'],
+      ['Payroll category', 'Office employee, Site labourer, Driver, Supervisor or Custom'],
+      ['Salary paid by', `Use one of: ${companies.map(row => row.name).join(', ') || 'an active company name'}`],
+      ['Department', `Optional. Use one of: ${departments.map(row => row.name).join(', ') || 'a department already in SiteOps'}`],
+      ['EPF / ETF', 'Enter Yes or No. The monthly EPF / ETF salary basis is statutory only; daily-rate earnings are calculated from attendance.'],
+      ['Verification', 'After upload, every field remains editable. Rows with errors cannot be submitted until corrected or excluded.']
+    ].map(row => row.map((value, index) => ({ value, style: index === 0 ? STYLE.NOTE : STYLE.CELL }))) }
+  ]);
+}
+
+async function employeeImportContext() {
+  const [departments, companies, employees] = await Promise.all([
+    query('SELECT id,name FROM departments ORDER BY name'),
+    query('SELECT id,name FROM companies WHERE active=1 ORDER BY id'),
+    query('SELECT code,email,nic_number nicNumber FROM employees')
+  ]);
+  return { departments, companies, employees };
+}
+
+function normalizeEmployeeImportRow(data, context) {
+  const value = label => data.get(importKey(label));
+  const departmentName = importText(value('Department'));
+  const companyName = importText(value('Salary paid by'));
+  const department = departmentName ? context.departments.find(row => row.name.toLowerCase() === departmentName.toLowerCase()) : null;
+  const company = companyName ? context.companies.find(row => row.name.toLowerCase() === companyName.toLowerCase()) : context.companies[0];
+  return {
+    code: importText(value('Employee code')), name: importText(value('Full name')),
+    joinDate: importDate(value('Employment start date')) || null,
+    departmentId: department?.id || null, department: departmentName,
+    designation: importText(value('Designation / trade')), workerType: importText(value('Employee type')) || 'Site',
+    employmentType: importText(value('Employment classification')) || 'Permanent', phone: importText(value('Phone')),
+    email: importText(value('Email')), birthDate: importDate(value('Birth date')) || null,
+    nicNumber: importText(value('NIC number')), additionalPhone1: importText(value('Additional phone 1')),
+    additionalPhone2: importText(value('Additional phone 2')), residentialAddress: importText(value('Residential address')),
+    permanentAddress: importText(value('Permanent address')), payrollCompanyId: company?.id || null,
+    payrollCompany: companyName, payBasis: importText(value('Pay basis')) || 'Monthly salary',
+    payFrequency: importText(value('Payment frequency')) || 'Monthly', payrollCategory: importText(value('Payroll category')) || 'Site labourer',
+    compensationEffectiveFrom: importDate(value('Compensation effective from')) || undefined,
+    basicSalary: importMoney(value('Monthly EPF / ETF salary basis (LKR)')), weeklyRate: importMoney(value('Weekly rate (LKR)')),
+    dailyRate: importMoney(value('Daily rate (LKR)')), epfEligible: importBoolean(value('EPF eligible')),
+    etfEligible: importBoolean(value('ETF eligible')), contributionStartDate: importDate(value('Contributions start date')) || null,
+    overtimeRate: importMoney(value('Legacy/custom OT rate (LKR/h)')), status: importText(value('Status')) || 'Active',
+    notes: importText(value('Notes'))
+  };
+}
+
+function employeeImportErrors(row, context, batchCodes = new Set()) {
+  const candidate = { ...row, departmentId: row.departmentId || undefined, payrollCompanyId: Number(row.payrollCompanyId),
+    phone: row.phone || undefined, email: row.email || '', compensationEffectiveFrom: row.compensationEffectiveFrom || undefined,
+    customOfficeOtRate: null, customSiteOtRate: null, customTravelOtRate: null };
+  const errors = [];
+  const parsed = employeeSchema.safeParse(candidate);
+  if (!parsed.success) errors.push(...Object.entries(parsed.error.flatten().fieldErrors).flatMap(([field, messages]) => messages.map(message => `${field}: ${message}`)));
+  if (!row.joinDate) errors.push('Employment start date is required.');
+  if (row.department && !row.departmentId) errors.push(`Department “${row.department}” does not exist.`);
+  if (row.departmentId && !context.departments.some(item => Number(item.id) === Number(row.departmentId))) errors.push('Choose an existing department.');
+  if (!row.payrollCompanyId || !context.companies.some(item => Number(item.id) === Number(row.payrollCompanyId))) errors.push(`Salary company “${row.payrollCompany || ''}” does not exist.`);
+  if (context.employees.some(existing => existing.code.toLowerCase() === row.code.toLowerCase())) errors.push('Employee code already exists.');
+  if (row.email && context.employees.some(existing => String(existing.email || '').toLowerCase() === row.email.toLowerCase())) errors.push('Email already belongs to an employee.');
+  if (row.nicNumber && context.employees.some(existing => String(existing.nicNumber || '').toLowerCase() === row.nicNumber.toLowerCase())) errors.push('NIC number already belongs to an employee.');
+  if (batchCodes.has(row.code.toLowerCase())) errors.push('Employee code is repeated in this workbook.');
+  else if (row.code) batchCodes.add(row.code.toLowerCase());
+  const profileError = parsed.success ? payProfileError(parsed.data) : '';
+  if (profileError) errors.push(profileError);
+  return [...new Set(errors)];
+}
 
 const listQuery = `SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.status,e.join_date joinDate,
   e.birth_date birthDate,e.nic_number nicNumber,e.additional_phone_1 additionalPhone1,e.additional_phone_2 additionalPhone2,
@@ -160,6 +265,104 @@ router.post('/departments', auth, permit('hr.manage'), validate(z.object({
 /* Employees */
 router.get('/', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
   res.json(forViewer(req, await query(`${listQuery} ORDER BY e.code`)))));
+
+router.get('/import/template', auth, permit('hr.manage'), wrap(async (_req, res) => {
+  const context = await employeeImportContext();
+  const workbook = employeeImportWorkbook(context);
+  res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="GKUC-employee-import-template.xlsx"');
+  res.send(workbook);
+}));
+
+router.post('/import/preview', auth, permit('hr.manage'), wrap(async (req, res) => {
+  const { file, discard } = await readUpload(req);
+  try {
+    if (!/\.xlsx$/i.test(file.filename || '')) return res.status(422).json({ error: 'Upload an Excel .xlsx workbook.' });
+    const buffer = await readUploadedFile(file.path);
+    if (buffer.length > 10 * 1024 * 1024) return res.status(413).json({ error: 'This employee workbook is too large. Split it into smaller batches.' });
+    const workbook = readWorkbook(buffer);
+    const sheet = workbook.sheet('Employees');
+    if (!sheet) return res.status(422).json({ error: 'The Employees sheet is missing. Download and use the employee template.' });
+    const headerRow = sheet.rows.findIndex(row => row?.some(cell => importKey(cell) === 'employee code'));
+    if (headerRow < 0) return res.status(422).json({ error: 'The Employees sheet does not contain the expected headings.' });
+    /* The reader preserves Excel's one-based sparse columns. Array#map keeps the empty
+       slot at index zero, which is not a valid Map entry later, so materialise every slot. */
+    const headerCells = sheet.rows[headerRow] || [];
+    const headers = Array.from({ length: Math.max(headerCells.length, sheet.columnCount + 1) }, (_, column) => importKey(headerCells[column]));
+    const required = ['employee code', 'full name', 'employment start date'];
+    const missing = required.filter(label => !headers.includes(label));
+    if (missing.length) return res.status(422).json({ error: `The Employees sheet is missing: ${missing.join(', ')}.` });
+    const context = await employeeImportContext();
+    const batchCodes = new Set();
+    const rows = sheet.rows.slice(headerRow + 1).map((cells, index) => ({ cells, sheetRow: headerRow + index + 2 }))
+      .filter(({ cells }) => cells?.some(cell => importText(cell)))
+      .map(({ cells, sheetRow }) => {
+        const data = new Map(headers.map((header, column) => [header, cells?.[column] ?? '']));
+        const employee = normalizeEmployeeImportRow(data, context);
+        return { sheetRow, include: true, data: employee, errors: employeeImportErrors(employee, context, batchCodes) };
+      });
+    if (!rows.length) return res.status(422).json({ error: 'No employee rows were found in the Employees sheet.' });
+    if (rows.length > 500) return res.status(422).json({ error: 'Import no more than 500 employees at once. Split this workbook into smaller batches.' });
+    res.json({ filename: file.filename, rows, departments: context.departments, companies: context.companies,
+      counts: { total: rows.length, ready: rows.filter(row => !row.errors.length).length, blocked: rows.filter(row => row.errors.length).length } });
+  } finally { await discard().catch(error => console.error('Could not clean up employee import upload', error)); }
+}));
+
+router.post('/import/confirm', auth, permit('hr.manage'), wrap(async (req, res) => {
+  const requested = Array.isArray(req.body?.rows) ? req.body.rows.filter(row => row?.include !== false).map(row => row.data) : [];
+  if (!requested.length) return res.status(400).json({ error: 'Select at least one employee to import.' });
+  if (requested.length > 500) return res.status(422).json({ error: 'Import no more than 500 employees at once.' });
+  const context = await employeeImportContext();
+  const batchCodes = new Set();
+  const checked = requested.map((row, index) => {
+    const normalized = {
+      ...row, code: importText(row.code), name: importText(row.name), designation: importText(row.designation),
+      departmentId: row.departmentId ? Number(row.departmentId) : null, payrollCompanyId: Number(row.payrollCompanyId),
+      basicSalary: Number(row.basicSalary || 0), dailyRate: Number(row.dailyRate || 0), weeklyRate: Number(row.weeklyRate || 0),
+      overtimeRate: Number(row.overtimeRate || 0), epfEligible: row.epfEligible === true || row.epfEligible === 'true',
+      etfEligible: row.etfEligible === true || row.etfEligible === 'true'
+    };
+    const department = context.departments.find(item => Number(item.id) === Number(normalized.departmentId));
+    const company = context.companies.find(item => Number(item.id) === Number(normalized.payrollCompanyId));
+    normalized.department = department?.name || (normalized.departmentId ? 'Unknown' : '');
+    normalized.payrollCompany = company?.name || '';
+    return { index, data: normalized, errors: employeeImportErrors(normalized, context, batchCodes) };
+  });
+  const blocked = checked.filter(row => row.errors.length);
+  if (blocked.length) return res.status(422).json({ error: 'Correct the highlighted employee rows before importing.', rows: checked });
+  const leavePolicy = await leavePolicyFor(today());
+  const created = await transaction(async connection => {
+    const ids = [];
+    for (const { data: body } of checked) {
+      const parsed = employeeSchema.safeParse({ ...body, departmentId: body.departmentId || undefined,
+        phone: body.phone || undefined, email: body.email || '', compensationEffectiveFrom: body.compensationEffectiveFrom || undefined,
+        customOfficeOtRate: null, customSiteOtRate: null, customTravelOtRate: null });
+      if (!parsed.success || !body.joinDate) throw Object.assign(new Error(`Employee ${body.code || body.name} is no longer valid. Review the workbook again.`), { status: 422 });
+      const [result] = await connection.execute(`INSERT INTO employees
+        (code,name,department_id,designation,worker_type,phone,email,join_date,basic_salary,daily_rate,weekly_rate,overtime_rate,
+         pay_basis,pay_frequency,payroll_category,payroll_company_id,compensation_effective_from,epf_eligible,etf_eligible,
+         custom_office_ot_rate,custom_site_ot_rate,custom_travel_ot_rate,status,notes,birth_date,nic_number,additional_phone_1,
+         additional_phone_2,residential_address,permanent_address,contribution_start_date,employment_type,annual_leave_entitlement,casual_leave_entitlement)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [body.code, body.name, body.departmentId || null, body.designation || '', body.workerType, body.phone || null, body.email || null,
+        body.joinDate, body.basicSalary, body.dailyRate, body.weeklyRate, body.overtimeRate, body.payBasis, body.payFrequency,
+        body.payrollCategory, body.payrollCompanyId, body.compensationEffectiveFrom || body.joinDate, body.epfEligible, body.etfEligible,
+        null, null, null, body.status, body.notes || null, body.birthDate || null, body.nicNumber || null, body.additionalPhone1 || null,
+        body.additionalPhone2 || null, body.residentialAddress || null, body.permanentAddress || null,
+        body.contributionStartDate || body.joinDate, body.employmentType, leavePolicy?.annual_default ?? 14, leavePolicy?.casual_default ?? 7]);
+      ids.push(result.insertId);
+      await audit(connection, req.user.id, 'CREATE', 'employee', result.insertId, null,
+        { ...body, source: 'Employee Excel import' }, req.ip);
+    }
+    await audit(connection, req.user.id, 'IMPORT', 'employees', ids.join(','), null,
+      { count: ids.length, codes: checked.map(row => row.data.code) }, req.ip);
+    return ids;
+  }).catch(error => {
+    if (error.code === 'ER_DUP_ENTRY') throw Object.assign(new Error('An employee code, email or NIC was added by someone else. Upload the workbook again to refresh the review.'), { status: 409 });
+    throw error;
+  });
+  res.status(201).json({ created: created.length, ids: created });
+}));
 
 /** Daily deployment plan, independent of scanner attendance and project-team membership. */
 router.get('/work-locations', auth, permit('hr.view','hr.manage','hr.attendance','site.attendance','resources.view','resources.reassign','projects.schedule'), wrap(async (req, res) => {
