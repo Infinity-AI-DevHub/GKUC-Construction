@@ -60,17 +60,17 @@ const resolveAssignees = async body => {
 /* Named columns rather than t.*, so the shape matches the camelCase every other endpoint returns. */
 const TASK_COLUMNS = `t.id,t.title,t.project_id projectId,t.assignee_employee_id assigneeEmployeeId,COALESCE(e.name,t.assignee) assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project`;
 
-const withProject = async id => withTaskAssignees(await getOne(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN employees e ON e.id=t.assignee_employee_id WHERE t.id=?`, [id]));
+const withProject = async id => withTaskAssignees(await getOne(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN employees e ON e.id=t.assignee_employee_id WHERE t.id=? AND p.active=1`, [id]));
 
 router.get('/', auth, permit('site.tasks','projects.view'), wrap(async (req, res) => {
-  const filters = [];
+  const filters = ['p.active=1'];
   const params = [];
   if (req.query.projectId) { filters.push('t.project_id=?'); params.push(req.query.projectId); }
   if (req.query.status) { filters.push('t.status=?'); params.push(req.query.status); }
   if (req.query.assignee) { filters.push(`(t.assignee=? OR EXISTS (SELECT 1 FROM task_assignees ta
     JOIN employees member ON member.id=ta.employee_id WHERE ta.task_id=t.id AND member.name=?))`);
     params.push(req.query.assignee, req.query.assignee); }
-  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  const where = `WHERE ${filters.join(' AND ')}`;
   res.json(await withTaskAssignees(await query(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN employees e ON e.id=t.assignee_employee_id ${where} ORDER BY t.id`, params)));
 }));
 
@@ -98,6 +98,8 @@ router.get('/:id', auth, permit('site.tasks','projects.view'), wrap(async (req, 
 
 router.post('/', auth, permit('site.tasks'), validate(taskSchema), wrap(async (req, res) => {
   const body = req.body;
+  if (!await getOne('SELECT id FROM projects WHERE id=? AND active=1', [body.projectId]))
+    return res.status(404).json({ error: 'Active project not found.' });
   if (body.reminderAt || body.reminderFrequency || body.reminderUserIds?.length) {
     if (!body.reminderAt || !body.reminderFrequency || !body.reminderUserIds?.length)
       return res.status(400).json({error:'Choose the reminder date and time, frequency and at least one recipient.'});
@@ -133,7 +135,8 @@ router.post('/', auth, permit('site.tasks'), validate(taskSchema), wrap(async (r
 }));
 
 router.patch('/:id', auth, permit('site.tasks'), validate(taskPatch), wrap(async (req, res) => {
-  const before = await getOne('SELECT * FROM tasks WHERE id=?', [req.params.id]);
+  const before = await getOne(`SELECT t.* FROM tasks t JOIN projects p ON p.id=t.project_id
+    WHERE t.id=? AND p.active=1`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Task not found' });
   if (req.body.status === 'Approved' && !can(req, 'projects.manage')) {
     return res.status(403).json({ error: 'Only management can approve completed work' });
@@ -179,7 +182,8 @@ router.patch('/:id', auth, permit('site.tasks'), validate(taskPatch), wrap(async
 }));
 
 router.post('/:id/comments', auth, permit('site.tasks','projects.view'), validate(z.object({ comment: z.string().min(1).max(2000) })), wrap(async (req, res) => {
-  const task = await getOne('SELECT id FROM tasks WHERE id=?', [req.params.id]);
+  const task = await getOne(`SELECT t.id FROM tasks t JOIN projects p ON p.id=t.project_id
+    WHERE t.id=? AND p.active=1`, [req.params.id]);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   const result = await query('INSERT INTO task_comments (task_id,user_id,comment) VALUES (?,?,?)', [task.id, req.user.id, req.body.comment]);
   res.status(201).json(await getOne(`SELECT c.id,c.comment,c.created_at createdAt,u.name author

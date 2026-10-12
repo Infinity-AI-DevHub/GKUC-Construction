@@ -12,7 +12,7 @@ const select = `SELECT r.id,r.project_id projectId,p.name site,r.supervisor,DATE
   FROM daily_reports r JOIN projects p ON p.id=r.project_id`;
 
 router.get('/', auth, permit('site.reports','projects.view'), wrap(async (req, res) => {
-  const where = req.query.projectId ? 'WHERE r.project_id=?' : '';
+  const where = req.query.projectId ? 'WHERE p.active=1 AND r.project_id=?' : 'WHERE p.active=1';
   const params = req.query.projectId ? [req.query.projectId] : [];
   res.json(await query(`${select} ${where} ORDER BY r.report_date DESC,r.id DESC LIMIT 120`, params));
 }));
@@ -34,7 +34,7 @@ router.get('/site-today/:projectId', auth, permit('site.reports'), wrap(async(re
 }));
 
 router.get('/:id', auth, permit('site.reports','projects.view'), wrap(async (req, res) => {
-  const report = await getOne(`${select} WHERE r.id=?`, [req.params.id]);
+  const report = await getOne(`${select} WHERE r.id=? AND p.active=1`, [req.params.id]);
   if (!report) return res.status(404).json({ error: 'Report not found' });
   const [materials, equipment, photos, attendance] = await Promise.all([
     query(`SELECT rm.id,rm.quantity,m.name material,m.unit FROM report_materials rm JOIN materials m ON m.id=rm.material_id WHERE rm.report_id=?`, [report.id]),
@@ -63,6 +63,8 @@ router.post('/', auth, permit('site.reports'), validate(z.object({
   photos: z.array(z.object({ caption: z.string().max(200).optional(), fileRef: z.string().min(2).max(400) })).default([])
 })), wrap(async (req, res) => {
   const body = req.body;
+  if (!await getOne('SELECT id FROM projects WHERE id=? AND active=1', [body.projectId]))
+    return res.status(404).json({ error: 'Active project not found.' });
   const date = body.reportDate || today();
   try {
     const id = await transaction(async connection => {

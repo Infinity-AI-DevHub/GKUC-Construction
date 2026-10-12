@@ -48,7 +48,7 @@ export const PERMISSIONS = [
   { key:'admin.documents',department:'Administration',label:'Manage invoice and quotation document settings' },
   /* Construction & Coordination */
   { key: 'projects.view', department: 'Construction & Coordination', label: 'View projects and sites' },
-  { key: 'projects.manage', department: 'Construction & Coordination', label: 'Create and edit projects' },
+  { key: 'projects.manage', department: 'Construction & Coordination', label: 'Create, edit, delete and recover projects' },
   /* Separate from projects.manage on purpose: the site record is evidence of how a plot
      looked before work started and at every stage after, so who may add to it and who may
      withdraw a photo from it is the MD's decision, not a side effect of managing projects. */

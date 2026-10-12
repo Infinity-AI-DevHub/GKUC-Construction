@@ -38,9 +38,10 @@ router.get('/', auth, wrap(async (req, res) => {
       JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id
       LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.active=1 ORDER BY p.id`)
       : query('SELECT id,name,company_id companyId FROM projects WHERE active=1 ORDER BY name')),
-    gated(['site.tasks','projects.view'], () => query(`SELECT t.id,t.title,t.project_id projectId,t.assignee_employee_id assigneeEmployeeId,COALESCE(e.name,t.assignee) assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project,p.company_id companyId FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN employees e ON e.id=t.assignee_employee_id ORDER BY t.id`).then(withTaskAssignees)),
+    gated(['site.tasks','projects.view'], () => query(`SELECT t.id,t.title,t.project_id projectId,t.assignee_employee_id assigneeEmployeeId,COALESCE(e.name,t.assignee) assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project,p.company_id companyId FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN employees e ON e.id=t.assignee_employee_id WHERE p.active=1 ORDER BY t.id`).then(withTaskAssignees)),
     gated(['hr.manage','hr.attendance'], () => query(`SELECT a.id,a.employee_name name,a.role,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,a.state,a.work_date workDate
-      FROM attendance a LEFT JOIN projects p ON p.id=a.project_id WHERE a.work_date=CURDATE() ORDER BY a.id`)),
+      FROM attendance a LEFT JOIN projects p ON p.id=a.project_id WHERE a.work_date=CURDATE()
+      AND (a.project_id IS NULL OR p.active=1) ORDER BY a.id`)),
     gated(['store.view','store.manage','site.reports'], () => can(req,'store.view')||can(req,'store.manage')
       ? query('SELECT * FROM materials WHERE active=1 ORDER BY id')
       : query('SELECT id,name,unit,stock,minimum FROM materials WHERE active=1 ORDER BY name')),
@@ -50,7 +51,7 @@ router.get('/', auth, wrap(async (req, res) => {
       LEFT JOIN vehicle_documents d ON d.vehicle_id=f.id AND d.doc_type=f.renewal_type ORDER BY f.id`)),
     gated(['site.reports','projects.view'], () => query(`SELECT r.id,r.project_id projectId,p.company_id companyId,p.name site,r.supervisor,DATE_FORMAT(r.report_date,'%d %b %Y') date,
       r.workforce,r.work_completed work,r.issue,r.weather,r.delay_hours delayHours
-      FROM daily_reports r JOIN projects p ON p.id=r.project_id ORDER BY r.report_date DESC,r.id DESC LIMIT 60`)),
+      FROM daily_reports r JOIN projects p ON p.id=r.project_id WHERE p.active=1 ORDER BY r.report_date DESC,r.id DESC LIMIT 60`)),
     /*
      * The roster.
      *
@@ -85,11 +86,11 @@ router.get('/', auth, wrap(async (req, res) => {
     gated(['store.view','store.manage'], () => query(`SELECT r.id,r.reference,r.status,r.needed_by neededBy,r.notes,p.name project,p.company_id companyId,u.name requestedBy,
       (SELECT COUNT(*) FROM purchase_request_items i WHERE i.request_id=r.id) lineCount,
       (SELECT COALESCE(SUM(i.quantity*i.estimated_rate),0) FROM purchase_request_items i WHERE i.request_id=r.id) estimate
-      FROM purchase_requests r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.requested_by ORDER BY r.id DESC`)),
+      FROM purchase_requests r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.requested_by WHERE p.active=1 ORDER BY r.id DESC`)),
     gated(['qs.view','qs.boq'], () => query(`SELECT b.id,b.reference,b.title,b.status,b.total,b.version,p.name project,p.company_id companyId,b.project_id projectId,u.name preparedBy
-      FROM boqs b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=b.prepared_by ORDER BY b.id DESC`)),
+      FROM boqs b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=b.prepared_by WHERE p.active=1 ORDER BY b.id DESC`)),
     gated(['projects.view'], () => query(`SELECT m.id,m.title,m.due_date dueDate,m.status,m.project_id projectId,p.company_id companyId,p.name project
-      FROM project_milestones m JOIN projects p ON p.id=m.project_id ORDER BY m.due_date`)),
+      FROM project_milestones m JOIN projects p ON p.id=m.project_id WHERE p.active=1 ORDER BY m.due_date`)),
     (async () => {
       /* Addressed to this person, or to nobody in particular and to a permission they
          hold. See the note in admin.js: `user_id IS NULL OR …` showed everyone everything. */
