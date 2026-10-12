@@ -386,6 +386,7 @@ main { width:100% }
 body { background: var(--brand-ice) }
 .app { background:var(--brand-ice) }
 .page-heading,.page-heading h1 { color:var(--brand-navy) }
+.page-heading-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}.page-heading-actions button{display:inline-flex;align-items:center;justify-content:center;gap:7px}
 .page-heading p,.page-heading .eyebrow { color:#63758a }
 .reference-welcome,.reference-welcome h1,.reference-welcome .welcome-counters b { color:var(--brand-navy) }
 .reference-welcome p,.reference-welcome .welcome-counters span { color:#63758a }
@@ -408,6 +409,8 @@ nav button.active svg { color:var(--brand-red) }
 }
 .project-card,.fleet-card,.report-row { transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease }
 .project-card:hover,.fleet-card:hover,.report-row:hover { transform:translateY(-2px);box-shadow:0 18px 42px rgba(7,29,59,.11);border-color:#c6d5e5 }
+.deleted-projects-panel{display:grid;gap:16px}.deleted-projects-panel>header{padding:22px 24px;background:#fff;border:1px solid #d7e2eb;border-radius:16px}.deleted-projects-panel h2{margin:4px 0 6px;color:#102f4c}.deleted-projects-panel p{margin:0;max-width:760px;color:#64798a;line-height:1.55}.deleted-project-list{display:grid;gap:12px}.deleted-project-list>article{display:grid;grid-template-columns:minmax(230px,1fr) minmax(420px,1.6fr) auto;align-items:center;gap:22px;padding:20px 22px;background:#fff;border:1px solid #d7e2eb;border-radius:15px;box-shadow:0 9px 28px rgba(10,38,63,.055)}.deleted-project-list h3{margin:8px 0 3px;color:#14334f}.deleted-project-list p{font-size:12px}.deleted-project-counts{display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:9px}.deleted-project-counts span{padding:9px 10px;border-radius:9px;background:#f4f7f9;color:#6a7d8b;font-size:10px}.deleted-project-counts strong{display:block;color:#173650;font-size:14px;margin-bottom:2px}.deleted-project-list button{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}.project-hero-actions{position:absolute;right:22px;top:22px;z-index:4;display:flex;gap:8px}.project-hero-actions .project-edit-button,.project-hero-actions .project-delete-button{position:static}.project-delete-button{display:inline-flex;align-items:center;gap:6px;color:#a51f38!important;border-color:#d9aeba!important;background:#fff!important}
+@media(max-width:900px){.deleted-project-list>article{grid-template-columns:1fr}.deleted-project-counts{grid-template-columns:repeat(2,1fr)}.project-hero-actions{left:22px;right:auto;top:72px;flex-wrap:wrap}}
 .table-head { background:#f3f6fa;color:#52647a }
 .modal-backdrop { background:rgba(3,15,31,.72) }
 .modal { border-radius:14px;overflow:hidden }

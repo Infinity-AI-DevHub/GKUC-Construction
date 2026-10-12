@@ -1749,6 +1749,41 @@ test('project details can be edited and an uncommitted project can change compan
   assert.equal(Number(detail.body.progress), 35);
 });
 
+test('project deletion is reversible and hides its linked work without deleting it', async () => {
+  const owner = await login();
+  const qs = await login('qs@gkuc.lk');
+  const data = (await call(owner, 'GET', '/bootstrap')).body.data;
+  const manager = data.employees.find(employee => employee.status === 'Active');
+  const client = (await call(owner, 'POST', '/clients', {
+    type: 'Organisation', name: `Recoverable Client ${Date.now()}`
+  })).body;
+  const created = await call(owner, 'POST', '/projects', {
+    companyId: 1, name: `Recoverable Project ${Date.now()}`, clientId: client.id,
+    managerEmployeeId: manager.id, site: 'Soft-delete test site', stage: 'Mid-way'
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const task = await call(owner, 'POST', '/tasks', {
+    projectId: created.body.id, title: 'Retained project task', assigneeEmployeeIds: [manager.id],
+    due: today(), dueDate: today(), priority: 'Medium', status: 'Not started', notes: 'Must survive recovery'
+  });
+  assert.equal(task.status, 201, JSON.stringify(task.body));
+
+  assert.equal((await call(qs, 'DELETE', `/projects/${created.body.id}`)).status, 403);
+  assert.equal((await call(owner, 'DELETE', `/projects/${created.body.id}`)).status, 204);
+  assert.equal((await call(owner, 'GET', `/projects/${created.body.id}`)).status, 404);
+  assert.equal((await call(owner, 'GET', '/projects')).body.some(row => row.id === created.body.id), false);
+  assert.equal((await call(owner, 'GET', '/tasks')).body.some(row => row.id === task.body.id), false);
+  const deleted = await call(owner, 'GET', '/projects/deleted?companyId=1');
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  assert.equal(deleted.body.find(row => row.id === created.body.id)?.taskCount, 1);
+  assert.equal((await call(qs, 'GET', '/projects/deleted')).status, 403);
+
+  assert.equal((await call(owner, 'POST', `/projects/${created.body.id}/restore`, {})).status, 200);
+  assert.equal((await call(owner, 'GET', `/projects/${created.body.id}`)).status, 200);
+  assert.equal((await call(owner, 'GET', '/tasks')).body.some(row => row.id === task.body.id), true);
+  assert.equal((await call(owner, 'POST', `/projects/${created.body.id}/restore`, {})).status, 409);
+});
+
 test('not-started projects notify every selected user on the configured schedule', async () => {
   const owner = await login();
   const qs = await login('qs@gkuc.lk');

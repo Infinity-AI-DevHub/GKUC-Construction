@@ -68,6 +68,39 @@ router.get('/', auth, permit('projects.view'), wrap(async (req, res) => {
     WHERE p.active=1 ${companyId ? 'AND p.company_id=?' : ''} ORDER BY p.id`, companyId ? [companyId] : []));
 }));
 
+/*
+ * A deleted project is one reversible tombstone. Its commercial, finance, site and
+ * document rows stay linked to it in the database, so restoring the project restores
+ * the complete record rather than an incomplete selection of child rows.
+ */
+router.get('/deleted', auth, permit('projects.manage'), wrap(async (req, res) => {
+  const companyId = Number(req.query.companyId || 0);
+  res.json(await query(`SELECT p.id,p.name,p.site,p.stage,p.client_id clientId,
+    COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,
+    p.created_at createdAt,
+    (SELECT COUNT(*) FROM tasks t WHERE t.project_id=p.id) taskCount,
+    (SELECT COUNT(*) FROM boqs b WHERE b.project_id=p.id) boqCount,
+    (SELECT COUNT(*) FROM quotations_client q WHERE q.project_id=p.id) quotationCount,
+    (SELECT COUNT(*) FROM client_invoices i WHERE i.project_id=p.id) invoiceCount,
+    ((SELECT COUNT(*) FROM expenses e WHERE e.project_id=p.id)
+      +(SELECT COUNT(*) FROM incomes i WHERE i.project_id=p.id)) financeCount,
+    (SELECT COUNT(*) FROM daily_reports r WHERE r.project_id=p.id) reportCount
+    FROM projects p JOIN companies c ON c.id=p.company_id
+    LEFT JOIN clients d ON d.id=p.client_id
+    WHERE p.active=0 ${companyId ? 'AND p.company_id=?' : ''}
+    ORDER BY p.id DESC`, companyId ? [companyId] : []));
+}));
+
+router.post('/:id/restore', auth, permit('projects.manage'), wrap(async (req, res) => {
+  const before = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
+  if (!before) return res.status(404).json({ error: 'Deleted project not found' });
+  if (before.active) return res.status(409).json({ error: 'This project is already active.' });
+  await query('UPDATE projects SET active=1 WHERE id=?', [before.id]);
+  const after = await getOne('SELECT * FROM projects WHERE id=?', [before.id]);
+  await audit(pool, req.user.id, 'RESTORE', 'project', before.id, before, after, req.ip);
+  res.json({ id: before.id, restored: true });
+}));
+
 router.get('/reminder-users', auth, permit('projects.manage'), wrap(async (_req, res) => {
   res.json(await query(`SELECT id,name,role,email FROM users WHERE active=1 ORDER BY name`));
 }));
@@ -105,7 +138,7 @@ router.post('/:id/authorise-work', auth, permit('projects.manage'), validate(z.o
 
 router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
   const project = await getOne(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode
-    FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.id=?`, [req.params.id]);
+    FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.id=? AND p.active=1`, [req.params.id]);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   const award = await projectAwardState(project.id);
   const [billingPlans, paymentTotals, costSheetTotals, workAuthorisation] = await Promise.all([
@@ -260,7 +293,7 @@ router.post('/', auth, permit('projects.manage'), validate(projectSchema), wrap(
 }));
 
 router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wrap(async (req, res) => {
-  const before = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
+  const before = await getOne('SELECT * FROM projects WHERE id=? AND active=1', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Project not found' });
   if (req.body.companyId && Number(req.body.companyId) !== Number(before.company_id)) {
     // Moving a project with commercial records would leave company-scoped ledgers and documents inconsistent.
@@ -314,8 +347,9 @@ router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wr
 router.delete('/:id', auth, permit('projects.manage'), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM projects WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Project not found' });
+  if (!before.active) return res.status(409).json({ error: 'This project is already in Deleted projects.' });
   await query('UPDATE projects SET active=0 WHERE id=?', [req.params.id]);
-  await audit(pool, req.user.id, 'ARCHIVE', 'project', before.id, before, null, req.ip);
+  await audit(pool, req.user.id, 'SOFT_DELETE', 'project', before.id, before, { ...before, active: 0 }, req.ip);
   res.status(204).end();
 }));
 
@@ -326,6 +360,8 @@ router.post('/:id/milestones', auth, permit('projects.manage'), validate(z.objec
   status: z.enum(['Pending', 'In progress', 'Completed', 'Delayed']).default('Pending'),
   notes: z.string().max(600).optional()
 })), wrap(async (req, res) => {
+  if (!await getOne('SELECT id FROM projects WHERE id=? AND active=1', [req.params.id]))
+    return res.status(404).json({ error: 'Active project not found.' });
   const body = req.body;
   const result = await query('INSERT INTO project_milestones (project_id,title,due_date,status,notes) VALUES (?,?,?,?,?)',
     [req.params.id, body.title, body.dueDate, body.status, body.notes || null]);
@@ -352,7 +388,7 @@ router.patch('/milestones/:id', auth, permit('projects.manage'), validate(z.obje
  */
 router.get('/:id/completion', auth, permit('projects.view'), wrap(async (req, res) => {
   const project = await getOne(`SELECT p.*,c.name company FROM projects p
-    JOIN companies c ON c.id=p.company_id WHERE p.id=?`, [req.params.id]);
+    JOIN companies c ON c.id=p.company_id WHERE p.id=? AND p.active=1`, [req.params.id]);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   const [cost, income, byCategory, tasks, milestones, labour, materials, equipment, reports, boq] = await Promise.all([
     getOne(`SELECT ${spendSql('p')} total FROM projects p WHERE p.id=?`, [project.id]),

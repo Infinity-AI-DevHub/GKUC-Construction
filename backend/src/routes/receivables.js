@@ -37,7 +37,8 @@ router.get('/receivables/accepted-quotations', auth, permit('finance.view', 'fin
       q.vat_percent vatPercent,q.total,b.id billingPlanId
       FROM quotations_client q LEFT JOIN projects p ON p.id=q.project_id
       LEFT JOIN quotation_billing_plans b ON b.quotation_id=q.id
-      WHERE q.status='Accepted' ${companyId ? 'AND q.company_id=?' : ''} ORDER BY q.id DESC`, companyId ? [companyId] : []));
+      WHERE q.status='Accepted' AND (q.project_id IS NULL OR p.active=1)
+      ${companyId ? 'AND q.company_id=?' : ''} ORDER BY q.id DESC`, companyId ? [companyId] : []));
   } catch (error) { next(error); }
 });
 
@@ -118,7 +119,7 @@ router.get('/receivables/invoices', auth, permit('finance.view', 'finance.invoic
           FROM client_invoices i
           LEFT JOIN projects p ON p.id=i.project_id
           JOIN users u ON u.id=i.created_by
-         ${companyId ? 'WHERE i.company_id=?' : ''}
+         WHERE (i.project_id IS NULL OR p.active=1) ${companyId ? 'AND i.company_id=?' : ''}
          ORDER BY i.id DESC LIMIT 300`, companyId ? [companyId] : []));
     } catch (error) { next(error); }
   });
@@ -142,6 +143,7 @@ router.get('/receivables/ageing', auth, permit('finance.view', 'finance.invoice'
                COUNT(*) invoices
           FROM client_invoices i LEFT JOIN projects p ON p.id=i.project_id
          WHERE i.status IN ('Issued','Part paid') AND i.net_payable > i.paid_amount
+           AND (i.project_id IS NULL OR p.active=1)
            ${companyId ? 'AND i.company_id=?' : ''}
          GROUP BY i.client, COALESCE(p.name,'No project')
          ORDER BY outstanding DESC`, companyId ? [companyId] : []);

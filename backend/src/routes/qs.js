@@ -94,7 +94,8 @@ const quoteSelect = `SELECT q.id,q.reference,q.title,q.client_name client,q.clie
 
 router.get('/quotations', auth, permit('qs.view'), wrap(async (req, res) => {
   const companyId=Number(req.query.companyId);
-  res.json(await query(`${quoteSelect} ${companyId>0?'WHERE q.company_id=?':''} ORDER BY q.id DESC`,companyId>0?[companyId]:[]));
+  res.json(await query(`${quoteSelect} WHERE (q.project_id IS NULL OR p.active=1)
+    ${companyId>0?'AND q.company_id=?':''} ORDER BY q.id DESC`,companyId>0?[companyId]:[]));
 }));
 
 router.get('/quotation-identity', auth, permit('qs.view', 'qs.quotation'), wrap(async (req, res) => {
@@ -108,7 +109,7 @@ router.get('/quotation-identity', auth, permit('qs.view', 'qs.quotation'), wrap(
 }));
 
 router.get('/quotations/:id', auth, permit('qs.view'), wrap(async (req, res) => {
-  const quotation = await getOne(`${quoteSelect} WHERE q.id=?`, [req.params.id]);
+  const quotation = await getOne(`${quoteSelect} WHERE q.id=? AND (q.project_id IS NULL OR p.active=1)`, [req.params.id]);
   if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
   const items = await query('SELECT id,method_id methodId,category,area,description,unit,quantity,rate,amount,method_statement methodStatement,material_id materialId,source_subquote_id sourceSubquoteId FROM quotation_items WHERE quotation_id=? ORDER BY id',
     [quotation.id]);
@@ -135,7 +136,7 @@ router.get('/quotation-preparers', auth, permit('qs.view', 'qs.quotation'), wrap
  * figure quoted and the figure the project is measured against cannot drift apart.
  */
 router.get('/quotations/:id/document', auth, permit('qs.view'), wrap(async (req, res) => {
-  const quotation = await getOne(`${quoteSelect} WHERE q.id=?`, [req.params.id]);
+  const quotation = await getOne(`${quoteSelect} WHERE q.id=? AND (q.project_id IS NULL OR p.active=1)`, [req.params.id]);
   if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
 
   const [items, context, client, bankAccount] = await Promise.all([

@@ -99,7 +99,7 @@ router.patch('/categories/:id', auth, permit('qs.boq'), validate(z.object({value
 
 router.get('/', auth, permit('qs.view','qs.boq'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId);
-  res.json(await query(`${select} ${companyId > 0 ? 'WHERE p.company_id=?' : ''} ORDER BY b.id DESC`, companyId > 0 ? [companyId] : []));
+  res.json(await query(`${select} WHERE p.active=1 ${companyId > 0 ? 'AND p.company_id=?' : ''} ORDER BY b.id DESC`, companyId > 0 ? [companyId] : []));
 }));
 
 /** Live site cost control: approved estimate, daily actuals, forecasts and exceptions. */

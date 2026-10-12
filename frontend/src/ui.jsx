@@ -46,13 +46,18 @@ export function PanelTitle({ title, action, onClick }) {
   return <div className="panel-title"><h2>{title}</h2>{onClick && <button onClick={onClick}>{action}<ChevronRight size={15} /></button>}</div>;
 }
 
-export function Page({ title, subtitle, action, children, onAction }) {
+export function Page({ title, subtitle, action, children, onAction, secondaryAction, onSecondaryAction, secondaryIcon: SecondaryIcon }) {
   const sections = React.Children.toArray(children);
   const navigation = title !== 'Tasks' && sections.find(child => React.isValidElement(child) && child.type === Tabs);
   return <>
     <div className="page-heading">
       <div><h1>{title}</h1><p>{subtitle}</p><RecordScopeBadge /></div>
-      {action && onAction && <button className="primary" onClick={onAction}><Plus size={17} />{action}</button>}
+      {(secondaryAction || action) && <div className="page-heading-actions">
+        {secondaryAction && onSecondaryAction && <button className="secondary" onClick={onSecondaryAction}>
+          {SecondaryIcon && <SecondaryIcon size={17} />}{secondaryAction}
+        </button>}
+        {action && onAction && <button className="primary" onClick={onAction}><Plus size={17} />{action}</button>}
+      </div>}
     </div>
     {navigation ? <div className="module-layout">
       <aside className="module-navigation" aria-label={`${title} sections`}>

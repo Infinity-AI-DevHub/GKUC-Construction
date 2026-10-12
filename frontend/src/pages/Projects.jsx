@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { BriefcaseBusiness, Building2, Check, FileText } from 'lucide-react';
-import { api, money, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { Archive, BriefcaseBusiness, Building2, Check, FileText, RotateCcw } from 'lucide-react';
+import { api, del, money, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, WorkflowForm, Page, Progress, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import ProjectDetail from './ProjectDetail.jsx';
 import ClientDirectory from './ClientDirectory.jsx';
@@ -17,6 +17,14 @@ export default function Projects({ data, reload, can, companyId, company, compan
   const [selectedTab, setTab] = useState(window.location.pathname.startsWith('/projects/clients/') ? 'Clients' : TABS[0]);
   const tab=tabs.includes(selectedTab)?selectedTab:tabs[0];
   const [open, setOpen] = useState('');
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [deleted, setDeleted] = useState([]);
+  const [deletedError, setDeletedError] = useState('');
+  const loadDeleted = async () => {
+    try { setDeleted(await api(`/projects/deleted?companyId=${companyId}`)); setDeletedError(''); }
+    catch (failure) { setDeletedError(failure.message); }
+  };
+  useEffect(() => { if (showDeleted) loadDeleted(); }, [showDeleted, companyId]);
 
   const projectFromPath = () => Number(window.location.pathname.match(/^\/projects\/(\d+)\/?$/)?.[1]) || null;
   const [detailId, setDetailId] = useState(projectFromPath);
@@ -41,7 +49,14 @@ export default function Projects({ data, reload, can, companyId, company, compan
   if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} companies={companies} setCompanyId={setCompanyId} reload={reload} close={closeProject} navigate={navigate} />;
 
   return <RecordScopeProvider scope={tab === 'Clients' ? { kind: 'shared' } : { kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Projects" subtitle={`Monitor progress, cost, and site health for ${company?.name || 'the selected company'}.`}
-    action={can.projects ? actionFor : null} onAction={() => setOpen(tab)}>
+    action={!showDeleted && can.projects ? actionFor : null} onAction={() => setOpen(tab)}
+    secondaryAction={can.projects ? (showDeleted ? 'Back to active projects' : 'Deleted projects') : null}
+    secondaryIcon={showDeleted ? RotateCcw : Archive} onSecondaryAction={() => setShowDeleted(value => !value)}>
+    {showDeleted ? <DeletedProjects rows={deleted} error={deletedError} onRecover={async project => {
+      if (!window.confirm(`Recover “${project.name}” and all of its linked records?`)) return;
+      await post(`/projects/${project.id}/restore`);
+      await Promise.all([loadDeleted(), reload()]);
+    }} /> : <>
     <Tabs tabs={tabs} active={tab} onChange={next => {
       if (next !== 'Clients' && window.location.pathname.startsWith('/projects/clients/'))
         window.history.pushState({}, '', '/projects');
@@ -62,7 +77,29 @@ export default function Projects({ data, reload, can, companyId, company, compan
     {open === 'Milestones' && <MilestoneForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'BOQ & estimates' && <BoqForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Inquiries' && <InquiryForm companyId={companyId} close={() => setOpen('')} reload={reload} />}
+    </>}
   </Page></RecordScopeProvider>;
+}
+
+function DeletedProjects({ rows, error, onRecover }) {
+  return <section className="deleted-projects-panel">
+    <header><div><span className="section-kicker">Reversible deletion</span><h2>Deleted projects</h2>
+      <p>Linked finance, quotations, invoices, BOQs, tasks, reports and files are retained. Recovering a project restores the complete record.</p></div></header>
+    {error && <p className="form-error">{error}</p>}
+    {!error && !rows.length && <div className="empty-state"><Archive size={24} /><strong>No deleted projects</strong><span>Projects deleted from this company will appear here.</span></div>}
+    <div className="deleted-project-list">{rows.map(project => <article key={project.id}>
+      <div><Badge tone="watch">Deleted</Badge><h3>{project.name}</h3><p>{project.client} · {project.site}</p></div>
+      <div className="deleted-project-counts">
+        <span><strong>{project.taskCount}</strong> tasks</span>
+        <span><strong>{project.boqCount}</strong> BOQs</span>
+        <span><strong>{project.quotationCount}</strong> quotations</span>
+        <span><strong>{project.invoiceCount}</strong> invoices</span>
+        <span><strong>{project.financeCount}</strong> finance entries</span>
+        <span><strong>{project.reportCount}</strong> reports</span>
+      </div>
+      <button className="secondary" onClick={() => onRecover(project)}><RotateCcw size={16} />Recover project</button>
+    </article>)}</div>
+  </section>;
 }
 
 function ProjectCards({ data, onOpen, onOpenClient }) {
