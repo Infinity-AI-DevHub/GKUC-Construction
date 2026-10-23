@@ -176,7 +176,7 @@ export function parseBiometricExport(text) {
 /**
  * The entry point for an uploaded export, whichever shape it arrives in.
  *
- * GKUC's own terminal writes an .xlsx workbook laid out as a calendar; other devices write
+ * GKUC's own terminal writes .xls or .xlsx workbooks laid out as a calendar; other devices write
  * delimited text. The file decides which reader is used, so neither the person uploading
  * nor the rest of the system has to know or care which device produced it.
  */

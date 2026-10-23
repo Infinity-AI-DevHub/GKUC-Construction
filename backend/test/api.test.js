@@ -26,6 +26,34 @@ const shift = days => {
   return date.toISOString().slice(0, 10);
 };
 
+test('biometric preview accepts legacy Excel uploads and reports corrupt files cleanly', async () => {
+  const { default: XLSX } = await import('xlsx');
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+    ['Attendance Logs'], ['Date', null, '2026-10-01 ~ 2026-10-01'],
+    ['ID', null, 'LEGACY-TEST-101', null, 'Name', null, 'Legacy test employee'],
+    [1], ['Thu'], ['07:30\n17:00']
+  ]), 'Attendance Logs');
+  const token = await login();
+  const upload = async buffer => {
+    const form = new FormData();
+    form.append('file', new Blob([buffer], { type: 'application/vnd.ms-excel' }), 'All Report.xls');
+    return fetch(`${base}/biometric/preview`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form
+    });
+  };
+  const response = await upload(XLSX.write(workbook, { bookType: 'biff8', type: 'buffer' }));
+  assert.equal(response.status, 200);
+  const preview = await response.json();
+  assert.equal(preview.rows.length, 1);
+  assert.equal(preview.rows[0].checkIn, '07:30:00');
+  assert.equal(preview.rows[0].checkOut, '17:00:00');
+  assert.equal(preview.summary.unmatched, 1);
+  const invalid = await upload(Buffer.from('not an Excel workbook'));
+  assert.equal(invalid.status, 422);
+  assert.match((await invalid.json()).error, /Excel file could not be read/);
+});
+
 before(async () => {
   testUploadDir = await mkdtemp(path.join(os.tmpdir(), 'gkuc-api-uploads-'));
   admin = await mysql.createConnection({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: process.env.DB_USER, password: process.env.DB_PASSWORD });

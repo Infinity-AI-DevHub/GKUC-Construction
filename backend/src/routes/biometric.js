@@ -52,8 +52,12 @@ router.post('/preview', auth, permit('hr.attendance'), wrap(async (req, res) => 
   const { file, discard } = await readUpload(req);
   /* A spreadsheet has to be parsed whole, so this is one of the few places the bytes are
      genuinely needed in memory. Attendance exports are small; documents never come here. */
-  const parsed = parseBiometricFile({ ...file, buffer: await readUploadedFile(file.path) });
-  await discard();
+  let parsed;
+  try {
+    parsed = parseBiometricFile({ ...file, buffer: await readUploadedFile(file.path) });
+  } finally {
+    await discard();
+  }
   if (!parsed.rows.length) {
     return res.status(422).json({
       error: 'Nothing could be read from that file',
