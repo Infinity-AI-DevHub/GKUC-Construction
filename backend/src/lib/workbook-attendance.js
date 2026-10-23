@@ -1,4 +1,24 @@
-import { readWorkbook } from './xlsx.js';
+import XLSX from 'xlsx';
+
+const LEGACY_SIGNATURE = Buffer.from('d0cf11e0a1b11ae1', 'hex');
+const isLegacyWorkbook = buffer => buffer.subarray(0, 8).equals(LEGACY_SIGNATURE);
+
+/** Both Excel formats use the same reader and 1-based grid, including encoded line breaks. */
+function readAttendanceWorkbook(buffer) {
+  const zip = buffer.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  if (!isLegacyWorkbook(buffer) && !zip) throw new Error('Unsupported Excel signature');
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: false, cellHTML: false });
+  return {
+    names: workbook.SheetNames,
+    sheet(name) {
+      const sheet = workbook.Sheets[name];
+      if (!sheet) return null;
+      const cells = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, range: 0 });
+      const rows = [undefined, ...cells.map(row => [undefined, ...row])];
+      return { rows, rowCount: cells.length, columnCount: Math.max(0, ...cells.map(row => row.length)) };
+    }
+  };
+}
 
 /**
  * Reads the "All Report" workbook that GKUC's fingerprint terminal exports.
@@ -138,13 +158,18 @@ function schedules(workbook, period) {
 }
 
 export function isWorkbook(buffer, filename = '') {
-  if (/\.xlsx$/i.test(filename)) return true;
+  if (/\.xlsx?$/i.test(filename) || isLegacyWorkbook(buffer)) return true;
   /* A .xlsx is a ZIP, which always starts "PK\x03\x04". */
   return buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04;
 }
 
 export function parseAttendanceWorkbook(buffer) {
-  const workbook = readWorkbook(buffer);
+  let workbook;
+  try {
+    workbook = readAttendanceWorkbook(buffer);
+  } catch {
+    throw Object.assign(new Error('This Excel file could not be read. Export a fresh .xls or .xlsx attendance report from the device and try again.'), { status: 422 });
+  }
   const found = findSheet(workbook, SHEET_LOGS);
   if (!found) {
     return {
