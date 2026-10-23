@@ -74,7 +74,7 @@ const employeeSchema = z.object({
   basicSalary: z.number().nonnegative().default(0),
   dailyRate: z.number().nonnegative().default(0),
   weeklyRate: z.number().nonnegative().default(0),
-  overtimeRate: z.number().nonnegative().default(0),
+  overtimeRate: z.literal(0).default(0),
   payBasis: z.enum(PAY_BASES).default('Monthly salary'),
   payFrequency: z.enum(PAY_FREQUENCIES).default('Monthly'),
   payrollCategory: z.enum(PAYROLL_CATEGORIES).default('Site labourer'),
@@ -83,9 +83,9 @@ const employeeSchema = z.object({
   epfEligible: z.boolean().default(true),
   etfEligible: z.boolean().default(true),
   contributionStartDate: isoDate.nullable().optional(),
-  customOfficeOtRate: z.number().nonnegative().nullable().optional(),
-  customSiteOtRate: z.number().nonnegative().nullable().optional(),
-  customTravelOtRate: z.number().nonnegative().nullable().optional(),
+  customOfficeOtRate: z.null().optional(),
+  customSiteOtRate: z.null().optional(),
+  customTravelOtRate: z.null().optional(),
   status: z.enum(['Active', 'On leave', 'Suspended', 'Left']).default('Active'),
   notes: z.string().max(600).optional()
 });
@@ -97,7 +97,7 @@ const IMPORT_HEADERS = [
   'Salary paid by', 'Pay basis', 'Payment frequency', 'Payroll category',
   'Compensation effective from', 'Monthly EPF / ETF salary basis (LKR)', 'Weekly rate (LKR)',
   'Daily rate (LKR)', 'EPF eligible', 'ETF eligible', 'Contributions start date',
-  'Legacy/custom OT rate (LKR/h)', 'Status', 'Notes'
+  'Status', 'Notes'
 ];
 const importKey = value => String(value ?? '').trim().toLowerCase().replace(/\s*\*$/, '');
 const importText = value => String(value ?? '').trim();
@@ -114,7 +114,7 @@ function employeeImportWorkbook({ departments, companies }) {
     'EMP-0001', 'Nimal Perera', '2020-01-15', departments[0]?.name || '', 'Site Supervisor',
     'Site', 'Permanent', '0771234567', 'nimal@example.com', '1990-05-20', '901234567V', '', '',
     'Colombo', 'Colombo', companies[0]?.name || '', 'Daily rate', 'Monthly', 'Supervisor',
-    '2020-01-15', 50000, 0, 3500, 'Yes', 'Yes', '2020-01-15', 0, 'Active', 'Example row — replace or delete'
+    '2020-01-15', 50000, 0, 3500, 'Yes', 'Yes', '2020-01-15', 'Active', 'Example row — replace or delete'
   ].map(value => ({ value, style: typeof value === 'number' ? STYLE.MONEY : STYLE.CELL }));
   const blank = IMPORT_HEADERS.map(() => ({ value: ' ', style: STYLE.CELL }));
   return writeWorkbook([

@@ -4,8 +4,8 @@ import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFiel
 import Hiring from './Hiring.jsx';
 import Insurance from './Insurance.jsx';
 import PayrollInputs from './PayrollInputs.jsx';
-import { ArrowDownToLine, Check, Clock3, FileSpreadsheet, PencilLine, Search, ShieldCheck, Upload, UserRoundCheck, UserRoundMinus, XCircle } from 'lucide-react';
-import { api, fetchDownload, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { ArrowDownToLine, Check, Clock3, FileSpreadsheet, PencilLine, RotateCcw, Search, ShieldCheck, Trash2, Upload, UserRoundCheck, UserRoundMinus, XCircle } from 'lucide-react';
+import { api, del, fetchDownload, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { allowedTabs, Avatar, Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import BiometricImport from './BiometricImport.jsx';
@@ -276,18 +276,19 @@ function EmployeeImportRow({ row, index, departments, companies, update, toggle 
       <label>Compensation effective from{field('compensationEffectiveFrom', 'date')}</label><label>EPF / ETF salary basis (LKR){field('basicSalary', 'number', { min: 0, step: '0.01' })}</label>
       <label>Weekly rate (LKR){field('weeklyRate', 'number', { min: 0, step: '0.01' })}</label><label>Daily rate (LKR){field('dailyRate', 'number', { min: 0, step: '0.01' })}</label>
       <label>EPF eligible{select('epfEligible', [[true,'Yes'],[false,'No']])}</label><label>ETF eligible{select('etfEligible', [[true,'Yes'],[false,'No']])}</label>
-      <label>Contributions start date{field('contributionStartDate', 'date')}</label><label>Legacy/custom OT rate{field('overtimeRate', 'number', { min: 0, step: '0.01' })}</label>
+      <label>Contributions start date{field('contributionStartDate', 'date')}</label>
       <label>Status{select('status', EMPLOYEE_STATUSES)}</label><label className="span-2">Notes{field('notes')}</label>
     </div>
   </article>;
 }
 
-const PAYROLL_TEMPLATE = 'minmax(130px,.9fr) 105px 130px 130px 100px 140px 110px 130px';
+const PAYROLL_TEMPLATE = 'minmax(130px,.9fr) 105px 130px 130px 100px 140px 110px 240px';
 
 /** PID 2.2 "Salary Information" — pay computed from recorded attendance and overtime. */
 function Payroll({ can, companyId }) {
   const [rows, setRows] = useState([]);
   const [detail, setDetail] = useState(null);
+  const [action,setAction]=useState(null);
   const load = () => api(`/payroll?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
   const setStatus = async (id, status) => { await patch(`/payroll/${id}`, { status }); await load(); };
@@ -307,15 +308,27 @@ function Payroll({ can, companyId }) {
         <span className="row-actions">
           <button className="status-button" onClick={() => openRecord(`/payroll/${row.id}`, setDetail)}>Open</button>
           {can.payroll && row.status === 'Draft' && <button className="status-button" onClick={() => setStatus(row.id, 'Approved')}>Approve</button>}
+          {can.payroll && row.status === 'Draft' && <>
+            <button className="icon-button" title="Recalculate draft payroll" aria-label="Recalculate draft payroll" onClick={()=>setAction({kind:'recalculate',run:row})}><RotateCcw size={16}/></button>
+            <button className="icon-button" title="Delete draft payroll" aria-label="Delete draft payroll" onClick={()=>setAction({kind:'delete',run:row})}><Trash2 size={16}/></button>
+          </>}
           {can.payroll && row.status === 'Approved' && <button className="status-button" onClick={() => setStatus(row.id, 'Paid')}>Mark paid</button>}
         </span>
       </Row>)}
     </Table>
     {detail && <PayrollDetail run={detail} close={() => setDetail(null)} />}
+    {action && <FormModal title={`${action.kind==='delete'?'Delete':'Recalculate'} ${action.run.reference}?`} label={action.kind==='delete'?'Delete draft':'Recalculate draft'} close={()=>setAction(null)} onSubmit={async()=>{
+      if(action.kind==='delete')await del(`/payroll/${action.run.id}`);
+      else await post('/payroll',{companyId:Number(action.run.companyId),periodStart:action.run.periodStart,periodEnd:action.run.periodEnd,payFrequency:action.run.payFrequency});
+      setDetail(null);await load();setAction(null);
+    }}>
+      <p className="wide">{shortDate(action.run.periodStart)} to {shortDate(action.run.periodEnd)} · {action.run.payFrequency} · {rupees(action.run.total)}</p>
+      <p className="wide">{action.kind==='delete'?'Remove this draft and its generated salary calculations? Attendance, OT, claims and salary advances will remain.':'Replace this draft with a fresh calculation using the current approved inputs? The previous calculation will remain in the audit trail.'}</p>
+    </FormModal>}
   </>;
 }
 
-const POLICY_TEMPLATE = '120px repeat(8,110px) repeat(3,105px)';
+const POLICY_TEMPLATE = '120px repeat(11,110px) repeat(3,105px)';
 const PROFILE_TEMPLATE = 'minmax(180px,1.3fr) 135px 105px 140px 80px 80px 100px';
 
 function PayrollSettings({ data, reload, companies, companyId, company }) {
@@ -348,14 +361,16 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
       <div><span>EPF / ETF eligible</span><strong>{payrollEmployees.filter(row => row.epfEligible || row.etfEligible).length}</strong></div>
     </div>
 
-    <Table columns={['Effective', 'Office OT', 'Labour site', 'Labour travel', 'Driver OT', 'Driver site', 'Driver travel', 'Supervisor site', 'Supervisor travel', 'EPF employee', 'EPF employer', 'ETF employer']}
+    <Table columns={['Effective', 'Office OT', 'Labour site', 'Labour travel', 'Driver OT', 'Driver site', 'Driver travel', 'Supervisor site', 'Supervisor travel', 'Custom office', 'Custom site', 'Custom travel', 'EPF employee', 'EPF employer', 'ETF employer']}
       template={POLICY_TEMPLATE} title="Effective-dated payroll policies"
       tools={<button className="status-button" onClick={() => setPolicyOpen(true)}>Set payroll rates</button>}>
       {settings.policies.map(row => <Row template={POLICY_TEMPLATE} key={row.id}>
         <strong>{shortDate(row.effectiveFrom)}</strong><span>{rupees(row.officeOtRate)}</span>
         <span>{rupees(row.siteLabourSiteOtRate)}</span><span>{rupees(row.siteLabourTravelOtRate)}</span>
         <span>{rupees(row.driverOtRate)}</span><span>{rupees(row.driverSiteOtRate ?? row.driverOtRate)}</span><span>{rupees(row.driverTravelOtRate ?? row.driverOtRate)}</span><span>{rupees(row.supervisorSiteOtRate)}</span>
-        <span>{rupees(row.supervisorTravelOtRate)}</span><span>{row.epfEmployeeRate}%</span>
+        <span>{rupees(row.supervisorTravelOtRate)}</span>
+        {['customOfficeOtRate','customSiteOtRate','customTravelOtRate'].map((name,index)=><span key={name}>{rupees((typeof row.hrRules==='string'?JSON.parse(row.hrRules):row.hrRules)?.[name]??[row.officeOtRate,row.siteLabourSiteOtRate,row.siteLabourTravelOtRate][index])}</span>)}
+        <span>{row.epfEmployeeRate}%</span>
         <span>{row.epfEmployerRate}%</span><span>{row.etfEmployerRate}%</span>
       </Row>)}
     </Table>
@@ -414,6 +429,9 @@ function PolicyForm({ companyId, policy, close, reload }) {
       officeOtRate: Number(values.officeOtRate), siteLabourSiteOtRate: Number(values.siteLabourSiteOtRate),
       siteLabourTravelOtRate: Number(values.siteLabourTravelOtRate), driverOtRate: Number(values.driverOtRate), driverSiteOtRate: Number(values.driverSiteOtRate), driverTravelOtRate: Number(values.driverTravelOtRate),
       supervisorSiteOtRate: Number(values.supervisorSiteOtRate), supervisorTravelOtRate: Number(values.supervisorTravelOtRate),
+      customOfficeOtRate: Number(values.customOfficeOtRate),
+      customSiteOtRate: Number(values.customSiteOtRate),
+      customTravelOtRate: Number(values.customTravelOtRate),
       epfEmployeeRate: Number(values.epfEmployeeRate), epfEmployerRate: Number(values.epfEmployerRate),
       etfEmployerRate: Number(values.etfEmployerRate), epfBasis: 'Basic earnings', etfBasis: 'Basic earnings',
       hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,paidHoursPerDay:Number(values.paidHoursPerDay),otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),otGraceMinutes:Number(values.otGraceMinutes),maxDailyOt:Number(values.maxDailyOt),lateGraceMinutes:Number(values.lateGraceMinutes),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),supervisorSiteCharge:Number(values.supervisorSiteCharge),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'},
@@ -443,6 +461,7 @@ function PolicyForm({ companyId, policy, close, reload }) {
     <Field name="driverTravelOtRate" label="Driver travel OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.driverTravelOtRate ?? policy?.driverOtRate ?? 225} />
     <Field name="supervisorSiteOtRate" label="Supervisor site OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.supervisorSiteOtRate ?? 225} />
     <Field name="supervisorTravelOtRate" label="Supervisor travel OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.supervisorTravelOtRate ?? 100} />
+    {Object.entries({customOfficeOtRate:['Custom-category office OT (LKR/h)',policy?.officeOtRate ?? 225],customSiteOtRate:['Custom-category site OT (LKR/h)',policy?.siteLabourSiteOtRate ?? 200],customTravelOtRate:['Custom-category travel OT (LKR/h)',policy?.siteLabourTravelOtRate ?? 100]}).map(([name,[label,fallback]])=><Field key={name} name={name} label={label} type="number" min="0" step="0.01" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
     <div className="payroll-policy-heading wide"><span>05</span><div><strong>Transport and travel</strong><p>Set when the full transport amount is due and how approved travel is reimbursed.</p></div></div>
     {Object.entries({transportDivisor:['Monthly transport proration divisor (days)',25],fullTransportDays:['Full transport after this many eligible days (set by HR)',''],longDistanceKm:['Long-distance threshold (km, greater than)',50],longDistancePayment:['Long-distance allowance per qualifying claim (LKR)',500],mileageRate:['Motorcycle mileage rate (LKR/km)',17],fixedTravelPayment:['Fixed office-travel payment (LKR)',300]}).map(([name,[label,fallback]])=><Field key={name} name={name} label={label} type="number" step="0.01" min="0" required={name!=='fullTransportDays'} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
     <SelectField name="fullTransportComparison" label="Full transport threshold comparison" options={['At least','More than']} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.fullTransportComparison||'At least'}/>
@@ -466,9 +485,6 @@ function PayProfileForm({ employee, companies, close, reload }) {
       compensationEffectiveFrom: values.compensationEffectiveFrom,
       epfEligible: values.epfEligible === 'true', etfEligible: values.etfEligible === 'true',
       contributionStartDate: values.contributionStartDate || null,
-      customOfficeOtRate: values.customOfficeOtRate === '' ? null : Number(values.customOfficeOtRate),
-      customSiteOtRate: values.customSiteOtRate === '' ? null : Number(values.customSiteOtRate),
-      customTravelOtRate: values.customTravelOtRate === '' ? null : Number(values.customTravelOtRate),
       allowanceEligibility:Object.fromEntries(['transport','longDistance','motorcycle','machine','specialDuty'].map(key=>[key,values[`eligible_${key}`]==='true']))
     });
     await reload();
@@ -487,9 +503,6 @@ function PayProfileForm({ employee, companies, close, reload }) {
     <SelectField name="etfEligible" label="ETF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue={String(Boolean(employee.etfEligible))} />
     <Field name="contributionStartDate" label="EPF / ETF contributions start on" type="date" required={false} defaultValue={inputDate(employee.contributionStartDate || employee.joinDate)} />
     <p className="form-note wide">GKUC's active policy also checks permanent status, the monthly-equivalent salary threshold and this contribution start date. Change those rules in Payroll settings when the company policy changes.</p>
-    <Field name="customOfficeOtRate" label="Custom office OT (optional)" type="number" min="0" step="0.01" required={false} defaultValue={employee.customOfficeOtRate ?? ''} />
-    <Field name="customSiteOtRate" label="Custom site OT (optional)" type="number" min="0" step="0.01" required={false} defaultValue={employee.customSiteOtRate ?? ''} />
-    <Field name="customTravelOtRate" label="Custom travel OT (optional)" type="number" min="0" step="0.01" required={false} defaultValue={employee.customTravelOtRate ?? ''} />
   </FormModal>;
 }
 
@@ -820,7 +833,6 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
       basicSalary: Number(values.basicSalary || 0),
       dailyRate: Number(values.dailyRate || 0),
       weeklyRate: Number(values.weeklyRate || 0),
-      overtimeRate: Number(values.overtimeRate || 0),
       payBasis: values.payBasis,
       payFrequency: values.payFrequency,
       payrollCategory: values.payrollCategory,
@@ -856,7 +868,6 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
     <SelectField required={false} name="epfEligible" label="EPF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue="true" />
     <SelectField required={false} name="etfEligible" label="ETF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue="true" />
     <Field required={false} name="contributionStartDate" label="EPF / ETF contributions start on" type="date" />
-    <Field name="overtimeRate" label="Legacy/custom OT rate (LKR/h)" type="number" min="0" defaultValue="0" required={false} />
   </FormModal>;
 }
 

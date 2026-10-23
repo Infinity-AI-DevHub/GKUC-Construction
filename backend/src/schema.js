@@ -1,4 +1,5 @@
-import { ddl, query } from './db.js';
+import { ddl, query, transaction } from './db.js';
+import { migrateEmployeeOtRates } from './lib/employee-ot-migration.js';
 import { createEmployeeReadViews } from './lib/employee-visibility.js';
 import { migrateAttendanceIdentity } from './lib/attendance-identity.js';
 import { DEFAULT_ROLES, LEGACY_ROLE_MAP, PERMISSIONS, FEATURE_PERMISSION_PARENTS } from './lib/permissions.js';
@@ -3435,6 +3436,7 @@ export async function migrate() {
   await addColumn('employees', 'deactivated_at', 'DATETIME NULL');
   await addColumn('employees', 'deactivated_by', 'BIGINT UNSIGNED NULL');
   await migrateAttendanceIdentity(query);
+  await migrateEmployeeOtRates({query, transaction});
   await createEmployeeReadViews(query);
   await seedWorkMethods();
   await seedAccessControl();

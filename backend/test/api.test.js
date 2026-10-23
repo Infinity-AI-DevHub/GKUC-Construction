@@ -89,6 +89,71 @@ test('attendance identity migration replaces the legacy key without changing sto
   } finally { await connection.end(); }
 });
 
+test('existing employee OT migration archives overrides without altering business history', async () => {
+  const {migrateEmployeeOtRates} = await import('../src/lib/employee-ot-migration.js');
+  const connection = await mysql.createConnection({host:process.env.DB_HOST,port:Number(process.env.DB_PORT),
+    user:process.env.DB_USER,password:process.env.DB_PASSWORD,database:testDatabase});
+  try {
+    const owner = await login();
+    const created = await call(owner,'POST','/employees',{code:`OT-MIG-${Date.now()}`,name:'OT Migration Existing Employee',
+      payrollCategory:'Custom',dailyRate:3200,basicSalary:50000});
+    assert.equal(created.status,201,JSON.stringify(created.body));
+    const id=created.body.id;
+    const ownerId=(await call(owner,'GET','/auth/me')).body.user.id;
+    const [run]=await connection.query(`INSERT INTO payroll_runs
+      (reference,period_start,period_end,total,status,created_by) VALUES (?,'1998-01-01','1998-01-01',3560,'Paid',?)`,
+      [`OT-MIG-HISTORY-${id}`,ownerId]);
+    await connection.query(`INSERT INTO payslips(run_id,employee_id,basic,overtime_pay,net_pay,employer_cost)
+      VALUES (?,?,3200,360,3560,3560)`,[run.insertId,id]);
+    await connection.query(`INSERT INTO overtime_records(employee_id,work_date,hours,rate,status)
+      VALUES (?,'1998-01-01',1,360,'Approved'),(?,'1998-01-02',1,999,'Pending')`,[id,id]);
+    await connection.query(`UPDATE employees SET overtime_rate=999,custom_office_ot_rate=310,
+      custom_site_ot_rate=360,custom_travel_ot_rate=160,deactivated_at=NOW() WHERE id=?`,[id]);
+    const [[before]]=await connection.query('SELECT * FROM employees WHERE id=?',[id]);
+    const tables=['attendance','overtime_records','hr_payroll_claims','payroll_runs','payslips',
+      'payslip_components','payroll_project_allocations','payroll_policies'];
+    const history=new Map();
+    for(const table of tables)history.set(table,(await connection.query(`SELECT * FROM ${table} ORDER BY id`))[0]);
+    const preview=spawnSync(process.execPath,['src/scripts/migrate-employee-ot-rates.js'],{
+      env:{...process.env,DB_NAME:testDatabase},encoding:'utf8',timeout:30000
+    });
+    assert.equal(preview.status,0,preview.stderr);
+    assert.match(preview.stdout,/Read-only/);
+    assert.match(preview.stdout,new RegExp(before.code));
+    assert.deepEqual((await connection.query('SELECT * FROM employees WHERE id=?',[id]))[0][0],before);
+    const dependencies={query:async(sql,params)=>(await connection.query(sql,params))[0],
+      transaction:async work=>{
+        await connection.beginTransaction();
+        try {const result=await work(connection);await connection.commit();return result;}
+        catch(error){await connection.rollback();throw error;}
+      }};
+    // Simulate a failure after archive/update, proving neither can commit alone.
+    await assert.rejects(migrateEmployeeOtRates({...dependencies,transaction:work=>dependencies.transaction(async real=>{
+      return work({query:real.query.bind(real),execute:async(sql,params)=>{
+        if(sql.includes('INSERT INTO audit_logs'))throw new Error('Simulated audit failure');
+        return real.execute(sql,params);
+      }});
+    })}),/Simulated audit failure/);
+    assert.deepEqual((await connection.query('SELECT * FROM employees WHERE id=?',[id]))[0][0],before);
+    assert.equal((await connection.query('SELECT * FROM employee_ot_rate_archive WHERE employee_id=?',[id]))[0].length,0);
+    const result=await migrateEmployeeOtRates(dependencies);
+    assert.ok(result.archivedEmployees>=1);
+    const [[archive]]=await connection.query('SELECT original_values FROM employee_ot_rate_archive WHERE employee_id=?',[id]);
+    const original=typeof archive.original_values==='string'?JSON.parse(archive.original_values):archive.original_values;
+    assert.equal(Number(original.overtime_rate),999);
+    assert.equal(Number(original.custom_site_ot_rate),360);
+    const [[after]]=await connection.query('SELECT * FROM employees WHERE id=?',[id]);
+    assert.deepEqual(after,{...before,overtime_rate:'0.00',custom_office_ot_rate:null,custom_site_ot_rate:null,custom_travel_ot_rate:null});
+    for(const table of tables)assert.deepEqual((await connection.query(`SELECT * FROM ${table} ORDER BY id`))[0],history.get(table),`${table} unchanged`);
+    assert.equal((await migrateEmployeeOtRates(dependencies)).archivedEmployees,0);
+    const [[audit]]=await connection.query("SELECT COUNT(*) n FROM audit_logs WHERE entity='employee_ot_rates' AND entity_id=?",[String(id)]);
+    assert.equal(Number(audit.n),1);
+    await connection.query('DELETE FROM overtime_records WHERE employee_id=?',[id]);
+    await connection.query('DELETE FROM payslips WHERE run_id=?',[run.insertId]);
+    await connection.query('DELETE FROM payroll_runs WHERE id=?',[run.insertId]);
+  } finally {await connection.end();}
+});
+
 test('biometric import keeps same-name employees separate and reimports their days safely', async () => {
   const owner = await login();
   const stamp = Date.now();
@@ -3150,6 +3215,119 @@ test('an inquiry converts into a registered project', async () => {
   })).status, 409, 'an inquiry converts only once');
 });
 
+test('draft payroll can be rebuilt and deleted atomically without losing source records', async () => {
+  const owner=await login();
+  const store=await login('store@gkuc.lk');
+  const workDate=shift(1100);
+  const person=await call(owner,'POST','/employees',{code:`REBUILD-${Date.now()}`,name:'Payroll Rebuild QA',
+    joinDate:today(),dailyRate:1000,epfEligible:false,etfEligible:false});
+  assert.equal(person.status,201,JSON.stringify(person.body));
+  const id=person.body.id;
+  await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,check_in,check_out,state,project_id)
+    VALUES (?,? ,'Labourer',?,'07:30','16:30','Checked out',1)`,[id,person.body.name,workDate]);
+  const [ot]=await admin.query(`INSERT INTO ${testDatabase}.overtime_records(employee_id,project_id,work_date,hours,rate,status)
+    VALUES (?,1,?,2,200,'Approved')`,[id,workDate]);
+  const body={companyId:1,periodStart:workDate,periodEnd:workDate,payFrequency:'Monthly'};
+  const first=await call(owner,'POST','/payroll',body);
+  assert.equal(first.status,201,JSON.stringify(first.body));
+  const runId=first.body.id;
+  const before=(await call(owner,'GET',`/payroll/${runId}`)).body;
+  assert.equal(Number(before.payslips.find(row=>row.employeeCode===person.body.code).netPay),1400);
+  assert.equal((await call(store,'DELETE',`/payroll/${runId}`)).status,403);
+  await admin.query(`UPDATE ${testDatabase}.employees SET daily_rate=1500 WHERE id=?`,[id]);
+  const second=await call(owner,'POST','/payroll',body);
+  assert.equal(second.status,201,JSON.stringify(second.body));
+  assert.equal(second.body.id,runId);
+  assert.equal(second.body.reference,first.body.reference);
+  const detail=(await call(owner,'GET',`/payroll/${runId}`)).body;
+  const slip=detail.payslips.find(row=>row.employeeCode===person.body.code);
+  assert.equal(Number(slip.netPay),1900);
+  const [[allocated]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.payroll_project_allocations WHERE source_type='Overtime' AND source_id=?`,[ot.insertId]);
+  assert.equal(Number(allocated.n),1);
+  assert.equal((await call(owner,'POST','/payroll',{...body,periodEnd:shift(1101)})).status,409,'partial overlap stays blocked');
+
+  // A calculation failure must restore the old slips, allocations and audit trail.
+  await admin.query(`UPDATE ${testDatabase}.employees SET allowance_eligibility=? WHERE id=?`,[JSON.stringify({transport:true}),id]);
+  const [component]=await admin.query(`INSERT INTO ${testDatabase}.employee_pay_components
+    (employee_id,name,kind,amount,pay_frequency,effective_from,created_by,calculation_method,allowance_type)
+    VALUES (?,'Invalid transport rule','Allowance',100,'Monthly',?,1,'Attendance-prorated amount','Transport')`,[id,workDate]);
+  const invalid=await call(owner,'POST','/payroll',body);
+  assert.equal(invalid.status,409,JSON.stringify(invalid.body));
+  assert.deepEqual((await call(owner,'GET',`/payroll/${runId}`)).body,detail);
+  await admin.query(`DELETE FROM ${testDatabase}.employee_pay_components WHERE id=?`,[component.insertId]);
+  const concurrent=await Promise.all([call(owner,'POST','/payroll',body),call(owner,'POST','/payroll',body)]);
+  assert.ok(concurrent.every(row=>row.status===201&&row.body.id===runId),JSON.stringify(concurrent));
+
+  assert.equal((await call(owner,'PATCH',`/payroll/${runId}`,{status:'Approved'})).status,200);
+  assert.equal((await call(owner,'DELETE',`/payroll/${runId}`)).status,409);
+  assert.equal((await call(owner,'POST','/payroll',body)).status,409);
+  assert.equal((await call(owner,'PATCH',`/payroll/${runId}`,{status:'Paid'})).status,200);
+  assert.equal((await call(owner,'DELETE',`/payroll/${runId}`)).status,409);
+  // Restore Draft only in the disposable test database to exercise deletion.
+  await admin.query(`UPDATE ${testDatabase}.payroll_runs SET status='Draft' WHERE id=?`,[runId]);
+  assert.equal((await call(owner,'DELETE',`/payroll/${runId}`)).status,204);
+  assert.equal((await call(owner,'GET',`/payroll/${runId}`)).status,404);
+  for(const table of ['payroll_project_allocations','payslip_components','salary_advance_recoveries']) {
+    const [[orphans]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.${table} child LEFT JOIN ${testDatabase}.payslips ps ON ps.id=child.payslip_id WHERE ps.id IS NULL`);
+    assert.equal(Number(orphans.n),0,table);
+  }
+  const [[source]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.overtime_records WHERE id=?`,[ot.insertId]);
+  assert.equal(Number(source.n),1);
+  const [[deleted]]=await admin.query(`SELECT before_json FROM ${testDatabase}.audit_logs WHERE entity='payroll_run' AND entity_id=? AND action='DELETE'`,[String(runId)]);
+  const snapshot=typeof deleted.before_json==='string'?JSON.parse(deleted.before_json):deleted.before_json;
+  assert.ok(snapshot.payslips.length);
+  assert.ok(snapshot.payroll_project_allocations.length);
+  const rebuilt=await call(owner,'POST','/payroll',body);
+  assert.equal(rebuilt.status,201,JSON.stringify(rebuilt.body));
+  const sql=await readFile(new URL('../../ops/delete-draft-payroll.sql',import.meta.url),'utf8');
+  const procedure=sql.match(/CREATE PROCEDURE[\s\S]*?END\$\$/)[0].slice(0,-2);
+  const connection=await mysql.createConnection({host:process.env.DB_HOST,port:Number(process.env.DB_PORT),
+    user:process.env.DB_USER,password:process.env.DB_PASSWORD,database:testDatabase});
+  try {
+    await connection.query(procedure);
+    await assert.rejects(connection.query('CALL gkuc_delete_draft_payroll_v1(0)'),/existing Draft/);
+    await connection.query("UPDATE payroll_runs SET status='Approved' WHERE id=?",[rebuilt.body.id]);
+    await assert.rejects(connection.query('CALL gkuc_delete_draft_payroll_v1(?)',[rebuilt.body.id]),/existing Draft/);
+    await connection.query("UPDATE payroll_runs SET status='Draft' WHERE id=?",[rebuilt.body.id]);
+    const preserved=(await call(owner,'GET',`/payroll/${rebuilt.body.id}`)).body;
+    await connection.query('CREATE TABLE test_payroll_delete_blocker (run_id BIGINT UNSIGNED, FOREIGN KEY(run_id) REFERENCES payroll_runs(id)) ENGINE=InnoDB');
+    await connection.query('INSERT INTO test_payroll_delete_blocker VALUES (?)',[rebuilt.body.id]);
+    await assert.rejects(connection.query('CALL gkuc_delete_draft_payroll_v1(?)',[rebuilt.body.id]));
+    assert.deepEqual((await call(owner,'GET',`/payroll/${rebuilt.body.id}`)).body,preserved,'SQL error rolls back all child deletions');
+    await connection.query('DROP TABLE test_payroll_delete_blocker');
+    await connection.query('CALL gkuc_delete_draft_payroll_v1(?)',[rebuilt.body.id]);
+    assert.equal((await call(owner,'GET',`/payroll/${rebuilt.body.id}`)).status,404);
+  } finally {
+    await connection.query('DROP TABLE IF EXISTS test_payroll_delete_blocker');
+    await connection.query('DROP PROCEDURE IF EXISTS gkuc_delete_draft_payroll_v1');
+    await connection.end();
+  }
+});
+
+test('employee forms cannot override payroll OT settings', async () => {
+  const hr = await login('hr@gkuc.lk');
+  assert.equal((await call(hr, 'PATCH', '/employees/2', {overtimeRate: 999})).status, 400);
+  for (const field of ['customOfficeOtRate', 'customSiteOtRate', 'customTravelOtRate']) {
+    assert.equal((await call(hr, 'PATCH', '/employees/2', {[field]: 999})).status, 400);
+    const profile = {payBasis:'Daily rate',payFrequency:'Weekly',payrollCategory:'Custom',
+      basicSalary:0,weeklyRate:0,dailyRate:2500,compensationEffectiveFrom:today(),
+      epfEligible:false,etfEligible:false,[field]:999};
+    assert.equal((await call(hr, 'PATCH', '/payroll/settings/employees/2', profile)).status, 400);
+  }
+  const policy = await call(hr, 'POST', '/payroll/settings/policies', {
+    effectiveFrom: shift(800), officeOtRate:225,siteLabourSiteOtRate:200,siteLabourTravelOtRate:100,
+    driverOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,
+    epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3,
+    customOfficeOtRate:310,customSiteOtRate:360,customTravelOtRate:160
+  });
+  assert.equal(policy.status, 201, JSON.stringify(policy.body));
+  const rules = typeof policy.body.hrRules === 'string' ? JSON.parse(policy.body.hrRules) : policy.body.hrRules;
+  assert.equal(rules.customOfficeOtRate, 310);
+  assert.equal(rules.customSiteOtRate, 360);
+  assert.equal(rules.customTravelOtRate, 160);
+  await admin.query(`DELETE FROM ${testDatabase}.payroll_policies WHERE id=?`, [policy.body.id]);
+});
+
 test('payroll is calculated from recorded attendance and approved overtime', async () => {
   const hr = await login('hr@gkuc.lk');
   const supervisor = await login('supervisor@gkuc.lk');
@@ -3255,7 +3433,13 @@ test('payroll is calculated from recorded attendance and approved overtime', asy
   const advances = (await call(owner, 'GET', `/receivables/petty-cash/${advanceFloat}/entries`)).body;
   assert.equal(Number(advances.find(row => row.employeeId === 2).outstandingAdvance), 0);
 
-  assert.equal((await call(hr, 'POST', '/payroll', { periodStart: shift(-30), periodEnd: today() })).status, 409);
+  const rebuilt=await call(hr, 'POST', '/payroll', { periodStart: shift(-30), periodEnd: today() });
+  assert.equal(rebuilt.status,201,JSON.stringify(rebuilt.body));
+  assert.equal(rebuilt.body.id,run.body.id);
+  const rebuiltSlip=(await call(hr,'GET',`/payroll/${run.body.id}`)).body.payslips.find(row=>row.employeeCode==='EMP-0002');
+  assert.equal(Number(rebuiltSlip.salaryAdvanceDeduction),4000,'rerunning releases and reapplies the same advance once');
+  assert.equal(rebuiltSlip.components.length,4,'claim components are rebuilt, not lost or duplicated');
+  assert.equal(Number(rebuiltSlip.netPay),Number(slip.netPay));
 
   assert.equal((await call(hr, 'PATCH', '/payroll/settings/employees/3', {
     payBasis: 'Daily rate', payFrequency: 'Weekly', payrollCategory: 'Site labourer',

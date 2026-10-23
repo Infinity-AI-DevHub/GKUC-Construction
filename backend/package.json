@@ -12,6 +12,7 @@
     "storage:diagnose:r2": "node src/scripts/diagnose-r2.js",
     "access:suspend": "node src/scripts/set-service-access.js suspend",
     "access:restore": "node src/scripts/set-service-access.js restore",
+    "payroll:migrate-ot": "node src/scripts/migrate-employee-ot-rates.js",
     "test": "node --test"
   },
   "dependencies": {

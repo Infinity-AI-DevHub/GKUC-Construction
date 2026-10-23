@@ -90,7 +90,7 @@ const scenarios = [
   { employee: supervisor, policy: grossPolicy, name: 'overtime and salary advance', input: { overtime: [['Site', 10]], salary_advance: 50000 }, expected: { overtimePay: 2250, grossEarnings: 122250, epfEmployeeDeduction: 9600, salaryAdvanceDeduction: 50000, deductions: 59600, netPay: 62650, employerCost: 140250 } },
 
   { employee: specialist, name: 'one normal day', input: { days_present: 1 }, expected: { basic: 8000, grossEarnings: 8000, netPay: 8000, employerCost: 8000 } },
-  { employee: specialist, name: 'custom site and travel overtime', input: { days_present: 1, overtime: [['Site', 2], ['Travel', 1]] }, expected: { overtimePay: 850, grossEarnings: 8850, netPay: 8850, employerCost: 8850 } },
+  { employee: specialist, name: 'custom category uses policy site and travel rates', input: { days_present: 1, overtime: [['Site', 2], ['Travel', 1]] }, expected: { overtimePay: 500, grossEarnings: 8500, netPay: 8500, employerCost: 8500 } },
   { employee: specialist, name: 'no attendance means no daily earnings', input: {}, expected: { basic: 0, grossEarnings: 0, deductions: 0, netPay: 0, employerCost: 0 } },
   { employee: specialist, name: 'daily components', input: { days_present: 1, components: [component('Allowance', 1000), component('Reimbursement', 500), component('Deduction', 750)] }, expected: { allowanceTotal: 1000, reimbursementTotal: 500, otherDeduction: 750, grossEarnings: 9000, deductions: 750, netPay: 8750, employerCost: 9500 } },
   { employee: specialist, name: 'daily advance capped at earnings', input: { days_present: 1, salary_advance: 15000 }, expected: { salaryAdvanceDeduction: 8000, deductions: 8000, netPay: 0, employerCost: 8000 } }
@@ -116,6 +116,26 @@ test('pay-type and overtime guardrails reject invalid combinations', () => {
   assert.match(payProfileError({ payBasis: 'Weekly rate', payFrequency: 'Monthly' }), /weekly/i);
   assert.throws(() => resolveOvertimeRate(office, 'Site', basicPolicy), /cannot record site overtime/);
   assert.throws(() => resolveOvertimeRate(labourer, 'Office', basicPolicy), /cannot record office overtime/);
+});
+
+test('every OT entry uses policy rates, never legacy employee overrides', () => {
+  const policy = {...basicPolicy, driver_site_ot_rate: 240, driver_travel_ot_rate: 125,
+    hr_rules: {customOfficeOtRate: 310, customSiteOtRate: 360, customTravelOtRate: 160}};
+  const legacy = {overtime_rate: 9999, custom_office_ot_rate: 9999,
+    custom_site_ot_rate: 9999, custom_travel_ot_rate: 9999};
+  for (const [category, rates] of [
+    ['Office employee', {Office: 225}], ['Site labourer', {Site: 200, Travel: 100}],
+    ['Driver', {Office: 225, Site: 240, Travel: 125}],
+    ['Supervisor', {Site: 225, Travel: 100}], ['Custom', {Office: 310, Site: 360, Travel: 160}]
+  ]) for (const [type, rate] of Object.entries(rates)) {
+    assert.equal(resolveOvertimeRate({...legacy, payroll_category: category}, type, policy), rate);
+  }
+  assert.equal(resolveOvertimeRate({...legacy, payroll_category: 'Custom'}, 'Site',
+    {...policy, hr_rules: JSON.stringify(policy.hr_rules)}), 360);
+  assert.equal(resolveOvertimeRate({...legacy, payroll_category: 'Custom'}, 'Site', basicPolicy), 200);
+  assert.equal(resolveOvertimeRate({...legacy, payroll_category: 'Custom'}, 'Site',
+    {...policy, hr_rules: {customSiteOtRate: 0}}), 0);
+  assert.throws(() => resolveOvertimeRate({payroll_category: 'Unknown'}, 'Site', policy), /valid payroll category/);
 });
 
 test('EPF and ETF eligibility are independent and never use gross additions', () => {
