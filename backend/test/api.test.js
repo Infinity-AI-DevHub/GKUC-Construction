@@ -3699,3 +3699,37 @@ test('HR leave policy and individual entitlements enforce yearly, monthly and wa
   assert.equal((await request('2035-06-02','2035-06-02','Paid','Casual')).status,409);
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
 });
+
+test('payment suspension blocks business data while status and session hygiene remain available',async()=>{
+  const owner=await login();
+  try {
+    await admin.query(`UPDATE ${testDatabase}.system_access_state
+      SET status='payment_overdue',message='Payment test lock' WHERE id=1`);
+    const statusResponse=await fetch(`${base}/service-status`);
+    assert.equal(statusResponse.status,200);
+    const status=await statusResponse.json();
+    assert.equal(status.status,'payment_overdue');
+    assert.equal(status.message,'Payment test lock');
+
+    const blocked=await call(owner,'GET','/bootstrap');
+    assert.equal(blocked.status,423);
+    assert.equal(blocked.body.code,'PAYMENT_OVERDUE');
+    assert.equal(blocked.body.serviceAccess.status,'payment_overdue');
+
+    const stillCanLogin=await fetch(`${base}/auth/login`,{
+      method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({email:'owner@gkuc.lk',password:'GKUC@2026'})
+    });
+    assert.equal(stillCanLogin.status,200);
+    const loginBody=await stillCanLogin.json();
+    const logout=await fetch(`${base}/auth/logout`,{
+      method:'POST',headers:{authorization:`Bearer ${loginBody.token}`}
+    });
+    assert.equal(logout.status,204);
+    assert.equal((await fetch(`${base}/health`)).status,200);
+  } finally {
+    await admin.query(`UPDATE ${testDatabase}.system_access_state
+      SET status='active',message=NULL WHERE id=1`);
+    await fetch(`${base}/service-status`);
+  }
+});

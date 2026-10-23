@@ -32,7 +32,11 @@ export function resolveOvertimeRate(employee, type, policy) {
   if (employee.payroll_category === 'Custom' && custom !== null && custom !== undefined) return Number(custom);
 
   if (employee.payroll_category === 'Office employee') return Number(policy.office_ot_rate);
-  if (employee.payroll_category === 'Driver') return Number(policy.driver_ot_rate);
+  if (employee.payroll_category === 'Driver') {
+    const rate = type === 'Site' ? policy.driver_site_ot_rate
+      : type === 'Travel' ? policy.driver_travel_ot_rate : policy.driver_ot_rate;
+    return Number(rate ?? policy.driver_ot_rate);
+  }
   if (employee.payroll_category === 'Supervisor')
     return Number(type === 'Travel' ? policy.supervisor_travel_ot_rate : policy.supervisor_site_ot_rate);
   if (employee.payroll_category === 'Site labourer')

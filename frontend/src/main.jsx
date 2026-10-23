@@ -1,13 +1,13 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Building2, Calculator, CircleDollarSign, ClipboardCheck, ClipboardList, FileText, LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse, MessageSquare, HardDrive } from 'lucide-react';
+import { Building2, Calculator, CircleDollarSign, ClipboardCheck, ClipboardList, FileText, LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse, MessageSquare, HardDrive, LockKeyhole, RefreshCw } from 'lucide-react';
 import './styles.css';
 import './theme.css';
 import './reference.css';
 import './responsive.css';
 import './workspace.css';
 
-import { announceDataChanged, api, post, setUploadLimit, slug, token } from './api.js';
+import { announceDataChanged, api, onServiceAccessChanged, post, setUploadLimit, slug, token } from './api.js';
 import { Modal } from './ui.jsx';
 import NotificationBell from './NotificationBell.jsx';
 import Banners, { useBanners, SoundToggle } from './Banners.jsx';
@@ -239,6 +239,26 @@ const adminTabFromPath = (pathname, tabs) => {
   return tabs.find(tab => slug(tab) === second) || 'Users';
 };
 
+function ServiceSuspended({ state, checking, onCheck }) {
+  return <main className="service-suspended">
+    <section className="service-suspended-card" aria-labelledby="service-suspended-title">
+      <div className="service-suspended-mark"><LockKeyhole size={34} /></div>
+      <p className="eyebrow">GKUC SITEOPS</p>
+      <h1 id="service-suspended-title">Payment overdue</h1>
+      <p className="service-suspended-message">{state?.message}</p>
+      <div className="service-suspended-assurance">
+        <strong>Your records remain safe</strong>
+        <span>No company data, documents, accounts or history have been removed.</span>
+      </div>
+      <p className="service-suspended-help">Please complete the outstanding payment and contact your service provider. Access can then be restored immediately.</p>
+      <button className="primary" type="button" onClick={onCheck} disabled={checking}>
+        <RefreshCw size={17} className={checking ? 'spin' : ''} />
+        {checking ? 'Checking…' : 'Check again'}
+      </button>
+    </section>
+  </main>;
+}
+
 function App() {
   /* Read from the address bar on first paint, so a deep link or a reload opens the page
      that was asked for rather than always the dashboard. */
@@ -251,6 +271,8 @@ function App() {
   const [user, setUser] = useState(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [serviceAccess, setServiceAccess] = useState(null);
+  const [checkingAccess, setCheckingAccess] = useState(false);
   const [companyId, setCompanyId] = useState(() => Number(localStorage.getItem('gkuc:company-id')) || 1);
 
   /*
@@ -272,7 +294,11 @@ function App() {
       /* Panels that fetch their own rows listen for this, so a record created on one of
          them appears straight away rather than after a page reload. */
       announceDataChanged();
-    } catch {
+    } catch (error) {
+      if (error.status === 423 && error.details?.serviceAccess) {
+        setServiceAccess(error.details.serviceAccess);
+        return;
+      }
       token.clear();
       setUser(null);
     } finally {
@@ -280,9 +306,37 @@ function App() {
     }
   };
 
+  const checkServiceAccess = async ({ reloadWhenRestored = false } = {}) => {
+    setCheckingAccess(true);
+    try {
+      const state = await api('/service-status');
+      setServiceAccess(state);
+      if (reloadWhenRestored && state.status === 'active') window.location.reload();
+      return state;
+    } finally {
+      setCheckingAccess(false);
+    }
+  };
+
   useEffect(() => {
-    if (token.get()) load();
-    else setLoading(false);
+    let active = true;
+    const start = async () => {
+      try {
+        const state = await api('/service-status');
+        if (!active) return;
+        setServiceAccess(state);
+        if (state.status === 'payment_overdue') setLoading(false);
+        else if (token.get()) await load();
+        else setLoading(false);
+      } catch { if (active) setLoading(false); }
+    };
+    start();
+    const off = onServiceAccessChanged(state => {
+      setServiceAccess(state);
+      setLoading(false);
+    });
+    const poll = window.setInterval(() => checkServiceAccess().catch(() => {}), 30000);
+    return () => { active = false; off(); window.clearInterval(poll); };
   }, []);
 
   const banners = useBanners();
@@ -401,6 +455,8 @@ function App() {
     if (window.location.pathname !== wanted) window.history.replaceState({}, '', wanted);
   }, [activePage, adminTab, user, data]);
 
+  if (serviceAccess?.status === 'payment_overdue') return <ServiceSuspended state={serviceAccess}
+    checking={checkingAccess} onCheck={() => checkServiceAccess({ reloadWhenRestored: true })} />;
   if (loading) return <div className="loading-screen"><Building2 size={30} /><strong>Loading SiteOps...</strong></div>;
   if (!user || !data) return <Login onLogin={async () => { setLoading(true); await load(); }} />;
 

@@ -287,6 +287,8 @@ async function createHrTables() {
     site_labour_site_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 200,
     site_labour_travel_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 100,
     driver_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 225,
+    driver_site_ot_rate DECIMAL(10,2) NULL,
+    driver_travel_ot_rate DECIMAL(10,2) NULL,
     supervisor_site_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 225,
     supervisor_travel_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 100,
     epf_employee_rate DECIMAL(6,3) NOT NULL DEFAULT 0,
@@ -3172,6 +3174,15 @@ async function createProjectManagerLinks() {
 }
 
 export async function migrate() {
+  await query(`CREATE TABLE IF NOT EXISTS system_access_state (
+    id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+    status ENUM('active','payment_overdue') NOT NULL DEFAULT 'active',
+    message TEXT NULL,
+    changed_by VARCHAR(120) NOT NULL DEFAULT 'Server command',
+    changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB`);
+  await query(`INSERT IGNORE INTO system_access_state(id,status,message) VALUES(
+    1,'active','Access to GKUC SiteOps has been temporarily suspended because the outstanding service payment has not been received. Please complete the payment to continue with the services.')`);
   await createCompaniesTable();
   await createCoreTables();
   await createHrTables();
@@ -3307,6 +3318,8 @@ export async function migrate() {
   await createIncomingLetterTable();
   await createProjectManagerLinks();
   await addColumn('payroll_policies','hr_rules','JSON NULL');
+  await addColumn('payroll_policies','driver_site_ot_rate','DECIMAL(10,2) NULL');
+  await addColumn('payroll_policies','driver_travel_ot_rate','DECIMAL(10,2) NULL');
   await modifyColumn('attendance','source',"VARCHAR(50) NOT NULL DEFAULT 'Manual'");
   await addColumn('attendance','source_notes','TEXT NULL');
   await addColumn('employees','allowance_eligibility','JSON NULL');

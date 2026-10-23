@@ -190,6 +190,7 @@ Optional environment variables:
 | `NOTIFY_CHANNELS` | *(empty)* | Any of `WhatsApp,SMS,Email` |
 | `NOTIFY_MIN_SEVERITY` | `Warning` | Minimum severity pushed off-platform |
 | `SEED_PASSWORD` | `GKUC@2026` | Password given to the seeded review accounts |
+| `SERVICE_SUSPENSION_MESSAGE` | standard overdue-payment wording | Optional replacement text shown while access is suspended |
 
 For production, create a dedicated MySQL user restricted to `gkuc_siteops`; do not deploy
 with the MySQL `root` account. Use scheduled `mysqldump --single-transaction` backups and
@@ -211,6 +212,22 @@ pm2 restart gkuc-siteops --update-env
 `build:production` explicitly installs the frontend build tools and then creates the
 production bundle. This avoids `vite: command not found` without moving Vite into the
 application's runtime dependencies.
+
+### Temporarily suspend or restore service access
+
+The payment lock is controlled from the server and does not need a separate SiteOps user.
+It preserves every account, session, record and uploaded file while refusing business-data
+requests. Run these commands from the project root on the server:
+
+```bash
+npm run access:suspend
+npm run access:restore
+```
+
+The running application notices the database change automatically; a PM2 restart is not
+required. Open users are moved to the payment-overdue screen within 30 seconds, or on their
+next action. The **Check again** button restores the normal interface immediately after the
+restore command has been run.
 
 ## Tests
 
