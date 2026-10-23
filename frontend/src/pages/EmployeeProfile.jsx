@@ -328,7 +328,6 @@ export default function EmployeeProfile({ employeeId, close, canManage, canPayro
 
 function PersonalDetailsForm({ employee, departments, companies, close, reload }) {
   const number = value => Number(value || 0);
-  const optionalNumber = value => value === '' ? null : Number(value);
   return <FormModal title={`Edit ${employee.name}`} close={close} label="Save employee details" wide onSubmit={async values => {
     await patch(`/employees/${employee.id}`, {
       ...personalDetails(values),
@@ -350,10 +349,6 @@ function PersonalDetailsForm({ employee, departments, companies, close, reload }
       basicSalary: number(values.basicSalary),
       weeklyRate: number(values.weeklyRate),
       dailyRate: number(values.dailyRate),
-      overtimeRate: number(values.overtimeRate),
-      customOfficeOtRate: optionalNumber(values.customOfficeOtRate),
-      customSiteOtRate: optionalNumber(values.customSiteOtRate),
-      customTravelOtRate: optionalNumber(values.customTravelOtRate),
       epfEligible: values.epfEligible === 'true',
       etfEligible: values.etfEligible === 'true',
       contributionStartDate: values.contributionStartDate || null,
@@ -389,13 +384,6 @@ function PersonalDetailsForm({ employee, departments, companies, close, reload }
     <Field required={false} name="basicSalary" label="Monthly EPF / ETF salary basis (LKR)" type="number" min="0" defaultValue={employee.basicSalary || 0} />
     <Field required={false} name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" defaultValue={employee.weeklyRate || 0} />
     <Field required={false} name="dailyRate" label="Daily rate (LKR)" type="number" min="0" defaultValue={employee.dailyRate || 0} />
-    <Field name="overtimeRate" label="Legacy/custom OT rate (LKR/h)" type="number" min="0" defaultValue={employee.overtimeRate || 0} required={false} />
-    <Field name="customOfficeOtRate" label="Office OT override (LKR/h)" type="number" min="0"
-      defaultValue={employee.customOfficeOtRate ?? ''} required={false} />
-    <Field name="customSiteOtRate" label="Site OT override (LKR/h)" type="number" min="0"
-      defaultValue={employee.customSiteOtRate ?? ''} required={false} />
-    <Field name="customTravelOtRate" label="Travel OT override (LKR/h)" type="number" min="0"
-      defaultValue={employee.customTravelOtRate ?? ''} required={false} />
     <SelectField required={false} name="epfEligible" label="EPF eligible" defaultValue={String(Boolean(employee.epfEligible))}
       options={[[false, 'No'], [true, 'Yes']]} />
     <SelectField required={false} name="etfEligible" label="ETF eligible" defaultValue={String(Boolean(employee.etfEligible))}

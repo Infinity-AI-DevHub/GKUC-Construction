@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { auth, permit, permissionsFor, validate, wrap } from '../lib/http.js';
+import { auth, permit, permissionsFor, validate, wrap, fail } from '../lib/http.js';
+import {clearDraftPayroll,lockPayrollRun} from '../lib/payroll-drafts.js';
 import { PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES, calculatePayslip, payProfileError } from '../lib/payroll-policy.js';
 import {rulesFor,calculateTransport,calculateLateDeduction,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
 import { contributionEligibility, DEFAULT_STATUTORY_RULES } from '../lib/statutory-eligibility.js';
@@ -55,6 +56,9 @@ const policySchema = z.object({
   driverTravelOtRate: z.number().positive().optional(),
   supervisorSiteOtRate: z.number().positive(),
   supervisorTravelOtRate: z.number().positive(),
+  customOfficeOtRate: z.number().nonnegative().optional(),
+  customSiteOtRate: z.number().nonnegative().optional(),
+  customTravelOtRate: z.number().nonnegative().optional(),
   epfEmployeeRate: percent,
   epfEmployerRate: percent,
   etfEmployerRate: percent,
@@ -118,7 +122,11 @@ router.post('/settings/policies', auth, permit("hr.settings"), validate(policySc
       body.driverOtRate, body.supervisorSiteOtRate, body.supervisorTravelOtRate, body.epfEmployeeRate,
       body.epfEmployerRate, body.etfEmployerRate, body.epfBasis, body.etfBasis, req.user.id]);
     await query('UPDATE payroll_policies SET hr_rules=?,driver_site_ot_rate=?,driver_travel_ot_rate=? WHERE id=?',
-      [JSON.stringify(body.hrRules),body.driverSiteOtRate ?? body.driverOtRate,body.driverTravelOtRate ?? body.driverOtRate,result.insertId]);
+      [JSON.stringify({...body.hrRules,
+        customOfficeOtRate: body.customOfficeOtRate ?? body.officeOtRate,
+        customSiteOtRate: body.customSiteOtRate ?? body.siteLabourSiteOtRate,
+        customTravelOtRate: body.customTravelOtRate ?? body.siteLabourTravelOtRate
+      }),body.driverSiteOtRate ?? body.driverOtRate,body.driverTravelOtRate ?? body.driverOtRate,result.insertId]);
     await query('UPDATE payroll_policies SET statutory_rules=? WHERE id=?',[JSON.stringify(body.statutoryRules),result.insertId]);
     const row = await getOne(`${policySelect} WHERE p.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'payroll_policy', row.id, null, row, req.ip);
@@ -167,9 +175,9 @@ const payProfileSchema = z.object({
   payrollCategory: z.enum(PAYROLL_CATEGORIES), basicSalary: z.number().nonnegative(),
   weeklyRate: z.number().nonnegative(), dailyRate: z.number().nonnegative(),
   compensationEffectiveFrom: isoDate, epfEligible: z.boolean(), etfEligible: z.boolean(), contributionStartDate: isoDate.nullable().optional(),
-  customOfficeOtRate: z.number().nonnegative().nullable().optional(),
-  customSiteOtRate: z.number().nonnegative().nullable().optional(),
-  customTravelOtRate: z.number().nonnegative().nullable().optional()
+  customOfficeOtRate: z.null().optional(),
+  customSiteOtRate: z.null().optional(),
+  customTravelOtRate: z.null().optional()
   ,allowanceEligibility:z.object({transport:z.boolean(),longDistance:z.boolean(),motorcycle:z.boolean(),machine:z.boolean(),specialDuty:z.boolean()}).optional()
 });
 
@@ -231,71 +239,76 @@ router.post('/', auth, permit('hr.payroll'), validate(z.object({
 export async function generatePayroll(req, res) {
   const { companyId, periodStart, periodEnd, payFrequency } = req.body;
   if (periodEnd < periodStart) return res.status(400).json({ error: 'The period end must fall after its start' });
-  const overlap=await getOne('SELECT id FROM payroll_runs WHERE company_id=? AND pay_frequency=? AND period_start<=? AND period_end>=?',[companyId,payFrequency,periodEnd,periodStart]);
-  if(overlap)return res.status(409).json({error:'A payroll run overlaps this payment period. Review the existing draft/run rather than paying these inputs twice.'});
-
-  const policy = await getOne('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1', [companyId, periodEnd]);
-  if (!policy) return res.status(409).json({ error: 'Configure a payroll policy for this period first' });
-
-  const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,
-      e.epf_eligible,e.etf_eligible,e.contribution_start_date,e.join_date,e.employment_type,e.allowance_eligibility,
-      ((SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1) legacy_name_unique,
-      (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR (a.employee_id IS NULL AND a.employee_name=e.name
-        AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1))
-        AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip')) days_present,
-      (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR (a.employee_id IS NULL AND a.employee_name=e.name
-        AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1))
-        AND a.work_date BETWEEN ? AND ? AND a.state='Absent') days_absent,
-      (SELECT COALESCE(SUM(o.hours),0) FROM visible_overtime_records o WHERE o.employee_id=e.id
-        AND o.work_date BETWEEN ? AND ? AND o.status='Approved') overtime_hours,
-      (SELECT COALESCE(SUM(o.hours*o.rate),0) FROM visible_overtime_records o WHERE o.employee_id=e.id
-        AND o.work_date BETWEEN ? AND ? AND o.status='Approved') overtime_pay,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Office' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
-        WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') office_ot_hours,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Office' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
-        WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') office_ot_pay,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Site' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
-        WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') site_ot_hours,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Site' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
-        WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') site_ot_pay,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
-        WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') travel_ot_hours,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
-        WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') travel_ot_pay,
-      (SELECT COALESCE(SUM(GREATEST(0,1-DATEDIFF(GREATEST(l.from_date,?),LEAST(l.to_date,?)))),0) FROM visible_leave_requests l WHERE l.employee_id=e.id AND l.status='Approved'
-        AND l.payment_type='Unpaid') unpaid_days,
-      (SELECT COALESCE(SUM(GREATEST(0,ABS(pe.amount)-COALESCE(
-          (SELECT SUM(sar.amount) FROM salary_advance_recoveries sar WHERE sar.entry_id=pe.id),0))),0)
-        FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
-        WHERE pe.employee_id=e.id AND pf.account_type='Salary advance' AND pe.kind='Spend'
-          AND pe.entry_date<=?) salary_advance
-    FROM visible_employees e WHERE e.status <> 'Left' AND e.payroll_company_id=? AND e.pay_frequency=?
-      AND COALESCE(e.compensation_effective_from,e.join_date)<=? ORDER BY e.code`,
-  [...Array.from({ length: 11 }, () => [periodStart, periodEnd]).flat(), periodEnd, companyId, payFrequency, periodEnd]);
-
-  if (!employees.length) return res.status(409).json({ error: `No active ${payFrequency.toLowerCase()}-paid employees fall inside this period` });
-  const attendanceRows=await query(`SELECT employee_id,employee_name,check_in,state FROM visible_attendance WHERE work_date BETWEEN ? AND ? AND check_in IS NOT NULL`,[periodStart,periodEnd]);
-  const activeRules=rulesFor(policy);
-  for (const row of employees) {
-    const eligibility = contributionEligibility(row, policy, periodEnd);
-    row.epf_eligible = eligibility.epf;
-    row.etf_eligible = eligibility.etf;
-    const late=attendanceRows.filter(a=>Number(a.employee_id)===Number(row.id)||!a.employee_id&&a.employee_name===row.name&&row.legacy_name_unique)
-      .map(a=>calculateLateDeduction(a,activeRules,row.daily_rate));
-    row.late_minutes=late.reduce((sum,item)=>sum+item.lateMinutes,0);
-    row.late_deduction=money(late.reduce((sum,item)=>sum+item.amount,0));
-  }
-  const covered=await getOne(`SELECT ps.employee_id FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1`,[...employees.map(e=>e.id),periodEnd,periodStart]);
-  if(covered)return res.status(409).json({error:'An employee is already included in another payroll run for these dates. Changing payment frequency must not pay the same period twice.'});
-
-  const components = await query(`SELECT * FROM visible_employee_pay_components
-    WHERE active=1 AND pay_frequency=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)
-    ORDER BY employee_id,id`, [payFrequency, periodEnd, periodStart]);
-
-  const reference = await nextReference('PAY', 'payroll_runs');
   try {
     const runId = await transaction(async connection => {
-      const [run] = await connection.execute(
+      const query=async(sql,params=[])=>(await connection.execute(sql,params))[0];
+      const getOne=async(sql,params=[])=>(await query(sql,params))[0];
+      if(!await getOne('SELECT id FROM companies WHERE id=? FOR UPDATE',[companyId]))throw fail(404,'Payroll company not found.');
+      const overlaps=await query('SELECT * FROM payroll_runs WHERE company_id=? AND pay_frequency=? AND period_start<=? AND period_end>=? FOR UPDATE',[companyId,payFrequency,periodEnd,periodStart]);
+      const existing=overlaps.find(row=>row.period_start===periodStart&&row.period_end===periodEnd);
+      if(overlaps.some(row=>row.id!==existing?.id))throw fail(409,'Another payroll overlaps these dates. Use the exact existing draft period or delete that draft first.');
+      if(existing)await clearDraftPayroll(connection,existing,req.user.id,'REGENERATE',req.ip);
+
+      const policy = await getOne('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1', [companyId, periodEnd]);
+      if (!policy) throw fail(409,'Configure a payroll policy for this period first');
+
+      const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,
+          e.epf_eligible,e.etf_eligible,e.contribution_start_date,e.join_date,e.employment_type,e.allowance_eligibility,
+          ((SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1) legacy_name_unique,
+          (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR (a.employee_id IS NULL AND a.employee_name=e.name
+            AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1))
+            AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip')) days_present,
+          (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR (a.employee_id IS NULL AND a.employee_name=e.name
+            AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1))
+            AND a.work_date BETWEEN ? AND ? AND a.state='Absent') days_absent,
+          (SELECT COALESCE(SUM(o.hours),0) FROM visible_overtime_records o WHERE o.employee_id=e.id
+            AND o.work_date BETWEEN ? AND ? AND o.status='Approved') overtime_hours,
+          (SELECT COALESCE(SUM(o.hours*o.rate),0) FROM visible_overtime_records o WHERE o.employee_id=e.id
+            AND o.work_date BETWEEN ? AND ? AND o.status='Approved') overtime_pay,
+          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Office' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
+            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') office_ot_hours,
+          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Office' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
+            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') office_ot_pay,
+          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Site' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
+            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') site_ot_hours,
+          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Site' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
+            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') site_ot_pay,
+          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
+            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') travel_ot_hours,
+          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
+            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') travel_ot_pay,
+          (SELECT COALESCE(SUM(GREATEST(0,1-DATEDIFF(GREATEST(l.from_date,?),LEAST(l.to_date,?)))),0) FROM visible_leave_requests l WHERE l.employee_id=e.id AND l.status='Approved'
+            AND l.payment_type='Unpaid') unpaid_days,
+          (SELECT COALESCE(SUM(GREATEST(0,ABS(pe.amount)-COALESCE(
+              (SELECT SUM(sar.amount) FROM salary_advance_recoveries sar WHERE sar.entry_id=pe.id),0))),0)
+            FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
+            WHERE pe.employee_id=e.id AND pf.account_type='Salary advance' AND pe.kind='Spend'
+              AND pe.entry_date<=?) salary_advance
+        FROM visible_employees e WHERE e.status <> 'Left' AND e.payroll_company_id=? AND e.pay_frequency=?
+          AND COALESCE(e.compensation_effective_from,e.join_date)<=? ORDER BY e.code FOR UPDATE`,
+      [...Array.from({ length: 11 }, () => [periodStart, periodEnd]).flat(), periodEnd, companyId, payFrequency, periodEnd]);
+
+      if (!employees.length) throw fail(409,`No active ${payFrequency.toLowerCase()}-paid employees fall inside this period`);
+      const attendanceRows=await query(`SELECT employee_id,employee_name,check_in,state FROM visible_attendance WHERE work_date BETWEEN ? AND ? AND check_in IS NOT NULL`,[periodStart,periodEnd]);
+      const activeRules=rulesFor(policy);
+      for (const row of employees) {
+        const eligibility = contributionEligibility(row, policy, periodEnd);
+        row.epf_eligible = eligibility.epf;
+        row.etf_eligible = eligibility.etf;
+        const late=attendanceRows.filter(a=>Number(a.employee_id)===Number(row.id)||!a.employee_id&&a.employee_name===row.name&&row.legacy_name_unique)
+          .map(a=>calculateLateDeduction(a,activeRules,row.daily_rate));
+        row.late_minutes=late.reduce((sum,item)=>sum+item.lateMinutes,0);
+        row.late_deduction=money(late.reduce((sum,item)=>sum+item.amount,0));
+      }
+      const covered=await getOne(`SELECT ps.employee_id FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1 FOR UPDATE`,[...employees.map(e=>e.id),periodEnd,periodStart]);
+      if(covered)throw fail(409,'An employee is already included in another payroll run for these dates. Changing payment frequency must not pay the same period twice.');
+
+      const components = await query(`SELECT * FROM visible_employee_pay_components
+        WHERE active=1 AND pay_frequency=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)
+        ORDER BY employee_id,id`, [payFrequency, periodEnd, periodStart]);
+
+      const reference = existing?.reference || await nextReference('PAY', 'payroll_runs');
+      const [run] = existing ? [{insertId:existing.id}] : await connection.execute(
         'INSERT INTO payroll_runs (company_id,reference,period_start,period_end,pay_frequency,policy_id,created_by) VALUES (?,?,?,?,?,?,?)',
         [companyId, reference, periodStart, periodEnd, payFrequency, policy.id, req.user.id]);
 
@@ -365,8 +378,8 @@ export async function generatePayroll(req, res) {
           }
         }
       }
-      await connection.execute('UPDATE payroll_runs SET total=? WHERE id=?', [total, run.insertId]);
-      await audit(connection, req.user.id, 'CREATE', 'payroll_run', run.insertId, null, { reference, total }, req.ip);
+      await connection.execute('UPDATE payroll_runs SET total=?,policy_id=?,created_by=?,approved_by=NULL,created_at=CURRENT_TIMESTAMP WHERE id=?', [total,policy.id,req.user.id, run.insertId]);
+      await audit(connection, req.user.id, existing?'REGENERATED':'CREATE', 'payroll_run', run.insertId, null, { reference, total }, req.ip);
       return run.insertId;
     });
     res.status(201).json(await getOne(`${select} WHERE r.id=?`, [runId]));
@@ -377,15 +390,25 @@ export async function generatePayroll(req, res) {
 }
 
 /** Approving locks the run; marking it paid posts the wage bill as a labour cost. */
+router.delete('/:id', auth, permit('hr.payroll'), wrap(async(req,res)=>{
+  await transaction(async connection=>{
+    const run=await lockPayrollRun(connection,req.params.id);
+    await clearDraftPayroll(connection,run,req.user.id,'DELETE',req.ip);
+    await connection.execute('DELETE FROM payroll_runs WHERE id=?',[run.id]);
+  });
+  res.status(204).end();
+}));
+
 router.patch('/:id', auth, permit('hr.payroll'), validate(z.object({ status: z.enum(['Draft', 'Approved', 'Paid']) })), wrap(async (req, res) => {
-  const before = await getOne('SELECT * FROM payroll_runs WHERE id=?', [req.params.id]);
-  if (!before) return res.status(404).json({ error: 'Payroll run not found' });
-  const allowed={Draft:['Approved'],Approved:['Paid'],Paid:[]};
-  if(!allowed[before.status].includes(req.body.status))return res.status(409).json({error:'Payroll can only move from Draft to Approved, then Paid. Approved or paid salary snapshots cannot be reopened or changed.'});
-  await query('UPDATE payroll_runs SET status=?,approved_by=? WHERE id=?',
-    [req.body.status, req.body.status === 'Draft' ? null : req.user.id, before.id]);
-  await audit(pool, req.user.id, req.body.status.toUpperCase(), 'payroll_run', before.id, before, { status: req.body.status }, req.ip);
-  res.json(await getOne(`${select} WHERE r.id=?`, [before.id]));
+  await transaction(async connection=>{
+    const before = await lockPayrollRun(connection,req.params.id);
+    const allowed={Draft:['Approved'],Approved:['Paid'],Paid:[]};
+    if(!allowed[before.status].includes(req.body.status))throw fail(409,'Payroll can only move from Draft to Approved, then Paid. Approved or paid salary snapshots cannot be reopened or changed.');
+    await connection.execute('UPDATE payroll_runs SET status=?,approved_by=? WHERE id=?',
+      [req.body.status, req.body.status === 'Draft' ? null : req.user.id, before.id]);
+    await audit(connection, req.user.id, req.body.status.toUpperCase(), 'payroll_run', before.id, before, { status: req.body.status }, req.ip);
+  });
+  res.json(await getOne(`${select} WHERE r.id=?`, [req.params.id]));
 }));
 
 /* Performance reviews (PID 2.2 "Performance Reports") */
