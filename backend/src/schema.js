@@ -1,5 +1,6 @@
 import { ddl, query } from './db.js';
 import { createEmployeeReadViews } from './lib/employee-visibility.js';
+import { migrateAttendanceIdentity } from './lib/attendance-identity.js';
 import { DEFAULT_ROLES, LEGACY_ROLE_MAP, PERMISSIONS, FEATURE_PERMISSION_PARENTS } from './lib/permissions.js';
 
 export const ROLES = [
@@ -203,12 +204,14 @@ async function createCoreTables() {
     INDEX idx_tasks_project(project_id)
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS attendance (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_name VARCHAR(120) NOT NULL, role VARCHAR(100) NOT NULL, project_id BIGINT UNSIGNED NOT NULL,
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, employee_id BIGINT UNSIGNED NULL,
+    employee_name VARCHAR(120) NOT NULL, role VARCHAR(100) NOT NULL, project_id BIGINT UNSIGNED NOT NULL,
     work_date DATE NOT NULL, check_in TIME NULL, check_out TIME NULL, state ENUM('On site','Late','Checked out','Absent','On leave','Business trip') NOT NULL,
     confirmed_by BIGINT UNSIGNED NULL, correction_reason VARCHAR(500) NULL,
     CONSTRAINT fk_attendance_project FOREIGN KEY(project_id) REFERENCES projects(id),
     CONSTRAINT fk_attendance_confirmer FOREIGN KEY(confirmed_by) REFERENCES users(id),
-    UNIQUE KEY uq_employee_day(employee_name,work_date), INDEX idx_attendance_day(work_date)
+    UNIQUE KEY uq_attendance_employee_day(employee_id,work_date),
+    INDEX idx_attendance_name_day(employee_name,work_date), INDEX idx_attendance_day(work_date)
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS materials (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(180) NOT NULL, unit VARCHAR(30) NOT NULL, stock DECIMAL(14,3) NOT NULL DEFAULT 0,
@@ -3431,6 +3434,7 @@ export async function migrate() {
   ) ENGINE=InnoDB`);
   await addColumn('employees', 'deactivated_at', 'DATETIME NULL');
   await addColumn('employees', 'deactivated_by', 'BIGINT UNSIGNED NULL');
+  await migrateAttendanceIdentity(query);
   await createEmployeeReadViews(query);
   await seedWorkMethods();
   await seedAccessControl();

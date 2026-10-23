@@ -512,7 +512,9 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
     listAttachments('employee', employee.id),
     query(`SELECT a.id,a.work_date workDate,a.check_in \`in\`,a.check_out \`out\`,a.state,a.source,a.work_location workLocation,a.needs_review needsReview,
       a.correction_reason correctionReason,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,p.id projectId FROM visible_attendance a
-      LEFT JOIN projects p ON p.id=a.project_id WHERE a.employee_id=? OR a.employee_name=? ORDER BY a.work_date DESC LIMIT 1500`, [employee.id, employee.name]),
+      LEFT JOIN projects p ON p.id=a.project_id WHERE a.employee_id=? OR (a.employee_id IS NULL AND a.employee_name=?
+        AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=a.employee_name)=1)
+      ORDER BY a.work_date DESC LIMIT 1500`, [employee.id, employee.name]),
     query(`SELECT 'Project manager' projectRole,a.assigned_at assignedAt,a.released_at releasedAt,
       p.id projectId,p.name project
       FROM visible_project_manager_assignments a JOIN projects p ON p.id=a.project_id WHERE a.employee_id=?

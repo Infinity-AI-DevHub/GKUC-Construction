@@ -18,11 +18,12 @@ const range = req => {
 
 const builders = {
   attendance: async ({ from, to }) => ({
-    columns: ['Employee', 'Role', 'Days present', 'Late days', 'Absent days'],
-    rows: (await query(`SELECT employee_name employee,role,
-        SUM(state IN ('On site','Late','Checked out')) present, SUM(state='Late') late, SUM(state='Absent') absent
-      FROM visible_attendance WHERE work_date BETWEEN ? AND ? GROUP BY employee_name,role ORDER BY present DESC`, [from, to]))
-      .map(row => [row.employee, row.role, row.present, row.late, row.absent])
+    columns: ['Employee', 'Employee code', 'Role', 'Days present', 'Late days', 'Absent days'],
+    rows: (await query(`SELECT a.employee_name employee,e.code employeeCode,a.role,
+        SUM(a.state IN ('On site','Late','Checked out')) present, SUM(a.state='Late') late, SUM(a.state='Absent') absent
+      FROM visible_attendance a LEFT JOIN visible_employees e ON e.id=a.employee_id
+      WHERE a.work_date BETWEEN ? AND ? GROUP BY a.employee_id,a.employee_name,e.code,a.role ORDER BY present DESC`, [from, to]))
+      .map(row => [row.employee, row.employeeCode || '', row.role, row.present, row.late, row.absent])
   }),
   employees: async () => ({
     columns: ['Code', 'Employee', 'Department', 'Designation', 'Status', 'EPF/ETF salary basis'],

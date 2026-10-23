@@ -34,29 +34,33 @@ router.get('/hr/attendance-register', auth, permit('hr.manage', 'hr.attendance')
     try {
       const period = monthRange(req.query.month);
       const rows = await query(`
-        SELECT a.id,a.employee_name name,a.work_date workDate,a.state,a.check_in checkIn,
+        SELECT a.id,COALESCE(a.employee_id,(SELECT MAX(person.id) FROM employees person
+                 WHERE person.name=a.employee_name HAVING COUNT(*)=1)) employeeId,
+               e.code employeeCode,COALESCE(e.name,a.employee_name) name,a.work_date workDate,a.state,a.check_in checkIn,
                a.check_out checkOut,a.project_id projectId,a.work_location workLocation,
                a.source,a.correction_reason correctionReason,p.name project
           FROM visible_attendance a LEFT JOIN projects p ON p.id=a.project_id
+          LEFT JOIN visible_employees e ON e.id=a.employee_id
          WHERE a.work_date BETWEEN ? AND ?
          ORDER BY a.employee_name, a.work_date`, [period.from, period.to]);
 
       const leave = await query(`
-        SELECT e.name, l.from_date fromDate, l.to_date toDate, l.leave_type leaveType
+        SELECT e.id employeeId,e.code employeeCode,e.name, l.from_date fromDate, l.to_date toDate, l.leave_type leaveType
           FROM visible_leave_requests l JOIN visible_employees e ON e.id=l.employee_id
          WHERE l.status='Approved' AND l.to_date >= ? AND l.from_date <= ?`,
       [period.from, period.to]);
 
       const people = new Map();
-      const ensure = name => {
-        if (!people.has(name)) {
-          people.set(name, { name, days: {}, present: 0, late: 0, absent: 0, onLeave: 0 });
+      const ensure = (employeeId, name, employeeCode) => {
+        const key = employeeId ? `employee:${employeeId}` : `legacy:${name}`;
+        if (!people.has(key)) {
+          people.set(key, { employeeId, employeeCode, name, days: {}, present: 0, late: 0, absent: 0, onLeave: 0 });
         }
-        return people.get(name);
+        return people.get(key);
       };
 
       for (const row of rows) {
-        const person = ensure(row.name);
+        const person = ensure(row.employeeId, row.name, row.employeeCode);
         const day = Number(String(row.workDate).slice(8, 10));
         const mark = row.state === 'On site' ? 'P' : row.state === 'Late' ? 'L'
           : row.state === 'On leave' ? 'V' : row.state === 'Business trip' ? 'B'
@@ -72,7 +76,7 @@ router.get('/hr/attendance-register', auth, permit('hr.manage', 'hr.attendance')
 
       /* Approved leave fills the days it covers, so a gap in the roll is genuinely a gap. */
       for (const row of leave) {
-        const person = ensure(row.name);
+        const person = ensure(row.employeeId, row.name, row.employeeCode);
         for (let day = 1; day <= period.days; day += 1) {
           const date = `${period.from.slice(0, 8)}${String(day).padStart(2, '0')}`;
           if (date >= String(row.fromDate).slice(0, 10) && date <= String(row.toDate).slice(0, 10)) {
