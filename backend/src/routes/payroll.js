@@ -316,7 +316,7 @@ export async function generatePayroll(req, res) {
           const c=typeof claim.calculation==='string'?JSON.parse(claim.calculation):claim.calculation;
           employeeComponents.push({id:null,claimId:claim.id,name:claim.kind==='Travel'?'Long-distance site allowance':claim.kind==='Mileage'?'Motorcycle mileage reimbursement':claim.kind==='Supervisor site charge'?'Supervisor site charge':`${claim.kind} allowance`,kind:claim.kind==='Mileage'?'Reimbursement':'Allowance',amount:claim.kind==='Travel'?c.allowance:claim.kind==='Mileage'?c.total:c.amount,formula:JSON.stringify({claimId:claim.id,date:claim.work_date,projectId:claim.project_id,calculation:c})});
         }
-        const calculation = calculatePayslip(employee, policy, employeeComponents);
+        const calculation = calculatePayslip(employee, policy, employeeComponents, payFrequency);
         total += calculation.netPay;
         const [slip] = await connection.execute(`INSERT INTO payslips
           (run_id,employee_id,days_present,days_absent,overtime_hours,basic,contribution_base,overtime_pay,

@@ -32,9 +32,10 @@ request model and are clipped to the payroll period and employment start date.
   Approved leave can count even without a separate attendance row, but never twice.
 - Per-worked-day allowance rules remain based on worked days, not paid leave days.
 
-The statutory contribution basis remains the separately configured monthly salary basis,
-prorated over payable days (worked plus approved paid leave) and capped at that monthly
-basis. OT and allowances do not become part of that statutory basis. Advance recovery is
+Statutory contributions apply only to Monthly payroll runs, using the full separately
+configured monthly salary basis without attendance, leave or period proration. Daily and
+Weekly runs have zero employee EPF, employer EPF and ETF. Existing employee eligibility
+still applies. OT and allowances do not become part of that statutory basis. Advance recovery is
 recomputed from the resulting available net amount under the existing recovery rules.
 
 Project attendance allocations retain only the actual daily salary for a worked day;
@@ -65,7 +66,7 @@ require a separately reviewed adjustment, not automatic rewriting or attendance 
 ## Verification
 
 Pure tests cover the LKR 1,600 shortfall, pending/rejected requests, boundaries, duplicate
-dates, conflicting attendance, OT/late exclusion and contribution proration. Isolated API
+dates, conflicting attendance, OT/late exclusion and the unprorated monthly contribution basis. Isolated API
 tests use actual leave create/approval endpoints for all three payroll frequencies, verify
 the same draft gains LKR 1,600 after approval, check project allocation amounts, prove
 failed rebuild rollback and confirm paid snapshots survive later leave-status changes.

@@ -5,7 +5,7 @@ import {calculatePayslip} from '../src/lib/payroll-policy.js';
 import {calculateAttendancePayroll} from '../src/lib/attendance-payroll.js';
 import {INITIAL_HR_RULES} from '../src/lib/hr-payroll-rules.js';
 
-const employee={id:1,join_date:'2020-01-01',daily_rate:1600};
+const employee={id:1,join_date:'2020-01-01',daily_rate:1600,pay_frequency:'Monthly'};
 const request={id:1,employee_id:1,from_date:'2026-10-02',to_date:'2026-10-02',status:'Approved',payment_type:'Paid',leave_type:'Annual'};
 const attendance=[{id:1,work_date:'2026-10-01',state:'Checked out',check_in:'07:30',check_out:'16:30'}];
 const run=(days=attendance,requests=[request],from='2026-10-01',to='2026-10-31',person=employee)=>calculatePayrollLeave(person,days,requests,from,to);
@@ -79,13 +79,13 @@ test('paid leave generates neither OT nor lateness and contradicting approved OT
   assert.throws(()=>calculateAttendancePayroll(person,leave.attendance,[{id:1,work_date:'2026-10-02',status:'Approved',overtime_type:'Site',hours:1}],policies),/absent\/leave/);
 });
 
-test('statutory basis includes paid leave days, keeps its monthly cap and excludes unpaid leave',()=>{
+test('statutory contributions always use the full monthly basis regardless of paid or unpaid days',()=>{
   const result=calculatePayslip({...employee,days_present:20,paid_leave_days:1,unpaid_leave_days:1,
     basic_salary:40000,epf_eligible:true,etf_eligible:true,overtime_pay:0,salary_advance:0},
     {epf_employee_rate:8,epf_employer_rate:12,etf_employer_rate:3},[]);
-  assert.equal(result.contributionBase,33600);
-  assert.equal(result.epfEmployeeDeduction,2688);
-  assert.equal(result.etfEmployerContribution,1008);
+  assert.equal(result.contributionBase,40000);
+  assert.equal(result.epfEmployeeDeduction,3200);
+  assert.equal(result.etfEmployerContribution,1200);
   assert.equal(calculatePayslip({...employee,days_present:25,paid_leave_days:2,basic_salary:40000,
     overtime_pay:0,salary_advance:0},{},[]).contributionBase,40000);
 });

@@ -351,7 +351,7 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
         <div><strong>Employee EPF</strong><p>{settings.activePolicy?.epfEmployeeRate ?? 'Not set'}%</p></div>
         <div><strong>Employer EPF</strong><p>{settings.activePolicy?.epfEmployerRate ?? 'Not set'}%</p></div>
         <div><strong>Employer ETF</strong><p>{settings.activePolicy?.etfEmployerRate ?? 'Not set'}%</p></div>
-        <p className="form-note wide">EPF and ETF use the employee's separate monthly statutory salary basis, prorated by worked and approved paid-leave days. Daily earnings, overtime, allowances and reimbursements never increase that basis. Eligibility remains configurable separately for each employee. Existing salary sheets are not recalculated automatically.</p>
+        <p className="form-note wide">EPF and ETF apply only to monthly payroll and use the full configured monthly statutory salary basis without proration. Daily and weekly runs have no EPF/ETF. Earnings, leave, OT, allowances and reimbursements do not change the basis. Employee eligibility remains configurable. Existing salary sheets are not recalculated automatically.</p>
       </div>
     </section>
     <div className="project-stats">
@@ -423,6 +423,7 @@ function PayrollSchedule({companyId}) {
 }
 
 function PolicyForm({ companyId, policy, close, reload }) {
+  const statutoryRules=(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)||{};
   return <FormModal title="Payroll rules" close={close} label="Save dated policy" wide onSubmit={async values => {
     await post('/payroll/settings/policies', {
       companyId,
@@ -436,7 +437,7 @@ function PolicyForm({ companyId, policy, close, reload }) {
       epfEmployeeRate: Number(values.epfEmployeeRate), epfEmployerRate: Number(values.epfEmployerRate),
       etfEmployerRate: Number(values.etfEmployerRate), epfBasis: 'Basic earnings', etfBasis: 'Basic earnings',
       hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,paidHoursPerDay:Number(values.paidHoursPerDay),otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),otGraceMinutes:Number(values.otGraceMinutes),maxDailyOt:Number(values.maxDailyOt),lateGraceMinutes:Number(values.lateGraceMinutes),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),supervisorSiteCharge:Number(values.supervisorSiteCharge),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'},
-      statutoryRules:{permanentOnly:values.permanentOnly==='true',minimumMonthlySalary:Number(values.minimumMonthlySalary),weeklyWeeksPerMonth:Number(values.weeklyWeeksPerMonth),dailyDaysPerMonth:Number(values.dailyDaysPerMonth)}
+      statutoryRules:{permanentOnly:values.permanentOnly==='true',minimumMonthlySalary:Number(values.minimumMonthlySalary),weeklyWeeksPerMonth:statutoryRules.weeklyWeeksPerMonth??52/12,dailyDaysPerMonth:statutoryRules.dailyDaysPerMonth??25}
     });
     await reload();
   }}>
@@ -446,8 +447,6 @@ function PolicyForm({ companyId, policy, close, reload }) {
     <div className="payroll-policy-heading wide"><span>02</span><div><strong>Earned salary and contributions</strong><p>Salary is daily rate × (worked days + approved paid-leave days). EPF and ETF use the separate statutory salary basis only.</p></div></div>
     <SelectField name="permanentOnly" label="GKUC EPF / ETF policy — permanent employees only" options={[[true,'Yes'],[false,'No']]} defaultValue={String((typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.permanentOnly ?? true)} />
     <Field name="minimumMonthlySalary" label="Minimum monthly EPF/ETF salary basis (LKR)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.minimumMonthlySalary ?? 30000} />
-    <Field name="weeklyWeeksPerMonth" label="Weeks per month for weekly-rate comparison" type="number" min="0.01" step="0.000001" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.weeklyWeeksPerMonth ?? 52/12} />
-    <Field name="dailyDaysPerMonth" label="Days per month for daily-rate comparison" type="number" min="0.01" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.dailyDaysPerMonth ?? 25} />
     <div className="payroll-policy-heading wide"><span>03</span><div><strong>Working hours and overtime</strong><p>Office/Site OT comes from attended times. Travel OT requires an approved claim.</p></div></div>
     {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],otInterval:['OT rounding interval (hours, rounded down)',0.25,'number'],minimumOt:['Minimum payable OT (hours)',0.25,'number'],otGraceMinutes:['Unpaid time after normal work ends (minutes)',15,'number'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} defaultValue={['otInterval','minimumOt'].includes(name) && (typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.otGraceMinutes === undefined ? fallback : (typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
     <div className="payroll-policy-heading wide"><span>04</span><div><strong>Late-arrival deductions</strong><p>The first 30 minutes are free. Each minute beyond the grace period deducts 1/60 of the employee's hourly rate.</p></div></div>
@@ -574,7 +573,10 @@ function PayrollDetail({ run, close }) {
           <div><span>Earned salary</span><strong>{rupees(slip.basic)}</strong>{Number(slip.paidLeavePay)>0&&<small>Includes {rupees(slip.paidLeavePay)} paid leave</small>}</div>
           <div><span>OT + allowances</span><strong>{rupees(Number(slip.overtimePay || 0) + Number(slip.allowanceTotal || 0))}</strong></div>
           <div><span>Reimbursements</span><strong>{rupees(slip.reimbursementTotal)}</strong></div>
-          <div><span>Total deductions</span><strong>{rupees(slip.deductions)}</strong><small>{Number(slip.lateDeduction)>0?`${slip.lateMinutes} late min · ${rupees(slip.lateDeduction)}`:'No late deduction'}</small></div>
+          <div><span>Total deductions</span><strong>{rupees(slip.deductions)}</strong>{[
+            ['Employee EPF',slip.epfEmployeeDeduction],['Late deduction',slip.lateDeduction],
+            ['Other deductions',slip.otherDeduction],['Advance recovery',slip.salaryAdvanceDeduction]
+          ].filter(([,amount])=>Number(amount)>0).map(([label,amount])=><small key={label}>{label}: {rupees(amount)}</small>)}{Number(slip.deductions)===0&&<small>No deductions</small>}</div>
           <div className="payroll-payslip-net"><span>Take-home pay</span><strong>{rupees(slip.netPay)}</strong></div>
         </div>)}
       </div>
