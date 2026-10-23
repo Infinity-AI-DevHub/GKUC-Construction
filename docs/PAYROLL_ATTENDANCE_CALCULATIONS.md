@@ -16,6 +16,8 @@ The user confirmed that attendance OT should be calculated automatically in the 
 effective policy for their payroll company. Payroll settings supply OT rates, shift times,
 rounding, minimum OT and grace periods. The employee's daily salary supplies their late
 deduction hourly rate; the separate monthly statutory salary basis is not used as earnings.
+Salary also includes approved paid-leave days; see `PAYROLL_PAID_LEAVE.md` for reconciliation,
+unpaid-leave exclusion and the payable-day statutory basis.
 
 For a 16:30 shift end, 15-minute unpaid evening grace and 15-minute rounding:
 

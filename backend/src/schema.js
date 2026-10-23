@@ -3354,6 +3354,10 @@ export async function migrate() {
   await addColumn('employee_pay_components','allowance_type',"VARCHAR(50) NOT NULL DEFAULT 'Other'");
   await addColumn('payslip_components','calculation_detail','TEXT NULL');
   await addColumn('payslips','calculation_detail','JSON NULL');
+  await addColumn('payslips','paid_leave_days','DECIMAL(6,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips','unpaid_leave_days','DECIMAL(6,2) NOT NULL DEFAULT 0');
+  await addColumn('payslips','payable_days','DECIMAL(6,2) NULL');
+  await addColumn('payslips','paid_leave_pay','DECIMAL(12,2) NOT NULL DEFAULT 0');
   await modifyColumn('payroll_project_allocations','source_type',"ENUM('Attendance','Overtime','Claim','Attendance OT') NOT NULL");
   await addColumn('supplier_invoices','verified_by','BIGINT UNSIGNED NULL');
   await addColumn('supplier_invoices','verified_at','DATETIME NULL');

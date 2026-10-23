@@ -55,11 +55,13 @@ export function resolveOvertimeRate(employee, type, policy) {
 export function calculatePayslip(employee, policy, components = []) {
   const dailyRate = Number(employee.daily_rate);
   const daysPresent = Number(employee.days_present || 0);
-  // GKUC pays salary for days actually worked. The employee profile's monthly
-  // `basic_salary` is a statutory reference amount only; it must never be added
-  // to earnings. Keep `basic` as the persisted payslip column for compatibility,
-  // but its meaning is now unambiguously earned salary.
-  const basic = money(dailyRate * daysPresent);
+  const paidLeaveDays = Number(employee.paid_leave_days || 0);
+  const unpaidLeaveDays = Number(employee.unpaid_leave_days || 0);
+  const payableDays = daysPresent + paidLeaveDays;
+  // The monthly statutory basis is not earnings. Approved paid leave is earnings;
+  // unpaid leave is excluded once, never subtracted again as a second deduction.
+  const basic = money(dailyRate * payableDays);
+  const paidLeavePay = money(dailyRate * paidLeaveDays);
   const overtimePay = Number(employee.overtime_pay);
   const componentTotal = kind => money(components.filter(row => row.kind === kind)
     .reduce((sum, row) => sum + Number(row.amount), 0));
@@ -76,9 +78,9 @@ export function calculatePayslip(employee, policy, components = []) {
   const standardDays = Math.max(1, Number(storedRules.dailyDaysPerMonth ?? 25));
   const statutoryMonthlyBasic = Math.max(0, Number(employee.basic_salary || 0));
   // The configured statutory amount is monthly, so a shorter payroll period uses
-  // only the attended-day share. Never exceed the configured monthly basis.
+  // the payable-day share, including paid leave. Never exceed the monthly basis.
   const contributionBase = money(Math.min(statutoryMonthlyBasic,
-    statutoryMonthlyBasic / standardDays * daysPresent));
+    statutoryMonthlyBasic / standardDays * payableDays));
   // A legacy gross-basis setting must never bring salary earnings, overtime,
   // allowances or reimbursements into the EPF/ETF basis.
   const epfEmployeeDeduction = employee.epf_eligible
@@ -98,7 +100,7 @@ export function calculatePayslip(employee, policy, components = []) {
   const employerCost = money(grossEarnings + reimbursementTotal + epfEmployerContribution + etfEmployerContribution);
 
   return {
-    basic: money(basic), contributionBase, overtimePay: money(overtimePay), allowanceTotal, reimbursementTotal,
+    basic: money(basic), paidLeaveDays, unpaidLeaveDays, payableDays, paidLeavePay, contributionBase, overtimePay: money(overtimePay), allowanceTotal, reimbursementTotal,
     grossEarnings, epfEmployeeDeduction, epfEmployerContribution, etfEmployerContribution,
     otherDeduction, lateDeduction, unpaidLeaveDeduction, salaryAdvanceDeduction, deductions, netPay, employerCost
   };

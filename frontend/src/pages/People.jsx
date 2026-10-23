@@ -6,7 +6,7 @@ import Insurance from './Insurance.jsx';
 import PayrollInputs from './PayrollInputs.jsx';
 import { ArrowDownToLine, Check, Clock3, FileSpreadsheet, PencilLine, RotateCcw, Search, ShieldCheck, Trash2, Upload, UserRoundCheck, UserRoundMinus, XCircle } from 'lucide-react';
 import { api, del, fetchDownload, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { allowedTabs, Avatar, Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { allowedTabs, Avatar, Badge, Field, FormModal, WorkflowForm, Modal, Page, Required, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import BiometricImport from './BiometricImport.jsx';
 import { useOptions } from '../options.js';
@@ -14,6 +14,7 @@ import { AttendanceRegister, LeaveRegister } from '../Registers.jsx';
 import EmployeeProfile from './EmployeeProfile.jsx';
 import WorkflowChecklist from '../WorkflowChecklist.jsx';
 import { payrollSteps } from '../workflow-paths.js';
+import {leavePaymentEligibility} from '../leave-payment.js';
 import AttendanceCorrection from './AttendanceCorrection.jsx';
 import WorkforceMap from './WorkforceMap.jsx';
 
@@ -350,7 +351,7 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
         <div><strong>Employee EPF</strong><p>{settings.activePolicy?.epfEmployeeRate ?? 'Not set'}%</p></div>
         <div><strong>Employer EPF</strong><p>{settings.activePolicy?.epfEmployerRate ?? 'Not set'}%</p></div>
         <div><strong>Employer ETF</strong><p>{settings.activePolicy?.etfEmployerRate ?? 'Not set'}%</p></div>
-        <p className="form-note wide">EPF and ETF use the employee's separate monthly statutory salary basis, prorated by attended days. Daily earnings, overtime, allowances and reimbursements never increase that basis. Eligibility remains configurable separately for each employee. Existing salary sheets are not recalculated automatically.</p>
+        <p className="form-note wide">EPF and ETF use the employee's separate monthly statutory salary basis, prorated by worked and approved paid-leave days. Daily earnings, overtime, allowances and reimbursements never increase that basis. Eligibility remains configurable separately for each employee. Existing salary sheets are not recalculated automatically.</p>
       </div>
     </section>
     <div className="project-stats">
@@ -442,7 +443,7 @@ function PolicyForm({ companyId, policy, close, reload }) {
     <div className="payroll-policy-intro wide"><strong>Set how pay is calculated</strong><p>These are company-wide rules, not an employee's salary. Work through each section, then save a dated policy. Existing approved payslips will not change.</p></div>
     <div className="payroll-policy-heading wide"><span>01</span><div><strong>When these rules begin</strong><p>The date determines which policy applies to new payroll calculations.</p></div></div>
     <Field name="effectiveFrom" label="Effective from" type="date" defaultValue={todayInput()} />
-    <div className="payroll-policy-heading wide"><span>02</span><div><strong>Earned salary and contributions</strong><p>Salary is daily rate × attended days. EPF and ETF use the separate statutory salary basis only.</p></div></div>
+    <div className="payroll-policy-heading wide"><span>02</span><div><strong>Earned salary and contributions</strong><p>Salary is daily rate × (worked days + approved paid-leave days). EPF and ETF use the separate statutory salary basis only.</p></div></div>
     <SelectField name="permanentOnly" label="GKUC EPF / ETF policy — permanent employees only" options={[[true,'Yes'],[false,'No']]} defaultValue={String((typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.permanentOnly ?? true)} />
     <Field name="minimumMonthlySalary" label="Minimum monthly EPF/ETF salary basis (LKR)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.minimumMonthlySalary ?? 30000} />
     <Field name="weeklyWeeksPerMonth" label="Weeks per month for weekly-rate comparison" type="number" min="0.01" step="0.000001" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.weeklyWeeksPerMonth ?? 52/12} />
@@ -496,7 +497,7 @@ function PayProfileForm({ employee, companies, close, reload }) {
     <SelectField name="payrollCategory" label="Payroll category" options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} defaultValue={employee.payrollCategory} />
     <Field name="compensationEffectiveFrom" label="Compensation effective from" type="date" defaultValue={inputDate(employee.compensationEffectiveFrom || employee.joinDate)} />
     <Field name="basicSalary" label="Monthly EPF / ETF salary basis (LKR)" type="number" min="0" step="0.01" defaultValue={employee.basicSalary || 0} />
-    <p className="form-note wide">This amount is only the statutory basis for EPF/ETF. It is not paid as salary. Earned salary is always the daily rate multiplied by attended days.</p>
+    <p className="form-note wide">This amount is only the statutory basis for EPF/ETF. It is not paid as salary. Earned salary is the daily rate multiplied by worked and approved paid-leave days.</p>
     <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" step="0.01" defaultValue={employee.weeklyRate || 0} />
     <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" step="0.01" defaultValue={employee.dailyRate || 0} />
     <SelectField name="epfEligible" label="EPF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue={String(Boolean(employee.epfEligible))} />
@@ -527,7 +528,7 @@ function PayComponentForm({ employee, close, reload }) {
 }
 
 function PayrollDetail({ run, close }) {
-  const template = 'minmax(160px,1.3fr) 75px 110px 110px 110px 110px 110px 110px 120px 115px 110px 110px 115px 115px 120px 125px';
+  const template = 'minmax(160px,1.3fr) 75px 85px 85px 110px 110px 110px 110px 110px 110px 120px 115px 110px 110px 115px 115px 120px 125px';
   const advances = run.payslips.flatMap(slip => slip.advanceRecoveries || []);
   const components = run.payslips.flatMap(slip => (slip.components || []).map(component => ({ ...component, employee: slip.employee, employeeCode: slip.employeeCode })));
   const gross = run.payslips.reduce((sum, slip) => sum + Number(slip.grossEarnings), 0);
@@ -546,7 +547,7 @@ function PayrollDetail({ run, close }) {
         <div><span>Total employer cost</span><strong>{rupees(employerCost)}</strong></div>
         {calculations.some(person=>person.detail.warnings?.length>0)&&<div><span>Needs review</span><strong>{calculations.reduce((sum,person)=>sum+(person.detail.warnings?.length||0),0)} calculation warning(s)</strong></div>}
       </div>
-      {!!calculations.length && <details className="payroll-breakdown-details wide"><summary>OT and late deductions by work date</summary>
+      {!!calculations.length && <details className="payroll-breakdown-details wide"><summary>OT, leave and late deductions by work date</summary>
         <Table title="OT calculation" columns={['Employee','Date / policy','Type / source','Hours','Rate','OT pay']} template="minmax(160px,1fr) 150px 160px 80px 110px 110px">
           {calculations.flatMap(person=>(person.detail.overtime||[]).map((row,index)=><Row key={`${person.code}-ot-${index}`} template="minmax(160px,1fr) 150px 160px 80px 110px 110px">
             <span>{person.employee}<small>{person.code}</small></span><span>{shortDate(row.workDate)}<small>Policy #{row.policyId}</small></span>
@@ -559,13 +560,18 @@ function PayrollDetail({ run, close }) {
             <span>{row.checkIn||'-'}<small>{row.normalStart}</small></span><span>{row.lateMinutes}</span><span>{row.graceMinutes}</span><span>{row.deductibleMinutes}</span><strong>{rupees(row.lateDeduction)}</strong>
           </Row>))}
         </Table>
+        <Table title="Approved leave in payroll" columns={['Employee','Date','Payment','Salary included']} template="minmax(160px,1fr) 150px 130px 140px">
+          {calculations.flatMap(person=>(person.detail.leave?.days||[]).map(row=><Row key={`${person.code}-leave-${row.workDate}`} template="minmax(160px,1fr) 150px 130px 140px">
+            <span>{person.employee}<small>{person.code}</small></span><span>{shortDate(row.workDate)}</span><span>{row.paymentType}</span><strong>{rupees(row.paymentType==='Paid'?person.detail.leave.dailyRate:0)}</strong>
+          </Row>))}
+        </Table>
         {calculations.flatMap(person=>(person.detail.warnings||[]).map((row,index)=><p className="form-note" key={`${person.code}-warning-${index}`}>{person.employee} · {shortDate(row.workDate)}: {row.message}</p>))}
       </details>}
       <div className="payroll-payslip-list wide">
-        <div className="payroll-policy-heading"><span>01</span><div><strong>What each employee receives</strong><p>Earned salary is daily rate × attended days. The EPF/ETF basis is shown separately and is not added to pay.</p></div></div>
+        <div className="payroll-policy-heading"><span>01</span><div><strong>What each employee receives</strong><p>Earned salary is daily rate × (worked days + approved paid-leave days). Unpaid leave adds no salary and is not deducted twice.</p></div></div>
         {run.payslips.map(slip => <div className="payroll-payslip-card" key={slip.id}>
-          <div className="payroll-payslip-person"><strong>{slip.employee}</strong><small>{slip.employeeCode} · {slip.daysPresent} attended days</small></div>
-          <div><span>Earned salary</span><strong>{rupees(slip.basic)}</strong></div>
+          <div className="payroll-payslip-person"><strong>{slip.employee}</strong><small>{slip.employeeCode} · {slip.daysPresent} worked · {slip.paidLeaveDays||0} paid leave · {slip.unpaidLeaveDays||0} unpaid leave</small></div>
+          <div><span>Earned salary</span><strong>{rupees(slip.basic)}</strong>{Number(slip.paidLeavePay)>0&&<small>Includes {rupees(slip.paidLeavePay)} paid leave</small>}</div>
           <div><span>OT + allowances</span><strong>{rupees(Number(slip.overtimePay || 0) + Number(slip.allowanceTotal || 0))}</strong></div>
           <div><span>Reimbursements</span><strong>{rupees(slip.reimbursementTotal)}</strong></div>
           <div><span>Total deductions</span><strong>{rupees(slip.deductions)}</strong><small>{Number(slip.lateDeduction)>0?`${slip.lateMinutes} late min · ${rupees(slip.lateDeduction)}`:'No late deduction'}</small></div>
@@ -573,10 +579,11 @@ function PayrollDetail({ run, close }) {
         </div>)}
       </div>
       <details className="payroll-breakdown-details wide"><summary>Show full salary calculation table</summary>
-        <Table columns={['Employee', 'Present', 'Earned salary', 'EPF/ETF basis', 'Office OT', 'Site OT', 'Travel OT', 'Allowances', 'Reimbursements', 'Gross', 'Late deduction', 'EPF employee', 'Other deductions', 'Salary advance', 'Net pay', 'Employer cost']} template={template} title="Salary sheet breakdown">
+        <Table columns={['Employee', 'Worked', 'Paid leave', 'Unpaid leave', 'Earned salary', 'EPF/ETF basis', 'Office OT', 'Site OT', 'Travel OT', 'Allowances', 'Reimbursements', 'Gross', 'Late deduction', 'EPF employee', 'Other deductions', 'Salary advance', 'Net pay', 'Employer cost']} template={template} title="Salary sheet breakdown">
           {run.payslips.map(slip => <Row template={template} key={slip.id}>
             <div><strong>{slip.employee}</strong><small>{slip.employeeCode}</small></div>
             <span>{slip.daysPresent}</span>
+            <span>{slip.paidLeaveDays||0}</span><span>{slip.unpaidLeaveDays||0}</span>
             <span>{rupees(slip.basic)}</span>
             <span>{rupees(slip.contributionBase)}</span>
             <div><strong>{rupees(slip.officeOtPay)}</strong><small>{slip.officeOtHours} h</small></div>
@@ -880,7 +887,7 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
     <SelectField required={false} name="payrollCategory" label="Payroll category" options={['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom']} defaultValue="Site labourer" />
     <Field required={false} name="compensationEffectiveFrom" label="Compensation effective from" type="date" defaultValue={todayInput()} />
     <Field required={false} name="basicSalary" label="Monthly EPF / ETF salary basis (LKR)" type="number" min="0" defaultValue="0" />
-    <p className="form-note wide">This amount is used only to calculate EPF/ETF. Salary earnings are the daily rate multiplied by attended days.</p>
+    <p className="form-note wide">This amount is used only to calculate EPF/ETF. Salary earnings are the daily rate multiplied by worked and approved paid-leave days.</p>
     <Field name="weeklyRate" label="Weekly rate (LKR)" type="number" min="0" required={false} />
     <Field name="dailyRate" label="Daily rate (LKR)" type="number" min="0" required={false} />
     <SelectField required={false} name="epfEligible" label="EPF eligible" options={[[true, 'Yes'], [false, 'No']]} defaultValue="true" />
@@ -951,18 +958,14 @@ function LeaveForm({ data, close, reload }) {
   const [fromDate,setFromDate]=useState(todayInput());
   const employee=data.employees.find(row=>String(row.id)===employeeId);
   const start=employee?.joinDate ? inputDate(employee.joinDate) : '';
-  let eligibleFrom='';
-  if(start){
-    const [year,month,day]=start.split('-').map(Number);
-    const target=new Date(Date.UTC(year,month-1+6,1));
-    const lastDay=new Date(Date.UTC(target.getUTCFullYear(),target.getUTCMonth()+1,0)).getUTCDate();
-    target.setUTCDate(Math.min(day,lastDay));eligibleFrom=target.toISOString().slice(0,10);
-  }
-  const eligible=eligibleFrom && fromDate>=eligibleFrom;
   const leaveTypes = useOptions('leave.type');
-  const [policy,setPolicy]=useState(null);
-  useEffect(()=>{api('/employees/leave/settings').then(value=>setPolicy(value.active)).catch(()=>{});},[]);
+  const [policies,setPolicies]=useState([]);
+  const [paymentType,setPaymentType]=useState('');
+  const {policy,eligibleFrom,paidAllowed:eligible,options:paymentOptions}=leavePaymentEligibility(start,policies,fromDate);
+  useEffect(()=>{api('/employees/leave/settings').then(value=>setPolicies(value.policies)).catch(()=>{});},[]);
+  useEffect(()=>{if(!paymentOptions.includes(paymentType))setPaymentType(paymentOptions[0]||'');},[paymentType,paymentOptions.join(',')]);
   return <FormModal title="Record leave" close={close} label="Save leave request" onSubmit={async values => {
+    if(!paymentOptions.includes(values.paymentType))throw new Error('Leave is unavailable for these dates under the applicable leave policy.');
     await post(`/employees/${values.employeeId}/leave`, {
       leaveType: values.leaveType,
       paymentType: values.paymentType,
@@ -974,9 +977,9 @@ function LeaveForm({ data, close, reload }) {
   }}>
     <label>Employee<select name="employeeId" required value={employeeId} onChange={event=>setEmployeeId(event.target.value)}>{data.employees.map(employee=><option key={employee.id} value={employee.id}>{employee.name}</option>)}</select></label>
     <SelectField name="leaveType" label="Leave type" options={leaveTypes} />
-    {!eligible && <p className="form-note wide" role="alert">{start ? `This employee is still in the leave waiting period. Paid leave is available from ${shortDate(eligibleFrom)}. ${policy?.allow_unpaid_during_wait?'Unpaid leave may be requested.':'Unpaid leave is also blocked by the active policy.'}` : 'Employment start date is not recorded. Update the employee profile before requesting leave.'}</p>}
-    <SelectField name="paymentType" label="Leave payment" options={['Paid','Unpaid']} />
-    <p className="form-note wide">Annual/other entitlement: {employee?.annualLeaveEntitlement??policy?.annual_default??14} days · Casual entitlement: {employee?.casualLeaveEntitlement??policy?.casual_default??7} days · Monthly maximum: {policy?.monthly_limit??5} days. Paid and unpaid requests count. Approved unpaid leave is deducted in payroll.</p>
+    {!eligible && <p className="form-note wide" role="alert">{!policy?'No leave policy is available for the selected start date.':start ? `This employee is still in the leave waiting period. Paid leave is available from ${shortDate(eligibleFrom)}. ${policy.allow_unpaid_during_wait?'Unpaid leave may be requested.':'Unpaid leave is also blocked by the active policy.'}` : 'Employment start date is not recorded. Update the employee profile before requesting leave.'}</p>}
+    <label>Leave payment<Required /><select name="paymentType" required value={paymentType} disabled={!paymentOptions.length} onChange={event=>setPaymentType(event.target.value)}>{!paymentOptions.length&&<option value="">Leave unavailable for these dates</option>}{paymentOptions.map(option=><option key={option} value={option}>{option}</option>)}</select></label>
+    <p className="form-note wide">Annual/other entitlement: {employee?.annualLeaveEntitlement??policy?.annual_default??14} days · Casual entitlement: {employee?.casualLeaveEntitlement??policy?.casual_default??7} days · Monthly maximum: {policy?.monthly_limit??5} days. Paid and unpaid requests count toward limits. Only approved paid leave adds salary; unpaid leave adds no salary.</p>
     <label>From<input name="fromDate" type="date" required value={fromDate} onChange={event=>setFromDate(event.target.value)} /></label>
     <Field name="toDate" label="To" type="date" defaultValue={todayInput()} />
     <TextArea name="reason" label="Reason" />
