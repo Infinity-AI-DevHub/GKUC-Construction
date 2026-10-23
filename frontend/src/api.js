@@ -1,6 +1,13 @@
 import { notice } from './notices.js';
 
 const TOKEN_KEY = 'gkuc-token';
+export const SERVICE_ACCESS_EVENT = 'gkuc:service-access';
+
+export const onServiceAccessChanged = listener => {
+  const handler = event => listener(event.detail);
+  window.addEventListener(SERVICE_ACCESS_EVENT, handler);
+  return () => window.removeEventListener(SERVICE_ACCESS_EVENT, handler);
+};
 
 export const token = {
   get: () => sessionStorage.getItem(TOKEN_KEY),
@@ -86,6 +93,9 @@ export const api = async (path, options = {}) => {
     try { body = JSON.parse(text); validJson = true; } catch { body = null; }
   }
   if (!response.ok) {
+    if (response.status === 423 && body?.code === 'PAYMENT_OVERDUE') {
+      window.dispatchEvent(new CustomEvent(SERVICE_ACCESS_EVENT, { detail: body.serviceAccess }));
+    }
     const message = responseError(response, body);
     reportFailure(path, message);
     const failure = new Error(message);

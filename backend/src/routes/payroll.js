@@ -51,6 +51,8 @@ const policySchema = z.object({
   siteLabourSiteOtRate: z.number().positive(),
   siteLabourTravelOtRate: z.number().positive(),
   driverOtRate: z.number().positive(),
+  driverSiteOtRate: z.number().positive().optional(),
+  driverTravelOtRate: z.number().positive().optional(),
   supervisorSiteOtRate: z.number().positive(),
   supervisorTravelOtRate: z.number().positive(),
   epfEmployeeRate: percent,
@@ -62,12 +64,13 @@ const policySchema = z.object({
     permanentOnly: z.boolean(), minimumMonthlySalary: z.number().nonnegative(),
     weeklyWeeksPerMonth: z.number().positive(), dailyDaysPerMonth: z.number().positive()
   }).default(DEFAULT_STATUTORY_RULES),
-  hrRules:z.object({normalStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),normalEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),paidHoursPerDay:z.number().positive().max(24).default(8),otInterval:z.number().positive().max(4),minimumOt:z.number().nonnegative().max(24),maxDailyOt:z.number().positive().max(24),lateGraceMinutes:z.number().int().nonnegative().default(30),lateHalfRateUntilMinutes:z.number().int().positive().default(45),lateThreeQuarterRateUntilMinutes:z.number().int().positive().default(60),lateIncrementMinutes:z.number().int().positive().default(15),lateIncrementFraction:z.number().positive().max(10).default(0.25),transportDivisor:z.number().positive().max(366),fullTransportDays:z.number().int().min(0).max(366).nullable(),fullTransportComparison:z.enum(['At least','More than']),longDistanceKm:z.number().nonnegative(),longDistancePayment:z.number().nonnegative(),supervisorSiteCharge:z.number().nonnegative().default(500),mileageRate:z.number().nonnegative(),fixedTravelPayment:z.number().nonnegative(),allowMileageAndFixed:z.boolean(),countLeaveForTransport:z.boolean(),countAbsenceForTransport:z.boolean(),separateApproval:z.boolean().default(false)}).refine(r=>r.normalEnd>r.normalStart,'Normal shift end must be after its start').refine(r=>r.lateGraceMinutes<r.lateHalfRateUntilMinutes&&r.lateHalfRateUntilMinutes<r.lateThreeQuarterRateUntilMinutes,'Late deduction thresholds must increase from grace to 50%, 75% and one hour').default(INITIAL_HR_RULES)
+  hrRules:z.object({normalStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),normalEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),paidHoursPerDay:z.number().positive().max(24).default(8),otInterval:z.number().positive().max(4),minimumOt:z.number().nonnegative().max(24),otGraceMinutes:z.number().int().min(0).max(240).default(0),maxDailyOt:z.number().positive().max(24),lateGraceMinutes:z.number().int().nonnegative().default(30),transportDivisor:z.number().positive().max(366),fullTransportDays:z.number().int().min(0).max(366).nullable(),fullTransportComparison:z.enum(['At least','More than']),longDistanceKm:z.number().nonnegative(),longDistancePayment:z.number().nonnegative(),supervisorSiteCharge:z.number().nonnegative().default(500),mileageRate:z.number().nonnegative(),fixedTravelPayment:z.number().nonnegative(),allowMileageAndFixed:z.boolean(),countLeaveForTransport:z.boolean(),countAbsenceForTransport:z.boolean(),separateApproval:z.boolean().default(false)}).refine(r=>r.normalEnd>r.normalStart,'Normal shift end must be after its start').default(INITIAL_HR_RULES)
 });
 
 const policySelect = `SELECT p.id,p.company_id companyId,c.name company,p.effective_from effectiveFrom,p.office_ot_rate officeOtRate,
   p.site_labour_site_ot_rate siteLabourSiteOtRate,p.site_labour_travel_ot_rate siteLabourTravelOtRate,
-  p.driver_ot_rate driverOtRate,p.supervisor_site_ot_rate supervisorSiteOtRate,
+  p.driver_ot_rate driverOtRate,COALESCE(p.driver_site_ot_rate,p.driver_ot_rate) driverSiteOtRate,
+  COALESCE(p.driver_travel_ot_rate,p.driver_ot_rate) driverTravelOtRate,p.supervisor_site_ot_rate supervisorSiteOtRate,
   p.supervisor_travel_ot_rate supervisorTravelOtRate,p.epf_employee_rate epfEmployeeRate,
   p.epf_employer_rate epfEmployerRate,p.etf_employer_rate etfEmployerRate,
   p.epf_basis epfBasis,p.etf_basis etfBasis,p.hr_rules hrRules,p.statutory_rules statutoryRules,u.name createdBy,p.created_at createdAt
@@ -114,7 +117,8 @@ router.post('/settings/policies', auth, permit("hr.settings"), validate(policySc
     [body.companyId, body.effectiveFrom, body.officeOtRate, body.siteLabourSiteOtRate, body.siteLabourTravelOtRate,
       body.driverOtRate, body.supervisorSiteOtRate, body.supervisorTravelOtRate, body.epfEmployeeRate,
       body.epfEmployerRate, body.etfEmployerRate, body.epfBasis, body.etfBasis, req.user.id]);
-    await query('UPDATE payroll_policies SET hr_rules=? WHERE id=?',[JSON.stringify(body.hrRules),result.insertId]);
+    await query('UPDATE payroll_policies SET hr_rules=?,driver_site_ot_rate=?,driver_travel_ot_rate=? WHERE id=?',
+      [JSON.stringify(body.hrRules),body.driverSiteOtRate ?? body.driverOtRate,body.driverTravelOtRate ?? body.driverOtRate,result.insertId]);
     await query('UPDATE payroll_policies SET statutory_rules=? WHERE id=?',[JSON.stringify(body.statutoryRules),result.insertId]);
     const row = await getOne(`${policySelect} WHERE p.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'payroll_policy', row.id, null, row, req.ip);

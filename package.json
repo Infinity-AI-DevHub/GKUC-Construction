@@ -10,6 +10,8 @@
     "dev:frontend": "npm run dev --prefix frontend",
     "build": "npm run build --prefix frontend",
     "build:production": "npm install --prefix frontend --include=dev && npm run build --prefix frontend",
+    "access:suspend": "npm run access:suspend --prefix backend",
+    "access:restore": "npm run access:restore --prefix backend",
     "start": "npm start --prefix backend",
     "test": "npm test --prefix backend && npm test --prefix frontend"
   },

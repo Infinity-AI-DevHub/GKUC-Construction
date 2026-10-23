@@ -16,6 +16,7 @@ import { startPresence } from './lib/presence.js';
 import { startIntegrityWatch } from './lib/integrity.js';
 import { rateLimit } from './lib/throttle.js';
 import { publishChange } from './lib/realtime.js';
+import { getServiceAccessState, serviceAccessMiddleware } from './lib/service-access.js';
 
 import authRoutes from './routes/auth.js';
 import bootstrapRoutes from './routes/bootstrap.js';
@@ -200,6 +201,21 @@ app.get('/api/health', async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
+/* Public by design: the app must be able to explain a suspension before sign-in. */
+app.get('/api/service-status', async (_req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await getServiceAccessState({ fresh: true }));
+  } catch (error) { next(error); }
+});
+
+/* Login and logout remain available for session hygiene. Every business-data endpoint is
+   independently refused by the server, so hiding the interface is never the control. */
+app.use('/api', (req, res, next) => {
+  const allowed = req.method === 'POST' && ['/auth/login', '/auth/logout'].includes(req.path);
+  return allowed ? next() : serviceAccessMiddleware(req, res, next);
+});
+
 app.use('/api/auth', authRoutes);
 app.post('/api/document-download-tickets', auth, async (req, res, next) => {
   try {
@@ -270,6 +286,7 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'API endpoint not f
  * Published files. Outside /api on purpose: these links are given to people outside the
  * company, and /s/<token> is a shape somebody can read out over a telephone.
  */
+app.use('/s', serviceAccessMiddleware);
 app.use('/', publicShareRoutes);
 
 app.use('/uploads', (_req, res) => res.status(404).json({ error: 'Not found' }));

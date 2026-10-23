@@ -1,7 +1,7 @@
-export const INITIAL_HR_RULES={normalStart:'07:30',normalEnd:'16:30',paidHoursPerDay:8,otInterval:0.5,minimumOt:0.5,maxDailyOt:6,lateGraceMinutes:30,lateHalfRateUntilMinutes:45,lateThreeQuarterRateUntilMinutes:60,lateIncrementMinutes:15,lateIncrementFraction:0.25,transportDivisor:25,fullTransportDays:null,fullTransportComparison:'At least',longDistanceKm:50,longDistancePayment:500,supervisorSiteCharge:500,mileageRate:17,fixedTravelPayment:300,allowMileageAndFixed:false,countLeaveForTransport:false,countAbsenceForTransport:false,separateApproval:false};
+export const INITIAL_HR_RULES={normalStart:'07:30',normalEnd:'16:30',paidHoursPerDay:8,otInterval:0.25,minimumOt:0.25,otGraceMinutes:15,maxDailyOt:6,lateGraceMinutes:30,transportDivisor:25,fullTransportDays:null,fullTransportComparison:'At least',longDistanceKm:50,longDistancePayment:500,supervisorSiteCharge:500,mileageRate:17,fixedTravelPayment:300,allowMileageAndFixed:false,countLeaveForTransport:false,countAbsenceForTransport:false,separateApproval:false};
 export const cents=n=>Math.round((Number(n)+Number.EPSILON)*100)/100;
 export const minutes=time=>{const [h,m]=String(time).split(':').map(Number);return h*60+m;};
-export function rulesFor(policy){return {...INITIAL_HR_RULES,...(typeof policy.hr_rules==='string'?JSON.parse(policy.hr_rules):policy.hr_rules||{})};}
+export function rulesFor(policy){return {...INITIAL_HR_RULES,otGraceMinutes:0,...(typeof policy.hr_rules==='string'?JSON.parse(policy.hr_rules):policy.hr_rules||{})};}
 export function suggestOvertime(attendance,rules){
   if(!attendance||['Absent','On leave'].includes(attendance.state))return {hours:0,intervals:[],warnings:[]};
   if(!attendance.check_in||!attendance.check_out)return {hours:0,intervals:[],warnings:['Record valid check-in and check-out times before confirming OT.']};
@@ -9,7 +9,8 @@ export function suggestOvertime(attendance,rules){
   if(end<=start)return {hours:0,intervals:[],warnings:['Check-out must be after check-in. Overnight shifts require a separate reviewed record.']};
   const intervals=[];
   if(start<normalStart)intervals.push([start,Math.min(end,normalStart)]);
-  if(end>normalEnd)intervals.push([Math.max(start,normalEnd),end]);
+  const eveningStart = normalEnd + Number(rules.otGraceMinutes ?? 0);
+  if(end>eveningStart)intervals.push([Math.max(start,eveningStart),end]);
   const rawHours=intervals.reduce((sum,[a,b])=>sum+(b-a)/60,0);
   const rounded=Math.floor((rawHours+1e-8)/rules.otInterval)*rules.otInterval;
   const hours=rounded>=rules.minimumOt?cents(rounded):0;
@@ -19,15 +20,10 @@ export function calculateLateDeduction(attendance,rules,dailyRate){
   if(!attendance?.check_in||['Absent','On leave'].includes(attendance.state))return {lateMinutes:0,hourlyRate:0,multiplier:0,amount:0};
   const lateMinutes=Math.max(0,minutes(attendance.check_in)-minutes(rules.normalStart));
   const paidHours=Math.max(0.01,Number(rules.paidHoursPerDay||8));
-  const hourlyRate=cents(Number(dailyRate||0)/paidHours);
-  let multiplier=0;
-  if(lateMinutes>rules.lateGraceMinutes&&lateMinutes<=rules.lateHalfRateUntilMinutes)multiplier=0.5;
-  else if(lateMinutes>rules.lateHalfRateUntilMinutes&&lateMinutes<rules.lateThreeQuarterRateUntilMinutes)multiplier=0.75;
-  else if(lateMinutes>=rules.lateThreeQuarterRateUntilMinutes){
-    const extra=Math.max(0,lateMinutes-rules.lateThreeQuarterRateUntilMinutes);
-    multiplier=1+Math.ceil(extra/rules.lateIncrementMinutes)*rules.lateIncrementFraction;
-  }
-  return {lateMinutes,hourlyRate,multiplier,amount:cents(hourlyRate*multiplier)};
+  const hourlyRate=Number(dailyRate||0)/paidHours;
+  const deductibleMinutes=Math.max(0,lateMinutes-Number(rules.lateGraceMinutes??30));
+  const multiplier=deductibleMinutes/60;
+  return {lateMinutes,deductibleMinutes,hourlyRate:cents(hourlyRate),multiplier,amount:cents(hourlyRate*multiplier)};
 }
 export const intervalsOverlap=(a,b)=>a.some(([start,end])=>b.some(([otherStart,otherEnd])=>start<otherEnd&&otherStart<end));
 export function calculateTransport(amount,days,method,rules){

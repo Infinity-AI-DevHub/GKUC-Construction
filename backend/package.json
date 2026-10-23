@@ -10,6 +10,8 @@
     "storage:migrate:r2": "node src/scripts/migrate-local-uploads-to-r2.js",
     "storage:migrate:r2:apply": "node src/scripts/migrate-local-uploads-to-r2.js --apply",
     "storage:diagnose:r2": "node src/scripts/diagnose-r2.js",
+    "access:suspend": "node src/scripts/set-service-access.js suspend",
+    "access:restore": "node src/scripts/set-service-access.js restore",
     "test": "node --test"
   },
   "dependencies": {

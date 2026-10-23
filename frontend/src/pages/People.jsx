@@ -292,7 +292,7 @@ function Payroll({ can, companyId }) {
   </>;
 }
 
-const POLICY_TEMPLATE = '120px repeat(6,110px) repeat(3,105px)';
+const POLICY_TEMPLATE = '120px repeat(8,110px) repeat(3,105px)';
 const PROFILE_TEMPLATE = 'minmax(180px,1.3fr) 135px 105px 140px 80px 80px 100px';
 
 function PayrollSettings({ data, reload, companies, companyId, company }) {
@@ -325,13 +325,13 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
       <div><span>EPF / ETF eligible</span><strong>{payrollEmployees.filter(row => row.epfEligible || row.etfEligible).length}</strong></div>
     </div>
 
-    <Table columns={['Effective', 'Office OT', 'Labour site', 'Labour travel', 'Driver OT', 'Supervisor site', 'Supervisor travel', 'EPF employee', 'EPF employer', 'ETF employer']}
+    <Table columns={['Effective', 'Office OT', 'Labour site', 'Labour travel', 'Driver OT', 'Driver site', 'Driver travel', 'Supervisor site', 'Supervisor travel', 'EPF employee', 'EPF employer', 'ETF employer']}
       template={POLICY_TEMPLATE} title="Effective-dated payroll policies"
       tools={<button className="status-button" onClick={() => setPolicyOpen(true)}>Set payroll rates</button>}>
       {settings.policies.map(row => <Row template={POLICY_TEMPLATE} key={row.id}>
         <strong>{shortDate(row.effectiveFrom)}</strong><span>{rupees(row.officeOtRate)}</span>
         <span>{rupees(row.siteLabourSiteOtRate)}</span><span>{rupees(row.siteLabourTravelOtRate)}</span>
-        <span>{rupees(row.driverOtRate)}</span><span>{rupees(row.supervisorSiteOtRate)}</span>
+        <span>{rupees(row.driverOtRate)}</span><span>{rupees(row.driverSiteOtRate ?? row.driverOtRate)}</span><span>{rupees(row.driverTravelOtRate ?? row.driverOtRate)}</span><span>{rupees(row.supervisorSiteOtRate)}</span>
         <span>{rupees(row.supervisorTravelOtRate)}</span><span>{row.epfEmployeeRate}%</span>
         <span>{row.epfEmployerRate}%</span><span>{row.etfEmployerRate}%</span>
       </Row>)}
@@ -389,11 +389,11 @@ function PolicyForm({ companyId, policy, close, reload }) {
       companyId,
       effectiveFrom: values.effectiveFrom,
       officeOtRate: Number(values.officeOtRate), siteLabourSiteOtRate: Number(values.siteLabourSiteOtRate),
-      siteLabourTravelOtRate: Number(values.siteLabourTravelOtRate), driverOtRate: Number(values.driverOtRate),
+      siteLabourTravelOtRate: Number(values.siteLabourTravelOtRate), driverOtRate: Number(values.driverOtRate), driverSiteOtRate: Number(values.driverSiteOtRate), driverTravelOtRate: Number(values.driverTravelOtRate),
       supervisorSiteOtRate: Number(values.supervisorSiteOtRate), supervisorTravelOtRate: Number(values.supervisorTravelOtRate),
       epfEmployeeRate: Number(values.epfEmployeeRate), epfEmployerRate: Number(values.epfEmployerRate),
       etfEmployerRate: Number(values.etfEmployerRate), epfBasis: 'Basic earnings', etfBasis: 'Basic earnings',
-      hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,paidHoursPerDay:Number(values.paidHoursPerDay),otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),maxDailyOt:Number(values.maxDailyOt),lateGraceMinutes:Number(values.lateGraceMinutes),lateHalfRateUntilMinutes:Number(values.lateHalfRateUntilMinutes),lateThreeQuarterRateUntilMinutes:Number(values.lateThreeQuarterRateUntilMinutes),lateIncrementMinutes:Number(values.lateIncrementMinutes),lateIncrementFraction:Number(values.lateIncrementFraction),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),supervisorSiteCharge:Number(values.supervisorSiteCharge),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'},
+      hrRules:{normalStart:values.normalStart,normalEnd:values.normalEnd,paidHoursPerDay:Number(values.paidHoursPerDay),otInterval:Number(values.otInterval),minimumOt:Number(values.minimumOt),otGraceMinutes:Number(values.otGraceMinutes),maxDailyOt:Number(values.maxDailyOt),lateGraceMinutes:Number(values.lateGraceMinutes),transportDivisor:Number(values.transportDivisor),fullTransportDays:values.fullTransportDays===''?null:Number(values.fullTransportDays),fullTransportComparison:values.fullTransportComparison,longDistanceKm:Number(values.longDistanceKm),longDistancePayment:Number(values.longDistancePayment),supervisorSiteCharge:Number(values.supervisorSiteCharge),mileageRate:Number(values.mileageRate),fixedTravelPayment:Number(values.fixedTravelPayment),allowMileageAndFixed:values.allowMileageAndFixed==='true',countLeaveForTransport:values.countLeaveForTransport==='true',countAbsenceForTransport:values.countAbsenceForTransport==='true'},
       statutoryRules:{permanentOnly:values.permanentOnly==='true',minimumMonthlySalary:Number(values.minimumMonthlySalary),weeklyWeeksPerMonth:Number(values.weeklyWeeksPerMonth),dailyDaysPerMonth:Number(values.dailyDaysPerMonth)}
     });
     await reload();
@@ -407,15 +407,17 @@ function PolicyForm({ companyId, policy, close, reload }) {
     <Field name="weeklyWeeksPerMonth" label="Weeks per month for weekly-rate comparison" type="number" min="0.01" step="0.000001" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.weeklyWeeksPerMonth ?? 52/12} />
     <Field name="dailyDaysPerMonth" label="Days per month for daily-rate comparison" type="number" min="0.01" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.dailyDaysPerMonth ?? 25} />
     <div className="payroll-policy-heading wide"><span>03</span><div><strong>Working hours and overtime</strong><p>Attendance suggests Site OT. HR must review and confirm it before payroll.</p></div></div>
-    {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],otInterval:['OT rounding interval (hours, rounded down)',0.5,'number'],minimumOt:['Minimum payable OT (hours)',0.5,'number'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
-    <div className="payroll-policy-heading wide"><span>04</span><div><strong>Late-arrival deductions</strong><p>The first 30 minutes are free. Later arrivals deduct a configurable fraction of the employee's hourly rate.</p></div></div>
+    {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],otInterval:['OT rounding interval (hours, rounded down)',0.25,'number'],minimumOt:['Minimum payable OT (hours)',0.25,'number'],otGraceMinutes:['Unpaid time after normal work ends (minutes)',15,'number'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} defaultValue={['otInterval','minimumOt'].includes(name) && (typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.otGraceMinutes === undefined ? fallback : (typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
+    <div className="payroll-policy-heading wide"><span>04</span><div><strong>Late-arrival deductions</strong><p>The first 30 minutes are free. Each minute beyond the grace period deducts 1/60 of the employee's hourly rate.</p></div></div>
     <Field name="paidHoursPerDay" label="Paid working hours used to calculate hourly rate" type="number" min="0.01" max="24" step="0.01" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.paidHoursPerDay??8}/>
-    {Object.entries({lateGraceMinutes:['No deduction through (minutes)',30],lateHalfRateUntilMinutes:['50% deduction through (minutes)',45],lateThreeQuarterRateUntilMinutes:['75% deduction until; full hourly rate at (minutes)',60],lateIncrementMinutes:['After one hour, each additional block (minutes)',15],lateIncrementFraction:['Additional hourly-rate fraction per block',0.25]}).map(([name,[label,fallback]])=><Field key={name} name={name} label={label} type="number" min="0" step={name==='lateIncrementFraction'?'0.01':'1'} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
-    <p className="form-note wide">Example: with an LKR 400 hourly rate, 30 minutes late deducts LKR 0; 31–45 minutes deducts LKR 200; 46–59 minutes deducts LKR 300; 60 minutes deducts LKR 400; 61–75 minutes deducts LKR 500.</p>
+    <Field name="lateGraceMinutes" label="No deduction through (minutes)" type="number" min="0" step="1" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.lateGraceMinutes??30}/>
+    <p className="form-note wide">Example: with an LKR 400 hourly rate, 30 minutes late deducts LKR 0; 31 minutes deducts LKR 6.67; 45 minutes deducts LKR 100; 60 minutes deducts LKR 200; 90 minutes deducts LKR 400.</p>
     <Field name="officeOtRate" label="Office OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.officeOtRate ?? 225} />
     <Field name="siteLabourSiteOtRate" label="Labour site OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.siteLabourSiteOtRate ?? 200} />
     <Field name="siteLabourTravelOtRate" label="Labour travel OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.siteLabourTravelOtRate ?? 100} />
     <Field name="driverOtRate" label="Driver OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.driverOtRate ?? 225} />
+    <Field name="driverSiteOtRate" label="Driver site OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.driverSiteOtRate ?? policy?.driverOtRate ?? 225} />
+    <Field name="driverTravelOtRate" label="Driver travel OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.driverTravelOtRate ?? policy?.driverOtRate ?? 225} />
     <Field name="supervisorSiteOtRate" label="Supervisor site OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.supervisorSiteOtRate ?? 225} />
     <Field name="supervisorTravelOtRate" label="Supervisor travel OT (LKR/h)" type="number" min="0.01" step="0.01" defaultValue={policy?.supervisorTravelOtRate ?? 100} />
     <div className="payroll-policy-heading wide"><span>05</span><div><strong>Transport and travel</strong><p>Set when the full transport amount is due and how approved travel is reimbursed.</p></div></div>
