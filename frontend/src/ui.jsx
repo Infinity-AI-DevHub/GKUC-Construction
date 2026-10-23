@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronRight, Plus, X } from 'lucide-react';
 import { initials, onDataChanged, slug } from './api.js';
 import './workflow.css';
@@ -120,10 +121,18 @@ function parseFieldErrors(failure) {
     .filter(([, messages]) => messages?.length).map(([name, messages]) => [name, messages[0]]));
 }
 
+let openModalCount = 0;
+let previousBodyOverflow;
+
 export function Modal({ title, close, children, wide = false, scope }) {
   const dialogRef = useRef(null);
   useEffect(() => {
     const previous = document.activeElement;
+    if (openModalCount === 0) {
+      previousBodyOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
+    openModalCount += 1;
     const dialog = dialogRef.current;
     dialog?.querySelector('input,select,textarea,button,[href]')?.focus();
     const onKeyDown = event => {
@@ -138,14 +147,19 @@ export function Modal({ title, close, children, wide = false, scope }) {
       else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0].focus(); }
     };
     document.addEventListener('keydown', onKeyDown);
-    return () => { document.removeEventListener('keydown', onKeyDown); previous?.focus?.(); };
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      openModalCount -= 1;
+      if (openModalCount === 0) document.body.style.overflow = previousBodyOverflow;
+      previous?.focus?.();
+    };
   }, []);
-  return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
+  return createPortal(<div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
     <div ref={dialogRef} className={wide ? 'modal modal-wide' : 'modal'} role="dialog" aria-modal="true" aria-label={title}>
-      <div className="modal-title"><div className="modal-title-context"><h2>{title}</h2><RecordScopeBadge scope={scope} compact /></div><button className="icon-btn" onClick={close}><X size={18} /></button></div>
+      <div className="modal-title"><div className="modal-title-context"><h2>{title}</h2><RecordScopeBadge scope={scope} compact /></div><button type="button" className="icon-btn" aria-label="Close dialog" onClick={close}><X size={18} /></button></div>
       <div className="modal-content">{children}</div>
     </div>
-  </div>;
+  </div>, document.body);
 }
 
 export function EntityForm({ onSubmit, error, children, fieldErrors = {}, errorRef }) {
