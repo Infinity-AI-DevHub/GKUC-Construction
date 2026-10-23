@@ -3217,6 +3217,70 @@ test('an inquiry converts into a registered project', async () => {
   })).status, 409, 'an inquiry converts only once');
 });
 
+test('approved paid leave restores LKR 1600 across payroll frequencies without paying unpaid leave twice', async () => {
+  const owner=await login();
+  const dates=['2033-02-01','2033-02-02','2033-02-03','2033-02-04'];
+  const leavePolicy=await call(owner,'POST','/employees/leave/settings',{effectiveFrom:dates[0],annualDefault:14,
+    casualDefault:7,monthlyLimit:5,waitingMonths:0,allowUnpaidDuringWait:true});
+  assert.equal(leavePolicy.status,201,JSON.stringify(leavePolicy.body));
+  for(const frequency of ['Daily','Weekly','Monthly']) {
+    const person=await call(owner,'POST','/employees',{code:`LEAVE-PAY-${frequency}-${Date.now()}`,name:'Paid Leave Payroll QA',
+      joinDate:'2033-01-01',compensationEffectiveFrom:'2033-01-01',payBasis:'Daily rate',payFrequency:frequency,
+      dailyRate:1600,epfEligible:false,etfEligible:false});
+    assert.equal(person.status,201,JSON.stringify(person.body));
+    const id=person.body.id;
+    await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out,project_id)
+      VALUES (?,?,'Worker',?,'Checked out','07:30','16:30',1),(?,?,'Worker',?,'Absent',NULL,NULL,NULL)`,
+      [id,person.body.name,dates[0],id,person.body.name,dates[1]]);
+    const requests=[];
+    for(const [index,paymentType] of ['Paid','Unpaid','Paid'].entries()) {
+      const leave=await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType,
+        fromDate:dates[index+1],toDate:dates[index+1],reason:'Paid and unpaid payroll regression'});
+      assert.equal(leave.status,201,JSON.stringify(leave.body));requests.push(leave.body.id);
+    }
+    const body={companyId:1,periodStart:dates[0],periodEnd:dates[3],payFrequency:frequency};
+    const initial=await call(owner,'POST','/payroll',body);
+    assert.equal(initial.status,201,JSON.stringify(initial.body));
+    const findSlip=async()=> (await call(owner,'GET',`/payroll/${initial.body.id}`)).body.payslips.find(row=>row.employeeCode===person.body.code);
+    const before=await findSlip();
+    assert.equal(Number(before.basic),1600,'pending leave is not paid');
+    for(const requestId of requests.slice(0,2))assert.equal((await call(owner,'PATCH',`/employees/leave/${requestId}`,{status:'Approved'})).status,200);
+    const rebuilt=await call(owner,'POST','/payroll',body);
+    assert.equal(rebuilt.status,201,JSON.stringify(rebuilt.body));
+    assert.equal(rebuilt.body.id,initial.body.id);
+    const after=await findSlip();
+    assert.equal(Number(after.daysPresent),1);
+    assert.equal(Number(after.daysAbsent),0,'approved leave supersedes an absent import marker');
+    assert.equal(Number(after.paidLeaveDays),1);
+    assert.equal(Number(after.unpaidLeaveDays),1);
+    assert.equal(Number(after.payableDays),2);
+    assert.equal(Number(after.paidLeavePay),1600);
+    assert.equal(Number(after.basic)-Number(before.basic),1600);
+    assert.equal(Number(after.basic),3200);
+    assert.equal(Number(after.netPay),3200);
+    assert.equal(Number(after.unpaidLeaveDeduction),0);
+    assert.equal(Number(after.overtimePay),0);
+    assert.equal(Number(after.lateDeduction),0);
+    const [[allocation]]=await admin.query(`SELECT SUM(amount) amount FROM ${testDatabase}.payroll_project_allocations
+      WHERE employee_id=? AND source_type='Attendance'`,[id]);
+    assert.equal(Number(allocation.amount),1600,'paid leave is not spread over the site worked-day allocation');
+    await admin.query(`UPDATE ${testDatabase}.attendance SET state='Checked out',check_in='07:30',check_out='16:30' WHERE employee_id=? AND work_date=?`,[id,dates[1]]);
+    const conflict=await call(owner,'POST','/payroll',body);
+    assert.equal(conflict.status,409,JSON.stringify(conflict.body));
+    assert.match(conflict.body.error,/leave conflicts with worked attendance/);
+    assert.deepEqual(await findSlip(),after,'conflict rolls back the entire rebuild');
+    await admin.query(`UPDATE ${testDatabase}.attendance SET state='Absent',check_in=NULL,check_out=NULL WHERE employee_id=? AND work_date=?`,[id,dates[1]]);
+    for(const status of ['Approved','Paid'])assert.equal((await call(owner,'PATCH',`/payroll/${initial.body.id}`,{status})).status,200);
+    assert.equal((await call(owner,'PATCH',`/employees/leave/${requests[0]}`,{status:'Pending'})).status,200);
+    assert.equal(Number((await findSlip()).paidLeavePay),1600,'paid history is never recalculated from changed leave requests');
+    assert.equal((await call(owner,'POST','/payroll',body)).status,409);
+    // Test-only cleanup: production endpoints never reopen a paid run.
+    await admin.query(`UPDATE ${testDatabase}.payroll_runs SET status='Draft' WHERE id=?`,[initial.body.id]);
+    assert.equal((await call(owner,'DELETE',`/payroll/${initial.body.id}`)).status,204);
+  }
+  await admin.query(`DELETE FROM ${testDatabase}.leave_policies WHERE id=?`,[leavePolicy.body.id]);
+});
+
 test('biometric attendance pays automatic OT and minute lateness for every category using dated settings', async () => {
   const owner=await login();
   const firstDate=shift(1400),secondDate=shift(1401);

@@ -44,6 +44,7 @@ parent-run deletion audit, not the full child snapshot; retain the verified full
 It requires permission to create a stored procedure. Do not disable foreign key checks.
 
 See `PAYROLL_ATTENDANCE_CALCULATIONS.md` for dated OT/late calculation and review rules.
+See `PAYROLL_PAID_LEAVE.md` for approved paid-leave salary and attendance conflict handling.
 No direct deletion is required after the new application is deployed: an exact-period
 Draft can simply be generated again. Deploy backend and frontend together; old servers
 will continue rejecting duplicate periods. Stop old workers before starting the new release.

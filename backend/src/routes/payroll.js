@@ -4,6 +4,7 @@ import { audit, getOne, nextReference, pool, query, transaction } from '../db.js
 import { auth, permit, permissionsFor, validate, wrap, fail } from '../lib/http.js';
 import {clearDraftPayroll,lockPayrollRun} from '../lib/payroll-drafts.js';
 import {calculateAttendancePayroll} from '../lib/attendance-payroll.js';
+import {calculatePayrollLeave} from '../lib/payroll-leave.js';
 import { PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES, calculatePayslip, payProfileError } from '../lib/payroll-policy.js';
 import {rulesFor,calculateTransport,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
 import { contributionEligibility, DEFAULT_STATUTORY_RULES } from '../lib/statutory-eligibility.js';
@@ -203,7 +204,8 @@ router.patch('/settings/employees/:id', auth, permit("hr.settings"), validate(pa
 router.get('/:id', auth, permit('hr.payroll'), wrap(async (req, res) => {
   const run = await getOne(`${select} WHERE r.id=?`, [req.params.id]);
   if (!run) return res.status(404).json({ error: 'Payroll run not found' });
-  const payslips = await query(`SELECT s.id,s.days_present daysPresent,s.days_absent daysAbsent,s.overtime_hours overtimeHours,
+  const payslips = await query(`SELECT s.id,s.days_present daysPresent,s.days_absent daysAbsent,s.paid_leave_days paidLeaveDays,
+    s.unpaid_leave_days unpaidLeaveDays,s.paid_leave_pay paidLeavePay,COALESCE(s.payable_days,s.days_present+s.paid_leave_days) payableDays,s.overtime_hours overtimeHours,
     s.basic,s.contribution_base contributionBase,s.overtime_pay overtimePay,s.late_minutes lateMinutes,s.late_deduction lateDeduction,s.unpaid_leave_deduction unpaidLeaveDeduction,
     s.office_ot_hours officeOtHours,s.office_ot_pay officeOtPay,s.site_ot_hours siteOtHours,s.site_ot_pay siteOtPay,
     s.travel_ot_hours travelOtHours,s.travel_ot_pay travelOtPay,s.allowance_total allowanceTotal,
@@ -256,14 +258,6 @@ export async function generatePayroll(req, res) {
       const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,e.payroll_category,e.payroll_company_id,e.worker_type,
           e.epf_eligible,e.etf_eligible,e.contribution_start_date,e.join_date,e.employment_type,e.allowance_eligibility,
           ((SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1) legacy_name_unique,
-          (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR (a.employee_id IS NULL AND a.employee_name=e.name
-            AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1))
-            AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip')) days_present,
-          (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR (a.employee_id IS NULL AND a.employee_name=e.name
-            AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1))
-            AND a.work_date BETWEEN ? AND ? AND a.state='Absent') days_absent,
-          (SELECT COALESCE(SUM(GREATEST(0,1-DATEDIFF(GREATEST(l.from_date,?),LEAST(l.to_date,?)))),0) FROM visible_leave_requests l WHERE l.employee_id=e.id AND l.status='Approved'
-            AND l.payment_type='Unpaid') unpaid_days,
           (SELECT COALESCE(SUM(GREATEST(0,ABS(pe.amount)-COALESCE(
               (SELECT SUM(sar.amount) FROM salary_advance_recoveries sar WHERE sar.entry_id=pe.id),0))),0)
             FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
@@ -271,21 +265,26 @@ export async function generatePayroll(req, res) {
               AND pe.entry_date<=?) salary_advance
         FROM visible_employees e WHERE e.status <> 'Left' AND e.payroll_company_id=? AND e.pay_frequency=?
           AND COALESCE(e.compensation_effective_from,e.join_date)<=? ORDER BY e.code FOR UPDATE`,
-      [...Array.from({ length: 3 }, () => [periodStart, periodEnd]).flat(), periodEnd, companyId, payFrequency, periodEnd]);
+      [periodEnd, companyId, payFrequency, periodEnd]);
 
       if (!employees.length) throw fail(409,`No active ${payFrequency.toLowerCase()}-paid employees fall inside this period`);
       const attendanceRows=await query(`SELECT * FROM visible_attendance WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id`,[periodStart,periodEnd]);
       const otRows=await query('SELECT * FROM visible_overtime_records WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id',[periodStart,periodEnd]);
       const travelClaims=await query("SELECT * FROM visible_hr_payroll_claims WHERE kind='Travel' AND work_date BETWEEN ? AND ?",[periodStart,periodEnd]);
       const datedPolicies=await query('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC',[companyId,periodEnd]);
+      const approvedLeave=await query("SELECT * FROM visible_leave_requests WHERE status='Approved' AND from_date<=? AND to_date>=? ORDER BY from_date,id",[periodEnd,periodStart]);
       for (const row of employees) {
         const eligibility = contributionEligibility(row, policy, periodEnd);
         row.epf_eligible = eligibility.epf;
         row.etf_eligible = eligibility.etf;
         const days=attendanceRows.filter(a=>Number(a.employee_id)===Number(row.id)||!a.employee_id&&a.employee_name===row.name&&row.legacy_name_unique);
         try {
-          Object.assign(row,calculateAttendancePayroll(row,days,otRows.filter(o=>Number(o.employee_id)===Number(row.id)),
+          const leave=calculatePayrollLeave(row,days,approvedLeave,periodStart,periodEnd);
+          const {attendance,detail,...leaveCounts}=leave;
+          Object.assign(row,leaveCounts);
+          Object.assign(row,calculateAttendancePayroll(row,attendance,otRows.filter(o=>Number(o.employee_id)===Number(row.id)),
             datedPolicies,travelClaims.filter(c=>Number(c.employee_id)===Number(row.id))));
+          row.calculation_detail.leave=detail;
         } catch(error) {throw fail(409,`${row.name}: ${error.message}`);}
       }
       const covered=await getOne(`SELECT ps.employee_id FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1 FOR UPDATE`,[...employees.map(e=>e.id),periodEnd,periodStart]);
@@ -303,9 +302,8 @@ export async function generatePayroll(req, res) {
       let total = 0;
       for (const employee of employees) {
         const rules=rulesFor(policy);
-        const extraStates=[...(rules.countLeaveForTransport?['On leave']:[]),...(rules.countAbsenceForTransport?['Absent']:[])];
-        const [extraDays]=extraStates.length?await connection.query(`SELECT COUNT(DISTINCT work_date) days FROM visible_attendance WHERE employee_id=? AND work_date BETWEEN ? AND ? AND state IN (${extraStates.map(()=>'?').join(',')})`,[employee.id,periodStart,periodEnd,...extraStates]):[[{days:0}]];
-        const eligibleTransportDays=Number(employee.days_present)+Number(extraDays[0].days);
+        const eligibleTransportDays=Number(employee.days_present)+(rules.countLeaveForTransport?employee.leave_days_for_transport:0)
+          +(rules.countAbsenceForTransport?employee.absent_days_for_transport:0);
         const eligibility=typeof employee.allowance_eligibility==='string'?JSON.parse(employee.allowance_eligibility):employee.allowance_eligibility||{};
         const employeeComponents = components.filter(row => row.employee_id === employee.id && (row.allowance_type==='Other'||eligibility[{Transport:'transport','Machine/operator':'machine','Special duty':'specialDuty'}[row.allowance_type]])).map(row=>{
           if(row.calculation_method==='Attendance-prorated amount'&&row.allowance_type!=='Transport')return {...row,amount:money(Number(row.amount)/rulesFor(policy).transportDivisor*Number(employee.days_present)),formula:`${row.amount} ÷ ${rulesFor(policy).transportDivisor} × ${employee.days_present} eligible attendance days`};
@@ -334,7 +332,8 @@ export async function generatePayroll(req, res) {
           calculation.epfEmployerContribution, calculation.etfEmployerContribution, calculation.otherDeduction,
           calculation.unpaidLeaveDeduction, calculation.salaryAdvanceDeduction, calculation.deductions,
           calculation.netPay, calculation.employerCost]);
-        await connection.execute('UPDATE payslips SET calculation_detail=? WHERE id=?',[JSON.stringify(employee.calculation_detail),slip.insertId]);
+        await connection.execute('UPDATE payslips SET calculation_detail=?,paid_leave_days=?,unpaid_leave_days=?,payable_days=?,paid_leave_pay=? WHERE id=?',
+          [JSON.stringify(employee.calculation_detail),calculation.paidLeaveDays,calculation.unpaidLeaveDays,calculation.payableDays,calculation.paidLeavePay,slip.insertId]);
 
         for (const component of employeeComponents) await connection.execute(`INSERT INTO payslip_components
           (payslip_id,source_component_id,name,kind,amount,calculation_detail,claim_id) VALUES (?,?,?,?,?,?,?)`,
@@ -347,7 +346,7 @@ export async function generatePayroll(req, res) {
           await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Claim',?,?)",[slip.insertId,c.project_id,employee.id,c.work_date,c.id,component.amount]);
         }
         const [sourceDays]=await connection.query(`SELECT a.id,a.project_id,a.work_date FROM visible_attendance a WHERE a.employee_id=? AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip') AND a.project_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM daily_cost_lines l JOIN daily_cost_sheets s ON s.id=l.sheet_id WHERE l.employee_id=a.employee_id AND s.work_date=a.work_date AND s.status IN ('Submitted','Approved'))`,[employee.id,periodStart,periodEnd]);
-        for(const a of sourceDays)await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Attendance',?,?)",[slip.insertId,a.project_id,employee.id,a.work_date,a.id,money((calculation.basic-calculation.unpaidLeaveDeduction)/Math.max(1,employee.days_present))]);
+        for(const a of sourceDays)await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Attendance',?,?)",[slip.insertId,a.project_id,employee.id,a.work_date,a.id,money(employee.daily_rate)]);
 
         /* Recover oldest advances first and keep any unpaid remainder for a later run. */
         let remaining = calculation.salaryAdvanceDeduction;
