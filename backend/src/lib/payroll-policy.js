@@ -91,7 +91,7 @@ export function calculatePayslip(employee, policy, components = []) {
     ? money(contributionBase * Number(policy.etf_employer_rate) / 100)
     : 0;
   const beforeAdvance = Math.max(0,
-    grossEarnings + reimbursementTotal - unpaidLeaveDeduction - otherDeduction - epfEmployeeDeduction);
+    grossEarnings + reimbursementTotal - unpaidLeaveDeduction - lateDeduction - otherDeduction - epfEmployeeDeduction);
   const salaryAdvanceDeduction = money(Math.min(beforeAdvance, Number(employee.salary_advance)));
   const deductions = money(unpaidLeaveDeduction + lateDeduction + otherDeduction + epfEmployeeDeduction + salaryAdvanceDeduction);
   const netPay = money(Math.max(0, grossEarnings + reimbursementTotal - deductions));

@@ -3353,6 +3353,8 @@ export async function migrate() {
   await addColumn('employee_pay_components','calculation_method',"VARCHAR(50) NOT NULL DEFAULT 'Fixed full amount'");
   await addColumn('employee_pay_components','allowance_type',"VARCHAR(50) NOT NULL DEFAULT 'Other'");
   await addColumn('payslip_components','calculation_detail','TEXT NULL');
+  await addColumn('payslips','calculation_detail','JSON NULL');
+  await modifyColumn('payroll_project_allocations','source_type',"ENUM('Attendance','Overtime','Claim','Attendance OT') NOT NULL");
   await addColumn('supplier_invoices','verified_by','BIGINT UNSIGNED NULL');
   await addColumn('supplier_invoices','verified_at','DATETIME NULL');
   await query(`CREATE TABLE IF NOT EXISTS employee_offboarding_cases (

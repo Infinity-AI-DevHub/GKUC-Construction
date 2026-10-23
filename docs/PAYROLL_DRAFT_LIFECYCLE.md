@@ -10,7 +10,7 @@ Approved and Paid payroll cannot be deleted or rebuilt.
 
 The previous run, payslips, components, advance recoveries and project allocations are
 copied into the audit trail before the generated children are removed. The same parent
-run is then rebuilt from attendance, approved recorded OT, approved claims, current
+run is then rebuilt from attendance-based Office/Site OT, reviewed OT decisions, approved claims, current
 employee compensation, effective payroll policy and recurring components. Its generated
 timestamp is refreshed so attendance corrections already included no longer appear as
 corrections after that draft.
@@ -43,10 +43,12 @@ back automatically on any SQL exception and refuses Approved/Paid runs. It recor
 parent-run deletion audit, not the full child snapshot; retain the verified full backup.
 It requires permission to create a stored procedure. Do not disable foreign key checks.
 
+See `PAYROLL_ATTENDANCE_CALCULATIONS.md` for dated OT/late calculation and review rules.
 No direct deletion is required after the new application is deployed: an exact-period
 Draft can simply be generated again. Deploy backend and frontend together; old servers
-will continue rejecting duplicate periods. These features do not depend on a schema
-change. The separate OT-source migration still runs as described in its rollout guide.
+will continue rejecting duplicate periods. Stop old workers before starting the new release.
+Attendance calculation snapshots and their project allocation source require the startup
+schema migration. The separate OT-source migration still runs as described in its rollout guide.
 
 ## Verification
 

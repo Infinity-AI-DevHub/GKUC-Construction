@@ -4,6 +4,7 @@ import {query,getOne,transaction,audit,pool} from '../db.js';
 import {auth,permit,validate,wrap,fail} from '../lib/http.js';
 import {rulesFor,suggestOvertime,calculateMileage,calculateLongDistance,intervalsOverlap,minutes} from '../lib/hr-payroll-rules.js';
 import {resolveOvertimeRate} from '../lib/payroll-policy.js';
+import {attendanceOvertimeType} from '../lib/attendance-payroll.js';
 const router=Router();router.use(auth,permit('hr.payroll'));
 const parse=value=>typeof value==='string'?JSON.parse(value):value||{};
 const date=z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -80,7 +81,7 @@ router.post('/suggestions/:attendanceId',validate(z.object({hours:z.number().pos
   const policy=await getOne('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.payroll_company_id,attendance.work_date]);if(!policy)throw fail(409,'Configure a payroll policy for this date.');
   const suggestion=suggestOvertime(attendance,rulesFor(policy));
   if(!suggestion.intervals.length)throw fail(409,'Valid attended times are required. No payable OT is allowed on absent or leave days.');
-  const type=attendance.work_location==='Office'?'Office':'Site';
+  const type=attendanceOvertimeType(employee,attendance);
   await transaction(async conn=>{
     await conn.query('SELECT id FROM visible_employees WHERE id=? FOR UPDATE',[employee.id]);
     const [existing]=await conn.query('SELECT * FROM visible_overtime_records WHERE employee_id=? AND work_date=?',[employee.id,attendance.work_date]);

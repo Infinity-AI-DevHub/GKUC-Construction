@@ -447,7 +447,7 @@ function PolicyForm({ companyId, policy, close, reload }) {
     <Field name="minimumMonthlySalary" label="Minimum monthly EPF/ETF salary basis (LKR)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.minimumMonthlySalary ?? 30000} />
     <Field name="weeklyWeeksPerMonth" label="Weeks per month for weekly-rate comparison" type="number" min="0.01" step="0.000001" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.weeklyWeeksPerMonth ?? 52/12} />
     <Field name="dailyDaysPerMonth" label="Days per month for daily-rate comparison" type="number" min="0.01" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.dailyDaysPerMonth ?? 25} />
-    <div className="payroll-policy-heading wide"><span>03</span><div><strong>Working hours and overtime</strong><p>Attendance suggests Site OT. HR must review and confirm it before payroll.</p></div></div>
+    <div className="payroll-policy-heading wide"><span>03</span><div><strong>Working hours and overtime</strong><p>Office/Site OT comes from attended times. Travel OT requires an approved claim.</p></div></div>
     {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],otInterval:['OT rounding interval (hours, rounded down)',0.25,'number'],minimumOt:['Minimum payable OT (hours)',0.25,'number'],otGraceMinutes:['Unpaid time after normal work ends (minutes)',15,'number'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} defaultValue={['otInterval','minimumOt'].includes(name) && (typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.otGraceMinutes === undefined ? fallback : (typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
     <div className="payroll-policy-heading wide"><span>04</span><div><strong>Late-arrival deductions</strong><p>The first 30 minutes are free. Each minute beyond the grace period deducts 1/60 of the employee's hourly rate.</p></div></div>
     <Field name="paidHoursPerDay" label="Paid working hours used to calculate hourly rate" type="number" min="0.01" max="24" step="0.01" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.paidHoursPerDay??8}/>
@@ -533,6 +533,8 @@ function PayrollDetail({ run, close }) {
   const gross = run.payslips.reduce((sum, slip) => sum + Number(slip.grossEarnings), 0);
   const deductions = run.payslips.reduce((sum, slip) => sum + Number(slip.deductions), 0);
   const employerCost = run.payslips.reduce((sum, slip) => sum + Number(slip.employerCost), 0);
+  const calculations=run.payslips.map(slip=>({employee:slip.employee,code:slip.employeeCode,
+    detail:typeof slip.calculationDetail==='string'?JSON.parse(slip.calculationDetail):slip.calculationDetail})).filter(row=>row.detail);
   return <Modal title={`${run.reference} · ${run.payFrequency} · ${shortDate(run.periodStart)} to ${shortDate(run.periodEnd)}`} close={close} wide>
     <div className="report-form">
       <WorkflowChecklist title="Monthly payroll path" steps={payrollSteps(run)} />
@@ -542,7 +544,23 @@ function PayrollDetail({ run, close }) {
         <div><span>Total deductions</span><strong>{rupees(deductions)}</strong></div>
         <div><span>Total net pay</span><strong>{rupees(run.total)}</strong></div>
         <div><span>Total employer cost</span><strong>{rupees(employerCost)}</strong></div>
+        {calculations.some(person=>person.detail.warnings?.length>0)&&<div><span>Needs review</span><strong>{calculations.reduce((sum,person)=>sum+(person.detail.warnings?.length||0),0)} calculation warning(s)</strong></div>}
       </div>
+      {!!calculations.length && <details className="payroll-breakdown-details wide"><summary>OT and late deductions by work date</summary>
+        <Table title="OT calculation" columns={['Employee','Date / policy','Type / source','Hours','Rate','OT pay']} template="minmax(160px,1fr) 150px 160px 80px 110px 110px">
+          {calculations.flatMap(person=>(person.detail.overtime||[]).map((row,index)=><Row key={`${person.code}-ot-${index}`} template="minmax(160px,1fr) 150px 160px 80px 110px 110px">
+            <span>{person.employee}<small>{person.code}</small></span><span>{shortDate(row.workDate)}<small>Policy #{row.policyId}</small></span>
+            <span>{row.type}<small>{row.source}</small></span><span>{row.hours}</span><span>{rupees(row.rate)}</span><strong>{rupees(row.amount)}</strong>
+          </Row>))}
+        </Table>
+        <Table title="Late deduction calculation" columns={['Employee','Date / policy','Arrival / start','Late min','Grace min','Charged min','Deduction']} template="minmax(160px,1fr) 150px 150px 85px 85px 95px 110px">
+          {calculations.flatMap(person=>(person.detail.attendance||[]).map((row,index)=><Row key={`${person.code}-late-${index}`} template="minmax(160px,1fr) 150px 150px 85px 85px 95px 110px">
+            <span>{person.employee}<small>{person.code}</small></span><span>{shortDate(row.workDate)}<small>Policy #{row.policyId}</small></span>
+            <span>{row.checkIn||'-'}<small>{row.normalStart}</small></span><span>{row.lateMinutes}</span><span>{row.graceMinutes}</span><span>{row.deductibleMinutes}</span><strong>{rupees(row.lateDeduction)}</strong>
+          </Row>))}
+        </Table>
+        {calculations.flatMap(person=>(person.detail.warnings||[]).map((row,index)=><p className="form-note" key={`${person.code}-warning-${index}`}>{person.employee} · {shortDate(row.workDate)}: {row.message}</p>))}
+      </details>}
       <div className="payroll-payslip-list wide">
         <div className="payroll-policy-heading"><span>01</span><div><strong>What each employee receives</strong><p>Earned salary is daily rate × attended days. The EPF/ETF basis is shown separately and is not added to pay.</p></div></div>
         {run.payslips.map(slip => <div className="payroll-payslip-card" key={slip.id}>
@@ -632,7 +650,7 @@ function PayrollForm({ companyId, company, close, reload }) {
     <SelectField name="payFrequency" label="Employees to pay" options={[["Daily", "Daily-paid employees"], ["Weekly", "Weekly-paid employees"], ["Monthly", "Monthly-paid employees"]]} defaultValue="Monthly" />
     <div className="qs-form-section wide"><span>02</span><div><h3>Calculation sources</h3><p>Review the inputs used in this draft.</p></div></div>
     <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
-      Only employees assigned to this payment frequency are included. Attendance, approved typed overtime,
+      Only employees assigned to this payment frequency are included. Attendance-based Office/Site OT, approved travel OT,
       recurring components, statutory eligibility and outstanding salary advances are calculated automatically.
     </p>
   </WorkflowForm>;
