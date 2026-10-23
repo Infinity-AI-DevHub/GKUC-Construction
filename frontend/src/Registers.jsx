@@ -71,8 +71,8 @@ export function AttendanceRegister({ projects = [], canCorrect = false }) {
               </tr>
             </thead>
             <tbody>
-              {register.rows.map(person => <tr key={person.name}>
-                <th className="register-name">{person.name}</th>
+              {register.rows.map(person => <tr key={person.employeeId || `legacy:${person.name}`}>
+                <th className="register-name">{person.name}{person.employeeCode && <> <small>({person.employeeCode})</small></>}</th>
                 {days.map(day => {
                   const entry = person.days[day];
                   return <td key={day}>

@@ -172,20 +172,33 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
   const skipped = [];
   let inserted = 0;
   let updated = 0;
+  let currentRecord;
 
   await transaction(async connection => {
-    for (const row of resolved) {
+    // Consistent employee lock order also serializes overlapping imports for the same person.
+    const ordered = [...resolved].sort((a, b) => a.employeeId - b.employeeId || a.date.localeCompare(b.date));
+    for (const row of ordered) {
+      currentRecord = row;
       const employeeId = row.employeeId || null;
-      const name = row.employee || row.name || row.code;
-      if (!name) { skipped.push({ ...row, why: 'No employee could be identified' }); continue; }
+      const [employees] = await connection.execute('SELECT name,designation FROM visible_employees WHERE id=? FOR UPDATE', [employeeId]);
+      const employee = employees[0];
+      if (!employee) throw Object.assign(new Error('An employee was deactivated while this import was being reviewed. Refresh the preview.'), { status: 409 });
+      const name = employee.name;
 
       const state = stateFor(row);
       const checkIn = ['Absent', 'On leave', 'Business trip'].includes(state) ? null : row.checkIn || null;
       const checkOut = ['Absent', 'On leave', 'Business trip'].includes(state) ? null : row.checkOut || null;
-      const [employee] = await connection.execute('SELECT designation FROM visible_employees WHERE id=?', [employeeId]);
       const [existing] = await connection.execute(
-        'SELECT * FROM visible_attendance WHERE (employee_id=? OR (employee_id IS NULL AND employee_name=?)) AND work_date=? LIMIT 1',
-        [employeeId, name, row.date]);
+        'SELECT * FROM attendance WHERE employee_id=? AND work_date=? LIMIT 1 FOR UPDATE', [employeeId, row.date]);
+      if (!existing.length) {
+        const [namesakes] = await connection.execute('SELECT id FROM employees WHERE name=?', [name]);
+        if (namesakes.length === 1) {
+          const [legacy] = await connection.execute(
+            'SELECT * FROM attendance WHERE employee_id IS NULL AND employee_name=? AND work_date=? ORDER BY id LIMIT 2 FOR UPDATE',
+            [name, row.date]);
+          if (legacy.length === 1) existing.push(legacy[0]);
+        }
+      }
       const workLocation = row.workLocation || (['Absent', 'On leave'].includes(state)
         ? 'Not working' : existing[0]?.work_location || 'Unassigned');
       const projectId = row.workLocation ? row.projectId
@@ -200,7 +213,7 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
         await connection.execute(
           `UPDATE attendance SET employee_name=?,role=?,project_id=?,work_location=?,check_in=?,check_out=?,state=?,employee_id=COALESCE(?,employee_id),
              needs_review=?,source='Biometric',correction_reason=COALESCE(?,correction_reason),confirmed_by=? WHERE id=?`,
-          [name, employee[0]?.designation || 'Worker', projectId, workLocation, checkIn, checkOut, state, employeeId,
+          [name, employee.designation || 'Worker', projectId, workLocation, checkIn, checkOut, state, employeeId,
             row.needsReview ? 1 : 0, row.correctionReason || null, req.user.id, existing[0].id]);
         if (row.correctionReason) await audit(connection, req.user.id, 'IMPORT_CORRECTION', 'attendance', existing[0].id,
           existing[0], { ...row, state, correctionReason: row.correctionReason }, req.ip);
@@ -210,7 +223,7 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
           `INSERT INTO attendance (employee_name,role,project_id,work_location,employee_id,work_date,check_in,check_out,state,
              needs_review,source,correction_reason,confirmed_by)
            VALUES (?,?,?,?,?,?,?,?,?,?,'Biometric',?,?)`,
-          [name, employee[0]?.designation || 'Worker', projectId, workLocation, employeeId, row.date,
+          [name, employee.designation || 'Worker', projectId, workLocation, employeeId, row.date,
             checkIn, checkOut, state, row.needsReview ? 1 : 0, row.correctionReason || null, req.user.id]);
         if (row.correctionReason) await audit(connection, req.user.id, 'IMPORT_CORRECTION', 'attendance', created.insertId,
           null, { ...row, state, correctionReason: row.correctionReason }, req.ip);
@@ -220,6 +233,12 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
     await audit(connection, req.user.id, 'IMPORT', 'attendance', null, null,
       { filename: req.body.filename || null, inserted, updated, skipped: skipped.length,
         locations: [...new Set(resolved.map(row => row.workLocation === 'Site' ? `Site:${row.projectId}` : row.workLocation))] }, req.ip);
+  }).catch(error => {
+    if (error.code !== 'ER_DUP_ENTRY') throw error;
+    if (error.sqlMessage?.includes('uq_employee_day')) {
+      throw Object.assign(new Error('The attendance database still uses the old name-based duplicate rule. Apply the latest attendance database migration, then retry. No attendance from this import was saved.'), { status: 409 });
+    }
+    throw Object.assign(new Error(`Attendance conflicts for ${currentRecord?.employee || currentRecord?.code || 'an employee'} on ${currentRecord?.date || 'a selected date'}. No attendance from this import was saved. Refresh the preview and retry.`), { status: 409 });
   });
 
   res.status(201).json({ site: 'assigned work locations', inserted, updated, skipped });

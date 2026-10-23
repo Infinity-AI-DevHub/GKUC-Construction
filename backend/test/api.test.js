@@ -1,7 +1,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import 'dotenv/config';
@@ -25,6 +25,113 @@ const shift = days => {
   date.setDate(date.getDate() + days);
   return date.toISOString().slice(0, 10);
 };
+
+test('full supplied biometric report imports and reimports without name collisions', {
+  skip: !process.env.GKUC_BIOMETRIC_REPORT_PATH
+}, async () => {
+  const { parseBiometricFile } = await import('../src/lib/biometric.js');
+  const source = parseBiometricFile({ filename: 'All Report.xls', buffer: await readFile(process.env.GKUC_BIOMETRIC_REPORT_PATH) });
+  assert.ok(source.rows.length);
+  const owner = await login();
+  const stamp = Date.now();
+  const codes = new Map();
+  for (const row of source.rows) {
+    if (codes.has(row.code)) continue;
+    const code = `REAL${stamp}-${row.code}`;
+    const person = await call(owner, 'POST', '/biometric/people', { code, name: row.name, firstDate: source.period.from });
+    assert.equal(person.status, 201, JSON.stringify(person.body));
+    codes.set(row.code, { code, id: person.body.id });
+  }
+  const rows = source.rows.map(row => ({ ...row, code: codes.get(row.code).code }));
+  const first = await call(owner, 'POST', '/biometric/commit', { filename: 'All Report.xls', rows });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal(first.body.inserted, source.rows.length);
+  const again = await call(owner, 'POST', '/biometric/commit', { filename: 'All Report.xls', rows });
+  assert.equal(again.status, 201, JSON.stringify(again.body));
+  assert.equal(again.body.inserted, 0);
+  assert.equal(again.body.updated, source.rows.length);
+  const ids = [...codes.values()].map(person => person.id);
+  const [[stored]] = await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.attendance WHERE employee_id IN (${ids.map(() => '?').join(',')})`, ids);
+  assert.equal(Number(stored.count), source.rows.length);
+  const run = await call(owner, 'POST', '/payroll', {
+    companyId: 1, periodStart: source.period.from, periodEnd: source.period.to, payFrequency: 'Monthly'
+  });
+  assert.equal(run.status, 201, JSON.stringify(run.body));
+  const detail = (await call(owner, 'GET', `/payroll/${run.body.id}`)).body;
+  for (const [originalCode, person] of codes) {
+    const expectedDays = source.rows.filter(row => row.code === originalCode
+      && (row.checkIn || row.checkOut || row.declaredState === 'Business trip')).length;
+    const slip = detail.payslips.find(row => row.employeeCode === `BIO-${person.code}`);
+    assert.ok(slip, `Payslip for scanner ${originalCode}`);
+    assert.equal(Number(slip.daysPresent), expectedDays, `Scanner ${originalCode} must only receive its own attendance`);
+  }
+});
+
+test('attendance identity migration replaces the legacy key without changing stored records', async () => {
+  const { migrateAttendanceIdentity } = await import('../src/lib/attendance-identity.js');
+  const connection = await mysql.createConnection({
+    host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD, database: testDatabase
+  });
+  try {
+    const [before] = await connection.query('SELECT * FROM attendance ORDER BY id');
+    await connection.query(`ALTER TABLE attendance ADD INDEX migration_employee_lookup (employee_id),
+      DROP INDEX uq_attendance_employee_day, ADD UNIQUE KEY uq_employee_day (employee_name,work_date)`);
+    const run = async (sql, params = []) => (await connection.query(sql, params))[0];
+    await migrateAttendanceIdentity(run);
+    await migrateAttendanceIdentity(run);
+    const [after] = await connection.query('SELECT * FROM attendance ORDER BY id');
+    assert.deepEqual(after, before);
+    const [indexes] = await connection.query('SHOW INDEX FROM attendance');
+    assert.ok(!indexes.some(row => row.Key_name === 'uq_employee_day'));
+    assert.deepEqual(indexes.filter(row => row.Key_name === 'uq_attendance_employee_day')
+      .sort((a, b) => a.Seq_in_index - b.Seq_in_index).map(row => row.Column_name), ['employee_id', 'work_date']);
+  } finally { await connection.end(); }
+});
+
+test('biometric import keeps same-name employees separate and reimports their days safely', async () => {
+  const owner = await login();
+  const stamp = Date.now();
+  const name = `Shared Attendance Name ${stamp}`;
+  const date = shift(-30);
+  const people = [];
+  for (const suffix of ['A', 'B']) {
+    const code = `SAME-${stamp}-${suffix}`;
+    const created = await call(owner, 'POST', '/biometric/people', { code, name, firstDate: date });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    people.push({ id: created.body.id, code });
+  }
+  const rows = people.map((person, index) => ({
+    code: person.code, date, checkIn: index ? '08:10:00' : '07:30:00', checkOut: '17:00:00'
+  }));
+  const [[empty]] = await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.attendance WHERE employee_name=?`, [name]);
+  assert.equal(Number(empty.count), 0);
+  const first = await call(owner, 'POST', '/biometric/commit', { rows });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal(first.body.inserted, 2);
+  const again = await call(owner, 'POST', '/biometric/commit', { rows });
+  assert.equal(again.status, 201, JSON.stringify(again.body));
+  assert.equal(again.body.inserted, 0);
+  assert.equal(again.body.updated, 2);
+  const [stored] = await admin.query(`SELECT employee_id,check_in FROM ${testDatabase}.attendance WHERE employee_name=? ORDER BY employee_id`, [name]);
+  assert.equal(stored.length, 2);
+  assert.deepEqual(stored.map(row => Number(row.employee_id)), people.map(person => person.id));
+  assert.deepEqual(stored.map(row => row.check_in), ['07:30:00', '08:10:00']);
+  for (const person of people) {
+    const profile = (await call(owner, 'GET', `/employees/${person.id}`)).body;
+    assert.equal(profile.attendance.length, 1, 'A same-name colleague must not appear in the employee profile');
+    assert.equal(profile.attendance[0].in, person.id === people[0].id ? '07:30:00' : '08:10:00');
+  }
+  const register = (await call(owner, 'GET', `/hr/attendance-register?month=${date.slice(0, 7)}`)).body;
+  const namesakes = register.rows.filter(row => row.name === name);
+  assert.equal(namesakes.length, 2);
+  assert.equal(new Set(namesakes.map(row => row.employeeId)).size, 2);
+  assert.ok(namesakes.every(row => row.present === 1));
+  const duplicate = await call(owner, 'POST', '/attendance', {
+    employeeId: people[0].id, date, workLocation: 'Office', state: 'On site'
+  });
+  assert.equal(duplicate.status, 409, 'Each employee must still have only one attendance row per day');
+});
 
 test('employee deactivation hides related records, preserves stored history and revokes access', async () => {
   const owner = await login();
@@ -1783,7 +1890,7 @@ test('several project members are assigned together and appear on the project', 
   assert.equal(assigned.status, 201, JSON.stringify(assigned.body));
   assert.equal(assigned.body.assigned, 3);
   const detail = await call(owner, 'GET', `/projects/${project.body.id}`);
-  assert.deepEqual(ids.sort(), detail.body.team.filter(member => ['Site team', 'Foreman'].includes(member.projectRole))
+  assert.deepEqual([...ids].sort(), detail.body.team.filter(member => ['Site team', 'Foreman'].includes(member.projectRole))
     .map(member => member.employeeId).sort());
   assert.equal(detail.body.team.some(member => Number(member.employeeId) === Number(ids[0]) && member.projectRole === 'Foreman'), true);
   const repeated = await call(owner, 'POST', `/projects/${project.body.id}/team/bulk`,

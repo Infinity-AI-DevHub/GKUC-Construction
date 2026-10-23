@@ -239,9 +239,12 @@ export async function generatePayroll(req, res) {
 
   const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,
       e.epf_eligible,e.etf_eligible,e.contribution_start_date,e.join_date,e.employment_type,e.allowance_eligibility,
-      (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR a.employee_name=e.name)
+      ((SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1) legacy_name_unique,
+      (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR (a.employee_id IS NULL AND a.employee_name=e.name
+        AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1))
         AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip')) days_present,
-      (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR a.employee_name=e.name)
+      (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR (a.employee_id IS NULL AND a.employee_name=e.name
+        AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1))
         AND a.work_date BETWEEN ? AND ? AND a.state='Absent') days_absent,
       (SELECT COALESCE(SUM(o.hours),0) FROM visible_overtime_records o WHERE o.employee_id=e.id
         AND o.work_date BETWEEN ? AND ? AND o.status='Approved') overtime_hours,
@@ -277,7 +280,7 @@ export async function generatePayroll(req, res) {
     const eligibility = contributionEligibility(row, policy, periodEnd);
     row.epf_eligible = eligibility.epf;
     row.etf_eligible = eligibility.etf;
-    const late=attendanceRows.filter(a=>Number(a.employee_id)===Number(row.id)||!a.employee_id&&a.employee_name===row.name)
+    const late=attendanceRows.filter(a=>Number(a.employee_id)===Number(row.id)||!a.employee_id&&a.employee_name===row.name&&row.legacy_name_unique)
       .map(a=>calculateLateDeduction(a,activeRules,row.daily_rate));
     row.late_minutes=late.reduce((sum,item)=>sum+item.lateMinutes,0);
     row.late_deduction=money(late.reduce((sum,item)=>sum+item.amount,0));

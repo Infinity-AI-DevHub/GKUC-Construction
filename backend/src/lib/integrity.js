@@ -333,7 +333,7 @@ async function selfApproval(found) {
  * Attendance recorded against a name that is not on the employee register.
  *
  * The obvious ghost-worker check — one person on two sites at once — cannot happen here:
- * the attendance table has a unique key on the name and the day, so the database refuses it
+ * the attendance table has a unique key on the employee ID and the day, so the database refuses it
  * outright. That is a better control than any detector, and it is already in place.
  *
  * What it does not stop is a name being added that belongs to nobody. A day's work booked
