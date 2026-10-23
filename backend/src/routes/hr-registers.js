@@ -37,13 +37,13 @@ router.get('/hr/attendance-register', auth, permit('hr.manage', 'hr.attendance')
         SELECT a.id,a.employee_name name,a.work_date workDate,a.state,a.check_in checkIn,
                a.check_out checkOut,a.project_id projectId,a.work_location workLocation,
                a.source,a.correction_reason correctionReason,p.name project
-          FROM attendance a LEFT JOIN projects p ON p.id=a.project_id
+          FROM visible_attendance a LEFT JOIN projects p ON p.id=a.project_id
          WHERE a.work_date BETWEEN ? AND ?
          ORDER BY a.employee_name, a.work_date`, [period.from, period.to]);
 
       const leave = await query(`
         SELECT e.name, l.from_date fromDate, l.to_date toDate, l.leave_type leaveType
-          FROM leave_requests l JOIN employees e ON e.id=l.employee_id
+          FROM visible_leave_requests l JOIN visible_employees e ON e.id=l.employee_id
          WHERE l.status='Approved' AND l.to_date >= ? AND l.from_date <= ?`,
       [period.from, period.to]);
 
@@ -108,13 +108,13 @@ router.get('/hr/leave-register', auth, permit('hr.view', 'hr.leave'), async (req
       SELECT e.id,e.code,e.name,e.designation,d.name department,e.join_date joinDate,
              e.annual_leave_entitlement annualEntitlement,
              e.casual_leave_entitlement casualEntitlement
-        FROM employees e LEFT JOIN departments d ON d.id=e.department_id
+        FROM visible_employees e LEFT JOIN departments d ON d.id=e.department_id
        WHERE e.status <> 'Left' ORDER BY e.name`);
 
     const taken = await query(`
       SELECT l.employee_id employeeId, l.leave_type leaveType, l.status,
              SUM(l.days) days, COUNT(*) occasions
-        FROM leave_requests l
+        FROM visible_leave_requests l
        WHERE l.from_date <= ? AND l.to_date >= ? AND l.status IN ('Approved','Pending')
        GROUP BY l.employee_id, l.leave_type, l.status`, [to, from]);
 

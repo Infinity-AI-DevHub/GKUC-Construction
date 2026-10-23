@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, today, transaction } from '../db.js';
-import { auth, can, permit, validate, wrap, fromOptions } from '../lib/http.js';
+import { auth as authenticate, can, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
 import {offboardingChecklist} from '../lib/offboarding.js';
 import {suggestOvertime,rulesFor,minutes,intervalsOverlap} from '../lib/hr-payroll-rules.js';
@@ -13,8 +13,46 @@ import { sendDocument } from '../lib/document-pdf.js';
 import { readUpload, readUploadedFile } from '../lib/storage.js';
 import { readWorkbook, serialToDate } from '../lib/xlsx.js';
 import { STYLE, writeWorkbook } from '../lib/xlsx-write.js';
+import { publishChange } from '../lib/realtime.js';
 
 const router = Router();
+// A one-use document ticket must be authenticated once, including the employee visibility guard.
+const auth = (req, res, next) => req.user ? next() : authenticate(req, res, next);
+
+router.use((req, res, next) => {
+  const id = req.path.match(/^\/(\d+)(?:\/|$)/)?.[1];
+  if (!id || req.path === `/${id}/deactivate`) return next();
+  auth(req, res, error => {
+    if (error) return next(error);
+    wrap(async (_req, _res, proceed) => {
+      if (!await getOne('SELECT id FROM visible_employees WHERE id=?', [id])) {
+        return res.status(404).json({ error: 'Employee not found' });
+      }
+      proceed();
+    })(req, res, next);
+  });
+});
+
+router.post('/:id/deactivate', auth, permit('hr.manage'), wrap(async (req, res) => {
+  await transaction(async connection => {
+    const [rows] = await connection.execute('SELECT * FROM `employees` WHERE id=? FOR UPDATE', [req.params.id]);
+    const employee = rows[0];
+    if (!employee) throw Object.assign(new Error('Employee not found'), { status: 404 });
+    if (employee.deactivated_at) return;
+    if (Number(employee.user_id) === Number(req.user.id)) {
+      throw Object.assign(new Error('You cannot deactivate your own employee record.'), { status: 409 });
+    }
+    await connection.execute('UPDATE employees SET deactivated_at=NOW(),deactivated_by=? WHERE id=?', [req.user.id, employee.id]);
+    if (employee.user_id) {
+      await connection.execute('UPDATE users SET active=0 WHERE id=?', [employee.user_id]);
+      await connection.execute('DELETE FROM sessions WHERE user_id=?', [employee.user_id]);
+    }
+    await audit(connection, req.user.id, 'DEACTIVATE', 'employee', employee.id,
+      { deactivated: false }, { deactivated: true }, req.ip);
+  });
+  publishChange('employees', { id: Number(req.params.id) });
+  res.status(204).end();
+}));
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 const employeeSchema = z.object({
@@ -101,7 +139,7 @@ async function employeeImportContext() {
   const [departments, companies, employees] = await Promise.all([
     query('SELECT id,name FROM departments ORDER BY name'),
     query('SELECT id,name FROM companies WHERE active=1 ORDER BY id'),
-    query('SELECT code,email,nic_number nicNumber FROM employees')
+    query('SELECT code,email,nic_number nicNumber FROM visible_employees')
   ]);
   return { departments, companies, employees };
 }
@@ -166,7 +204,7 @@ const listQuery = `SELECT e.id,e.code,e.name,e.designation,e.phone,e.email,e.sta
   e.custom_office_ot_rate customOfficeOtRate,e.custom_site_ot_rate customSiteOtRate,e.custom_travel_ot_rate customTravelOtRate,
   e.department_id departmentId,d.name department,
   e.notes,e.photo_url photoUrl,e.biometric_id biometricId,e.worker_type workerType,e.current_project_id currentProjectId,cp.name currentProject
-  FROM employees e LEFT JOIN departments d ON d.id=e.department_id LEFT JOIN projects cp ON cp.id=e.current_project_id`;
+  FROM visible_employees e LEFT JOIN departments d ON d.id=e.department_id LEFT JOIN projects cp ON cp.id=e.current_project_id`;
 
 /*
  * What someone earns is not part of "view employee records".
@@ -208,12 +246,12 @@ router.post('/leave/settings', auth, permit('hr.manage'), validate(z.object({
   } catch(error) { if(error.code==='ER_DUP_ENTRY') return res.status(409).json({error:'A leave policy already starts on this date. Choose a different effective date.'}); throw error; }
 }));
 router.get('/:id/leave-entitlement',auth,permit('hr.leave','hr.manage'),wrap(async(req,res)=>{
-  const row=await getOne('SELECT id,annual_leave_entitlement annual,casual_leave_entitlement casual FROM employees WHERE id=?',[req.params.id]);
+  const row=await getOne('SELECT id,annual_leave_entitlement annual,casual_leave_entitlement casual FROM visible_employees WHERE id=?',[req.params.id]);
   if(!row)return res.status(404).json({error:'Employee not found.'});
   res.json(row);
 }));
 router.put('/:id/leave-entitlement',auth,permit('hr.manage'),validate(z.object({annual:z.number().min(0).max(365),casual:z.number().min(0).max(365)})),wrap(async(req,res)=>{
-  const before=await getOne('SELECT annual_leave_entitlement annual,casual_leave_entitlement casual FROM employees WHERE id=?',[req.params.id]);
+  const before=await getOne('SELECT annual_leave_entitlement annual,casual_leave_entitlement casual FROM visible_employees WHERE id=?',[req.params.id]);
   if(!before)return res.status(404).json({error:'Employee not found.'});
   await query('UPDATE employees SET annual_leave_entitlement=?,casual_leave_entitlement=? WHERE id=?',[req.body.annual,req.body.casual,req.params.id]);
   await audit(pool,req.user.id,'UPDATE','leave_entitlement',req.params.id,before,req.body,req.ip);
@@ -228,16 +266,16 @@ const bankAccountSchema = z.object({
   accountHolderName: z.string().trim().min(2).max(180)
 });
 router.get('/:id/bank-account', auth, permit('hr.payroll','hr.manage'), wrap(async (req, res) => {
-  const employee = await getOne('SELECT id FROM employees WHERE id=?', [req.params.id]);
+  const employee = await getOne('SELECT id FROM visible_employees WHERE id=?', [req.params.id]);
   if (!employee) return res.status(404).json({ error: 'Employee not found.' });
   const account = await getOne(`SELECT bank_name bankName,branch_name branchName,account_number accountNumber,
-    account_holder_name accountHolderName,updated_at updatedAt FROM employee_bank_accounts WHERE employee_id=?`, [req.params.id]);
+    account_holder_name accountHolderName,updated_at updatedAt FROM visible_employee_bank_accounts WHERE employee_id=?`, [req.params.id]);
   res.json(account || null);
 }));
 router.put('/:id/bank-account', auth, permit('hr.manage'), validate(bankAccountSchema), wrap(async (req, res) => {
-  const employee = await getOne('SELECT id FROM employees WHERE id=?', [req.params.id]);
+  const employee = await getOne('SELECT id FROM visible_employees WHERE id=?', [req.params.id]);
   if (!employee) return res.status(404).json({ error: 'Employee not found.' });
-  const before = await getOne('SELECT bank_name,branch_name,account_number,account_holder_name FROM employee_bank_accounts WHERE employee_id=?', [req.params.id]);
+  const before = await getOne('SELECT bank_name,branch_name,account_number,account_holder_name FROM visible_employee_bank_accounts WHERE employee_id=?', [req.params.id]);
   const b = req.body;
   await query(`INSERT INTO employee_bank_accounts (employee_id,bank_name,branch_name,account_number,account_holder_name,updated_by)
     VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE bank_name=VALUES(bank_name),branch_name=VALUES(branch_name),
@@ -250,7 +288,7 @@ router.put('/:id/bank-account', auth, permit('hr.manage'), validate(bankAccountS
 
 /* Departments */
 router.get('/departments', auth, permit('hr.view','hr.manage'), wrap(async (_req, res) => res.json(await query(`SELECT d.id,d.name,d.description,
-  (SELECT COUNT(*) FROM employees e WHERE e.department_id=d.id) headcount FROM departments d ORDER BY d.name`))));
+  (SELECT COUNT(*) FROM visible_employees e WHERE e.department_id=d.id) headcount FROM departments d ORDER BY d.name`))));
 
 router.post('/departments', auth, permit('hr.manage'), validate(z.object({
   name: z.string().min(2).max(120),
@@ -372,7 +410,7 @@ router.get('/work-locations', auth, permit('hr.view','hr.manage','hr.attendance'
     return res.status(400).json({ error: 'Choose a valid work-location date range.' });
   const rows = await query(`SELECT w.id,w.employee_id employeeId,w.work_date workDate,w.work_location workLocation,
     w.project_id projectId,p.name project,w.note,w.updated_at updatedAt
-    FROM employee_work_locations w LEFT JOIN projects p ON p.id=w.project_id
+    FROM visible_employee_work_locations w LEFT JOIN projects p ON p.id=w.project_id
     WHERE w.work_date BETWEEN ? AND ? ORDER BY w.work_date,w.employee_id`, [from.data, to.data]);
   res.json(rows);
 }));
@@ -388,7 +426,7 @@ router.post('/work-locations', auth, permit('hr.manage','hr.attendance','resourc
   const days = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
   if (!Number.isFinite(days) || days < 1 || days > 62)
     return res.status(400).json({ error: 'Choose a date range of no more than 62 days, with the end on or after the start.' });
-  const employee = await getOne("SELECT id,name,worker_type workerType FROM employees WHERE id=? AND status <> 'Left'", [employeeId]);
+  const employee = await getOne("SELECT id,name,worker_type workerType FROM visible_employees WHERE id=? AND status <> 'Left'", [employeeId]);
   if (!employee) return res.status(404).json({ error: 'This active employee could not be found.' });
   if (workLocation === 'Office' && employee.workerType === 'Site')
     return res.status(400).json({ error: 'Site workers cannot be scheduled at the office. Change the employee type first if needed.' });
@@ -398,7 +436,7 @@ router.post('/work-locations', auth, permit('hr.manage','hr.attendance','resourc
     return res.status(400).json({ error: 'Only a project-site assignment can include a project.' });
   const dates = Array.from({ length: days }, (_, index) => new Date(Date.parse(`${from}T00:00:00Z`) + index * 86400000).toISOString().slice(0, 10));
   await transaction(async connection => {
-    const [before] = await connection.execute('SELECT * FROM employee_work_locations WHERE employee_id=? AND work_date BETWEEN ? AND ?', [employeeId, from, to]);
+    const [before] = await connection.execute('SELECT * FROM visible_employee_work_locations WHERE employee_id=? AND work_date BETWEEN ? AND ?', [employeeId, from, to]);
     for (const date of dates) {
       if (workLocation === 'Unassigned') await connection.execute('DELETE FROM employee_work_locations WHERE employee_id=? AND work_date=?', [employeeId, date]);
       else await connection.execute(`INSERT INTO employee_work_locations
@@ -417,18 +455,18 @@ router.get('/availability', auth, permit('hr.view','hr.manage','site.attendance'
   const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : new Date().toLocaleDateString('en-CA');
   const [employees, attendance, leave, assignments, locations] = await Promise.all([
     query(`SELECT e.id,e.code,e.name,e.designation,e.worker_type workerType,e.photo_url photoUrl,e.status employmentStatus,
-      d.name department FROM employees e LEFT JOIN departments d ON d.id=e.department_id
+      d.name department FROM visible_employees e LEFT JOIN departments d ON d.id=e.department_id
       WHERE e.status <> 'Left' AND e.join_date<=? ORDER BY e.name`, [date]),
     query(`SELECT a.employee_id employeeId,a.employee_name employeeName,a.state,a.work_location workLocation,
-      p.id projectId,p.name project FROM attendance a LEFT JOIN projects p ON p.id=a.project_id WHERE a.work_date=?`, [date]),
-    query(`SELECT l.employee_id employeeId,l.leave_type leaveType FROM leave_requests l
+      p.id projectId,p.name project FROM visible_attendance a LEFT JOIN projects p ON p.id=a.project_id WHERE a.work_date=?`, [date]),
+    query(`SELECT l.employee_id employeeId,l.leave_type leaveType FROM visible_leave_requests l
       WHERE l.status='Approved' AND ? BETWEEN l.from_date AND l.to_date`, [date]),
     query(`SELECT pt.employee_id employeeId,p.id projectId,p.name project,pt.project_role projectRole
-      FROM project_team pt JOIN projects p ON p.id=pt.project_id
+      FROM visible_project_team pt JOIN projects p ON p.id=pt.project_id
       WHERE DATE(pt.assigned_at)<=? AND (pt.released_at IS NULL OR DATE(pt.released_at)>=?)
       ORDER BY pt.assigned_at DESC`, [date, date]),
     query(`SELECT w.employee_id employeeId,w.work_location workLocation,w.project_id projectId,p.name project
-      FROM employee_work_locations w LEFT JOIN projects p ON p.id=w.project_id WHERE w.work_date=?`, [date])
+      FROM visible_employee_work_locations w LEFT JOIN projects p ON p.id=w.project_id WHERE w.work_date=?`, [date])
   ]);
   const byAttendance = new Map(attendance.map(row => [row.employeeId || `name:${row.employeeName}`, row]));
   const byLeave = new Map(leave.map(row => [row.employeeId, row]));
@@ -468,37 +506,37 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
   if (!found) return res.status(404).json({ error: 'Employee not found' });
   const employee = forViewer(req, found);
   const [leave, overtime, documents, attendance, projects, tasks, reports, reviews, biometricIds] = await Promise.all([
-    query('SELECT id,leave_type leaveType,from_date fromDate,to_date toDate,days,reason,status FROM leave_requests WHERE employee_id=? ORDER BY id DESC', [employee.id]),
-    query(`SELECT o.id,o.work_date workDate,o.overtime_type overtimeType,o.hours,o.rate,o.status,p.name project FROM overtime_records o
+    query('SELECT id,leave_type leaveType,from_date fromDate,to_date toDate,days,reason,status FROM visible_leave_requests WHERE employee_id=? ORDER BY id DESC', [employee.id]),
+    query(`SELECT o.id,o.work_date workDate,o.overtime_type overtimeType,o.hours,o.rate,o.status,p.name project FROM visible_overtime_records o
       LEFT JOIN projects p ON p.id=o.project_id WHERE o.employee_id=? ORDER BY o.id DESC`, [employee.id]),
     listAttachments('employee', employee.id),
     query(`SELECT a.id,a.work_date workDate,a.check_in \`in\`,a.check_out \`out\`,a.state,a.source,a.work_location workLocation,a.needs_review needsReview,
-      a.correction_reason correctionReason,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,p.id projectId FROM attendance a
+      a.correction_reason correctionReason,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,p.id projectId FROM visible_attendance a
       LEFT JOIN projects p ON p.id=a.project_id WHERE a.employee_id=? OR a.employee_name=? ORDER BY a.work_date DESC LIMIT 1500`, [employee.id, employee.name]),
     query(`SELECT 'Project manager' projectRole,a.assigned_at assignedAt,a.released_at releasedAt,
       p.id projectId,p.name project
-      FROM project_manager_assignments a JOIN projects p ON p.id=a.project_id WHERE a.employee_id=?
+      FROM visible_project_manager_assignments a JOIN projects p ON p.id=a.project_id WHERE a.employee_id=?
       UNION ALL
       SELECT t.project_role projectRole,t.assigned_at assignedAt,t.released_at releasedAt,p.id projectId,p.name project
-      FROM project_team t JOIN projects p ON p.id=t.project_id
+      FROM visible_project_team t JOIN projects p ON p.id=t.project_id
       WHERE t.employee_id=? AND (p.manager_employee_id IS NULL OR p.manager_employee_id<>?)
       ORDER BY assignedAt DESC`, [employee.id, employee.id, employee.id]),
     query(`SELECT t.id,t.title,t.status,t.priority,t.due_date dueDate,t.updated_at updatedAt,p.id projectId,p.name project
       FROM tasks t JOIN projects p ON p.id=t.project_id
-      WHERE EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.task_id=t.id AND ta.employee_id=?)
+      WHERE EXISTS (SELECT 1 FROM visible_task_assignees ta WHERE ta.task_id=t.id AND ta.employee_id=?)
         OR t.assignee_employee_id=? OR (t.assignee_employee_id IS NULL AND LOWER(t.assignee)=LOWER(?)
-        AND (SELECT COUNT(*) FROM employees WHERE LOWER(name)=LOWER(?))=1)
+        AND (SELECT COUNT(*) FROM visible_employees WHERE LOWER(name)=LOWER(?))=1)
       ORDER BY t.updated_at DESC`, [employee.id, employee.id, employee.name, employee.name]),
     query(`SELECT r.id,r.report_date reportDate,r.work_completed work,r.issue,r.workforce,p.id projectId,p.name project
       FROM daily_reports r JOIN projects p ON p.id=r.project_id WHERE LOWER(r.supervisor)=LOWER(?)
-      AND (SELECT COUNT(*) FROM employees WHERE LOWER(name)=LOWER(?))=1
+      AND (SELECT COUNT(*) FROM visible_employees WHERE LOWER(name)=LOWER(?))=1
       ORDER BY r.report_date DESC LIMIT 1500`, [employee.name, employee.name]),
     (can(req, 'hr.payroll') || can(req, 'hr.manage'))
       ? query(`SELECT r.id,r.review_date reviewDate,r.period,r.quality,r.productivity,r.safety,r.reliability,r.overall,
-          r.strengths,r.improvements,u.name reviewer FROM performance_reviews r JOIN users u ON u.id=r.reviewer_id
+          r.strengths,r.improvements,u.name reviewer FROM visible_performance_reviews r JOIN users u ON u.id=r.reviewer_id
           WHERE r.employee_id=? ORDER BY r.review_date`, [employee.id])
       : Promise.resolve([]),
-    query('SELECT code FROM employee_biometric_ids WHERE employee_id=? ORDER BY code', [employee.id])
+    query('SELECT code FROM visible_employee_biometric_ids WHERE employee_id=? ORDER BY code', [employee.id])
   ]);
   const presentStates = new Set(['On site', 'Late', 'Checked out', 'Business trip']);
   const monthMap = new Map();
@@ -553,7 +591,7 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
 }));
 
 const letterEmployee = id => getOne(`SELECT e.id,e.code,e.name,e.designation,e.join_date joinDate,
-  e.payroll_company_id companyId FROM employees e WHERE e.id=?`, [id]);
+  e.payroll_company_id companyId FROM visible_employees e WHERE e.id=?`, [id]);
 const letterCompany = id => getOne(`SELECT id,name,address,telephone,registration_number registrationNumber
   FROM companies WHERE id=? AND active=1`, [id]);
 
@@ -562,7 +600,7 @@ router.get('/:id/letters', auth, permit('hr.manage'), wrap(async (req, res) => {
   if (!employee) return res.status(404).json({ error: 'Employee not found.' });
   const issued = await query(`SELECT l.id,l.letter_type letterType,l.milestone_date milestoneDate,
     l.issued_on issuedOn,l.company_id companyId,c.name company,u.name issuedBy
-    FROM employee_letters l JOIN companies c ON c.id=l.company_id JOIN users u ON u.id=l.issued_by
+    FROM visible_employee_letters l JOIN companies c ON c.id=l.company_id JOIN users u ON u.id=l.issued_by
     WHERE l.employee_id=?`, [employee.id]);
   res.json(Object.entries(LETTER_TYPES).map(([type, label]) => {
     const record = issued.find(row => row.letterType === label);
@@ -585,7 +623,7 @@ router.post('/:id/letters', auth, permit('hr.manage'), validate(z.object({
     return res.status(400).json({ error: `This letter cannot be issued before ${milestone}. Check the employee’s start date if it is incorrect.` });
   const company = await letterCompany(companyId);
   if (!company) return res.status(400).json({ error: 'Choose an active GKUC company to issue this letter.' });
-  const existing = await getOne('SELECT id FROM employee_letters WHERE employee_id=? AND letter_type=?', [employee.id, LETTER_TYPES[type]]);
+  const existing = await getOne('SELECT id FROM visible_employee_letters WHERE employee_id=? AND letter_type=?', [employee.id, LETTER_TYPES[type]]);
   if (existing) return res.status(409).json({ error: 'This letter has already been issued. Open the issued copy in the employee profile.' });
   const issuedOn = today();
   const html = employeeLetterHtml({ employee, company, type, milestone, issuedOn, signer: req.user.name });
@@ -611,7 +649,7 @@ router.get('/:id/letters/:type/document', auth, permit('hr.manage'), wrap(async 
   if (!LETTER_TYPES[type]) return res.status(404).json({ error: 'Unknown employee letter.' });
   const employee = await letterEmployee(req.params.id);
   if (!employee) return res.status(404).json({ error: 'Employee not found.' });
-  const record = await getOne(`SELECT html_snapshot html FROM employee_letters
+  const record = await getOne(`SELECT html_snapshot html FROM visible_employee_letters
     WHERE employee_id=? AND letter_type=?`, [employee.id, LETTER_TYPES[type]]);
   let html = record?.html;
   if (!html) {
@@ -657,10 +695,10 @@ router.post('/', auth, permit('hr.manage'), validate(employeeSchema), wrap(async
 router.post('/:id/offboarding/start',auth,permit('hr.manage'),validate(z.object({
   requestedOn:isoDate,reason:z.string().trim().min(5).max(600)
 })),wrap(async(req,res)=>{
-  const employee=await getOne('SELECT id,name,status FROM employees WHERE id=?',[req.params.id]);
+  const employee=await getOne('SELECT id,name,status FROM visible_employees WHERE id=?',[req.params.id]);
   if(!employee)return res.status(404).json({error:'Employee not found.'});
   if(employee.status==='Left')return res.status(409).json({error:'This employee has already left.'});
-  const existing=await getOne('SELECT id FROM employee_offboarding_cases WHERE employee_id=?',[employee.id]);
+  const existing=await getOne('SELECT id FROM visible_employee_offboarding_cases WHERE employee_id=?',[employee.id]);
   if(existing)return res.status(409).json({error:'An offboarding checklist is already active for this employee.'});
   const result=await query(`INSERT INTO employee_offboarding_cases(employee_id,reason,requested_on,requested_by)
     VALUES(?,?,?,?)`,[employee.id,req.body.reason,req.body.requestedOn,req.user.id]);
@@ -673,7 +711,7 @@ router.patch('/:id/offboarding/clearance',auth,permit('admin.users','hr.payroll'
 })),wrap(async(req,res)=>{
   const permission=req.body.area==='access'?'admin.users':'hr.payroll';
   if(!can(req,permission))return res.status(403).json({error:`${req.body.area==='access'?'Administration':'HR payroll'} must confirm this clearance.`});
-  const employee=await getOne('SELECT id,name,status FROM employees WHERE id=?',[req.params.id]);
+  const employee=await getOne('SELECT id,name,status FROM visible_employees WHERE id=?',[req.params.id]);
   if(!employee)return res.status(404).json({error:'Employee not found.'});
   const column=req.body.area==='access'?'access':'payroll';
   const result=await query(`UPDATE employee_offboarding_cases SET ${column}_cleared_by=?,${column}_cleared_at=NOW()
@@ -684,26 +722,26 @@ router.patch('/:id/offboarding/clearance',auth,permit('admin.users','hr.payroll'
   res.json(await offboardingChecklist(employee));
 }));
 router.get('/:id/offboarding',auth,permit('hr.manage','hr.assets','hr.payroll','admin.users'),wrap(async(req,res)=>{
-  const employee=await getOne('SELECT id,name FROM employees WHERE id=?',[req.params.id]);
+  const employee=await getOne('SELECT id,name FROM visible_employees WHERE id=?',[req.params.id]);
   if(!employee)return res.status(404).json({error:'Employee not found.'});
   res.json(await offboardingChecklist(employee));
 }));
 router.get('/:id/assets',auth,permit('hr.assets','hr.manage'),wrap(async(req,res)=>{
-  res.json(await query('SELECT * FROM employee_asset_handovers WHERE employee_id=? ORDER BY id DESC',[req.params.id]));
+  res.json(await query('SELECT * FROM visible_employee_asset_handovers WHERE employee_id=? ORDER BY id DESC',[req.params.id]));
 }));
 router.post('/:id/assets',auth,permit('hr.assets'),validate(z.object({assetName:z.string().trim().min(2).max(180),assetCode:z.string().trim().min(1).max(120),category:z.string().max(80),handedOn:isoDate,conditionBefore:z.string().trim().min(3).max(10000),notes:z.string().max(10000).default('')})),wrap(async(req,res)=>{
   const b=req.body;
   const result=await transaction(async conn=>{
-    const [people]=await conn.query('SELECT id,status FROM employees WHERE id=? FOR UPDATE',[req.params.id]);
+    const [people]=await conn.query('SELECT id,status FROM visible_employees WHERE id=? FOR UPDATE',[req.params.id]);
     if(!people[0]||people[0].status==='Left')throw Object.assign(new Error('Choose an employee who has not been offboarded.'),{status:409});
-    const [open]=await conn.query('SELECT id FROM employee_asset_handovers WHERE asset_code=? AND returned_on IS NULL',[b.assetCode]);
+    const [open]=await conn.query('SELECT id FROM visible_employee_asset_handovers WHERE asset_code=? AND returned_on IS NULL',[b.assetCode]);
     if(open.length)throw Object.assign(new Error('This asset is already handed over. Record its return before assigning it again.'),{status:409});
     const [r]=await conn.query('INSERT INTO employee_asset_handovers(employee_id,asset_name,asset_code,category,handed_on,condition_before,notes,created_by) VALUES(?,?,?,?,?,?,?,?)',[req.params.id,b.assetName,b.assetCode,b.category,b.handedOn,b.conditionBefore,b.notes,req.user.id]);
     await audit(conn,req.user.id,'CREATE','handover',r.insertId,null,b,req.ip);return r.insertId;
   });res.status(201).json({id:result});
 }));
 router.patch('/:id/assets/:assetId/return',auth,permit('hr.assets'),validate(z.object({returnedOn:isoDate,conditionReturned:z.string().trim().min(3).max(10000)})),wrap(async(req,res)=>{
-  const before=await getOne('SELECT * FROM employee_asset_handovers WHERE id=? AND employee_id=?',[req.params.assetId,req.params.id]);
+  const before=await getOne('SELECT * FROM visible_employee_asset_handovers WHERE id=? AND employee_id=?',[req.params.assetId,req.params.id]);
   if(!before)return res.status(404).json({error:'Asset handover not found.'});
   if(before.returned_on)return res.status(409).json({error:'This asset has already been returned.'});
   if(req.body.returnedOn<before.handed_on)return res.status(400).json({error:'Return date cannot be before handover date.'});
@@ -711,7 +749,7 @@ router.patch('/:id/assets/:assetId/return',auth,permit('hr.assets'),validate(z.o
   await audit(pool,req.user.id,'RETURN','handover',before.id,before,req.body,req.ip);res.json({id:before.id});
 }));
 router.patch('/:id', auth, permit('hr.manage'), validate(employeeSchema.partial().extend({jobDescription:z.string().max(20000).optional()})), wrap(async (req, res) => {
-  const before = await getOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
+  const before = await getOne('SELECT * FROM visible_employees WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
   if(req.body.status==='Left'){
     const checklist=await offboardingChecklist(before);
@@ -744,13 +782,13 @@ router.patch('/:id', auth, permit('hr.manage'), validate(employeeSchema.partial(
 /* Leave management */
 router.get('/:id/conduct',auth,permit("hr.conduct"),wrap(async(req,res)=>{
   res.json(await query(`SELECT c.id,c.kind,c.record_date recordDate,c.description,c.rating,c.created_at createdAt,u.name recordedBy
-    FROM employee_conduct_records c JOIN users u ON u.id=c.created_by WHERE c.employee_id=? ORDER BY c.record_date DESC,c.id DESC`,[req.params.id]));
+    FROM visible_employee_conduct_records c JOIN users u ON u.id=c.created_by WHERE c.employee_id=? ORDER BY c.record_date DESC,c.id DESC`,[req.params.id]));
 }));
 router.post('/:id/conduct',auth,permit("hr.conduct"),validate(z.object({
   kind:z.enum(['Offence','Good rating']),recordDate:isoDate,
   description:z.string().trim().min(3).max(5000),rating:z.number().int().min(1).max(5).nullable().optional()
 })),wrap(async(req,res)=>{
-  if(!(await getOne('SELECT id FROM employees WHERE id=?',[req.params.id]))) return res.status(404).json({error:'Employee not found. Refresh the employee register and try again.'});
+  if(!(await getOne('SELECT id FROM visible_employees WHERE id=?',[req.params.id]))) return res.status(404).json({error:'Employee not found. Refresh the employee register and try again.'});
   const b=req.body;
   if(b.kind==='Offence' && b.rating) return res.status(400).json({error:'Star ratings apply only to good-rating entries, not offences.'});
   const result=await query('INSERT INTO employee_conduct_records(employee_id,kind,record_date,description,rating,created_by) VALUES(?,?,?,?,?,?)',[req.params.id,b.kind,b.recordDate,b.description,b.rating||null,req.user.id]);
@@ -759,7 +797,7 @@ router.post('/:id/conduct',auth,permit("hr.conduct"),validate(z.object({
 }));
 router.get('/leave/all', auth, permit('hr.view','hr.leave'), wrap(async (_req, res) => res.json(await query(`SELECT l.id,l.leave_type leaveType,l.from_date fromDate,
   l.to_date toDate,l.days,l.reason,l.status,l.payment_type paymentType,l.created_at createdAt,e.name employee,e.code employeeCode,e.id employeeId
-  FROM leave_requests l JOIN employees e ON e.id=l.employee_id ORDER BY l.id DESC`))));
+  FROM visible_leave_requests l JOIN visible_employees e ON e.id=l.employee_id ORDER BY l.id DESC`))));
 
 router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.object({
   leaveType: z.string().trim().min(1).max(60),
@@ -773,7 +811,7 @@ router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.obje
   return transaction(async connection => {
   const query = async (sql,params) => (await connection.query(sql,params))[0];
   const getOne = async (sql,params) => (await query(sql,params))[0];
-  const employee = await getOne("SELECT id,join_date,annual_leave_entitlement annual,casual_leave_entitlement casual FROM employees WHERE id=? FOR UPDATE",[req.params.id]);
+  const employee = await getOne("SELECT id,join_date,annual_leave_entitlement annual,casual_leave_entitlement casual FROM visible_employees WHERE id=? FOR UPDATE",[req.params.id]);
   if(!employee) return res.status(404).json({error:'Employee not found. Please select an existing employee.'});
   const body = req.body;
   const policy = await leavePolicyFor(body.fromDate);
@@ -786,15 +824,15 @@ router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.obje
   if (body.fromDate.slice(0,4) !== body.toDate.slice(0,4)) return res.status(400).json({error:'Please record leave crossing New Year as two requests, one for each year.'});
   if (body.fromDate.slice(0,7) !== body.toDate.slice(0,7)) return res.status(400).json({error:'Record leave crossing a month boundary as two requests so each month’s limit can be checked.'});
   const entitlement = body.leaveType==='Casual' ? Number(employee.casual) : Number(employee.annual);
-  const used = await getOne(`SELECT COALESCE(SUM(days),0) days FROM leave_requests WHERE employee_id=? AND status!='Rejected' AND YEAR(from_date)=? AND ${body.leaveType==='Casual'?"leave_type='Casual'":"leave_type<>'Casual'"}`,[req.params.id,body.fromDate.slice(0,4)]);
+  const used = await getOne(`SELECT COALESCE(SUM(days),0) days FROM visible_leave_requests WHERE employee_id=? AND status!='Rejected' AND YEAR(from_date)=? AND ${body.leaveType==='Casual'?"leave_type='Casual'":"leave_type<>'Casual'"}`,[req.params.id,body.fromDate.slice(0,4)]);
   if (Number(used.days)+days>entitlement) return res.status(409).json({error:`This employee has ${Math.max(0,entitlement-Number(used.days))} ${body.leaveType==='Casual'?'casual':'annual'} leave day(s) remaining this year. HR can edit the employee’s entitlement in their profile.`});
-  const monthly=await getOne(`SELECT COALESCE(SUM(days),0) days FROM leave_requests WHERE employee_id=? AND status!='Rejected' AND DATE_FORMAT(from_date,'%Y-%m')=?`,[req.params.id,body.fromDate.slice(0,7)]);
+  const monthly=await getOne(`SELECT COALESCE(SUM(days),0) days FROM visible_leave_requests WHERE employee_id=? AND status!='Rejected' AND DATE_FORMAT(from_date,'%Y-%m')=?`,[req.params.id,body.fromDate.slice(0,7)]);
   if(Number(monthly.days)+days>Number(policy.monthly_limit))return res.status(409).json({error:`The monthly leave limit is ${policy.monthly_limit} day(s). This employee has ${Math.max(0,Number(policy.monthly_limit)-Number(monthly.days))} day(s) available in ${body.fromDate.slice(0,7)}. Split or shorten the request, or ask HR to update the leave policy.`});
-  const overlap = await getOne("SELECT id FROM leave_requests WHERE employee_id=? AND status!='Rejected' AND from_date<=? AND to_date>=?",[req.params.id,body.toDate,body.fromDate]);
+  const overlap = await getOne("SELECT id FROM visible_leave_requests WHERE employee_id=? AND status!='Rejected' AND from_date<=? AND to_date>=?",[req.params.id,body.toDate,body.fromDate]);
   if (overlap) return res.status(409).json({error:'This employee already has leave recorded for these dates. Please check the leave register.'});
   const result = await query('INSERT INTO leave_requests (employee_id,leave_type,from_date,to_date,days,reason) VALUES (?,?,?,?,?,?)',
     [req.params.id, body.leaveType, body.fromDate, body.toDate, days, body.reason]);
-  const row = await getOne('SELECT * FROM leave_requests WHERE id=?', [result.insertId]);
+  const row = await getOne('SELECT * FROM visible_leave_requests WHERE id=?', [result.insertId]);
   await query('UPDATE leave_requests SET payment_type=? WHERE id=?',[body.paymentType || (body.leaveType==='Unpaid'?'Unpaid':'Paid'),result.insertId]);
   row.payment_type = body.paymentType || (body.leaveType==='Unpaid'?'Unpaid':'Paid');
   await audit(connection, req.user.id, 'CREATE', 'leave_request', row.id, null, row, req.ip);
@@ -803,26 +841,26 @@ router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.obje
 }));
 
 router.patch('/leave/:id', auth, permit('hr.manage', 'hr.leave'), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
-  const before = await getOne('SELECT * FROM leave_requests WHERE id=?', [req.params.id]);
+  const before = await getOne('SELECT * FROM visible_leave_requests WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Leave request not found' });
   if(before.status==='Rejected' && req.body.status!=='Rejected') return res.status(409).json({error:'Please create a new leave request instead of reopening a rejected request, so the annual allowance can be checked again.'});
   if(req.body.status==='Approved') {
     const fromDate=before.from_date instanceof Date?before.from_date.toISOString().slice(0,10):String(before.from_date).slice(0,10);
     const policy=await leavePolicyFor(fromDate);
-    const eligibility=await getOne('SELECT join_date FROM employees WHERE id=?',[before.employee_id]);
+    const eligibility=await getOne('SELECT join_date FROM visible_employees WHERE id=?',[before.employee_id]);
     const eligibleFrom=eligibility?.join_date&&policy ? addCalendarMonths(eligibility.join_date,policy.waiting_months) : null;
     if(!eligibleFrom || (fromDate<eligibleFrom && (before.payment_type==='Paid'||!policy.allow_unpaid_during_wait))) return res.status(409).json({error:'This request does not meet the active leave waiting-period rule. Review the employee start date and HR policy before approving.'});
   }
   await query('UPDATE leave_requests SET status=?,decided_by=?,decided_at=NOW() WHERE id=?', [req.body.status, req.user.id, req.params.id]);
   if (req.body.status === 'Approved') await query("UPDATE employees SET status='On leave' WHERE id=?", [before.employee_id]);
-  const after = await getOne('SELECT * FROM leave_requests WHERE id=?', [req.params.id]);
+  const after = await getOne('SELECT * FROM visible_leave_requests WHERE id=?', [req.params.id]);
   await audit(pool, req.user.id, 'UPDATE', 'leave_request', after.id, before, after, req.ip);
   res.json(after);
 }));
 
 /* Overtime */
 router.get('/overtime/all', auth, permit('hr.payroll'), wrap(async (_req, res) => res.json(await query(`SELECT o.id,o.work_date workDate,o.hours,o.rate,o.status,
-  o.overtime_type overtimeType,e.name employee,e.code employeeCode,p.name project FROM overtime_records o JOIN employees e ON e.id=o.employee_id
+  o.overtime_type overtimeType,e.name employee,e.code employeeCode,p.name project FROM visible_overtime_records o JOIN visible_employees e ON e.id=o.employee_id
   LEFT JOIN projects p ON p.id=o.project_id ORDER BY o.id DESC`))));
 
 router.post('/:id/overtime', auth, permit('hr.payroll'), validate(z.object({
@@ -832,13 +870,13 @@ router.post('/:id/overtime', auth, permit('hr.payroll'), validate(z.object({
   overtimeType: z.enum(OVERTIME_TYPES).default('Site'),
   startTime:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),endTime:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),reason:z.string().trim().min(3).max(1000).optional()
 })), wrap(async (req, res) => {
-  const employee = await getOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
+  const employee = await getOne('SELECT * FROM visible_employees WHERE id=?', [req.params.id]);
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
   const policy = await getOne(`SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=?
     ORDER BY effective_from DESC,id DESC LIMIT 1`, [employee.payroll_company_id, req.body.workDate]);
   if (!policy) return res.status(409).json({ error: 'Configure an overtime policy for this date first' });
   if(req.body.overtimeType==='Travel')return res.status(409).json({error:'Record Travel OT through Payroll Inputs → Travel claim, with departure and return times. Do not infer it from ordinary attendance.'});
-  const attendance=await getOne('SELECT * FROM attendance WHERE employee_id=? AND work_date=?',[employee.id,req.body.workDate]);
+  const attendance=await getOne('SELECT * FROM visible_attendance WHERE employee_id=? AND work_date=?',[employee.id,req.body.workDate]);
   if(attendance&&['Absent','On leave'].includes(attendance.state))return res.status(409).json({error:'No OT is payable for an absent or leave day. Correct attendance first if it is wrong.'});
   const suggestion=suggestOvertime(attendance,rulesFor(policy));
   const intervals=req.body.startTime&&req.body.endTime?[[minutes(req.body.startTime),minutes(req.body.endTime)]]:suggestion.intervals;
@@ -848,24 +886,24 @@ router.post('/:id/overtime', auth, permit('hr.payroll'), validate(z.object({
   try { rate = resolveOvertimeRate(employee, req.body.overtimeType, policy); }
   catch (error) { return res.status(400).json({ error: error.message }); }
   const result = await transaction(async conn=>{
-    await conn.query('SELECT id FROM employees WHERE id=? FOR UPDATE',[employee.id]);
-    const [existing]=await conn.query('SELECT * FROM overtime_records WHERE employee_id=? AND work_date=?',[employee.id,req.body.workDate]);
+    await conn.query('SELECT id FROM visible_employees WHERE id=? FOR UPDATE',[employee.id]);
+    const [existing]=await conn.query('SELECT * FROM visible_overtime_records WHERE employee_id=? AND work_date=?',[employee.id,req.body.workDate]);
     if(existing.some(o=>o.overtime_type===req.body.overtimeType))throw Object.assign(new Error('OT already exists for this employee, date and type. Review the existing record.'),{status:409});
-    const [travel]=await conn.query("SELECT calculation FROM hr_payroll_claims WHERE employee_id=? AND work_date=? AND kind='Travel' AND status<>'Rejected'",[employee.id,req.body.workDate]);
+    const [travel]=await conn.query("SELECT calculation FROM visible_hr_payroll_claims WHERE employee_id=? AND work_date=? AND kind='Travel' AND status<>'Rejected'",[employee.id,req.body.workDate]);
     if(travel.some(c=>intervalsOverlap(intervals,(typeof c.calculation==='string'?JSON.parse(c.calculation):c.calculation).intervals||[])))throw Object.assign(new Error('Site/Office OT overlaps travel. Correct the intervals before saving.'),{status:409});
     const [r]=await conn.query(`INSERT INTO overtime_records(employee_id,project_id,work_date,overtime_type,hours,rate,policy_id,input_detail) VALUES(?,?,?,?,?,?,?,?)`,[employee.id,req.body.projectId||null,req.body.workDate,req.body.overtimeType,req.body.hours,rate,policy.id,JSON.stringify({intervals,suggestion,reason:req.body.reason,attendanceId:attendance?.id,warnings:[...suggestion.warnings,...(req.body.hours>rulesFor(policy).maxDailyOt?['OT exceeds daily warning threshold.']:[])]})]);return r;
   });
-  const row = await getOne('SELECT * FROM overtime_records WHERE id=?', [result.insertId]);
+  const row = await getOne('SELECT * FROM visible_overtime_records WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'overtime', row.id, null, row, req.ip);
   res.status(201).json(row);
 }));
 
 router.patch('/overtime/:id', auth, permit('hr.payroll'), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
-  const before = await getOne('SELECT * FROM overtime_records WHERE id=?', [req.params.id]);
+  const before = await getOne('SELECT * FROM visible_overtime_records WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Overtime record not found' });
   if(before.status!=='Pending')return res.status(409).json({error:'Reviewed OT is locked. Use an audited adjustment instead of changing a historical approval.'});
   await query('UPDATE overtime_records SET status=?,approved_by=? WHERE id=?', [req.body.status, req.user.id, req.params.id]);
-  const after = await getOne('SELECT * FROM overtime_records WHERE id=?', [req.params.id]);
+  const after = await getOne('SELECT * FROM visible_overtime_records WHERE id=?', [req.params.id]);
   await audit(pool, req.user.id, 'UPDATE', 'overtime', after.id, before, after, req.ip);
   res.json(after);
 }));

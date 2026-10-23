@@ -64,7 +64,7 @@ const toRow = body => {
 
 router.get('/', auth, permit('projects.view'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 0);
-  res.json(await query(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id
+  res.json(await query(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,CASE WHEN p.manager_employee_id IS NOT NULL THEN me.name ELSE p.manager END manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN visible_employees me ON me.id=p.manager_employee_id
     WHERE p.active=1 ${companyId ? 'AND p.company_id=?' : ''} ORDER BY p.id`, companyId ? [companyId] : []));
 }));
 
@@ -137,8 +137,8 @@ router.post('/:id/authorise-work', auth, permit('projects.manage'), validate(z.o
 }));
 
 router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
-  const project = await getOne(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode
-    FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.id=? AND p.active=1`, [req.params.id]);
+  const project = await getOne(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,CASE WHEN p.manager_employee_id IS NOT NULL THEN me.name ELSE p.manager END manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode
+    FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN visible_employees me ON me.id=p.manager_employee_id WHERE p.id=? AND p.active=1`, [req.params.id]);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   const award = await projectAwardState(project.id);
   const [billingPlans, paymentTotals, costSheetTotals, workAuthorisation] = await Promise.all([
@@ -157,14 +157,14 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
     query('SELECT id,title,due_date dueDate,status,completed_at completedAt,notes FROM project_milestones WHERE project_id=? ORDER BY due_date', [project.id]),
     listAttachments('project', project.id),
     query(`SELECT CONCAT('manager-',p.id) id,e.id employeeId,'Project manager' projectRole,e.name,e.designation,e.code
-      FROM projects p JOIN employees e ON e.id=p.manager_employee_id WHERE p.id=?
+      FROM projects p JOIN visible_employees e ON e.id=p.manager_employee_id WHERE p.id=?
       UNION ALL SELECT CAST(t.id AS CHAR) id,e.id employeeId,t.project_role projectRole,e.name,e.designation,e.code
-      FROM project_team t JOIN employees e ON e.id=t.employee_id JOIN projects p ON p.id=t.project_id
+      FROM visible_project_team t JOIN visible_employees e ON e.id=t.employee_id JOIN projects p ON p.id=t.project_id
       WHERE t.project_id=? AND t.released_at IS NULL AND (p.manager_employee_id IS NULL OR p.manager_employee_id<>t.employee_id)
       ORDER BY name`, [project.id, project.id]),
-    query(`SELECT t.id,t.title,t.assignee_employee_id assigneeEmployeeId,COALESCE(e.name,t.assignee) assignee,
+    query(`SELECT t.id,t.title,t.assignee_employee_id assigneeEmployeeId,CASE WHEN t.assignee_employee_id IS NOT NULL THEN e.name ELSE t.assignee END assignee,
       t.due,t.due_date dueDate,t.priority,t.status,t.notes FROM tasks t
-      LEFT JOIN employees e ON e.id=t.assignee_employee_id WHERE t.project_id=? ORDER BY t.id DESC`, [project.id]).then(withTaskAssignees),
+      LEFT JOIN visible_employees e ON e.id=t.assignee_employee_id WHERE t.project_id=? ORDER BY t.id DESC`, [project.id]).then(withTaskAssignees),
     query(`SELECT ${spendSql('p')} total FROM projects p WHERE p.id=?`, [project.id]),
     query('SELECT COALESCE(SUM(amount),0) total FROM incomes WHERE project_id=?', [project.id]),
     query('SELECT id,reference,title,status,total FROM boqs WHERE project_id=? ORDER BY id DESC', [project.id]),
@@ -187,13 +187,13 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
     query(`SELECT id,received_date date,description,amount,method,reference FROM incomes
       WHERE project_id=? ORDER BY received_date DESC,id DESC LIMIT 500`, [project.id]),
     query(`SELECT work_date date,state,COUNT(DISTINCT COALESCE(CAST(employee_id AS CHAR),CONCAT('name:',employee_name))) people,
-      MIN(check_in) firstIn,MAX(check_out) lastOut FROM attendance WHERE project_id=?
+      MIN(check_in) firstIn,MAX(check_out) lastOut FROM visible_attendance WHERE project_id=?
       GROUP BY work_date,state ORDER BY work_date DESC LIMIT 500`, [project.id]),
     query(`SELECT m.name,m.unit,SUM(sm.quantity) quantity,COUNT(*) movements
       FROM stock_movements sm JOIN materials m ON m.id=sm.material_id
       WHERE sm.project_id=? AND sm.movement_type='Issue' GROUP BY m.id,m.name,m.unit ORDER BY quantity DESC`, [project.id]),
     query(`SELECT e.code,e.name,a.assigned_to assignedTo,a.assigned_at assignedAt,a.returned_at returnedAt,
-      a.condition_note conditionNote FROM equipment_assignments a JOIN equipment e ON e.id=a.equipment_id
+      a.condition_note conditionNote FROM visible_equipment_assignments a JOIN equipment e ON e.id=a.equipment_id
       WHERE a.project_id=? ORDER BY a.assigned_at DESC`, [project.id]),
     query(`SELECT si.invoice_no invoiceNo,s.name supplier,si.invoice_date invoiceDate,si.due_date dueDate,
       si.amount,si.paid_amount paidAmount,si.status FROM supplier_invoices si
@@ -286,8 +286,8 @@ router.post('/', auth, permit('projects.manage'), validate(projectSchema), wrap(
     }
     return created;
   });
-  const row = await getOne(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode
-    FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.id=?`, [result.insertId]);
+  const row = await getOne(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,CASE WHEN p.manager_employee_id IS NOT NULL THEN me.name ELSE p.manager END manager,COALESCE(d.name,p.client) client,p.company_id companyId,c.name company,c.code companyCode
+    FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id LEFT JOIN visible_employees me ON me.id=p.manager_employee_id WHERE p.id=?`, [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'project', row.id, null, row, req.ip);
   res.status(201).json(row);
 }));
@@ -396,12 +396,12 @@ router.get('/:id/completion', auth, permit('projects.view'), wrap(async (req, re
     query('SELECT source,COALESCE(SUM(amount),0) total FROM expenses WHERE project_id=? GROUP BY source', [project.id]),
     getOne(`SELECT COUNT(*) total, SUM(status IN ('Completed','Approved')) done FROM tasks WHERE project_id=?`, [project.id]),
     getOne(`SELECT COUNT(*) total, SUM(status='Completed') done FROM project_milestones WHERE project_id=?`, [project.id]),
-    getOne(`SELECT COUNT(*) shifts, COUNT(DISTINCT employee_name) people FROM attendance
+    getOne(`SELECT COUNT(*) shifts, COUNT(DISTINCT employee_name) people FROM visible_attendance
       WHERE project_id=? AND state IN ('On site','Late','Checked out')`, [project.id]),
     query(`SELECT m.name,m.unit,COALESCE(SUM(sm.quantity),0) quantity FROM stock_movements sm JOIN materials m ON m.id=sm.material_id
       WHERE sm.project_id=? AND sm.movement_type='Issue' GROUP BY m.id ORDER BY quantity DESC LIMIT 20`, [project.id]),
     query(`SELECT e.name,e.code,MIN(a.assigned_at) firstUsed,MAX(COALESCE(a.returned_at,CURDATE())) lastUsed
-      FROM equipment_assignments a JOIN equipment e ON e.id=a.equipment_id WHERE a.project_id=? GROUP BY e.id`, [project.id]),
+      FROM visible_equipment_assignments a JOIN equipment e ON e.id=a.equipment_id WHERE a.project_id=? GROUP BY e.id`, [project.id]),
     getOne(`SELECT COUNT(*) total, COALESCE(SUM(delay_hours),0) delayHours,
       SUM(issue <> '') issues FROM daily_reports WHERE project_id=?`, [project.id]),
     getOne(`SELECT COALESCE(SUM(total),0) estimated FROM boqs WHERE project_id=? AND status='Approved'`, [project.id])
@@ -447,12 +447,12 @@ router.post('/:id/team/bulk', auth, permit('projects.manage'), validate(z.object
   if (employeeIds.includes(Number(project.managerEmployeeId))) {
     return res.status(400).json({ error: 'The project manager is already assigned. Remove them from the selection.' });
   }
-  const employees = await query(`SELECT id,name,status FROM employees WHERE id IN (${employeeIds.map(() => '?').join(',')})`, employeeIds);
+  const employees = await query(`SELECT id,name,status FROM visible_employees WHERE id IN (${employeeIds.map(() => '?').join(',')})`, employeeIds);
   const available = new Set(employees.filter(row => ['Active', 'On leave'].includes(row.status)).map(row => Number(row.id)));
   if (employeeIds.some(id => !available.has(id))) {
     return res.status(400).json({ error: 'One or more selected employees are no longer active or available. Refresh the page and choose again.' });
   }
-  const existing = await query(`SELECT employee_id employeeId FROM project_team WHERE project_id=? AND employee_id IN (${employeeIds.map(() => '?').join(',')})`,
+  const existing = await query(`SELECT employee_id employeeId FROM visible_project_team WHERE project_id=? AND employee_id IN (${employeeIds.map(() => '?').join(',')})`,
     [project.id, ...employeeIds]);
   if (existing.length) {
     const names = employees.filter(row => existing.some(member => Number(member.employeeId) === Number(row.id))).map(row => row.name);
@@ -484,7 +484,7 @@ router.post('/:id/team', auth, permit('projects.manage'), validate(z.object({
   try {
     const result = await query('INSERT INTO project_team (project_id,employee_id,project_role) VALUES (?,?,?)',
       [req.params.id, req.body.employeeId, req.body.projectRole]);
-    const row = await getOne('SELECT * FROM project_team WHERE id=?', [result.insertId]);
+    const row = await getOne('SELECT * FROM visible_project_team WHERE id=?', [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'project_team', row.id, null, row, req.ip);
     res.status(201).json(row);
   } catch (error) {

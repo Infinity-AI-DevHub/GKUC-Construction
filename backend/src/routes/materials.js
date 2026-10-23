@@ -78,7 +78,7 @@ router.get('/inventory',auth,permit('store.view','store.manage','projects.view')
     query(`SELECT f.id,f.vehicle,f.registration,f.status,f.project_id projectId,p.name project,f.driver
       FROM fleet f LEFT JOIN projects p ON p.id=f.project_id WHERE f.status<>'Inactive' ORDER BY f.vehicle`),
     query(`SELECT e.id,e.name,e.code,e.status,a.project_id projectId,p.name project,a.assigned_to assignedTo
-      FROM equipment e LEFT JOIN equipment_assignments a ON a.equipment_id=e.id AND a.returned_at IS NULL
+      FROM equipment e LEFT JOIN visible_equipment_assignments a ON a.equipment_id=e.id AND a.returned_at IS NULL
       LEFT JOIN projects p ON p.id=a.project_id ORDER BY e.name`)
   ]);
   const allowed=new Map(allowances.map(row=>[`${row.projectId}:${row.materialId}`,Number(row.allowedQuantity)]));

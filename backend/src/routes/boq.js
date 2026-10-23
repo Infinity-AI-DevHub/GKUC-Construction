@@ -289,7 +289,7 @@ router.get('/cost-control/options', auth, permit('qs.view','qs.boq','qs.costCont
   if (!project) return res.status(404).json({ error: 'Choose an active project site.' });
   const [tasks, employees, vehicles, reserves, fuel, quotationItems, fuelFloats] = await Promise.all([
     withTaskAssignees(await query('SELECT id,title,status,due,due_date dueDate,priority,notes,assignee_employee_id assigneeEmployeeId,assignee FROM tasks WHERE project_id=? ORDER BY title', [projectId])),
-    query("SELECT id,name,code,designation,status,daily_rate dailyRate FROM employees WHERE status IN ('Active','On leave') ORDER BY name"),
+    query("SELECT id,name,code,designation,status,daily_rate dailyRate FROM visible_employees WHERE status IN ('Active','On leave') ORDER BY name"),
     query('SELECT id,vehicle,registration FROM fleet WHERE status<>\'Inactive\' ORDER BY vehicle'),
     query("SELECT id,name,unit,stock,unit_cost unitCost,site FROM materials WHERE active=1 AND LOWER(unit) IN ('l','litre','litres','liter','liters') ORDER BY name"),
     query(`SELECT f.id,f.vehicle_id vehicleId,f.fuel_date fuelDate,f.litres,f.cost,v.vehicle,v.registration
@@ -322,7 +322,7 @@ async function validateCompletedTask(connection, body) {
   const ids = [...new Set(body.employeeIds)];
   if (ids.length !== body.employeeIds.length) throw costError('Each employee can be selected only once.');
   if (!ids.length) return { ids, names: new Map(), display: 'Unassigned' };
-  const [employees] = await connection.execute(`SELECT id,name FROM employees WHERE id IN (${ids.map(() => '?').join(',')})
+  const [employees] = await connection.execute(`SELECT id,name FROM visible_employees WHERE id IN (${ids.map(() => '?').join(',')})
     AND status IN ('Active','On leave')`, ids);
   if (employees.length !== ids.length) throw costError('One or more selected employees are not active. Refresh the employee list and try again.');
   const names = new Map(employees.map(employee => [Number(employee.id), employee.name]));
@@ -387,7 +387,7 @@ router.get('/cost-control/daily-sheets/:id', auth, permit('qs.view','qs.boq','qs
   const lines = await query(`SELECT l.*,t.title work,e.name employee,v.vehicle,v.registration,m.name reserveMaterial,
     pf.name fuelFloat,
     qi.description quotationItem FROM daily_cost_lines l JOIN tasks t ON t.id=l.task_id
-    LEFT JOIN employees e ON e.id=l.employee_id LEFT JOIN fleet v ON v.id=l.vehicle_id
+    LEFT JOIN visible_employees e ON e.id=l.employee_id LEFT JOIN fleet v ON v.id=l.vehicle_id
     LEFT JOIN materials m ON m.id=l.reserve_material_id
     LEFT JOIN petty_cash_floats pf ON pf.id=l.fuel_float_id
     LEFT JOIN quotation_items qi ON qi.id=l.quotation_item_id
@@ -428,7 +428,7 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
         if(allocated)throw costError('This employee/day is already allocated from payroll. Use the payroll allocation instead of recording a second labour cost.',409);
         if (labourersOnSheet.has(line.employeeId)) throw costError('A labourer day salary can be charged only once on this sheet.');
         labourersOnSheet.add(line.employeeId);
-        const [[employee]] = await connection.execute('SELECT id FROM employees WHERE id=? AND status<>\'Left\'', [line.employeeId]);
+        const [[employee]] = await connection.execute('SELECT id FROM visible_employees WHERE id=? AND status<>\'Left\'', [line.employeeId]);
         if (!employee) throw costError('The selected employee is not active. Choose another employee or leave the cost unassigned.');
         const [[already]] = await connection.execute(`SELECT l.id FROM daily_cost_lines l
           JOIN daily_cost_sheets s ON s.id=l.sheet_id

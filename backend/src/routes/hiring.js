@@ -77,7 +77,7 @@ router.post('/:id/hire',validate(z.object({code:z.string().trim().min(2).max(40)
     if(c.status!=='Selected'||c.employee_id)throw Object.assign(new Error('Only a selected candidate can be hired, and each candidate can be converted once.'),{status:409});
     const [companies]=await conn.query('SELECT id FROM companies WHERE id=?',[b.companyId]);
     if(!companies.length)throw Object.assign(new Error('Choose an existing payroll company before creating the employee.'),{status:400});
-    if(c.email){const [existing]=await conn.query('SELECT id FROM employees WHERE LOWER(email)=LOWER(?)',[c.email]);if(existing.length)throw Object.assign(new Error('An employee already uses this email. Check the existing profile before hiring to avoid duplicates.'),{status:409});}
+    if(c.email){const [existing]=await conn.query('SELECT id FROM visible_employees WHERE LOWER(email)=LOWER(?)',[c.email]);if(existing.length)throw Object.assign(new Error('An employee already uses this email. Check the existing profile before hiring to avoid duplicates.'),{status:409});}
     let userId=null;
     if(b.createAccess){
       if(!c.email||!b.roleId||!b.password)throw Object.assign(new Error('Enter a candidate email, access role and temporary password to create system access.'),{status:400});

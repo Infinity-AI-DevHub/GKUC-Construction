@@ -10,12 +10,12 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const DOC_TYPES = ['Insurance', 'Revenue licence', 'Emission test', 'Service', 'Fitness certificate'];
 const money = amount => `LKR ${Number(amount || 0).toLocaleString('en-LK', { maximumFractionDigits: 2 })}`;
 
-const select = `SELECT f.id,f.vehicle,f.registration reg,f.driver,f.status,f.renewal_type renewal,
+const select = `SELECT f.id,f.vehicle,f.registration reg,CASE WHEN f.driver_employee_id IS NOT NULL THEN e.name ELSE f.driver END driver,f.status,f.renewal_type renewal,
   COALESCE(primary_doc.expiry_date,f.due_date) due_date,f.odometer,
-  f.project_id projectId,p.name project,f.driver_employee_id driverEmployeeId,e.name driverName,e.phone driverPhone,
+  f.project_id projectId,p.name project,e.id driverEmployeeId,e.name driverName,e.phone driverPhone,
   f.service_interval_km serviceIntervalKm,f.service_interval_months serviceIntervalMonths,
   f.last_service_date lastServiceDate,f.last_service_odometer lastServiceOdometer
-  FROM fleet f LEFT JOIN projects p ON p.id=f.project_id LEFT JOIN employees e ON e.id=f.driver_employee_id
+  FROM fleet f LEFT JOIN projects p ON p.id=f.project_id LEFT JOIN visible_employees e ON e.id=f.driver_employee_id
   LEFT JOIN vehicle_documents primary_doc ON primary_doc.vehicle_id=f.id AND primary_doc.doc_type=f.renewal_type`;
 
 const fleetSchema = z.object({
@@ -129,7 +129,7 @@ router.get('/:id', auth, permit('transport.view','transport.manage'), wrap(async
       COALESCE((SELECT SUM(cost) FROM vehicle_maintenance WHERE vehicle_id=?),0) maintenanceCost,
       COALESCE((SELECT SUM(litres) FROM fuel_records WHERE vehicle_id=?),0) litres`, [vehicle.id, vehicle.id, vehicle.id]),
     query(`SELECT a.id,a.driver_name driverName,a.employee_id employeeId,a.assigned_on assignedOn,
-      a.ended_on endedOn,a.notes,p.name project FROM vehicle_driver_assignments a
+      a.ended_on endedOn,a.notes,p.name project FROM visible_vehicle_driver_assignments a
       LEFT JOIN projects p ON p.id=a.project_id WHERE a.vehicle_id=? ORDER BY a.id DESC`,[vehicle.id]),
     query(`SELECT id,reading_date readingDate,odometer,source,notes FROM vehicle_odometer_readings
       WHERE vehicle_id=? ORDER BY reading_date DESC,id DESC LIMIT 100`,[vehicle.id]),
@@ -157,7 +157,7 @@ router.post('/', auth, permit('transport.manage'), validate(fleetSchema), wrap(a
     const id=await transaction(async connection=>{
       let driver=body.driver||null;
       if(body.driverEmployeeId){
-        const [[employee]]=await connection.execute("SELECT name FROM employees WHERE id=? AND status='Active'",[body.driverEmployeeId]);
+        const [[employee]]=await connection.execute("SELECT name FROM visible_employees WHERE id=? AND status='Active'",[body.driverEmployeeId]);
         if(!employee)throw Object.assign(new Error('Assigned driver is not an active employee'),{status:400});
         driver=employee.name;
       }
@@ -220,7 +220,7 @@ router.post('/:id/drivers',auth,permit('transport.manage'),validate(z.object({
     if(!vehicle)throw Object.assign(new Error('Vehicle not found'),{status:404});
     let name=b.driverName||null;
     if(b.employeeId){
-      const [[employee]]=await connection.execute("SELECT name FROM employees WHERE id=? AND status='Active'",[b.employeeId]);
+      const [[employee]]=await connection.execute("SELECT name FROM visible_employees WHERE id=? AND status='Active'",[b.employeeId]);
       if(!employee)throw Object.assign(new Error('Driver is not an active employee'),{status:400});
       name=employee.name;
     }
@@ -229,7 +229,7 @@ router.post('/:id/drivers',auth,permit('transport.manage'),validate(z.object({
       const [[project]]=await connection.execute('SELECT id FROM projects WHERE id=? AND active=1',[projectId]);
       if(!project)throw Object.assign(new Error('Project site not found'),{status:400});
     }
-    const [[active]]=await connection.execute(`SELECT id,assigned_on assignedOn FROM vehicle_driver_assignments
+    const [[active]]=await connection.execute(`SELECT id,assigned_on assignedOn FROM visible_vehicle_driver_assignments
       WHERE vehicle_id=? AND ended_on IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE`,[vehicle.id]);
     // DATE values are calendar days, not instants. Comparing parsed Date objects
     // can shift the day when the app and database use different time zones.
@@ -301,7 +301,7 @@ router.post('/:id/documents', auth, permit('transport.manage'), validate(z.objec
       (vehicle_id,doc_type,reference,renewed_on,expiry_date,cost,recorded_by) VALUES (?,?,?,?,?,?,?)`,
       [vehicle.id,body.docType,body.reference||null,renewedOn,body.expiryDate,body.cost,req.user.id]);
     if(body.docType==='Insurance'){
-      const [[policy]]=await connection.execute(`SELECT id FROM hr_insurance WHERE vehicle_id=? AND kind='Vehicle'
+      const [[policy]]=await connection.execute(`SELECT id FROM visible_hr_insurance WHERE vehicle_id=? AND kind='Vehicle'
         AND status='Active' ORDER BY id DESC LIMIT 1 FOR UPDATE`,[vehicle.id]);
       if(policy)await connection.execute(`UPDATE hr_insurance SET policy_number=?,start_date=?,end_date=?,expiry_date=?,premium=? WHERE id=?`,
         [body.reference||'',renewedOn,body.expiryDate,body.expiryDate,body.cost,policy.id]);

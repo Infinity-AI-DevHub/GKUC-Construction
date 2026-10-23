@@ -12,8 +12,8 @@ const schema=z.object({name:z.string().trim().min(2).max(180),kind:z.enum(['Work
   if(b.endDate<b.startDate||b.expiryDate<b.startDate)ctx.addIssue({code:'custom',message:'Policy end and expiry dates cannot be before the start date.'});
   if(!(b.kind==='Work site'?b.projectId:b.kind==='Employee life'?b.employeeId:b.vehicleId))ctx.addIssue({code:'custom',message:'Select the project, employee or vehicle covered by this insurance.'});
 });
-const select=`SELECT i.*,COALESCE(vd.expiry_date,i.expiry_date) effective_expiry,COALESCE(vd.reference,i.policy_number) effective_reference,COALESCE(vd.cost,i.premium) effective_premium,p.name project,e.name employee,f.registration vehicle FROM hr_insurance i
- LEFT JOIN projects p ON p.id=i.project_id LEFT JOIN employees e ON e.id=i.employee_id LEFT JOIN fleet f ON f.id=i.vehicle_id
+const select=`SELECT i.*,COALESCE(vd.expiry_date,i.expiry_date) effective_expiry,COALESCE(vd.reference,i.policy_number) effective_reference,COALESCE(vd.cost,i.premium) effective_premium,p.name project,e.name employee,f.registration vehicle FROM visible_hr_insurance i
+ LEFT JOIN projects p ON p.id=i.project_id LEFT JOIN visible_employees e ON e.id=i.employee_id LEFT JOIN fleet f ON f.id=i.vehicle_id
  LEFT JOIN vehicle_documents vd ON vd.vehicle_id=i.vehicle_id AND vd.doc_type='Insurance' AND i.status='Active'`;
 const map=row=>({...row,expiry_date:row.effective_expiry,policy_number:row.effective_reference,premium:row.effective_premium,reminders:typeof row.reminders==='string'?JSON.parse(row.reminders):row.reminders});
 router.get('/',wrap(async(_req,res)=>{
@@ -23,7 +23,7 @@ router.get('/',wrap(async(_req,res)=>{
       (SELECT r.renewed_on FROM vehicle_document_renewals r WHERE r.vehicle_id=d.vehicle_id AND r.doc_type='Insurance'
         ORDER BY r.id DESC LIMIT 1) renewedOn
       FROM vehicle_documents d JOIN fleet f ON f.id=d.vehicle_id WHERE d.doc_type='Insurance'
-        AND NOT EXISTS(SELECT 1 FROM hr_insurance i WHERE i.vehicle_id=d.vehicle_id AND i.kind='Vehicle')
+        AND NOT EXISTS(SELECT 1 FROM visible_hr_insurance i WHERE i.vehicle_id=d.vehicle_id AND i.kind='Vehicle')
       ORDER BY f.registration`)
   ]);
   res.json([...policies.map(map),...fleetOnly.map(row=>({
@@ -35,18 +35,18 @@ router.get('/',wrap(async(_req,res)=>{
     reminders:[],status:'Active'
   }))]);
 }));
-router.get('/options',wrap(async(_req,res)=>res.json({projects:await query('SELECT id,name FROM projects WHERE active=1 ORDER BY name'),employees:await query("SELECT id,name,code FROM employees WHERE status<>'Left' ORDER BY name"),vehicles:await query('SELECT id,registration name FROM fleet ORDER BY registration')})));
+router.get('/options',wrap(async(_req,res)=>res.json({projects:await query('SELECT id,name FROM projects WHERE active=1 ORDER BY name'),employees:await query("SELECT id,name,code FROM visible_employees WHERE status<>'Left' ORDER BY name"),vehicles:await query('SELECT id,registration name FROM fleet ORDER BY registration')})));
 async function save(req,res){
   const b=req.body;
   const result=await transaction(async conn=>{
     let before=null;
-    if(req.params.id){const [rows]=await conn.query('SELECT * FROM hr_insurance WHERE id=? FOR UPDATE',[req.params.id]);before=rows[0];if(!before)throw Object.assign(new Error('Insurance record not found.'),{status:404});}
+    if(req.params.id){const [rows]=await conn.query('SELECT * FROM visible_hr_insurance WHERE id=? FOR UPDATE',[req.params.id]);before=rows[0];if(!before)throw Object.assign(new Error('Insurance record not found.'),{status:404});}
     const projectId=b.kind==='Work site'?b.projectId:null,employeeId=b.kind==='Employee life'?b.employeeId:null,vehicleId=b.kind==='Vehicle'?b.vehicleId:null;
-    const table=b.kind==='Work site'?'projects':b.kind==='Employee life'?'employees':'fleet';
+    const table=b.kind==='Work site'?'projects':b.kind==='Employee life'?'visible_employees':'fleet';
     const [linked]=await conn.query(`SELECT id FROM ${table} WHERE id=? FOR UPDATE`,[projectId||employeeId||vehicleId]);
     if(!linked.length)throw Object.assign(new Error('The selected project, employee or vehicle no longer exists. Refresh and select another.'),{status:400});
     if(vehicleId&&b.status==='Active'){
-      const [other]=await conn.query("SELECT id FROM hr_insurance WHERE vehicle_id=? AND status='Active' AND id<>?",[vehicleId,before?.id||0]);
+      const [other]=await conn.query("SELECT id FROM visible_hr_insurance WHERE vehicle_id=? AND status='Active' AND id<>?",[vehicleId,before?.id||0]);
       if(other.length)throw Object.assign(new Error('This vehicle already has an active HR insurance policy. Edit it or archive it before adding its replacement.'),{status:409});
       const [[current]]=await conn.query("SELECT reference,expiry_date expiryDate,cost FROM vehicle_documents WHERE vehicle_id=? AND doc_type='Insurance' FOR UPDATE",[vehicleId]);
       await conn.query(`INSERT INTO vehicle_documents(vehicle_id,doc_type,reference,expiry_date,cost) VALUES(?,'Insurance',?,?,?) ON DUPLICATE KEY UPDATE reference=VALUES(reference),expiry_date=VALUES(expiry_date),cost=VALUES(cost)`,[vehicleId,b.policyNumber,b.expiryDate,b.premium]);

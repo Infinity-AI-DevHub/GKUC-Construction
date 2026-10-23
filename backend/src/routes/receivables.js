@@ -745,7 +745,7 @@ router.get('/receivables/petty-cash/:id/entries', auth, permit('finance.view', '
                p.name project,u.name recordedBy
           FROM petty_cash_entries e JOIN users u ON u.id=e.recorded_by
           JOIN petty_cash_floats f ON f.id=e.float_id
-          LEFT JOIN employees emp ON emp.id=e.employee_id
+          LEFT JOIN visible_employees emp ON emp.id=e.employee_id
           LEFT JOIN fuel_records fr ON fr.id=e.fuel_record_id
           LEFT JOIN fleet v ON v.id=fr.vehicle_id
           LEFT JOIN projects p ON p.id=e.project_id
@@ -773,7 +773,7 @@ router.post('/receivables/petty-cash/:id/entries', auth, permit('finance.manage'
       if (float.account_type === 'Salary advance' && req.body.kind === 'Spend' && !req.body.employeeId)
         throw fail(400, 'Choose the employee receiving this salary advance');
       if (req.body.employeeId) {
-        const employee = await getOne("SELECT id FROM employees WHERE id=? AND status<>'Left'", [req.body.employeeId]);
+        const employee = await getOne("SELECT id FROM visible_employees WHERE id=? AND status<>'Left'", [req.body.employeeId]);
         if (!employee) throw fail(400, 'That employee is not active');
       }
       const projectId = req.body.projectId || float.project_id;
@@ -790,7 +790,7 @@ router.post('/receivables/petty-cash/:id/entries', auth, permit('finance.manage'
         const [[lockedFloat]]=await connection.execute('SELECT id FROM petty_cash_floats WHERE id=? AND active=1 FOR UPDATE',[req.params.id]);
         if(!lockedFloat)throw fail(404,'That float is no longer active');
         if(float.account_type==='Salary advance'&&req.body.kind==='Spend'){
-          const [[worker]]=await connection.execute("SELECT id,pay_basis,payroll_category,daily_rate FROM employees WHERE id=? AND status<>'Left' FOR UPDATE",[req.body.employeeId]);
+          const [[worker]]=await connection.execute("SELECT id,pay_basis,payroll_category,daily_rate FROM visible_employees WHERE id=? AND status<>'Left' FOR UPDATE",[req.body.employeeId]);
           if(!worker)throw fail(400,'Choose an active employee receiving this advance.');
           if(worker.pay_basis==='Daily rate'||worker.payroll_category==='Site labourer'){
             const dailyRate=Number(worker.daily_rate);

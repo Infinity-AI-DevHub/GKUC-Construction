@@ -34,20 +34,20 @@ router.get('/', auth, wrap(async (req, res) => {
     suppliers, purchaseRequests, boqs, milestones, notifications, finance, inquiries, weekly] = await Promise.all([
     query('SELECT id,code,name FROM companies WHERE active=1 ORDER BY id'),
     gated(['projects.view','site.reports','finance.reports','finance.managementAccounts','finance.dailyExpenses','finance.expectedOutflows'], () => can(req,'projects.view') ? query(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,
-      COALESCE(me.name,p.manager) manager,COALESCE(d.name,p.client) client,c.name company,c.code companyCode FROM projects p
+      CASE WHEN p.manager_employee_id IS NOT NULL THEN me.name ELSE p.manager END manager,COALESCE(d.name,p.client) client,c.name company,c.code companyCode FROM projects p
       JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id
-      LEFT JOIN employees me ON me.id=p.manager_employee_id WHERE p.active=1 ORDER BY p.id`)
+      LEFT JOIN visible_employees me ON me.id=p.manager_employee_id WHERE p.active=1 ORDER BY p.id`)
       : query('SELECT id,name,company_id companyId FROM projects WHERE active=1 ORDER BY name')),
-    gated(['site.tasks','projects.view'], () => query(`SELECT t.id,t.title,t.project_id projectId,t.assignee_employee_id assigneeEmployeeId,COALESCE(e.name,t.assignee) assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project,p.company_id companyId FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN employees e ON e.id=t.assignee_employee_id WHERE p.active=1 ORDER BY t.id`).then(withTaskAssignees)),
+    gated(['site.tasks','projects.view'], () => query(`SELECT t.id,t.title,t.project_id projectId,t.assignee_employee_id assigneeEmployeeId,CASE WHEN t.assignee_employee_id IS NOT NULL THEN e.name ELSE t.assignee END assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project,p.company_id companyId FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN visible_employees e ON e.id=t.assignee_employee_id WHERE p.active=1 ORDER BY t.id`).then(withTaskAssignees)),
     gated(['hr.manage','hr.attendance'], () => query(`SELECT a.id,a.employee_name name,a.role,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,a.state,a.work_date workDate
-      FROM attendance a LEFT JOIN projects p ON p.id=a.project_id WHERE a.work_date=CURDATE()
+      FROM visible_attendance a LEFT JOIN projects p ON p.id=a.project_id WHERE a.work_date=CURDATE()
       AND (a.project_id IS NULL OR p.active=1) ORDER BY a.id`)),
     gated(['store.view','store.manage','site.reports'], () => can(req,'store.view')||can(req,'store.manage')
       ? query('SELECT * FROM materials WHERE active=1 ORDER BY id')
       : query('SELECT id,name,unit,stock,minimum FROM materials WHERE active=1 ORDER BY name')),
-    gated(['transport.view','transport.manage'], () => query(`SELECT f.id,f.vehicle,f.registration reg,f.driver,f.status,
+    gated(['transport.view','transport.manage'], () => query(`SELECT f.id,f.vehicle,f.registration reg,CASE WHEN f.driver_employee_id IS NOT NULL THEN e.name ELSE f.driver END driver,f.status,
       f.renewal_type renewal,COALESCE(d.expiry_date,f.due_date) due_date,f.odometer,p.name project
-      FROM fleet f LEFT JOIN projects p ON p.id=f.project_id
+      FROM fleet f LEFT JOIN projects p ON p.id=f.project_id LEFT JOIN visible_employees e ON e.id=f.driver_employee_id
       LEFT JOIN vehicle_documents d ON d.vehicle_id=f.id AND d.doc_type=f.renewal_type ORDER BY f.id`)),
     gated(['site.reports','projects.view'], () => query(`SELECT r.id,r.project_id projectId,p.company_id companyId,p.name site,r.supervisor,DATE_FORMAT(r.report_date,'%d %b %Y') date,
       r.workforce,r.work_completed work,r.issue,r.weather,r.delay_hours delayHours
@@ -64,7 +64,7 @@ router.get('/', auth, wrap(async (req, res) => {
      */
     gated(['hr.view','hr.manage','hr.attendance','site.attendance','site.reports','store.lending','projects.manage','enquiries.manage','site.tasks','qs.tender'], () =>
       !['hr.view','hr.manage','hr.attendance','store.lending','projects.manage','enquiries.manage','site.tasks','qs.tender'].some(key=>can(req,key))
-        ? query('SELECT id,code,name,status FROM employees WHERE status<>? ORDER BY name',['Archived'])
+        ? query('SELECT id,code,name,status FROM visible_employees WHERE status<>? ORDER BY name',['Archived'])
         : query(`SELECT e.id,e.user_id userId,e.code,e.name,e.designation,e.phone,e.email,e.status,
       ${['hr.payroll', 'hr.manage','hr.settings'].some(key => req.user.permissions.includes(key))
     ? `e.allowance_eligibility allowanceEligibility,e.basic_salary basicSalary,e.daily_rate dailyRate,e.weekly_rate weeklyRate,e.overtime_rate overtimeRate,
@@ -72,14 +72,14 @@ router.get('/', auth, wrap(async (req, res) => {
        e.compensation_effective_from compensationEffectiveFrom,e.epf_eligible epfEligible,e.etf_eligible etfEligible,
        e.custom_office_ot_rate customOfficeOtRate,e.custom_site_ot_rate customSiteOtRate,e.custom_travel_ot_rate customTravelOtRate,` : ''}
       e.join_date joinDate,e.worker_type workerType,d.name department,e.department_id departmentId
-      FROM employees e LEFT JOIN departments d ON d.id=e.department_id ORDER BY e.code`)),
+      FROM visible_employees e LEFT JOIN departments d ON d.id=e.department_id ORDER BY e.code`)),
     gated(['hr.view','hr.manage'], () => query('SELECT id,name,description FROM departments ORDER BY name')),
     gated(['store.view','store.manage'], () => query(`SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_cost purchaseCost,
-      (SELECT p.name FROM equipment_assignments a JOIN projects p ON p.id=a.project_id
+      (SELECT p.name FROM visible_equipment_assignments a JOIN projects p ON p.id=a.project_id
         WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) project,
-      (SELECT a.due_back FROM equipment_assignments a
+      (SELECT a.due_back FROM visible_equipment_assignments a
         WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) dueBack,
-      (SELECT DATEDIFF(CURDATE(), a.due_back) FROM equipment_assignments a
+      (SELECT DATEDIFF(CURDATE(), a.due_back) FROM visible_equipment_assignments a
         WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) daysOverdue
       FROM equipment e ORDER BY e.code`)),
     gated(['store.view','store.manage','finance.pay','finance.supplierStatements'], () => query('SELECT id,name,contact_person contact,phone,email,address FROM suppliers WHERE active=1 ORDER BY name')),
@@ -113,7 +113,7 @@ router.get('/', auth, wrap(async (req, res) => {
       i.expected_start expectedStart,i.project_id projectId FROM inquiries i ORDER BY i.id DESC LIMIT 40`)),
     /* Real site activity for the last seven days, replacing the placeholder chart. */
     gated(['projects.view','site.reports'], () => query(`SELECT DATE_FORMAT(d.day,'%a') label, DATE_FORMAT(d.day,'%Y-%m-%d') day,
-        (SELECT COUNT(*) FROM attendance a WHERE a.work_date=d.day AND a.state IN ('On site','Late','Checked out')) workforce,
+        (SELECT COUNT(*) FROM visible_attendance a WHERE a.work_date=d.day AND a.state IN ('On site','Late','Checked out')) workforce,
         (SELECT COUNT(*) FROM daily_reports r WHERE r.report_date=d.day) reports
       FROM (SELECT CURDATE() - INTERVAL n DAY day FROM
         (SELECT 6 n UNION SELECT 5 UNION SELECT 4 UNION SELECT 3 UNION SELECT 2 UNION SELECT 1 UNION SELECT 0) days) d

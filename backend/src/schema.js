@@ -1,4 +1,5 @@
 import { ddl, query } from './db.js';
+import { createEmployeeReadViews } from './lib/employee-visibility.js';
 import { DEFAULT_ROLES, LEGACY_ROLE_MAP, PERMISSIONS, FEATURE_PERMISSION_PARENTS } from './lib/permissions.js';
 
 export const ROLES = [
@@ -2869,7 +2870,7 @@ async function migrateExistingInstalls() {
   await addColumn('attendance', 'needs_review', 'TINYINT(1) NOT NULL DEFAULT 0');
   await addColumn('attendance', 'source', "VARCHAR(20) NOT NULL DEFAULT 'Manual'");
   await addColumn('attendance', 'work_location', "ENUM('Office','Site') NOT NULL DEFAULT 'Site'");
-  await modifyColumn('attendance', 'work_location', "ENUM('Office','Site','Not working') NOT NULL DEFAULT 'Site'");
+  await modifyColumn('attendance', 'work_location', "ENUM('Office','Site','Not working','Unassigned') NOT NULL DEFAULT 'Site'");
   await query(`CREATE TABLE IF NOT EXISTS employee_work_locations (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     employee_id BIGINT UNSIGNED NOT NULL,
@@ -3428,6 +3429,9 @@ export async function migrate() {
     FOREIGN KEY(recorded_by) REFERENCES users(id),
     INDEX idx_compliance_renewal(compliance_id,expiry_date)
   ) ENGINE=InnoDB`);
+  await addColumn('employees', 'deactivated_at', 'DATETIME NULL');
+  await addColumn('employees', 'deactivated_by', 'BIGINT UNSIGNED NULL');
+  await createEmployeeReadViews(query);
   await seedWorkMethods();
   await seedAccessControl();
 }

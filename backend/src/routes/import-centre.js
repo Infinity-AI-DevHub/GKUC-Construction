@@ -115,7 +115,7 @@ async function inspect(kind, rows) {
       if (!link(type, clean(data[field]))) errors.push(`${field.replaceAll('_', ' ')} ${clean(data[field])} has not been imported yet.`);
     }
     if (kind === 'projects') {
-      const employee = await getOne('SELECT id FROM employees WHERE code=? LIMIT 1', [clean(data.PROJECT_MANAGER_EMPLOYEE_CODE)]);
+      const employee = await getOne('SELECT id FROM visible_employees WHERE code=? LIMIT 1', [clean(data.PROJECT_MANAGER_EMPLOYEE_CODE)]);
       if (!employee) errors.push(`Project manager ${clean(data.PROJECT_MANAGER_EMPLOYEE_CODE)} was not found. Add or correct the employee code first.`);
       if (!['GKUC Construction','GKUC Readymix'].includes(clean(data.COMPANY))) errors.push('Company must be GKUC Construction or GKUC Readymix.');
       if (!['On track','Watch','At risk'].includes(clean(data.HEALTH))) errors.push('Health must be On track, Watch or At risk.');
@@ -348,7 +348,7 @@ router.post('/batches/:id/confirm', auth, wrap(async (req, res) => {
         id = result.insertId;
       } else {
         const [client] = await connection.execute('SELECT target_id FROM historical_import_links WHERE kind=? AND source_code=?', ['clients', clean(d.CLIENT_CODE)]);
-        const [employee] = await connection.execute('SELECT id,name FROM employees WHERE code=? LIMIT 1', [clean(d.PROJECT_MANAGER_EMPLOYEE_CODE)]);
+        const [employee] = await connection.execute('SELECT id,name FROM visible_employees WHERE code=? LIMIT 1', [clean(d.PROJECT_MANAGER_EMPLOYEE_CODE)]);
         if (!client[0] || !employee[0]) throw Object.assign(new Error(`Project ${record.code} has a missing client or manager. Run the dry check again.`), { status: 409 });
         const [result] = await connection.execute(`INSERT INTO projects
           (name,client,client_id,manager,manager_employee_id,progress,budget,health,stage,site,start_date,end_date,active,company_id)

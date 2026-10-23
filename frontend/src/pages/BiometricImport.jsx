@@ -109,12 +109,6 @@ export default function BiometricImport({ data, projects = data.projects, can, r
     if (!preview?.rows?.some(row => row.employeeId)) return;
     const rows = preview.rows.map(row => ({ ...row, ...edits[keyFor(row)] }));
     const usable = rows.filter(row => row.employeeId);
-    const missing = usable.filter(row => !locationFor(row));
-    if (missing.length) {
-      setCommitError(`${missing.length} matched day(s) still need a work location. Set each person's usual location below, then override any days spent elsewhere before importing.`);
-      setConfirmPartial(false);
-      return;
-    }
     setBusy(true); setError(''); setCommitError(''); setConfirmPartial(false);
     try {
       const leftOut = rows.length - usable.length;
@@ -138,7 +132,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
       try { await reload(); }
       catch (failure) { setCommitError(`Attendance was saved, but the page could not refresh. ${failure.message} Refresh the page before importing again.`); }
     } catch (failure) {
-      setCommitError(`Attendance could not be imported. ${failure.message} Your preview is still here; check the locations and identities before trying again.`);
+      setCommitError(`Attendance could not be imported. ${failure.message} Your preview is still here; check the identities before trying again.`);
     } finally { setBusy(false); }
   };
 
@@ -150,7 +144,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
   const locationFor = row => ['Absent', 'On leave'].includes(row.declaredState) || (!row.declaredState && !row.checkIn && !row.checkOut)
     ? 'not-working' : (row.locationKey || (row.plannedWorkLocation === 'Office' ? 'office'
       : row.plannedWorkLocation === 'Site' ? `site:${row.plannedProjectId}` : '') || personLocations[row.employeeId] || '');
-  const locationPayload = key => key === 'office' ? { workLocation: 'Office', projectId: null }
+  const locationPayload = key => !key ? {} : key === 'office' ? { workLocation: 'Office', projectId: null }
     : key === 'not-working' ? { workLocation: 'Not working', projectId: null }
       : { workLocation: 'Site', projectId: Number(key.slice(5)) };
   const locationLabel = key => key === 'office' ? 'Head office'
@@ -213,7 +207,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
       <div className="import-result">
         <CheckCircle2 size={16} />
         <span>
-          Imported with <strong>individual work locations</strong> — {result.inserted} new day(s),
+          Attendance imported — {result.inserted} new day(s),
           {' '}{result.updated} updated{result.skipped.length ? `, ${result.skipped.length} skipped` : ''}.
           {result.skipped.some(item => item.why === 'A manual correction was kept') && ' Existing HR corrections were kept unchanged.'}
           {result.leftOut ? ` ${result.leftOut} unmatched day(s) were not imported; link those people below and import them later.` : ' Payroll and leave now read from this record.'}
@@ -266,9 +260,9 @@ export default function BiometricImport({ data, projects = data.projects, can, r
 
       {peopleInFile.length > 0 && <section className="table-panel import-location-panel">
         <div className="table-tools">
-          <h2>Where did each person work?</h2>
-          <small>Dated locations from the Workforce map are used first. Set a usual location here for days without a schedule; edit any individual day below if they worked elsewhere. Absent and leave days are marked Not working automatically.</small>
-          <strong className={unassigned ? 'needs-review' : ''}>{unassigned ? `${unassigned} matched day(s) need a location` : 'All matched days have a location'}</strong>
+          <h2>Work locations (optional)</h2>
+          <small>Dated locations from the Workforce map are used first. You can import without choosing a location. Previously saved locations are retained; new days without a location are Unassigned. Absent and leave days are marked Not working automatically.</small>
+          <strong>{unassigned ? `${unassigned} matched day(s) have no location selected` : 'All matched days have a location'}</strong>
         </div>
         <div className="import-location-grid">
           {peopleInFile.map(person => <label key={person.employeeId}>
@@ -276,7 +270,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
             <select value={personLocations[person.employeeId] || ''} disabled={busy}
               onChange={event => { setPersonLocations(current => ({ ...current, [person.employeeId]: event.target.value })); setCommitError(''); setConfirmPartial(false); }}
               aria-label={`Usual work location for ${person.employee || person.name}`}>
-              <option value="">Choose work location…</option>
+              <option value="">No location selected</option>
               <option value="office">Head office</option>
               {projects.map(project => <option value={`site:${project.id}`} key={project.id}>{project.name}</option>)}
             </select>
@@ -286,7 +280,6 @@ export default function BiometricImport({ data, projects = data.projects, can, r
 
       <div className="import-commit">
         <button className="primary" onClick={() => {
-          if (unassigned) { setCommitError(`${unassigned} matched day(s) need a location. Assign each person above or edit individual days before importing.`); return; }
           preview.summary.unmatched > 0 ? setConfirmPartial(true) : commit();
         }} disabled={busy || !matched}>
           {busy ? 'Importing…' : preview.summary.unmatched > 0 ? `Review import of ${matched} matched day(s)` : `Import ${matched} matched day(s)`}
@@ -320,7 +313,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
               <Badge tone={slug(row.declaredState || row.state)}>{row.correctionReason ? 'Edited' : row.state}</Badge>
               {row.needsReview && <small className="needs-review">One punch only — confirm</small>}
             </div>
-            <div>{row.employeeId ? <><strong className={locationFor(row) ? '' : 'needs-review'}>{locationLabel(locationFor(row))}</strong>
+            <div>{row.employeeId ? <><strong>{locationLabel(locationFor(row))}</strong>
               {row.locationKey ? <small>Day override</small> : row.plannedWorkLocation && <small>Workforce schedule</small>}</> : <span>Awaiting identity</span>}</div>
             {row.employeeId
               ? <Badge tone={row.duplicate ? 'watch' : 'on-track'}>{row.duplicate ? 'Will update' : 'New'}</Badge>

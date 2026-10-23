@@ -189,7 +189,7 @@ export async function dispatch(notification) {
   for (const [channel, adapter] of Object.entries(adapters)) {
     if (!enabled(channel)) continue;
     for (const user of users) {
-      const employee = channel === 'Email' ? null : await getOne('SELECT phone FROM employees WHERE email=?', [user.email]);
+      const employee = channel === 'Email' ? null : await getOne('SELECT phone FROM visible_employees WHERE email=?', [user.email]);
       const recipient = addressFor(channel, user, employee);
       if (!recipient) {
         await record(notification.id, channel, user.name, 'Skipped', adapter.provider(), 'No address on file');

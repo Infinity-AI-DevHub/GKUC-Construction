@@ -688,7 +688,7 @@ router.get('/reporting', auth, permit('finance.view','finance.manage'), wrap(asy
       pce.employee_id employeeId,emp.name employee,fr.vehicle_id vehicleId,
       fv.vehicle vehicle,fv.registration registration FROM petty_cash_entries pce
       JOIN petty_cash_floats pcf ON pcf.id=pce.float_id
-      LEFT JOIN employees emp ON emp.id=pce.employee_id
+      LEFT JOIN visible_employees emp ON emp.id=pce.employee_id
       LEFT JOIN fuel_records fr ON fr.id=pce.fuel_record_id
       LEFT JOIN fleet fv ON fv.id=fr.vehicle_id
       LEFT JOIN projects p ON p.id=COALESCE(pce.project_id,pcf.project_id)

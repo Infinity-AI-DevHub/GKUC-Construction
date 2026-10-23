@@ -39,7 +39,7 @@ const resolveAssignees = async body => {
     const ids = [...new Set(body.assigneeEmployeeIds)];
     if (ids.length !== body.assigneeEmployeeIds.length)
       throw Object.assign(new Error('Each employee can be selected only once.'), { status: 400 });
-    const found = await query(`SELECT id,name FROM employees WHERE id IN (${ids.map(() => '?').join(',')})
+    const found = await query(`SELECT id,name FROM visible_employees WHERE id IN (${ids.map(() => '?').join(',')})
       AND status IN ('Active','On leave')`, ids);
     if (found.length !== ids.length)
       throw Object.assign(new Error('One or more selected employees are not active. Choose active employees or people on leave.'), { status: 400 });
@@ -48,30 +48,30 @@ const resolveAssignees = async body => {
       display: ids.map(id => names.get(id)).join(', ') };
   }
   if (body.assigneeEmployeeId) {
-    const employee = await getOne("SELECT id,name FROM employees WHERE id=? AND status IN ('Active','On leave')", [body.assigneeEmployeeId]);
+    const employee = await getOne("SELECT id,name FROM visible_employees WHERE id=? AND status IN ('Active','On leave')", [body.assigneeEmployeeId]);
     if (!employee) throw Object.assign(new Error('Choose an active employee for this task.'), { status: 400 });
     return { assigneeEmployeeId: employee.id, assignee: employee.name, ids: [Number(employee.id)], display: employee.name };
   }
-  const match = await getOne('SELECT MIN(id) id,COUNT(*) matches FROM employees WHERE LOWER(TRIM(name))=LOWER(TRIM(?))', [body.assignee]);
+  const match = await getOne('SELECT MIN(id) id,COUNT(*) matches FROM visible_employees WHERE LOWER(TRIM(name))=LOWER(TRIM(?))', [body.assignee]);
   const id = Number(match?.matches) === 1 ? Number(match.id) : null;
   return { assigneeEmployeeId: id, assignee: body.assignee, ids: id ? [id] : [], display: body.assignee };
 };
 
 /* Named columns rather than t.*, so the shape matches the camelCase every other endpoint returns. */
-const TASK_COLUMNS = `t.id,t.title,t.project_id projectId,t.assignee_employee_id assigneeEmployeeId,COALESCE(e.name,t.assignee) assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project`;
+const TASK_COLUMNS = `t.id,t.title,t.project_id projectId,t.assignee_employee_id assigneeEmployeeId,CASE WHEN t.assignee_employee_id IS NOT NULL THEN e.name ELSE t.assignee END assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project`;
 
-const withProject = async id => withTaskAssignees(await getOne(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN employees e ON e.id=t.assignee_employee_id WHERE t.id=? AND p.active=1`, [id]));
+const withProject = async id => withTaskAssignees(await getOne(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN visible_employees e ON e.id=t.assignee_employee_id WHERE t.id=? AND p.active=1`, [id]));
 
 router.get('/', auth, permit('site.tasks','projects.view'), wrap(async (req, res) => {
   const filters = ['p.active=1'];
   const params = [];
   if (req.query.projectId) { filters.push('t.project_id=?'); params.push(req.query.projectId); }
   if (req.query.status) { filters.push('t.status=?'); params.push(req.query.status); }
-  if (req.query.assignee) { filters.push(`(t.assignee=? OR EXISTS (SELECT 1 FROM task_assignees ta
-    JOIN employees member ON member.id=ta.employee_id WHERE ta.task_id=t.id AND member.name=?))`);
+  if (req.query.assignee) { filters.push(`(t.assignee=? OR EXISTS (SELECT 1 FROM visible_task_assignees ta
+    JOIN visible_employees member ON member.id=ta.employee_id WHERE ta.task_id=t.id AND member.name=?))`);
     params.push(req.query.assignee, req.query.assignee); }
   const where = `WHERE ${filters.join(' AND ')}`;
-  res.json(await withTaskAssignees(await query(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN employees e ON e.id=t.assignee_employee_id ${where} ORDER BY t.id`, params)));
+  res.json(await withTaskAssignees(await query(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN visible_employees e ON e.id=t.assignee_employee_id ${where} ORDER BY t.id`, params)));
 }));
 
 router.get('/reminder-users', auth, permit('site.tasks'), wrap(async (_req,res) => {

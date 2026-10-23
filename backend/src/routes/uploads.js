@@ -55,10 +55,10 @@ if (missingStorageFolders.length) {
 
 /** Each owner type points at the table its id must exist in. */
 const OWNER_TABLES = {
-  attendance:'attendance',claim:'hr_payroll_claims',
-  handover:'employee_asset_handovers',
+  attendance:'visible_attendance',claim:'visible_hr_payroll_claims',
+  handover:'visible_employee_asset_handovers',
   candidate:'hiring_candidates',
-  task: 'tasks', project: 'projects', employee: 'employees',
+  task: 'tasks', project: 'projects', employee: 'visible_employees',
   report: 'daily_reports', vehicle: 'fleet', equipment: 'equipment', incoming_letter: 'incoming_letters',
   risk_finding:'risk_findings',company_compliance:'company_compliance_records'
 };
@@ -73,7 +73,7 @@ const metaSchema = z.object({
 export const listAttachments = (ownerType, ownerId) => query(
   `SELECT a.id,a.url,a.filename,a.mime,a.size_bytes size,a.title,a.category,a.kind,a.expiry_date expiryDate,
      a.created_at createdAt,u.name uploadedBy
-   FROM attachments a JOIN users u ON u.id=a.uploaded_by
+   FROM visible_attachments a JOIN users u ON u.id=a.uploaded_by
    WHERE a.owner_type=? AND a.owner_id=? ORDER BY a.id DESC`, [ownerType, ownerId]
 );
 
@@ -161,7 +161,7 @@ router.get('/search/documents', auth, wrap(async (req, res) => {
        t.source,t.pages,t.characters,
        MATCH(t.content) AGAINST (? IN BOOLEAN MODE) score,
        SUBSTRING(t.content, GREATEST(1, LOCATE(?, t.content) - 90), 260) excerpt
-     FROM attachment_text t JOIN attachments a ON a.id=t.attachment_id
+     FROM attachment_text t JOIN visible_attachments a ON a.id=t.attachment_id
      WHERE a.owner_type IN (${readable.map(() => '?').join(',')})
        AND MATCH(t.content) AGAINST (? IN BOOLEAN MODE)
      ORDER BY score DESC LIMIT 50`,
@@ -172,7 +172,7 @@ router.get('/search/documents', auth, wrap(async (req, res) => {
 
 router.get('/file/:id', auth, wrap(async (req, res) => {
   const file = await getOne(
-    'SELECT id,owner_type ownerType,owner_id ownerId,storage_key storageKey,filename,mime FROM attachments WHERE id=?',
+    'SELECT id,owner_type ownerType,owner_id ownerId,storage_key storageKey,filename,mime FROM visible_attachments WHERE id=?',
     [req.params.id]);
   if (!file) return res.status(404).json({ error: 'File not found' });
 
@@ -247,7 +247,7 @@ router.post('/:ownerType/:ownerId', auth, wrap(async (req, res, next) => {
     /* Queued, not awaited: a scan takes minutes to read and the file is usable now. */
     await enqueueOcr(result.insertId, stored.mime).catch(() => {});
     res.status(201).json(await getOne(`SELECT a.id,a.url,a.filename,a.mime,a.size_bytes size,a.title,a.category,a.kind,
-      a.expiry_date expiryDate,a.created_at createdAt,? uploadedBy FROM attachments a WHERE a.id=?`, [req.user.name, result.insertId]));
+      a.expiry_date expiryDate,a.created_at createdAt,? uploadedBy FROM visible_attachments a WHERE a.id=?`, [req.user.name, result.insertId]));
   } catch (error) {
     await remove(stored.key).catch(() => {});
     next(error);
@@ -265,7 +265,7 @@ router.post('/:ownerType/:ownerId', auth, wrap(async (req, res, next) => {
  * type, exactly as attaching one does.
  */
 router.delete('/:id', auth, wrap(async (req, res) => {
-  const attachment = await getOne('SELECT * FROM attachments WHERE id=?', [req.params.id]);
+  const attachment = await getOne('SELECT * FROM visible_attachments WHERE id=?', [req.params.id]);
   if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
   const required = WRITERS[attachment.owner_type];
   if (!required || !can(req, required)) {
@@ -292,7 +292,7 @@ router.get('/:ownerType/:ownerId/text/:id', auth, wrap(async (req, res) => {
   const row = await getOne(
     `SELECT t.content,t.source,t.pages,t.characters,t.extracted_at extractedAt,
        j.status,j.detail
-     FROM attachments a
+     FROM visible_attachments a
      LEFT JOIN attachment_text t ON t.attachment_id=a.id
      LEFT JOIN ocr_jobs j ON j.attachment_id=a.id
      WHERE a.id=? AND a.owner_type=? AND a.owner_id=?`,

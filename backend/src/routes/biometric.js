@@ -19,12 +19,15 @@ const LATE_AFTER = process.env.ATTENDANCE_LATE_AFTER || '08:00:00';
 
 /** Only HR-approved scanner numbers match automatically. One employee can have several. */
 async function resolveEmployees(rows) {
-  const mappings = await query(`SELECT b.code,e.id,e.name FROM employee_biometric_ids b
-    JOIN employees e ON e.id=b.employee_id WHERE e.status <> 'Left'`);
+  const mappings = await query(`SELECT b.code,e.id,e.name FROM visible_employee_biometric_ids b
+    JOIN visible_employees e ON e.id=b.employee_id WHERE e.status <> 'Left'`);
   const key = value => String(value ?? '').trim().toLowerCase();
   const byDevice = new Map(mappings.map(item => [key(item.code), item]));
+  const hidden = await query(`SELECT b.code FROM \`employee_biometric_ids\` b
+    JOIN \`employees\` e ON e.id=b.employee_id WHERE e.deactivated_at IS NOT NULL`);
+  const hiddenCodes = new Set(hidden.map(item => key(item.code)));
 
-  return rows.map(row => {
+  return rows.filter(row => !hiddenCodes.has(key(row.code))).map(row => {
     /* Only a mapping approved by HR is automatic. Names in this export are often first
        names and employee codes belong to a different numbering scheme. */
     const match = (row.code && byDevice.get(key(row.code))) || null;
@@ -69,11 +72,11 @@ router.post('/preview', auth, permit('hr.attendance'), wrap(async (req, res) => 
   const resolved = await resolveEmployees(parsed.rows);
   const dates = resolved.map(row => row.date).sort();
   const existing = await query(
-    'SELECT employee_id employeeId,employee_name name,work_date workDate FROM attendance WHERE work_date BETWEEN ? AND ?',
+    'SELECT employee_id employeeId,employee_name name,work_date workDate FROM visible_attendance WHERE work_date BETWEEN ? AND ?',
     [dates[0], dates[dates.length - 1]]);
   const alreadyHave = new Set(existing.map(row => `${row.employeeId || row.name}|${String(row.workDate).slice(0, 10)}`));
   const planned = await query(`SELECT employee_id employeeId,work_date workDate,work_location workLocation,project_id projectId
-    FROM employee_work_locations WHERE work_date BETWEEN ? AND ?`, [dates[0], dates[dates.length - 1]]);
+    FROM visible_employee_work_locations WHERE work_date BETWEEN ? AND ?`, [dates[0], dates[dates.length - 1]]);
   const plannedByDay = new Map(planned.map(row => [`${row.employeeId}|${String(row.workDate).slice(0, 10)}`, row]));
 
   const rows = resolved.map(row => {
@@ -86,7 +89,7 @@ router.post('/preview', auth, permit('hr.attendance'), wrap(async (req, res) => 
   /* One line per unrecognised device number, so the mapping is offered once rather than
      once per day that person worked. */
   const unknown = new Map();
-  const employees = await query("SELECT id,code,name,designation FROM employees WHERE status <> 'Left' ORDER BY name");
+  const employees = await query("SELECT id,code,name,designation FROM visible_employees WHERE status <> 'Left' ORDER BY name");
   const normal = value => String(value || '').trim().toLowerCase();
   for (const row of rows) {
     if (row.employeeId || !row.code) continue;
@@ -140,12 +143,15 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
     declaredState: z.enum(['Absent', 'On leave', 'Business trip']).nullable().optional(),
     correctionReason: z.string().trim().min(3).max(500).nullable().optional()
   }).extend({
-    workLocation: z.enum(['Office', 'Site', 'Not working']),
-    projectId: z.number().int().positive().nullable()
+    workLocation: z.enum(['Office', 'Site', 'Not working']).nullable().optional(),
+    projectId: z.number().int().positive().nullable().default(null)
   })).min(1).max(5000)
 })), wrap(async (req, res) => {
 
   const resolved = await resolveEmployees(req.body.rows);
+  if (resolved.length !== req.body.rows.length) {
+    return res.status(409).json({ error: 'Some selected employees are deactivated. Refresh the import preview before continuing.' });
+  }
   const unresolved = resolved.filter(row => !row.employeeId);
   if (unresolved.length) {
     return res.status(409).json({ error: `${unresolved.length} attendance row(s) still need an identity decision` });
@@ -156,6 +162,7 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
   const projectById = new Map(projects.map(project => [Number(project.id), project]));
   for (const row of resolved) {
     const notWorking = ['Absent', 'On leave'].includes(stateFor(row));
+    if (!row.workLocation && row.projectId === null) continue;
     const valid = notWorking
       ? row.workLocation === 'Not working' && row.projectId === null
       : row.workLocation === 'Office' ? row.projectId === null
@@ -175,10 +182,14 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
       const state = stateFor(row);
       const checkIn = ['Absent', 'On leave', 'Business trip'].includes(state) ? null : row.checkIn || null;
       const checkOut = ['Absent', 'On leave', 'Business trip'].includes(state) ? null : row.checkOut || null;
-      const [employee] = await connection.execute('SELECT designation FROM employees WHERE id=?', [employeeId]);
+      const [employee] = await connection.execute('SELECT designation FROM visible_employees WHERE id=?', [employeeId]);
       const [existing] = await connection.execute(
-        'SELECT * FROM attendance WHERE (employee_id=? OR (employee_id IS NULL AND employee_name=?)) AND work_date=? LIMIT 1',
+        'SELECT * FROM visible_attendance WHERE (employee_id=? OR (employee_id IS NULL AND employee_name=?)) AND work_date=? LIMIT 1',
         [employeeId, name, row.date]);
+      const workLocation = row.workLocation || (['Absent', 'On leave'].includes(state)
+        ? 'Not working' : existing[0]?.work_location || 'Unassigned');
+      const projectId = row.workLocation ? row.projectId
+        : workLocation === 'Site' ? existing[0]?.project_id ?? null : null;
 
       if (existing[0]) {
         /* Re-uploading a file must not silently erase an HR correction already used by payroll. */
@@ -189,7 +200,7 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
         await connection.execute(
           `UPDATE attendance SET employee_name=?,role=?,project_id=?,work_location=?,check_in=?,check_out=?,state=?,employee_id=COALESCE(?,employee_id),
              needs_review=?,source='Biometric',correction_reason=COALESCE(?,correction_reason),confirmed_by=? WHERE id=?`,
-          [name, employee[0]?.designation || 'Worker', row.projectId, row.workLocation, checkIn, checkOut, state, employeeId,
+          [name, employee[0]?.designation || 'Worker', projectId, workLocation, checkIn, checkOut, state, employeeId,
             row.needsReview ? 1 : 0, row.correctionReason || null, req.user.id, existing[0].id]);
         if (row.correctionReason) await audit(connection, req.user.id, 'IMPORT_CORRECTION', 'attendance', existing[0].id,
           existing[0], { ...row, state, correctionReason: row.correctionReason }, req.ip);
@@ -199,7 +210,7 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
           `INSERT INTO attendance (employee_name,role,project_id,work_location,employee_id,work_date,check_in,check_out,state,
              needs_review,source,correction_reason,confirmed_by)
            VALUES (?,?,?,?,?,?,?,?,?,?,'Biometric',?,?)`,
-          [name, employee[0]?.designation || 'Worker', row.projectId, row.workLocation, employeeId, row.date,
+          [name, employee[0]?.designation || 'Worker', projectId, workLocation, employeeId, row.date,
             checkIn, checkOut, state, row.needsReview ? 1 : 0, row.correctionReason || null, req.user.id]);
         if (row.correctionReason) await audit(connection, req.user.id, 'IMPORT_CORRECTION', 'attendance', created.insertId,
           null, { ...row, state, correctionReason: row.correctionReason }, req.ip);
@@ -223,12 +234,12 @@ router.post('/mappings', auth, permit('hr.attendance'), validate(z.object({
   employeeId: z.number().int().positive(),
   replaceExisting: z.boolean().optional()
 })), wrap(async (req, res) => {
-  const employee = await getOne('SELECT id,name,code FROM employees WHERE id=?', [req.body.employeeId]);
+  const employee = await getOne('SELECT id,name,code FROM visible_employees WHERE id=?', [req.body.employeeId]);
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
   await transaction(async connection => {
-    const [[owner]] = await connection.execute(`SELECT e.id,e.name FROM employee_biometric_ids b
-      JOIN employees e ON e.id=b.employee_id WHERE b.code=? FOR UPDATE`, [req.body.code]);
+    const [[owner]] = await connection.execute(`SELECT e.id,e.name FROM visible_employee_biometric_ids b
+      JOIN visible_employees e ON e.id=b.employee_id WHERE b.code=? FOR UPDATE`, [req.body.code]);
     const taken = owner?.id !== employee.id ? owner : null;
     if (taken && !req.body.replaceExisting) throw Object.assign(
       new Error(`Device number ${req.body.code} is already ${taken.name}'s. Confirm reassignment before changing it.`),
@@ -244,7 +255,7 @@ router.post('/mappings', auth, permit('hr.attendance'), validate(z.object({
     await audit(connection, req.user.id, taken ? 'REASSIGN' : 'UPDATE', 'employee_biometric', employee.id,
       taken ? { employeeId: taken.id, name: taken.name } : null, { biometricId: req.body.code }, req.ip);
   });
-  const codes = await query('SELECT code FROM employee_biometric_ids WHERE employee_id=? ORDER BY code', [employee.id]);
+  const codes = await query('SELECT code FROM visible_employee_biometric_ids WHERE employee_id=? ORDER BY code', [employee.id]);
   res.json({ employeeId: employee.id, name: employee.name, code: req.body.code, codes: codes.map(row => row.code) });
 }));
 
@@ -256,8 +267,8 @@ router.post('/people', auth, permit('hr.attendance'), validate(z.object({
   firstDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 })), wrap(async (req, res) => {
   const body = req.body;
-  const taken = await getOne(`SELECT e.id,e.name FROM employee_biometric_ids b
-    JOIN employees e ON e.id=b.employee_id WHERE b.code=?`, [body.code]);
+  const taken = await getOne(`SELECT e.id,e.name FROM visible_employee_biometric_ids b
+    JOIN visible_employees e ON e.id=b.employee_id WHERE b.code=?`, [body.code]);
   if (taken) return res.status(409).json({ error: `Device number ${body.code} already belongs to ${taken.name}` });
 
   const created = await transaction(async connection => {
@@ -274,7 +285,7 @@ router.post('/people', auth, permit('hr.attendance'), validate(z.object({
     const baseCode = `BIO-${body.code}`.slice(0, 40);
     let employeeCode = baseCode;
     let suffix = 1;
-    while ((await connection.execute('SELECT id FROM employees WHERE code=?', [employeeCode]))[0].length) {
+    while ((await connection.execute('SELECT id FROM visible_employees WHERE code=?', [employeeCode]))[0].length) {
       employeeCode = `${baseCode.slice(0, 35)}-${suffix++}`;
     }
     const officeDepartment = /human resources|(^| )hr($| )|account|finance|administration|(^| )admin($| )|quantity survey|(^| )qs($| )/i.test(body.department || '');

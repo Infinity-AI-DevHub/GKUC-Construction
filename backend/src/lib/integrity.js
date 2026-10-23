@@ -344,10 +344,10 @@ async function unknownWorkers(found) {
   const rows = await query(`
     SELECT a.employee_name name, COUNT(*) days, MIN(a.id) id,
            MAX(a.project_id) projectId, GROUP_CONCAT(DISTINCT p.name) projects
-      FROM attendance a
+      FROM visible_attendance a
       JOIN projects p ON p.id=a.project_id
      WHERE a.work_date >= DATE_SUB(CURDATE(), INTERVAL 120 DAY)
-       AND NOT EXISTS (SELECT 1 FROM employees e WHERE e.name = a.employee_name)
+       AND NOT EXISTS (SELECT 1 FROM visible_employees e WHERE e.name = a.employee_name)
      GROUP BY a.employee_name
      ORDER BY days DESC LIMIT 100`);
 
@@ -377,7 +377,7 @@ async function copiedAttendance(found) {
   const rows = await query(`
     SELECT a.project_id projectId, p.name project, a.work_date workDate, a.check_in checkIn,
            COUNT(*) people, MIN(a.id) id
-      FROM attendance a JOIN projects p ON p.id=a.project_id
+      FROM visible_attendance a JOIN projects p ON p.id=a.project_id
      WHERE a.check_in IS NOT NULL AND a.work_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
      GROUP BY a.project_id, a.work_date, a.check_in HAVING people >= 6 LIMIT 100`);
   for (const row of rows) {
@@ -402,7 +402,7 @@ async function excessiveOvertime(found) {
   const rows = await query(`
     SELECT o.id, o.hours, o.rate, o.work_date workDate, o.project_id projectId,
            e.name, o.employee_id employeeId
-      FROM overtime_records o JOIN employees e ON e.id=o.employee_id
+      FROM visible_overtime_records o JOIN visible_employees e ON e.id=o.employee_id
      WHERE o.hours > ? ORDER BY o.id DESC LIMIT 200`, [String(max)]);
   for (const row of rows) {
     found.push(await raise({

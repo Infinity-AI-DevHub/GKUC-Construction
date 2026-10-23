@@ -17,7 +17,7 @@ router.get('/messaging/recipients', auth, permit('messages.send'), async (_req, 
   try {
     const [employees, users, projects] = await Promise.all([
       query(`SELECT e.id,e.name,e.designation,e.phone,e.current_project_id projectId,p.name project
-        FROM employees e LEFT JOIN projects p ON p.id=e.current_project_id
+        FROM visible_employees e LEFT JOIN projects p ON p.id=e.current_project_id
         WHERE e.status <> 'Left' ORDER BY e.name`),
       query(`SELECT id,name,email,role,whatsapp_phone phone FROM users WHERE active=1 ORDER BY name`),
       query("SELECT id,name FROM projects WHERE active=1 AND site_status <> 'Completed' ORDER BY name")
@@ -57,7 +57,7 @@ async function resolve(recipients) {
   const resolved = [];
   for (const entry of recipients) {
     if (entry.kind === 'Employee') {
-      const row = await getOne('SELECT id,name,phone FROM employees WHERE id=? AND status <> ?', [entry.id, 'Left']);
+      const row = await getOne('SELECT id,name,phone FROM visible_employees WHERE id=? AND status <> ?', [entry.id, 'Left']);
       if (!row) continue;
       resolved.push({ kind: 'Employee', id: row.id, name: row.name, address: row.phone || null });
     } else if (entry.kind === 'User') {

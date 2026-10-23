@@ -36,7 +36,7 @@ const letterSelect = `SELECT l.id,l.received_date receivedDate,l.sender,l.sender
   l.assigned_employee_id assignedEmployeeId,e.name assignedEmployee,l.assigned_department assignedDepartment,
   l.status,l.logged_by loggedById,u.name loggedBy,l.created_at createdAt,l.updated_at updatedAt
   FROM incoming_letters l LEFT JOIN clients c ON c.id=l.client_id
-  LEFT JOIN projects p ON p.id=l.project_id LEFT JOIN employees e ON e.id=l.assigned_employee_id
+  LEFT JOIN projects p ON p.id=l.project_id LEFT JOIN visible_employees e ON e.id=l.assigned_employee_id
   JOIN users u ON u.id=l.logged_by`;
 const letterInput = z.object({
   receivedDate: isoDate, sender: z.string().trim().min(2).max(180),
@@ -52,7 +52,7 @@ router.get('/letters/options', auth, permit('enquiries.manage'), wrap(async (_re
   const [clients,projects,employees]=await Promise.all([
     query('SELECT id,name FROM clients WHERE active=1 ORDER BY name'),
     query('SELECT id,name,client_id clientId FROM projects WHERE active=1 ORDER BY name'),
-    query("SELECT id,name FROM employees WHERE status<>'Left' ORDER BY name")
+    query("SELECT id,name FROM visible_employees WHERE status<>'Left' ORDER BY name")
   ]);
   res.json({clients,projects,employees});
 }));
