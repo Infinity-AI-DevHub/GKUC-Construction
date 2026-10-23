@@ -3,8 +3,9 @@ import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
 import { auth, permit, permissionsFor, validate, wrap, fail } from '../lib/http.js';
 import {clearDraftPayroll,lockPayrollRun} from '../lib/payroll-drafts.js';
+import {calculateAttendancePayroll} from '../lib/attendance-payroll.js';
 import { PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES, calculatePayslip, payProfileError } from '../lib/payroll-policy.js';
-import {rulesFor,calculateTransport,calculateLateDeduction,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
+import {rulesFor,calculateTransport,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
 import { contributionEligibility, DEFAULT_STATUTORY_RULES } from '../lib/statutory-eligibility.js';
 
 const router = Router();
@@ -209,7 +210,7 @@ router.get('/:id', auth, permit('hr.payroll'), wrap(async (req, res) => {
     s.reimbursement_total reimbursementTotal,s.gross_earnings grossEarnings,
     s.epf_employee_deduction epfEmployeeDeduction,s.epf_employer_contribution epfEmployerContribution,
     s.etf_employer_contribution etfEmployerContribution,s.other_deduction otherDeduction,
-    s.salary_advance_deduction salaryAdvanceDeduction,s.deductions,s.net_pay netPay,s.employer_cost employerCost,
+    s.salary_advance_deduction salaryAdvanceDeduction,s.deductions,s.net_pay netPay,s.employer_cost employerCost,s.calculation_detail calculationDetail,
     e.name employee,e.code employeeCode,e.designation
     FROM payslips s JOIN visible_employees e ON e.id=s.employee_id WHERE s.run_id=? ORDER BY e.code`, [run.id]);
   const advanceRecoveries = await query(`SELECT sar.id,sar.payslip_id payslipId,sar.amount,
@@ -226,8 +227,8 @@ router.get('/:id', auth, permit('hr.payroll'), wrap(async (req, res) => {
 }));
 
 /**
- * Builds a draft run for the period: days present come from attendance, overtime from
- * approved overtime records, and unpaid leave is deducted at the daily rate.
+ * Builds a draft from attendance and dated policies. Reviewed OT replaces automatic
+ * Office/Site hours; Travel remains a separately approved input.
  */
 router.post('/', auth, permit('hr.payroll'), validate(z.object({
   companyId: z.number().int().positive().default(1),
@@ -252,7 +253,7 @@ export async function generatePayroll(req, res) {
       const policy = await getOne('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1', [companyId, periodEnd]);
       if (!policy) throw fail(409,'Configure a payroll policy for this period first');
 
-      const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,
+      const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,e.payroll_category,e.payroll_company_id,e.worker_type,
           e.epf_eligible,e.etf_eligible,e.contribution_start_date,e.join_date,e.employment_type,e.allowance_eligibility,
           ((SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1) legacy_name_unique,
           (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR (a.employee_id IS NULL AND a.employee_name=e.name
@@ -261,22 +262,6 @@ export async function generatePayroll(req, res) {
           (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR (a.employee_id IS NULL AND a.employee_name=e.name
             AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1))
             AND a.work_date BETWEEN ? AND ? AND a.state='Absent') days_absent,
-          (SELECT COALESCE(SUM(o.hours),0) FROM visible_overtime_records o WHERE o.employee_id=e.id
-            AND o.work_date BETWEEN ? AND ? AND o.status='Approved') overtime_hours,
-          (SELECT COALESCE(SUM(o.hours*o.rate),0) FROM visible_overtime_records o WHERE o.employee_id=e.id
-            AND o.work_date BETWEEN ? AND ? AND o.status='Approved') overtime_pay,
-          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Office' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
-            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') office_ot_hours,
-          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Office' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
-            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') office_ot_pay,
-          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Site' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
-            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') site_ot_hours,
-          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Site' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
-            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') site_ot_pay,
-          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
-            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') travel_ot_hours,
-          (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
-            WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') travel_ot_pay,
           (SELECT COALESCE(SUM(GREATEST(0,1-DATEDIFF(GREATEST(l.from_date,?),LEAST(l.to_date,?)))),0) FROM visible_leave_requests l WHERE l.employee_id=e.id AND l.status='Approved'
             AND l.payment_type='Unpaid') unpaid_days,
           (SELECT COALESCE(SUM(GREATEST(0,ABS(pe.amount)-COALESCE(
@@ -286,19 +271,22 @@ export async function generatePayroll(req, res) {
               AND pe.entry_date<=?) salary_advance
         FROM visible_employees e WHERE e.status <> 'Left' AND e.payroll_company_id=? AND e.pay_frequency=?
           AND COALESCE(e.compensation_effective_from,e.join_date)<=? ORDER BY e.code FOR UPDATE`,
-      [...Array.from({ length: 11 }, () => [periodStart, periodEnd]).flat(), periodEnd, companyId, payFrequency, periodEnd]);
+      [...Array.from({ length: 3 }, () => [periodStart, periodEnd]).flat(), periodEnd, companyId, payFrequency, periodEnd]);
 
       if (!employees.length) throw fail(409,`No active ${payFrequency.toLowerCase()}-paid employees fall inside this period`);
-      const attendanceRows=await query(`SELECT employee_id,employee_name,check_in,state FROM visible_attendance WHERE work_date BETWEEN ? AND ? AND check_in IS NOT NULL`,[periodStart,periodEnd]);
-      const activeRules=rulesFor(policy);
+      const attendanceRows=await query(`SELECT * FROM visible_attendance WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id`,[periodStart,periodEnd]);
+      const otRows=await query('SELECT * FROM visible_overtime_records WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id',[periodStart,periodEnd]);
+      const travelClaims=await query("SELECT * FROM visible_hr_payroll_claims WHERE kind='Travel' AND work_date BETWEEN ? AND ?",[periodStart,periodEnd]);
+      const datedPolicies=await query('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC',[companyId,periodEnd]);
       for (const row of employees) {
         const eligibility = contributionEligibility(row, policy, periodEnd);
         row.epf_eligible = eligibility.epf;
         row.etf_eligible = eligibility.etf;
-        const late=attendanceRows.filter(a=>Number(a.employee_id)===Number(row.id)||!a.employee_id&&a.employee_name===row.name&&row.legacy_name_unique)
-          .map(a=>calculateLateDeduction(a,activeRules,row.daily_rate));
-        row.late_minutes=late.reduce((sum,item)=>sum+item.lateMinutes,0);
-        row.late_deduction=money(late.reduce((sum,item)=>sum+item.amount,0));
+        const days=attendanceRows.filter(a=>Number(a.employee_id)===Number(row.id)||!a.employee_id&&a.employee_name===row.name&&row.legacy_name_unique);
+        try {
+          Object.assign(row,calculateAttendancePayroll(row,days,otRows.filter(o=>Number(o.employee_id)===Number(row.id)),
+            datedPolicies,travelClaims.filter(c=>Number(c.employee_id)===Number(row.id))));
+        } catch(error) {throw fail(409,`${row.name}: ${error.message}`);}
       }
       const covered=await getOne(`SELECT ps.employee_id FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1 FOR UPDATE`,[...employees.map(e=>e.id),periodEnd,periodStart]);
       if(covered)throw fail(409,'An employee is already included in another payroll run for these dates. Changing payment frequency must not pay the same period twice.');
@@ -346,12 +334,14 @@ export async function generatePayroll(req, res) {
           calculation.epfEmployerContribution, calculation.etfEmployerContribution, calculation.otherDeduction,
           calculation.unpaidLeaveDeduction, calculation.salaryAdvanceDeduction, calculation.deductions,
           calculation.netPay, calculation.employerCost]);
+        await connection.execute('UPDATE payslips SET calculation_detail=? WHERE id=?',[JSON.stringify(employee.calculation_detail),slip.insertId]);
 
         for (const component of employeeComponents) await connection.execute(`INSERT INTO payslip_components
           (payslip_id,source_component_id,name,kind,amount,calculation_detail,claim_id) VALUES (?,?,?,?,?,?,?)`,
         [slip.insertId, component.id, component.name, component.kind, component.amount,component.formula,component.claimId||null]);
-        const [sourceOt]=await connection.query("SELECT id,project_id,work_date,hours*rate amount FROM visible_overtime_records WHERE employee_id=? AND work_date BETWEEN ? AND ? AND status='Approved' AND project_id IS NOT NULL",[employee.id,periodStart,periodEnd]);
-        for(const o of sourceOt)await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Overtime',?,?)",[slip.insertId,o.project_id,employee.id,o.work_date,o.id,o.amount]);
+        for(const o of employee.calculation_detail.overtime.filter(o=>o.projectId))
+          await connection.query('INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,?,?,?)',
+            [slip.insertId,o.projectId,employee.id,o.workDate,o.source==='Attendance'?'Attendance OT':'Overtime',o.sourceId,o.amount]);
         for(const c of claims.filter(c=>c.project_id)){
           const component=employeeComponents.find(p=>p.claimId===c.id);
           await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Claim',?,?)",[slip.insertId,c.project_id,employee.id,c.work_date,c.id,component.amount]);

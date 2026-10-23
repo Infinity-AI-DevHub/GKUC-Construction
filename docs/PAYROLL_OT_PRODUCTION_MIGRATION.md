@@ -41,8 +41,9 @@ The report compares existing non-rejected OT against its linked policy using the
 employee category. A difference is a review flag, not proof the historical payment was
 wrong: employee category or company may have changed since the work date. Missing linked
 policies also require review. Historical amounts are never silently recalculated, including
-draft payroll and pending OT. Existing pending/approved OT keeps its recorded rate until an
-authorized HR review; new OT uses payroll settings only.
+draft payroll and pending OT during this migration. Source OT keeps its original recorded
+rate. On a subsequent draft rebuild, approved hours use the policy rate effective on their
+work date and attendance may supply automatic OT; see `PAYROLL_ATTENDANCE_CALCULATIONS.md`.
 
 Do not bulk-update payslips or OT rates. Paid/approved history must be retained; any agreed
 financial correction needs a separately reviewed adjustment under the normal payroll process.
