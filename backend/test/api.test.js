@@ -26,6 +26,92 @@ const shift = days => {
   return date.toISOString().slice(0, 10);
 };
 
+test('employee deactivation hides related records, preserves stored history and revokes access', async () => {
+  const owner = await login();
+  const store = await login('store@gkuc.lk');
+  const code = `DEACTIVATE-${Date.now()}`;
+  const date = shift(-20);
+  const created = await call(owner, 'POST', '/biometric/people', { code, name: 'Deactivated Employee QA', firstDate: date });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const id = created.body.id;
+  const roles = (await call(owner, 'GET', '/users/roles')).body;
+  const role = roles.find(row => row.name === 'Read-Only Viewer');
+  const email = `${code.toLowerCase()}@example.com`;
+  const account = await call(owner, 'POST', '/users', {
+    employeeId: id, name: created.body.name, email, password: 'EmployeeAccess2026!', roleId: role.id
+  });
+  assert.equal(account.status, 201, JSON.stringify(account.body));
+  const session = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password: 'EmployeeAccess2026!' })
+  });
+  assert.equal(session.status, 200);
+  const employeeToken = (await session.json()).token;
+  assert.equal((await call(owner, 'POST', '/biometric/commit', {
+    rows: [{ code, date, checkIn: '07:30:00', checkOut: '17:00:00' }]
+  })).status, 201);
+  await admin.query(`INSERT INTO ${testDatabase}.leave_requests
+    (employee_id,leave_type,from_date,to_date,days,reason,status) VALUES (?,'Unpaid',?,?,1,'Retained leave history','Approved')`, [id, date, date]);
+  await admin.query(`INSERT INTO ${testDatabase}.overtime_records
+    (employee_id,work_date,hours,rate) VALUES (?,?,1,225)`, [id, date]);
+  const form = new FormData();
+  form.append('file', new Blob(['Retained employee document'], { type: 'text/plain' }), 'employee-history.txt');
+  const uploaded = await fetch(`${base}/uploads/employee/${id}`, { method: 'POST', headers: { authorization: `Bearer ${owner}` }, body: form });
+  assert.equal(uploaded.status, 201);
+  const attachment = await uploaded.json();
+  const ownerId = (await call(owner, 'GET', '/auth/me')).body.user.id;
+  const [payroll] = await admin.query(`INSERT INTO ${testDatabase}.payroll_runs
+    (reference,period_start,period_end,total,created_by) VALUES (?,'1999-01-01','1999-01-01',2500,?)`, [code, ownerId]);
+  await admin.query(`INSERT INTO ${testDatabase}.payslips (run_id,employee_id,basic,net_pay,employer_cost) VALUES (?,?,2500,2500,2500)`, [payroll.insertId, id]);
+  assert.equal((await call(store, 'POST', `/employees/${id}/deactivate`)).status, 403);
+  assert.equal((await call(owner, 'GET', `/employees/${id}`)).status, 200);
+  assert.equal((await call(owner, 'POST', `/employees/${id}/deactivate`)).status, 204);
+  assert.equal((await call(owner, 'POST', `/employees/${id}/deactivate`)).status, 204);
+  for (const suffix of ['', '/bank-account', '/conduct', '/assets', '/letters']) {
+    assert.equal((await call(owner, 'GET', `/employees/${id}${suffix}`)).status, 404, suffix);
+  }
+  const employees = (await call(owner, 'GET', '/employees')).body;
+  assert.ok(!employees.some(row => row.id === id));
+  const bootstrap = (await call(owner, 'GET', '/bootstrap')).body;
+  assert.ok(!bootstrap.data.employees.some(row => row.id === id));
+  const attendance = (await call(owner, 'GET', `/attendance?date=${date}`)).body;
+  assert.ok(!attendance.some(row => row.employeeId === id));
+  const register = (await call(owner, 'GET', `/hr/attendance-register?month=${date.slice(0, 7)}`)).body;
+  assert.ok(!register.rows.some(row => row.name === created.body.name));
+  for (const path of ['/employees/leave/all', '/employees/overtime/all']) {
+    assert.ok(!(await call(owner, 'GET', path)).body.some(row => row.employeeId === id || row.employee === created.body.name));
+  }
+  assert.deepEqual((await call(owner, 'GET', `/uploads/employee/${id}`)).body, []);
+  assert.equal((await fetch(`${base}/uploads/file/${attachment.id}`, { headers: { authorization: `Bearer ${owner}` } })).status, 404);
+  assert.equal((await call(employeeToken, 'GET', '/auth/me')).status, 401);
+  const payrollDetail = (await call(owner, 'GET', `/payroll/${payroll.insertId}`)).body;
+  assert.deepEqual(payrollDetail.payslips, []);
+  assert.equal(Number(payrollDetail.total), 2500, 'Historical payroll totals must not change');
+  const blockedImport = await call(owner, 'POST', '/biometric/commit', {
+    rows: [{ code, date, checkIn: '07:30:00', checkOut: '17:00:00' }]
+  });
+  assert.equal(blockedImport.status, 409);
+  const nextCode = `${code}-ACTIVE`;
+  assert.equal((await call(owner, 'POST', '/biometric/people', { code: nextCode, name: 'Visible Employee QA', firstDate: date })).status, 201);
+  const mixed = new FormData();
+  mixed.append('file', new Blob([`EmployeeID,Name,Date,In,Out\n${code},Deactivated Employee QA,${date},07:30,17:00\n${nextCode},Visible Employee QA,${date},07:30,17:00\n`], { type: 'text/csv' }), 'mixed-employees.csv');
+  const previewResponse = await fetch(`${base}/biometric/preview`, { method: 'POST', headers: { authorization: `Bearer ${owner}` }, body: mixed });
+  assert.equal(previewResponse.status, 200);
+  const preview = await previewResponse.json();
+  assert.equal(preview.rows.length, 1);
+  assert.equal(preview.rows[0].code, nextCode);
+  const [[stored]] = await admin.query(`SELECT deactivated_at FROM ${testDatabase}.employees WHERE id=?`, [id]);
+  assert.ok(stored.deactivated_at);
+  for (const table of ['attendance', 'leave_requests', 'overtime_records', 'payslips']) {
+    const [[count]] = await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.${table} WHERE employee_id=?`, [id]);
+    assert.equal(Number(count.count), 1, `${table} history must remain`);
+  }
+  const [[storedFile]] = await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.attachments WHERE id=?`, [attachment.id]);
+  assert.equal(Number(storedFile.count), 1);
+  const [[audit]] = await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.audit_logs WHERE entity='employee' AND entity_id=? AND action='DEACTIVATE'`, [String(id)]);
+  assert.equal(Number(audit.count), 1);
+});
+
 test('biometric preview accepts legacy Excel uploads and reports corrupt files cleanly', async () => {
   const { default: XLSX } = await import('xlsx');
   const workbook = XLSX.utils.book_new();
@@ -3493,9 +3579,13 @@ test('biometric import keeps each day at its own office, site, or non-working lo
     { ...baseRow, date: shift(-98), declaredState: 'On leave', workLocation: 'Not working', projectId: null }
   ];
   const missing = await call(token, 'POST', '/biometric/commit', {
-    filename: 'mixed.xlsx', rows: [{ ...rows[0], workLocation: undefined }, ...rows.slice(1)]
+    filename: 'mixed.xlsx', rows: [{ ...rows[0], date: shift(-97), workLocation: undefined, projectId: undefined }]
   });
-  assert.equal(missing.status, 400);
+  assert.equal(missing.status, 201, JSON.stringify(missing.body));
+  const unassigned = (await call(token, 'GET', `/attendance?date=${shift(-97)}`)).body
+    .find(item => item.employeeId === person.body.id);
+  assert.equal(unassigned.workLocation, 'Unassigned');
+  assert.equal(unassigned.projectId, null);
   assert.equal((await call(token, 'GET', `/attendance?date=${start}`)).body
     .filter(item => item.employeeId === person.body.id).length, 0);
   const wrongSite = await call(token, 'POST', '/biometric/commit', {
@@ -3505,6 +3595,16 @@ test('biometric import keeps each day at its own office, site, or non-working lo
   const saved = await call(token, 'POST', '/biometric/commit', { filename: 'mixed.xlsx', rows });
   assert.equal(saved.status, 201, JSON.stringify(saved.body));
   assert.equal(saved.body.inserted, 4);
+  for (const row of rows) {
+    const day = (await call(token, 'GET', `/attendance?date=${row.date}`)).body
+      .find(item => item.employeeId === person.body.id);
+    assert.equal(day.workLocation, row.workLocation);
+    assert.equal(day.projectId, row.projectId);
+  }
+  const reimport = await call(token, 'POST', '/biometric/commit', {
+    filename: 'without-locations.xlsx', rows: rows.map(({ workLocation, projectId, ...row }) => row)
+  });
+  assert.equal(reimport.status, 201, JSON.stringify(reimport.body));
   for (const row of rows) {
     const day = (await call(token, 'GET', `/attendance?date=${row.date}`)).body
       .find(item => item.employeeId === person.body.id);

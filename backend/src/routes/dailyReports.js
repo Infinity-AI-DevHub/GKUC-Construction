@@ -24,7 +24,7 @@ router.get('/site-today/:projectId', auth, permit('site.reports'), wrap(async(re
     getOne(`SELECT id,report_date reportDate,workforce,work_completed work FROM daily_reports
       WHERE project_id=? AND report_date=DATE_SUB(CURDATE(),INTERVAL 1 DAY) ORDER BY id DESC LIMIT 1`,[project.id]),
     getOne(`SELECT id FROM daily_reports WHERE project_id=? AND report_date=CURDATE()`,[project.id]),
-    query(`SELECT a.employee_id employeeId,e.name FROM attendance a JOIN employees e ON e.id=a.employee_id
+    query(`SELECT a.employee_id employeeId,e.name FROM visible_attendance a JOIN visible_employees e ON e.id=a.employee_id
       WHERE a.project_id=? AND a.work_date=DATE_SUB(CURDATE(),INTERVAL 1 DAY)
       AND a.state IN ('On site','Late','Checked out')`,[project.id])
   ]);
@@ -40,7 +40,7 @@ router.get('/:id', auth, permit('site.reports','projects.view'), wrap(async (req
     query(`SELECT rm.id,rm.quantity,m.name material,m.unit FROM report_materials rm JOIN materials m ON m.id=rm.material_id WHERE rm.report_id=?`, [report.id]),
     query(`SELECT re.id,re.hours,e.name equipment,e.code FROM report_equipment re JOIN equipment e ON e.id=re.equipment_id WHERE re.report_id=?`, [report.id]),
     listAttachments('report', report.id),
-    query(`SELECT employee_name name,role,check_in \`in\`,check_out \`out\`,state FROM attendance
+    query(`SELECT employee_name name,role,check_in \`in\`,check_out \`out\`,state FROM visible_attendance
       WHERE project_id=? AND work_date=? ORDER BY employee_name`, [report.projectId, report.reportDate])
   ]);
   res.json({ ...report, materials, equipment, photos, attendance });

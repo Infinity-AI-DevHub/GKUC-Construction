@@ -21,12 +21,12 @@ const router = Router();
 async function assignedTo(projectId) {
   const [labour, vehicles, equipment] = await Promise.all([
     query(`SELECT e.id,e.name,e.designation,e.phone,t.project_role projectRole
-      FROM project_team t JOIN employees e ON e.id=t.employee_id
+      FROM visible_project_team t JOIN visible_employees e ON e.id=t.employee_id
       WHERE t.project_id=? AND t.released_at IS NULL ORDER BY e.name`, [projectId]),
     query(`SELECT f.id,f.vehicle,f.registration,f.driver,f.driver_employee_id driverEmployeeId
       FROM fleet f WHERE f.project_id=? ORDER BY f.vehicle`, [projectId]),
     query(`SELECT e.id,e.code,e.name,a.assigned_to assignedTo,a.id assignmentId
-      FROM equipment_assignments a JOIN equipment e ON e.id=a.equipment_id
+      FROM visible_equipment_assignments a JOIN equipment e ON e.id=a.equipment_id
       WHERE a.project_id=? AND a.returned_at IS NULL ORDER BY e.code`, [projectId])
   ]);
   return { labour, vehicles, equipment };
@@ -43,14 +43,14 @@ router.get('/resources/availability', auth, permit('resources.view'), wrap(async
       FROM projects WHERE active=1 ORDER BY FIELD(site_status,'Active','On hold','Rescheduled','Completed'), id`),
     query(`SELECT e.id,e.code,e.name,e.designation,e.phone,e.status,
         t.project_id projectId,p.name project,p.site_status siteStatus,t.project_role projectRole
-      FROM employees e
-      LEFT JOIN project_team t ON t.employee_id=e.id AND t.released_at IS NULL
+      FROM visible_employees e
+      LEFT JOIN visible_project_team t ON t.employee_id=e.id AND t.released_at IS NULL
       LEFT JOIN projects p ON p.id=t.project_id
       WHERE e.status <> 'Left' ORDER BY e.name`),
     query(`SELECT f.id,f.vehicle,f.registration,f.status,f.driver,f.project_id projectId,
         p.name project,p.site_status siteStatus,e.name driverName
       FROM fleet f LEFT JOIN projects p ON p.id=f.project_id
-      LEFT JOIN employees e ON e.id=f.driver_employee_id ORDER BY f.vehicle`),
+      LEFT JOIN visible_employees e ON e.id=f.driver_employee_id ORDER BY f.vehicle`),
     /*
      * Joined to the latest open lending rather than to every open lending.
      *
@@ -62,8 +62,8 @@ router.get('/resources/availability', auth, permit('resources.view'), wrap(async
     query(`SELECT eq.id,eq.code,eq.name,eq.category,eq.status,
         a.project_id projectId,p.name project,p.site_status siteStatus,a.assigned_to assignedTo
       FROM equipment eq
-      LEFT JOIN equipment_assignments a ON a.id = (
-        SELECT open.id FROM equipment_assignments open
+      LEFT JOIN visible_equipment_assignments a ON a.id = (
+        SELECT open.id FROM visible_equipment_assignments open
          WHERE open.equipment_id = eq.id AND open.returned_at IS NULL
          ORDER BY open.id DESC LIMIT 1)
       LEFT JOIN projects p ON p.id=a.project_id
@@ -291,11 +291,11 @@ router.post('/resources/reassign', auth, permit('resources.reassign'), validate(
     let fromProjectId = null;
 
     if (resourceType === 'Labour') {
-      const [rows] = await connection.execute('SELECT * FROM employees WHERE id=?', [resourceId]);
+      const [rows] = await connection.execute('SELECT * FROM visible_employees WHERE id=?', [resourceId]);
       if (!rows[0]) throw Object.assign(new Error('Employee not found'), { status: 404 });
       name = rows[0].name;
       const [current] = await connection.execute(
-        'SELECT project_id FROM project_team WHERE employee_id=? AND released_at IS NULL', [resourceId]);
+        'SELECT project_id FROM visible_project_team WHERE employee_id=? AND released_at IS NULL', [resourceId]);
       fromProjectId = current[0]?.project_id || null;
       await connection.execute('UPDATE project_team SET released_at=CURDATE() WHERE employee_id=? AND released_at IS NULL', [resourceId]);
       if (destination) {
@@ -321,7 +321,7 @@ router.post('/resources/reassign', auth, permit('resources.reassign'), validate(
       if (!rows[0]) throw Object.assign(new Error('Equipment not found'), { status: 404 });
       name = `${rows[0].code} ${rows[0].name}`;
       const [open] = await connection.execute(
-        'SELECT * FROM equipment_assignments WHERE equipment_id=? AND returned_at IS NULL ORDER BY id DESC LIMIT 1', [resourceId]);
+        'SELECT * FROM visible_equipment_assignments WHERE equipment_id=? AND returned_at IS NULL ORDER BY id DESC LIMIT 1', [resourceId]);
       fromProjectId = open[0]?.project_id || null;
       if (open[0]) await connection.execute('UPDATE equipment_assignments SET returned_at=CURDATE() WHERE id=?', [open[0].id]);
       if (destination) {

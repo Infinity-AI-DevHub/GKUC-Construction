@@ -23,7 +23,7 @@ const preparedByFields = {
 
 async function preparedSnapshot(body, fallbackUser) {
   const selected = body.preparedByUserId ? await getOne(`SELECT u.id,u.name,COALESCE(NULLIF(e.designation,''),r.name) designation
-    FROM users u JOIN roles r ON r.id=u.role_id LEFT JOIN employees e ON e.user_id=u.id
+    FROM users u JOIN roles r ON r.id=u.role_id LEFT JOIN visible_employees e ON e.user_id=u.id
     WHERE u.id=? AND u.active=1`, [body.preparedByUserId]) : null;
   if (body.preparedByUserId && !selected) throw Object.assign(new Error('The selected preparer is no longer active.'), { status: 400 });
   return { userId: selected?.id || null, name: body.preparedByName || selected?.name || fallbackUser.name,
@@ -120,7 +120,7 @@ router.get('/quotations/:id', auth, permit('qs.view'), wrap(async (req, res) => 
 
 router.get('/quotation-preparers', auth, permit('qs.view', 'qs.quotation'), wrap(async (_req, res) => {
   res.json(await query(`SELECT u.id,u.name,COALESCE(NULLIF(e.designation,''),r.name) designation
-    FROM users u JOIN roles r ON r.id=u.role_id LEFT JOIN employees e ON e.user_id=u.id
+    FROM users u JOIN roles r ON r.id=u.role_id LEFT JOIN visible_employees e ON e.user_id=u.id
     WHERE u.active=1 ORDER BY u.name`));
 }));
 

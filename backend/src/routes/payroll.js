@@ -100,7 +100,7 @@ router.get('/settings', auth, permit("hr.settings"), wrap(async (req, res) => {
     query(`SELECT c.id,c.employee_id employeeId,e.code employeeCode,e.name employee,c.name,c.kind,c.amount,
       c.pay_frequency payFrequency,c.effective_from effectiveFrom,c.effective_to effectiveTo,c.active,c.calculation_method calculationMethod,c.allowance_type allowanceType,
       u.name createdBy,c.created_at createdAt
-      FROM employee_pay_components c JOIN employees e ON e.id=c.employee_id JOIN users u ON u.id=c.created_by
+      FROM visible_employee_pay_components c JOIN visible_employees e ON e.id=c.employee_id JOIN users u ON u.id=c.created_by
       WHERE e.payroll_company_id=? ORDER BY c.active DESC,e.code,c.kind,c.name`, [companyId])
   ]);
   res.json({ activePolicy: policies.find(row => String(row.effectiveFrom).slice(0, 10) <= new Date().toISOString().slice(0, 10)) || null,
@@ -140,23 +140,23 @@ const componentSchema = z.object({
 
 router.post('/settings/components', auth, permit("hr.settings"), validate(componentSchema), wrap(async (req, res) => {
   const body = req.body;
-  if (!await getOne('SELECT id FROM employees WHERE id=?', [body.employeeId]))
+  if (!await getOne('SELECT id FROM visible_employees WHERE id=?', [body.employeeId]))
     return res.status(404).json({ error: 'Employee not found' });
   const result = await query(`INSERT INTO employee_pay_components
     (employee_id,name,kind,amount,pay_frequency,effective_from,effective_to,created_by)
     VALUES (?,?,?,?,?,?,?,?)`, [body.employeeId, body.name, body.kind, body.amount, body.payFrequency,
     body.effectiveFrom, body.effectiveTo || null, req.user.id]);
   await query('UPDATE employee_pay_components SET calculation_method=?,allowance_type=? WHERE id=?',[body.calculationMethod,body.allowanceType,result.insertId]);
-  const row = await getOne('SELECT * FROM employee_pay_components WHERE id=?', [result.insertId]);
+  const row = await getOne('SELECT * FROM visible_employee_pay_components WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'employee_pay_component', row.id, null, row, req.ip);
   res.status(201).json(row);
 }));
 
 router.patch('/settings/components/:id', auth, permit("hr.settings"), validate(z.object({ active: z.boolean() })), wrap(async (req, res) => {
-  const before = await getOne('SELECT * FROM employee_pay_components WHERE id=?', [req.params.id]);
+  const before = await getOne('SELECT * FROM visible_employee_pay_components WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Pay component not found' });
   await query('UPDATE employee_pay_components SET active=? WHERE id=?', [req.body.active, before.id]);
-  const after = await getOne('SELECT * FROM employee_pay_components WHERE id=?', [before.id]);
+  const after = await getOne('SELECT * FROM visible_employee_pay_components WHERE id=?', [before.id]);
   await audit(pool, req.user.id, 'UPDATE', 'employee_pay_component', before.id, before, after, req.ip);
   res.json(after);
 }));
@@ -174,7 +174,7 @@ const payProfileSchema = z.object({
 });
 
 router.patch('/settings/employees/:id', auth, permit("hr.settings"), validate(payProfileSchema), wrap(async (req, res) => {
-  const before = await getOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
+  const before = await getOne('SELECT * FROM visible_employees WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
   const body = req.body;
   const profileError = payProfileError(body);
@@ -186,7 +186,7 @@ router.patch('/settings/employees/:id', auth, permit("hr.settings"), validate(pa
     body.customOfficeOtRate ?? null, body.customSiteOtRate ?? null, body.customTravelOtRate ?? null, before.id]);
   if(body.allowanceEligibility)await query('UPDATE employees SET allowance_eligibility=? WHERE id=?',[JSON.stringify(body.allowanceEligibility),before.id]);
   if(body.contributionStartDate !== undefined)await query('UPDATE employees SET contribution_start_date=? WHERE id=?',[body.contributionStartDate || null,before.id]);
-  const after = await getOne('SELECT * FROM employees WHERE id=?', [before.id]);
+  const after = await getOne('SELECT * FROM visible_employees WHERE id=?', [before.id]);
   await audit(pool, req.user.id, 'UPDATE', 'employee_pay_profile', before.id, before, after, req.ip);
   res.json({ id: before.id });
 }));
@@ -203,11 +203,11 @@ router.get('/:id', auth, permit('hr.payroll'), wrap(async (req, res) => {
     s.etf_employer_contribution etfEmployerContribution,s.other_deduction otherDeduction,
     s.salary_advance_deduction salaryAdvanceDeduction,s.deductions,s.net_pay netPay,s.employer_cost employerCost,
     e.name employee,e.code employeeCode,e.designation
-    FROM payslips s JOIN employees e ON e.id=s.employee_id WHERE s.run_id=? ORDER BY e.code`, [run.id]);
+    FROM payslips s JOIN visible_employees e ON e.id=s.employee_id WHERE s.run_id=? ORDER BY e.code`, [run.id]);
   const advanceRecoveries = await query(`SELECT sar.id,sar.payslip_id payslipId,sar.amount,
     pe.entry_date advanceDate,pe.description,e.id employeeId,e.name employee,e.code employeeCode
     FROM salary_advance_recoveries sar JOIN payslips ps ON ps.id=sar.payslip_id
-    JOIN petty_cash_entries pe ON pe.id=sar.entry_id JOIN employees e ON e.id=ps.employee_id
+    JOIN petty_cash_entries pe ON pe.id=sar.entry_id JOIN visible_employees e ON e.id=ps.employee_id
     WHERE ps.run_id=? ORDER BY e.code,pe.entry_date,pe.id`, [run.id]);
   const components = await query(`SELECT sc.id,sc.payslip_id payslipId,sc.name,sc.kind,sc.amount,sc.calculation_detail calculationDetail
     FROM payslip_components sc JOIN payslips ps ON ps.id=sc.payslip_id
@@ -239,39 +239,39 @@ export async function generatePayroll(req, res) {
 
   const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,
       e.epf_eligible,e.etf_eligible,e.contribution_start_date,e.join_date,e.employment_type,e.allowance_eligibility,
-      (SELECT COUNT(*) FROM attendance a WHERE (a.employee_id=e.id OR a.employee_name=e.name)
+      (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR a.employee_name=e.name)
         AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip')) days_present,
-      (SELECT COUNT(*) FROM attendance a WHERE (a.employee_id=e.id OR a.employee_name=e.name)
+      (SELECT COUNT(*) FROM visible_attendance a WHERE (a.employee_id=e.id OR a.employee_name=e.name)
         AND a.work_date BETWEEN ? AND ? AND a.state='Absent') days_absent,
-      (SELECT COALESCE(SUM(o.hours),0) FROM overtime_records o WHERE o.employee_id=e.id
+      (SELECT COALESCE(SUM(o.hours),0) FROM visible_overtime_records o WHERE o.employee_id=e.id
         AND o.work_date BETWEEN ? AND ? AND o.status='Approved') overtime_hours,
-      (SELECT COALESCE(SUM(o.hours*o.rate),0) FROM overtime_records o WHERE o.employee_id=e.id
+      (SELECT COALESCE(SUM(o.hours*o.rate),0) FROM visible_overtime_records o WHERE o.employee_id=e.id
         AND o.work_date BETWEEN ? AND ? AND o.status='Approved') overtime_pay,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Office' THEN o.hours ELSE 0 END),0) FROM overtime_records o
+      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Office' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
         WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') office_ot_hours,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Office' THEN o.hours*o.rate ELSE 0 END),0) FROM overtime_records o
+      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Office' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
         WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') office_ot_pay,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Site' THEN o.hours ELSE 0 END),0) FROM overtime_records o
+      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Site' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
         WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') site_ot_hours,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Site' THEN o.hours*o.rate ELSE 0 END),0) FROM overtime_records o
+      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Site' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
         WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') site_ot_pay,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours ELSE 0 END),0) FROM overtime_records o
+      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours ELSE 0 END),0) FROM visible_overtime_records o
         WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') travel_ot_hours,
-      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours*o.rate ELSE 0 END),0) FROM overtime_records o
+      (SELECT COALESCE(SUM(CASE WHEN o.overtime_type='Travel' THEN o.hours*o.rate ELSE 0 END),0) FROM visible_overtime_records o
         WHERE o.employee_id=e.id AND o.work_date BETWEEN ? AND ? AND o.status='Approved') travel_ot_pay,
-      (SELECT COALESCE(SUM(GREATEST(0,1-DATEDIFF(GREATEST(l.from_date,?),LEAST(l.to_date,?)))),0) FROM leave_requests l WHERE l.employee_id=e.id AND l.status='Approved'
+      (SELECT COALESCE(SUM(GREATEST(0,1-DATEDIFF(GREATEST(l.from_date,?),LEAST(l.to_date,?)))),0) FROM visible_leave_requests l WHERE l.employee_id=e.id AND l.status='Approved'
         AND l.payment_type='Unpaid') unpaid_days,
       (SELECT COALESCE(SUM(GREATEST(0,ABS(pe.amount)-COALESCE(
           (SELECT SUM(sar.amount) FROM salary_advance_recoveries sar WHERE sar.entry_id=pe.id),0))),0)
         FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
         WHERE pe.employee_id=e.id AND pf.account_type='Salary advance' AND pe.kind='Spend'
           AND pe.entry_date<=?) salary_advance
-    FROM employees e WHERE e.status <> 'Left' AND e.payroll_company_id=? AND e.pay_frequency=?
+    FROM visible_employees e WHERE e.status <> 'Left' AND e.payroll_company_id=? AND e.pay_frequency=?
       AND COALESCE(e.compensation_effective_from,e.join_date)<=? ORDER BY e.code`,
   [...Array.from({ length: 11 }, () => [periodStart, periodEnd]).flat(), periodEnd, companyId, payFrequency, periodEnd]);
 
   if (!employees.length) return res.status(409).json({ error: `No active ${payFrequency.toLowerCase()}-paid employees fall inside this period` });
-  const attendanceRows=await query(`SELECT employee_id,employee_name,check_in,state FROM attendance WHERE work_date BETWEEN ? AND ? AND check_in IS NOT NULL`,[periodStart,periodEnd]);
+  const attendanceRows=await query(`SELECT employee_id,employee_name,check_in,state FROM visible_attendance WHERE work_date BETWEEN ? AND ? AND check_in IS NOT NULL`,[periodStart,periodEnd]);
   const activeRules=rulesFor(policy);
   for (const row of employees) {
     const eligibility = contributionEligibility(row, policy, periodEnd);
@@ -285,7 +285,7 @@ export async function generatePayroll(req, res) {
   const covered=await getOne(`SELECT ps.employee_id FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1`,[...employees.map(e=>e.id),periodEnd,periodStart]);
   if(covered)return res.status(409).json({error:'An employee is already included in another payroll run for these dates. Changing payment frequency must not pay the same period twice.'});
 
-  const components = await query(`SELECT * FROM employee_pay_components
+  const components = await query(`SELECT * FROM visible_employee_pay_components
     WHERE active=1 AND pay_frequency=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)
     ORDER BY employee_id,id`, [payFrequency, periodEnd, periodStart]);
 
@@ -300,7 +300,7 @@ export async function generatePayroll(req, res) {
       for (const employee of employees) {
         const rules=rulesFor(policy);
         const extraStates=[...(rules.countLeaveForTransport?['On leave']:[]),...(rules.countAbsenceForTransport?['Absent']:[])];
-        const [extraDays]=extraStates.length?await connection.query(`SELECT COUNT(DISTINCT work_date) days FROM attendance WHERE employee_id=? AND work_date BETWEEN ? AND ? AND state IN (${extraStates.map(()=>'?').join(',')})`,[employee.id,periodStart,periodEnd,...extraStates]):[[{days:0}]];
+        const [extraDays]=extraStates.length?await connection.query(`SELECT COUNT(DISTINCT work_date) days FROM visible_attendance WHERE employee_id=? AND work_date BETWEEN ? AND ? AND state IN (${extraStates.map(()=>'?').join(',')})`,[employee.id,periodStart,periodEnd,...extraStates]):[[{days:0}]];
         const eligibleTransportDays=Number(employee.days_present)+Number(extraDays[0].days);
         const eligibility=typeof employee.allowance_eligibility==='string'?JSON.parse(employee.allowance_eligibility):employee.allowance_eligibility||{};
         const employeeComponents = components.filter(row => row.employee_id === employee.id && (row.allowance_type==='Other'||eligibility[{Transport:'transport','Machine/operator':'machine','Special duty':'specialDuty'}[row.allowance_type]])).map(row=>{
@@ -309,7 +309,7 @@ export async function generatePayroll(req, res) {
           try{result=calculateTransport(Number(row.amount),row.allowance_type==='Transport'?eligibleTransportDays:Number(employee.days_present),row.calculation_method,rules);}catch(e){throw Object.assign(e,{status:409});}
           return {...row,amount:result.amount,formula:result.formula};
         });
-        const [claims]=await connection.query(`SELECT c.* FROM hr_payroll_claims c WHERE c.employee_id=? AND c.work_date BETWEEN ? AND ? AND c.status='Approved' AND NOT EXISTS(SELECT 1 FROM payslip_components pc WHERE pc.claim_id=c.id) FOR UPDATE`,[employee.id,periodStart,periodEnd]);
+        const [claims]=await connection.query(`SELECT c.* FROM visible_hr_payroll_claims c WHERE c.employee_id=? AND c.work_date BETWEEN ? AND ? AND c.status='Approved' AND NOT EXISTS(SELECT 1 FROM payslip_components pc WHERE pc.claim_id=c.id) FOR UPDATE`,[employee.id,periodStart,periodEnd]);
         for(const claim of claims){
           const c=typeof claim.calculation==='string'?JSON.parse(claim.calculation):claim.calculation;
           employeeComponents.push({id:null,claimId:claim.id,name:claim.kind==='Travel'?'Long-distance site allowance':claim.kind==='Mileage'?'Motorcycle mileage reimbursement':claim.kind==='Supervisor site charge'?'Supervisor site charge':`${claim.kind} allowance`,kind:claim.kind==='Mileage'?'Reimbursement':'Allowance',amount:claim.kind==='Travel'?c.allowance:claim.kind==='Mileage'?c.total:c.amount,formula:JSON.stringify({claimId:claim.id,date:claim.work_date,projectId:claim.project_id,calculation:c})});
@@ -334,13 +334,13 @@ export async function generatePayroll(req, res) {
         for (const component of employeeComponents) await connection.execute(`INSERT INTO payslip_components
           (payslip_id,source_component_id,name,kind,amount,calculation_detail,claim_id) VALUES (?,?,?,?,?,?,?)`,
         [slip.insertId, component.id, component.name, component.kind, component.amount,component.formula,component.claimId||null]);
-        const [sourceOt]=await connection.query("SELECT id,project_id,work_date,hours*rate amount FROM overtime_records WHERE employee_id=? AND work_date BETWEEN ? AND ? AND status='Approved' AND project_id IS NOT NULL",[employee.id,periodStart,periodEnd]);
+        const [sourceOt]=await connection.query("SELECT id,project_id,work_date,hours*rate amount FROM visible_overtime_records WHERE employee_id=? AND work_date BETWEEN ? AND ? AND status='Approved' AND project_id IS NOT NULL",[employee.id,periodStart,periodEnd]);
         for(const o of sourceOt)await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Overtime',?,?)",[slip.insertId,o.project_id,employee.id,o.work_date,o.id,o.amount]);
         for(const c of claims.filter(c=>c.project_id)){
           const component=employeeComponents.find(p=>p.claimId===c.id);
           await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Claim',?,?)",[slip.insertId,c.project_id,employee.id,c.work_date,c.id,component.amount]);
         }
-        const [sourceDays]=await connection.query(`SELECT a.id,a.project_id,a.work_date FROM attendance a WHERE a.employee_id=? AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip') AND a.project_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM daily_cost_lines l JOIN daily_cost_sheets s ON s.id=l.sheet_id WHERE l.employee_id=a.employee_id AND s.work_date=a.work_date AND s.status IN ('Submitted','Approved'))`,[employee.id,periodStart,periodEnd]);
+        const [sourceDays]=await connection.query(`SELECT a.id,a.project_id,a.work_date FROM visible_attendance a WHERE a.employee_id=? AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip') AND a.project_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM daily_cost_lines l JOIN daily_cost_sheets s ON s.id=l.sheet_id WHERE l.employee_id=a.employee_id AND s.work_date=a.work_date AND s.status IN ('Submitted','Approved'))`,[employee.id,periodStart,periodEnd]);
         for(const a of sourceDays)await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Attendance',?,?)",[slip.insertId,a.project_id,employee.id,a.work_date,a.id,money((calculation.basic-calculation.unpaidLeaveDeduction)/Math.max(1,employee.days_present))]);
 
         /* Recover oldest advances first and keep any unpaid remainder for a later run. */
@@ -388,7 +388,7 @@ router.patch('/:id', auth, permit('hr.payroll'), validate(z.object({ status: z.e
 /* Performance reviews (PID 2.2 "Performance Reports") */
 const reviewSelect = `SELECT r.id,r.review_date reviewDate,r.period,r.quality,r.productivity,r.safety,r.reliability,
   r.overall,r.strengths,r.improvements,e.name employee,e.code employeeCode,e.id employeeId,u.name reviewer
-  FROM performance_reviews r JOIN employees e ON e.id=r.employee_id JOIN users u ON u.id=r.reviewer_id`;
+  FROM visible_performance_reviews r JOIN visible_employees e ON e.id=r.employee_id JOIN users u ON u.id=r.reviewer_id`;
 
 /*
  * Appraisals sit with pay, not with the staff directory.

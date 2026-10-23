@@ -8,11 +8,11 @@ const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 const select = `SELECT e.id,e.code,e.name,e.category,e.status,e.purchase_date purchaseDate,e.purchase_cost purchaseCost,e.notes,e.qr_token qrToken,
-  (SELECT p.name FROM equipment_assignments a JOIN projects p ON p.id=a.project_id
+  (SELECT p.name FROM visible_equipment_assignments a JOIN projects p ON p.id=a.project_id
     WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) project,
-  (SELECT a.assigned_to FROM equipment_assignments a WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) holder,
-  (SELECT a.due_back FROM equipment_assignments a WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) dueBack,
-  (SELECT DATEDIFF(CURDATE(), a.due_back) FROM equipment_assignments a
+  (SELECT a.assigned_to FROM visible_equipment_assignments a WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) holder,
+  (SELECT a.due_back FROM visible_equipment_assignments a WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) dueBack,
+  (SELECT DATEDIFF(CURDATE(), a.due_back) FROM visible_equipment_assignments a
     WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) daysOverdue
   FROM equipment e`;
 
@@ -45,7 +45,7 @@ router.get('/:id', auth, permit('store.view','store.manage'), wrap(async (req, r
   const [assignments, maintenance] = await Promise.all([
     query(`SELECT a.id,a.assigned_to assignedTo,a.assigned_at assignedAt,a.returned_at returnedAt,a.due_back dueBack,
       a.issued_condition issuedCondition,a.returned_condition returnedCondition,a.condition_note conditionNote,p.name project
-      FROM equipment_assignments a JOIN projects p ON p.id=a.project_id WHERE a.equipment_id=? ORDER BY a.id DESC`, [item.id]),
+      FROM visible_equipment_assignments a JOIN projects p ON p.id=a.project_id WHERE a.equipment_id=? ORDER BY a.id DESC`, [item.id]),
     query('SELECT id,maintenance_type maintenanceType,performed_at performedAt,cost,notes FROM equipment_maintenance WHERE equipment_id=? ORDER BY performed_at DESC', [item.id])
   ]);
   res.json({ ...item, assignments, maintenance });
@@ -101,7 +101,7 @@ router.post('/:id/assign', auth, permit('store.lending'), validate(z.object({
        */
       const [[open]] = await connection.execute(
         `SELECT a.id, a.assigned_to assignedTo, a.assigned_at assignedAt, p.name project
-           FROM equipment_assignments a LEFT JOIN projects p ON p.id=a.project_id
+           FROM visible_equipment_assignments a LEFT JOIN projects p ON p.id=a.project_id
           WHERE a.equipment_id=? AND a.returned_at IS NULL
           ORDER BY a.id DESC LIMIT 1`, [item.id]);
       if (open) {
@@ -123,7 +123,7 @@ router.post('/:id/assign', auth, permit('store.lending'), validate(z.object({
       await audit(connection, req.user.id, 'ASSIGN', 'equipment', item.id, item, req.body, req.ip);
       return result.insertId;
     });
-    res.status(201).json(await getOne('SELECT * FROM equipment_assignments WHERE id=?', [id]));
+    res.status(201).json(await getOne('SELECT * FROM visible_equipment_assignments WHERE id=?', [id]));
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
     throw error;
@@ -136,7 +136,7 @@ router.post('/:id/return', auth, permit('store.lending'), validate(z.object({
   conditionNote: z.string().max(500).optional(),
   status: z.enum(['Available', 'Maintenance', 'Retired']).default('Available')
 })), wrap(async (req, res) => {
-  const open = await getOne('SELECT * FROM equipment_assignments WHERE equipment_id=? AND returned_at IS NULL ORDER BY id DESC LIMIT 1', [req.params.id]);
+  const open = await getOne('SELECT * FROM visible_equipment_assignments WHERE equipment_id=? AND returned_at IS NULL ORDER BY id DESC LIMIT 1', [req.params.id]);
   if (!open) return res.status(409).json({ error: 'This equipment is not currently assigned' });
   await query(`UPDATE equipment_assignments
     SET returned_at=?, returned_condition=COALESCE(?,returned_condition),

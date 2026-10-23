@@ -4,7 +4,7 @@ import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFiel
 import Hiring from './Hiring.jsx';
 import Insurance from './Insurance.jsx';
 import PayrollInputs from './PayrollInputs.jsx';
-import { ArrowDownToLine, Check, Clock3, FileSpreadsheet, PencilLine, Search, ShieldCheck, Upload, UserRoundCheck, XCircle } from 'lucide-react';
+import { ArrowDownToLine, Check, Clock3, FileSpreadsheet, PencilLine, Search, ShieldCheck, Upload, UserRoundCheck, UserRoundMinus, XCircle } from 'lucide-react';
 import { api, fetchDownload, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { allowedTabs, Avatar, Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
@@ -88,7 +88,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={tabs} active={tab} onChange={setTab} groups={TAB_GROUPS} />
 
-    {tab === 'Employees' && <Employees data={data} can={can} onOpen={openEmployee} onImport={() => setOpen('Employee import')} focusRequest={employeeSearchRequest} />}
+    {tab === 'Employees' && <Employees data={data} can={can} reload={reload} onOpen={openEmployee} onImport={() => setOpen('Employee import')} focusRequest={employeeSearchRequest} />}
     {tab === 'Hiring' && <Hiring companies={companies} companyId={companyId} reload={reload} />}
     {tab === 'Insurance' && <Insurance />}
     {tab === 'Payroll Inputs' && <PayrollInputs data={data}/>}
@@ -125,13 +125,16 @@ const PAY_COLUMNS = ['EPF/ETF basis', 'Daily rate'];
 const NO_PAY_COLUMNS = EMPLOYEE_COLUMNS.filter(column => !PAY_COLUMNS.includes(column));
 const NO_PAY_TEMPLATE = 'minmax(190px,1.4fr) 100px minmax(140px,1fr) minmax(140px,1fr) 100px';
 
-function Employees({ data, can, onOpen, onImport, focusRequest }) {
+function Employees({ data, can, onOpen, onImport, focusRequest, reload }) {
   const [search, setSearch] = useState('');
+  const [deactivating, setDeactivating] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const searchInput = useRef(null);
   useEffect(() => { if (focusRequest) searchInput.current?.focus(); }, [focusRequest]);
   const showsPay = data.employees.some(employee => employee.basicSalary !== undefined);
-  const columns = showsPay ? EMPLOYEE_COLUMNS : NO_PAY_COLUMNS;
-  const template = showsPay ? EMPLOYEE_TEMPLATE : NO_PAY_TEMPLATE;
+  const columns = [...(showsPay ? EMPLOYEE_COLUMNS : NO_PAY_COLUMNS), ...(can.hr ? [''] : [])];
+  const template = `${showsPay ? EMPLOYEE_TEMPLATE : NO_PAY_TEMPLATE}${can.hr ? ' 48px' : ''}`;
   const term = search.trim().toLocaleLowerCase();
   const employees = term ? data.employees.filter(employee => [employee.name, employee.code, employee.department]
     .some(value => String(value || '').toLocaleLowerCase().includes(term))) : data.employees;
@@ -158,8 +161,28 @@ function Employees({ data, can, onOpen, onImport, focusRequest }) {
         {showsPay && <span>{rupees(employee.basicSalary)}</span>}
         {showsPay && <span>{rupees(employee.dailyRate)}</span>}
         <Badge tone={slug(employee.status)}>{employee.status}</Badge>
+        {can.hr && <button type="button" className="icon-btn" title={`Deactivate ${employee.name}`}
+          aria-label={`Deactivate ${employee.name}`} onClick={event => {
+            event.stopPropagation(); setError(''); setDeactivating(employee);
+          }}><UserRoundMinus size={17} /></button>}
       </Row>)}
     </Table>
+    {deactivating && <Modal title="Deactivate employee" close={() => { if (!busy) setDeactivating(null); }}>
+      <p>Deactivate <strong>{deactivating.name}</strong>? Their profile and related employee details will be hidden. All records will be retained, and linked sign-in access will be disabled.</p>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="form-actions">
+        <button type="button" className="secondary" disabled={busy} onClick={() => setDeactivating(null)}>Cancel</button>
+        <button type="button" className="primary" disabled={busy} onClick={async () => {
+          setBusy(true); setError('');
+          try {
+            await post(`/employees/${deactivating.id}/deactivate`);
+            await reload();
+            setDeactivating(null);
+          } catch (failure) { setError(failure.message); }
+          finally { setBusy(false); }
+        }}><UserRoundMinus size={16} />{busy ? 'Deactivating...' : 'Deactivate employee'}</button>
+      </div>
+    </Modal>}
   </>;
 }
 

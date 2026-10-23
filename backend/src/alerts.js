@@ -191,7 +191,7 @@ async function milestoneAlerts(stamp, alerts) {
 }
 
 async function employeeDocumentAlerts(stamp, alerts) {
-  const rows = await query(`SELECT a.id,a.title,a.expiry_date,e.name FROM attachments a JOIN employees e ON e.id=a.owner_id
+  const rows = await query(`SELECT a.id,a.title,a.expiry_date,e.name FROM attachments a JOIN visible_employees e ON e.id=a.owner_id
     WHERE a.owner_type='employee' AND a.expiry_date IS NOT NULL
       AND a.expiry_date <= DATE_ADD(CURDATE(), INTERVAL ? DAY)`, [ALERT_WINDOW_DAYS]);
   for (const row of rows) {
@@ -462,7 +462,7 @@ async function projectStartReminderAlerts(stamp, alerts) {
 }
 
 export async function runBirthdayReminderScan(stamp = today()) {
-  const employees = await query("SELECT id,name,code,birth_date FROM employees WHERE birth_date IS NOT NULL AND status IN ('Active','On leave')");
+  const employees = await query("SELECT id,name,code,birth_date FROM visible_employees WHERE birth_date IS NOT NULL AND status IN ('Active','On leave')");
   let count = 0;
   for (const employee of employees) {
     const birthday = upcomingBirthday(employee.birth_date, stamp);
@@ -481,7 +481,7 @@ export async function runBirthdayReminderScan(stamp = today()) {
 
 export async function runEmployeeLetterReminderScan(stamp = today()) {
   const rows = await query(`SELECT e.id,e.name,e.code,e.join_date joinDate,l.letter_type letterType
-    FROM employees e LEFT JOIN employee_letters l ON l.employee_id=e.id
+    FROM visible_employees e LEFT JOIN visible_employee_letters l ON l.employee_id=e.id
     WHERE e.join_date IS NOT NULL AND e.status IN ('Active','On leave')`);
   const issued = new Set(rows.filter(row => row.letterType).map(row => `${row.id}:${row.letterType}`));
   const employees = [...new Map(rows.map(row => [row.id, row])).values()];
@@ -678,7 +678,7 @@ async function toolReturnAlerts(stamp, alerts) {
   const rows = await query(`
     SELECT a.id,a.assigned_to assignedTo,a.assigned_at assignedAt,a.due_back dueBack,
            e.code,e.name,p.name project, DATEDIFF(CURDATE(), a.due_back) overdue
-      FROM equipment_assignments a
+      FROM visible_equipment_assignments a
       JOIN equipment e ON e.id=a.equipment_id
       LEFT JOIN projects p ON p.id=a.project_id
      WHERE a.returned_at IS NULL AND a.due_back IS NOT NULL AND a.due_back < CURDATE()`);
@@ -703,7 +703,7 @@ export async function notify(alert) {
 }
 
 export async function runInsuranceReminderScan(stamp=today()) {
-  const records=await query(`SELECT i.*,COALESCE(vd.expiry_date,i.expiry_date) expiry FROM hr_insurance i
+  const records=await query(`SELECT i.*,COALESCE(vd.expiry_date,i.expiry_date) expiry FROM visible_hr_insurance i
     LEFT JOIN vehicle_documents vd ON vd.vehicle_id=i.vehicle_id AND vd.doc_type='Insurance' WHERE i.status='Active'`);
   for(const policy of records){
     const reminders=typeof policy.reminders==='string'?JSON.parse(policy.reminders):policy.reminders;

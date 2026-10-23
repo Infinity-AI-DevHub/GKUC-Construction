@@ -148,7 +148,7 @@ router.get('/users/roles', auth, permit('admin.users', 'admin.roles'), wrap(asyn
   res.json(await query('SELECT id,name,description FROM roles ORDER BY is_system DESC, name'))));
 
 router.get('/users/employee-options', auth, permit('admin.users'), wrap(async (_req, res) =>
-  res.json(await query("SELECT id,code,name,email FROM employees WHERE user_id IS NULL AND status='Active' ORDER BY name"))));
+  res.json(await query("SELECT id,code,name,email FROM visible_employees WHERE user_id IS NULL AND status='Active' ORDER BY name"))));
 
 router.post('/users', auth, permit('admin.users'), validate(z.object({
   name: z.string().min(2).max(120),
@@ -163,8 +163,8 @@ router.post('/users', auth, permit('admin.users'), validate(z.object({
   if (!role) return res.status(400).json({ error: 'Unknown role' });
   const row = await transaction(async connection => {
     const [matches] = await connection.query(body.employeeId
-      ? 'SELECT id,user_id FROM employees WHERE id=? FOR UPDATE'
-      : 'SELECT id,user_id FROM employees WHERE LOWER(email)=? FOR UPDATE',
+      ? 'SELECT id,user_id FROM visible_employees WHERE id=? FOR UPDATE'
+      : 'SELECT id,user_id FROM visible_employees WHERE LOWER(email)=? FOR UPDATE',
     [body.employeeId || body.email.toLowerCase()]);
     if ((body.employeeId && !matches.length) || matches.length > 1 || matches.some(employee => employee.user_id)) {
       throw Object.assign(new Error('This employee is missing, already has system access, or has duplicate profiles. Please check the employee record before creating the account.'), { status: 409 });

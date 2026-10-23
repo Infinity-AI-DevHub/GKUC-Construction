@@ -21,13 +21,13 @@ const builders = {
     columns: ['Employee', 'Role', 'Days present', 'Late days', 'Absent days'],
     rows: (await query(`SELECT employee_name employee,role,
         SUM(state IN ('On site','Late','Checked out')) present, SUM(state='Late') late, SUM(state='Absent') absent
-      FROM attendance WHERE work_date BETWEEN ? AND ? GROUP BY employee_name,role ORDER BY present DESC`, [from, to]))
+      FROM visible_attendance WHERE work_date BETWEEN ? AND ? GROUP BY employee_name,role ORDER BY present DESC`, [from, to]))
       .map(row => [row.employee, row.role, row.present, row.late, row.absent])
   }),
   employees: async () => ({
     columns: ['Code', 'Employee', 'Department', 'Designation', 'Status', 'EPF/ETF salary basis'],
     rows: (await query(`SELECT e.code,e.name,d.name department,e.designation,e.status,e.basic_salary salary
-      FROM employees e LEFT JOIN departments d ON d.id=e.department_id ORDER BY e.code`))
+      FROM visible_employees e LEFT JOIN departments d ON d.id=e.department_id ORDER BY e.code`))
       .map(row => [row.code, row.name, row.department || '—', row.designation, row.status, row.salary])
   }),
   projects: async () => ({
@@ -67,7 +67,7 @@ const builders = {
   equipment: async () => ({
     columns: ['Code', 'Equipment', 'Category', 'Status', 'Assigned to', 'Maintenance cost'],
     rows: (await query(`SELECT e.code,e.name,e.category,e.status,
-        (SELECT CONCAT(a.assigned_to,' — ',p.name) FROM equipment_assignments a JOIN projects p ON p.id=a.project_id
+        (SELECT CONCAT(a.assigned_to,' — ',p.name) FROM visible_equipment_assignments a JOIN projects p ON p.id=a.project_id
           WHERE a.equipment_id=e.id AND a.returned_at IS NULL ORDER BY a.id DESC LIMIT 1) holder,
         COALESCE((SELECT SUM(cost) FROM equipment_maintenance WHERE equipment_id=e.id),0) maintenance
       FROM equipment e ORDER BY e.code`))

@@ -28,7 +28,7 @@ export async function buildSummary() {
   const [
     attendance, tasks, reports, expenses, receipts, overdue, alerts, bonds, tools, findings, projects
   ] = await Promise.all([
-    getOne(`SELECT COUNT(*) onSite FROM attendance WHERE work_date=CURDATE() AND state IN ('On site','Late')`),
+    getOne(`SELECT COUNT(*) onSite FROM visible_attendance WHERE work_date=CURDATE() AND state IN ('On site','Late')`),
     getOne(`SELECT
         SUM(status='Completed' AND DATE(updated_at)=CURDATE()) doneToday,
         SUM(status NOT IN ('Completed','Approved') AND due < CURDATE()) overdue,
@@ -44,7 +44,7 @@ export async function buildSummary() {
               FROM notifications WHERE status<>'Read' AND DATE(created_at)=CURDATE()`),
     getOne(`SELECT COUNT(*) expiring FROM bank_bonds
              WHERE status='Live' AND expiry_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)`).catch(() => ({ expiring: 0 })),
-    getOne(`SELECT COUNT(*) out FROM equipment_assignments
+    getOne(`SELECT COUNT(*) out FROM visible_equipment_assignments
              WHERE returned_at IS NULL AND due_back IS NOT NULL AND due_back < CURDATE()`).catch(() => ({ out: 0 })),
     getOne(`SELECT COUNT(*) open FROM risk_findings WHERE status='Open' AND severity IN ('Critical','High')`)
       .catch(() => ({ open: 0 })),
