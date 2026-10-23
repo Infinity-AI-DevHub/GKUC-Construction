@@ -1,5 +1,5 @@
 /* Shared presentation system, aligned with the commercial desk. No workflow changes. */
-main{--workspace-ink:#102a43;--workspace-red:#ab1736;--workspace-muted:#65788b;--workspace-line:#e1e7ee}
+main,.modal-backdrop{--workspace-ink:#102a43;--workspace-red:#ab1736;--workspace-muted:#65788b;--workspace-line:#e1e7ee}
 main .page-heading{padding:8px 0 26px;margin-bottom:0;align-items:center;gap:20px}
 main .page-heading h1{font-family:Manrope,sans-serif;font-size:30px;letter-spacing:-1.2px;color:var(--workspace-ink)}
 main .page-heading p{font-size:13px;color:var(--workspace-muted);margin-top:8px;line-height:1.7}
@@ -72,17 +72,17 @@ main .table-row small{font-size:11px;color:var(--workspace-muted);margin-top:4px
 main :is(.summary,.metric){border:1px solid var(--workspace-line);border-radius:14px;padding:20px;background:#fff;box-shadow:none}
 main .summary strong{font:800 23px Manrope,sans-serif;color:var(--workspace-ink)}
 main .summary span{font-size:12px;color:var(--workspace-muted)}
-main .primary{background:var(--workspace-red);border-color:var(--workspace-red);border-radius:9px;box-shadow:0 4px 10px #ab173614;min-height:40px;font-size:12px}
-main .secondary{border-radius:9px;min-height:38px;font-size:12px;border:1px solid #dfe6ed;background:#fff;color:#3e566d}
-main button:focus-visible,main a:focus-visible{outline:2px solid var(--workspace-red);outline-offset:3px}
+main .primary,.modal-backdrop .primary{background:var(--workspace-red);border-color:var(--workspace-red);border-radius:9px;box-shadow:0 4px 10px #ab173614;min-height:40px;font-size:12px}
+main .secondary,.modal-backdrop .secondary{border-radius:9px;min-height:38px;font-size:12px;border:1px solid #dfe6ed;background:#fff;color:#3e566d}
+main button:focus-visible,main a:focus-visible,.modal-backdrop :is(button,a):focus-visible{outline:2px solid var(--workspace-red);outline-offset:3px}
 main .modal{background:#fff;border-radius:18px;border:1px solid #e2e8ee;box-shadow:0 28px 100px #102a4333}
 main .modal-title{padding:23px 26px;background:#fff;border-bottom:1px solid var(--workspace-line)}
 main .modal-title h2{font:800 20px Manrope,sans-serif;color:var(--workspace-ink);letter-spacing:-.4px}
-main :is(.report-form,.modal-body){background:#fff;padding:26px;gap:20px}
-main .report-form label{font-size:12px;color:#52687b;line-height:1.6}
-main .report-form :is(input,select,textarea){background:#fafbfd;border:1px solid #dce4ed;border-radius:8px;font-size:13px;padding:11px 12px;line-height:1.5;min-height:42px;color:var(--workspace-ink)}
-main .report-form :is(input,select,textarea):focus{outline:2px solid #ab173627;outline-offset:1px;border-color:#bc7185;background:#fff}
-main .report-form input:is([type=checkbox],[type=radio]){width:17px;height:17px;min-height:17px;padding:0;accent-color:var(--workspace-red)}
+main :is(.report-form,.modal-body),.modal-backdrop :is(.report-form,.modal-body){background:#fff;padding:26px;gap:20px}
+main .report-form label,.modal-backdrop .report-form label{font-size:12px;color:#52687b;line-height:1.6}
+main .report-form :is(input,select,textarea),.modal-backdrop .report-form :is(input,select,textarea){background:#fafbfd;border:1px solid #dce4ed;border-radius:8px;font-size:13px;padding:11px 12px;line-height:1.5;min-height:42px;color:var(--workspace-ink)}
+main .report-form :is(input,select,textarea):focus,.modal-backdrop .report-form :is(input,select,textarea):focus{outline:2px solid #ab173627;outline-offset:1px;border-color:#bc7185;background:#fff}
+main .report-form input:is([type=checkbox],[type=radio]),.modal-backdrop .report-form input:is([type=checkbox],[type=radio]){width:17px;height:17px;min-height:17px;padding:0;accent-color:var(--workspace-red)}
 main .modal-actions{padding-top:18px;border-top:1px solid var(--workspace-line);gap:10px}
 main .task-project-heading{background:#fff;border:1px solid var(--workspace-line);border-left:4px solid var(--workspace-red);border-radius:13px;padding:20px 24px}
 main .reference-welcome h1{color:var(--workspace-ink);font-family:Manrope,sans-serif;letter-spacing:-1px}
@@ -92,7 +92,7 @@ main .reference-dashboard :is(.dashboard-card,.metric){border-radius:16px;border
 @media(prefers-reduced-motion:reduce){.module-navigation .segments button{transition:none}}
 
 /* A single surface and spacing system for the shared dialogs across modules. */
-.modal-backdrop{padding:24px;background:rgba(5,19,38,.64);backdrop-filter:blur(7px)}
+.modal-backdrop{padding:24px;background:rgba(5,19,38,.64);backdrop-filter:blur(7px);z-index:1000}
 .modal{width:min(640px,100%);max-width:calc(100vw - 28px);border:1px solid #dce5ee;border-radius:20px;background:#fff;box-shadow:0 28px 90px rgba(6,24,43,.27);overflow:hidden}
 .modal.modal-wide{width:min(880px,100%)}
 .modal-title{height:auto;min-height:76px;padding:20px 28px;background:linear-gradient(120deg,#f7f9fc,#fff 70%);border-bottom:1px solid #e3eaf1;gap:16px}
@@ -173,6 +173,8 @@ main .reference-dashboard :is(.dashboard-card,.metric){border-radius:16px;border
 .modal-content .table-panel :is(.table-head,.table-row){min-height:48px;align-items:center;column-gap:16px}
 .modal-content .table-panel .table-head{color:#536b7f;background:#f4f7fa;font-weight:800}
 .modal-content .table-panel .table-row{border-bottom:1px solid #e8eef3}
+
+@media(max-width:800px){.modal-backdrop .report-form :is(input,select,textarea){font-size:16px}}
 .invoice-payments-history .table-wrap{margin:0}
 .modal-content .table-wrap>.invoice-payments-table{min-width:780px}
 .invoice-payments-table th:nth-child(1),.invoice-payments-table td:nth-child(1){width:130px;white-space:nowrap}
