@@ -17,7 +17,8 @@ effective policy for their payroll company. Payroll settings supply OT rates, sh
 rounding, minimum OT and grace periods. The employee's daily salary supplies their late
 deduction hourly rate; the separate monthly statutory salary basis is not used as earnings.
 Salary also includes approved paid-leave days; see `PAYROLL_PAID_LEAVE.md` for reconciliation,
-unpaid-leave exclusion and the payable-day statutory basis.
+unpaid-leave exclusion. Statutory contributions apply only to Monthly runs and use the
+full configured monthly basis without proration; Daily and Weekly runs have none.
 
 For a 16:30 shift end, 15-minute unpaid evening grace and 15-minute rounding:
 

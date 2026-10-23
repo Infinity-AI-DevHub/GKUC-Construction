@@ -9,7 +9,7 @@ import {RecordScopeProvider} from '/src/record-scope.jsx';
 import '/src/styles.css';import '/src/theme.css';import '/src/reference.css';import '/src/responsive.css';import '/src/workspace.css';
 const h=React.createElement,noop=()=>{};
 const slip={id:1,employee:'Paid Leave QA',employeeCode:'LEAVE-QA',daysPresent:1,paidLeaveDays:1,unpaidLeaveDays:1,payableDays:2,
-basic:3200,paidLeavePay:1600,grossEarnings:3200,netPay:3200,employerCost:3200,deductions:0,reimbursementTotal:0,allowanceTotal:0,
+basic:3200,paidLeavePay:1600,grossEarnings:3200,netPay:800,employerCost:7700,deductions:2400,epfEmployeeDeduction:2400,reimbursementTotal:0,allowanceTotal:0,
 overtimePay:0,lateDeduction:0,advanceRecoveries:[],components:[],calculationDetail:{attendance:[],overtime:[],warnings:[],
 leave:{dailyRate:1600,days:[{workDate:'2026-10-02',paymentType:'Paid'},{workDate:'2026-10-03',paymentType:'Unpaid'}]}}};
 const child=location.search.includes('payroll')?h(PayrollDetail,{close:noop,run:{reference:'PAY-LEAVE-QA',payFrequency:'Monthly',
@@ -49,6 +49,7 @@ try {
     await page.screenshot({path:'/tmp/gkuc-paid-leave-form-'+name+'.png'});
     await page.goto(base+'/__paid-leave?mode=payroll');
     await page.getByText(/Includes.*1,600/).waitFor();
+    await page.getByText('Employee EPF: LKR 2,400',{exact:true}).waitFor();
     await page.getByText('OT, leave and late deductions by work date',{exact:true}).click();
     await page.getByText('Approved leave in payroll',{exact:true}).waitFor();
     assert.equal(await page.getByText('Paid',{exact:true}).count(),1);

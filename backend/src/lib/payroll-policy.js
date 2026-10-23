@@ -52,7 +52,7 @@ export function resolveOvertimeRate(employee, type, policy) {
  * Inputs deliberately mirror the database row names so no second set of payroll rules
  * can drift away from production behaviour.
  */
-export function calculatePayslip(employee, policy, components = []) {
+export function calculatePayslip(employee, policy, components = [], payFrequency = employee.pay_frequency) {
   const dailyRate = Number(employee.daily_rate);
   const daysPresent = Number(employee.days_present || 0);
   const paidLeaveDays = Number(employee.paid_leave_days || 0);
@@ -73,23 +73,20 @@ export function calculatePayslip(employee, policy, components = []) {
   // again would charge the employee twice.
   const unpaidLeaveDeduction = 0;
   const grossEarnings = money(basic + overtimePay + allowanceTotal);
-  const storedRules = typeof policy?.statutory_rules === 'string'
-    ? JSON.parse(policy.statutory_rules) : (policy?.statutory_rules || policy?.statutoryRules || {});
-  const standardDays = Math.max(1, Number(storedRules.dailyDaysPerMonth ?? 25));
   const statutoryMonthlyBasic = Math.max(0, Number(employee.basic_salary || 0));
-  // The configured statutory amount is monthly, so a shorter payroll period uses
-  // the payable-day share, including paid leave. Never exceed the monthly basis.
-  const contributionBase = money(Math.min(statutoryMonthlyBasic,
-    statutoryMonthlyBasic / standardDays * payableDays));
+  // Contributions apply only to Monthly runs, using the full configured basis.
+  // Attendance, leave and the length of the period never prorate that basis.
+  const monthlyContributions = payFrequency === 'Monthly';
+  const contributionBase = monthlyContributions ? money(statutoryMonthlyBasic) : 0;
   // A legacy gross-basis setting must never bring salary earnings, overtime,
   // allowances or reimbursements into the EPF/ETF basis.
-  const epfEmployeeDeduction = employee.epf_eligible
+  const epfEmployeeDeduction = monthlyContributions && employee.epf_eligible
     ? money(contributionBase * Number(policy.epf_employee_rate) / 100)
     : 0;
-  const epfEmployerContribution = employee.epf_eligible
+  const epfEmployerContribution = monthlyContributions && employee.epf_eligible
     ? money(contributionBase * Number(policy.epf_employer_rate) / 100)
     : 0;
-  const etfEmployerContribution = employee.etf_eligible
+  const etfEmployerContribution = monthlyContributions && employee.etf_eligible
     ? money(contributionBase * Number(policy.etf_employer_rate) / 100)
     : 0;
   const beforeAdvance = Math.max(0,

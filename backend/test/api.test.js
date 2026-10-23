@@ -3217,6 +3217,40 @@ test('an inquiry converts into a registered project', async () => {
   })).status, 409, 'an inquiry converts only once');
 });
 
+test('statutory contributions use the full basis only in monthly payroll drafts', async () => {
+  const owner=await login();
+  const policy=await call(owner,'POST','/payroll/settings/policies',{companyId:1,effectiveFrom:'2034-01-01',
+    officeOtRate:225,siteLabourSiteOtRate:200,siteLabourTravelOtRate:100,driverOtRate:225,
+    supervisorSiteOtRate:225,supervisorTravelOtRate:100,epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3});
+  assert.equal(policy.status,201,JSON.stringify(policy.body));
+  for(const frequency of ['Daily','Weekly','Monthly']) {
+    const person=await call(owner,'POST','/employees',{code:`EPF-${frequency}-${Date.now()}`,name:'Contribution Frequency QA',
+      joinDate:'2034-01-01',compensationEffectiveFrom:'2034-01-01',payBasis:'Daily rate',payFrequency:frequency,
+      employmentType:'Permanent',basicSalary:30000,dailyRate:5000,epfEligible:true,etfEligible:true,
+      contributionStartDate:'2034-01-01'});
+    assert.equal(person.status,201,JSON.stringify(person.body));
+    const body={companyId:1,periodStart:'2034-02-01',periodEnd:'2034-02-01',payFrequency:frequency};
+    const run=await call(owner,'POST','/payroll',body);
+    assert.equal(run.status,201,JSON.stringify(run.body));
+    for(let attempt=0;attempt<2;attempt++) {
+      const detail=await call(owner,'GET',`/payroll/${run.body.id}`);
+      const slip=detail.body.payslips.find(row=>row.employeeCode===person.body.code);
+      assert.ok(slip);
+      const monthly=frequency==='Monthly';
+      assert.equal(Number(slip.contributionBase),monthly?30000:0);
+      assert.equal(Number(slip.epfEmployeeDeduction),monthly?2400:0);
+      assert.equal(Number(slip.epfEmployerContribution),monthly?3600:0);
+      assert.equal(Number(slip.etfEmployerContribution),monthly?900:0);
+      if(attempt===0) {
+        const rebuilt=await call(owner,'POST','/payroll',body);
+        assert.equal(rebuilt.status,201,JSON.stringify(rebuilt.body));
+        assert.equal(rebuilt.body.id,run.body.id);
+      }
+    }
+    assert.equal((await call(owner,'DELETE',`/payroll/${run.body.id}`)).status,204);
+  }
+});
+
 test('approved paid leave restores LKR 1600 across payroll frequencies without paying unpaid leave twice', async () => {
   const owner=await login();
   const dates=['2033-02-01','2033-02-02','2033-02-03','2033-02-04'];
@@ -3547,16 +3581,16 @@ test('payroll is calculated from recorded attendance and approved overtime', asy
   assert.equal(Number(slip.allowanceTotal), 3000);
   assert.equal(Number(slip.reimbursementTotal), 1000);
   assert.equal(Number(slip.basic), 26400, 'earned salary is daily rate × six attended days');
-  assert.equal(Number(slip.contributionBase), 23520, 'the monthly statutory basis is prorated over the same attended days');
-  assert.equal(Number(slip.epfEmployeeDeduction), 1881.6);
-  assert.equal(Number(slip.epfEmployerContribution), 2822.4);
-  assert.equal(Number(slip.etfEmployerContribution), 705.6);
+  assert.equal(Number(slip.contributionBase), 98000, 'every run uses the full configured monthly statutory basis');
+  assert.equal(Number(slip.epfEmployeeDeduction), 7840);
+  assert.equal(Number(slip.epfEmployerContribution), 11760);
+  assert.equal(Number(slip.etfEmployerContribution), 2940);
   assert.equal(Number(slip.otherDeduction), 500);
   assert.equal(Number(slip.unpaidLeaveDeduction), 0);
   assert.equal(Number(slip.salaryAdvanceDeduction), 4000, 'the named worker advance is recovered');
-  assert.equal(Number(slip.deductions), 6381.6, 'the salary sheet reconciles statutory, recurring and advance deductions');
-  assert.equal(Number(slip.netPay), 25018.4);
-  assert.equal(Number(slip.employerCost), 34928);
+  assert.equal(Number(slip.deductions), 12340, 'the salary sheet reconciles statutory, recurring and advance deductions');
+  assert.equal(Number(slip.netPay), 19060);
+  assert.equal(Number(slip.employerCost), 46100);
   assert.equal(slip.components.length, 4, 'the payslip preserves recurring components and the linked travel allowance calculation');
   assert.equal(Number(slip.advanceRecoveries[0].amount), 4000);
   const advances = (await call(owner, 'GET', `/receivables/petty-cash/${advanceFloat}/entries`)).body;
