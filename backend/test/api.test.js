@@ -361,6 +361,52 @@ const call = async (token, method, path, body) => {
   return { status: response.status, body: response.status === 204 ? null : await response.json() };
 };
 
+test('users can change only their own display name without changing access or employee records', async () => {
+  assert.equal((await call('invalid','PATCH','/auth/me',{name:'Unauthorised'})).status,401);
+  for(const email of ['owner@gkuc.lk','hr@gkuc.lk','store@gkuc.lk','supervisor@gkuc.lk','finance@gkuc.lk','qs@gkuc.lk','transport@gkuc.lk']) {
+    const token=await login(email);
+    const before=(await call(token,'GET','/auth/me')).body.user;
+    const [employees]=await admin.query(`SELECT id,name FROM ${testDatabase}.employees ORDER BY id`);
+    for(const name of ['', '   ', 'x'.repeat(121), 'Bad\u0000Name'])
+      assert.equal((await call(token,'PATCH','/auth/me',{name})).status,400);
+    assert.equal((await call(token,'PATCH','/auth/me',{name:'New name',id:999,role:'Managing Director'})).status,400);
+    const saved=await call(token,'PATCH','/auth/me',{name:'  Display Name QA  '});
+    assert.equal(saved.status,200,JSON.stringify(saved.body));
+    const after=(await call(token,'GET','/auth/me')).body.user;
+    assert.deepEqual(after,{...before,name:'Display Name QA'});
+    const fresh=(await call(await login(email),'GET','/auth/me')).body.user;
+    assert.equal(fresh.name,'Display Name QA','name survives another sign-in');
+    const [unchanged]=await admin.query(`SELECT id,name FROM ${testDatabase}.employees ORDER BY id`);
+    assert.deepEqual(unchanged,employees);
+    assert.equal((await call(token,'PATCH','/auth/me',{name:before.name})).status,200);
+  }
+});
+
+test('navigation department metadata comes from the linked employee without changing grants',async()=>{
+  const token=await login('finance@gkuc.lk');
+  const before=(await call(token,'GET','/auth/me')).body.user;
+  const [[employee]]=await admin.query(`SELECT id,department_id FROM ${testDatabase}.employees WHERE user_id=? ORDER BY id LIMIT 1`,[before.id]);
+  const [department]=await admin.query(`INSERT INTO ${testDatabase}.departments(name,description) VALUES (?,?)`,[`Navigation QA ${Date.now()}`,'Navigation department test']);
+  let createdId;
+  try{
+    if(employee)await admin.query(`UPDATE ${testDatabase}.employees SET department_id=? WHERE id=?`,[department.insertId,employee.id]);
+    else{
+      const [created]=await admin.query(`INSERT INTO ${testDatabase}.employees(code,name,designation,user_id,join_date,department_id) VALUES (?,?,?,?,?,?)`,
+        [`NAV-${Date.now()}`,'Navigation QA','Finance',before.id,today(),department.insertId]);createdId=created.insertId;
+    }
+    const after=(await call(token,'GET','/auth/me')).body.user;
+    assert.match(after.department,/^Navigation QA /);
+    assert.deepEqual(after.permissions,before.permissions);
+    assert.equal(after.role,before.role);
+    const bootstrap=(await call(token,'GET','/bootstrap')).body;
+    assert.equal(bootstrap.user.department,after.department);
+  }finally{
+    if(employee)await admin.query(`UPDATE ${testDatabase}.employees SET department_id=? WHERE id=?`,[employee.department_id,employee.id]);
+    if(createdId)await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[createdId]);
+    await admin.query(`DELETE FROM ${testDatabase}.departments WHERE id=?`,[department.insertId]);
+  }
+});
+
 test('document designer cannot be opened or changed through the API', async () => {
   const owner = await login();
   for (const [method, path] of [['GET', '/document-design'], ['PUT', '/document-design'],
@@ -2520,12 +2566,100 @@ test('VAT clearance is company-specific with reminders, renewal history and a wo
   assert.equal((await call(owner,'GET','/company-compliance?companyId=2')).body.length,0,'other company remains separate');
 });
 
+test('Other income stays company scoped, honors no-tax and VAT choices, and carries cheque tax only once',async()=>{
+  const owner=await login(),date=today(),stamp=Date.now();
+  const base={projectId:null,companyId:1,incomeSource:'Equipment rental',description:'Other income QA',amount:1000,receivedDate:date,method:'Cash',reference:`OTHER-${stamp}`};
+  for(const incomeSource of [undefined,'   ','x'.repeat(181)])
+    assert.equal((await call(owner,'POST','/finance/income',{...base,incomeSource})).status,400);
+  const none=await call(owner,'POST','/finance/income',{...base,taxTreatment:'None',vatRate:18,amountIncludesVat:true});
+  assert.equal(none.status,201,JSON.stringify(none.body));
+  assert.equal(none.body.project_id,null);assert.equal(Number(none.body.company_id),1);
+  assert.equal(Number(none.body.amount),1000);assert.equal(Number(none.body.vat_amount),0);assert.equal(Number(none.body.vat_rate),0);
+  assert.equal((await call(owner,'POST','/finance/income',base)).status,409);
+  assert.equal((await call(owner,'POST','/finance/income',{...base,companyId:undefined})).status,400);
+  const otherCompany=await call(owner,'POST','/finance/income',{...base,companyId:2});
+  assert.equal(otherCompany.status,201,JSON.stringify(otherCompany.body));
+  const exclusive=await call(owner,'POST','/finance/income',{...base,reference:`TAX-EX-${stamp}`,taxTreatment:'Standard',vatRate:18});
+  assert.equal(exclusive.status,201,JSON.stringify(exclusive.body));
+  assert.equal(Number(exclusive.body.amount),1180);assert.equal(Number(exclusive.body.vat_amount),180);
+  const inclusive=await call(owner,'POST','/finance/income',{...base,reference:`NO-TRACK-${stamp}`,amount:1180,taxTreatment:'None',vatRate:18});
+  assert.equal(inclusive.status,201,JSON.stringify(inclusive.body));
+  assert.equal(Number(inclusive.body.amount),1180);assert.equal(Number(inclusive.body.net_amount),1180);
+  assert.equal(Number(inclusive.body.vat_amount),0);
+  const listed=(await call(owner,'GET','/finance/income?companyId=1')).body;
+  assert.equal(listed.find(row=>row.id===none.body.id).project,'Other');
+  assert.equal(listed.find(row=>row.id===none.body.id).incomeSource,'Equipment rental');
+  assert.ok(!listed.some(row=>row.id===otherCompany.body.id));
+  const schedule=async()=>(await call(owner,'GET',`/finance/vat?companyId=1&start=${date}&end=${date}`)).body;
+  let vat=await schedule();
+  assert.ok(!vat.output.some(row=>row.id===`income-${none.body.id}`));
+  assert.equal(vat.output.find(row=>row.id===`income-${exclusive.body.id}`).vatAmount,180);
+  const cheque=await call(owner,'POST','/receivables/cheques',{companyId:1,projectId:null,incomeSource:'Equipment rental cheque',chequeNumber:`OTHER-CHQ-${stamp}`,bank:'QA Bank',payer:'Other payer',purpose:'Other cheque income',amount:1000,
+    receivedDate:date,chequeDate:date,depositBy:date,taxTreatment:'Standard',vatRate:18});
+  assert.equal(cheque.status,201,JSON.stringify(cheque.body));
+  assert.equal(Number(cheque.body.amount),1180);
+  const incomeCount=async()=>{const [[row]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.incomes WHERE origin_type='received_cheque' AND origin_id=?`,[String(cheque.body.id)]);return Number(row.count)};
+  assert.equal(await incomeCount(),0);
+  for(let attempt=0;attempt<2;attempt++)assert.equal((await call(owner,'PATCH',`/receivables/cheques/${cheque.body.id}`,{status:'Cleared'})).status,200);
+  assert.equal(await incomeCount(),1);
+  const [[cleared]]=await admin.query(`SELECT income_source FROM ${testDatabase}.incomes WHERE origin_type='received_cheque' AND origin_id=?`,[String(cheque.body.id)]);
+  assert.equal(cleared.income_source,'Equipment rental cheque');
+  vat=await schedule();
+  assert.equal(vat.output.filter(row=>row.documentNumber===cheque.body.cheque_number).length,1);
+  assert.equal(Number(vat.output.find(row=>row.documentNumber===cheque.body.cheque_number).vatAmount),180);
+});
+
+test('Finance creates company VAT ledgers and manual entries without changing cash ledgers',async()=>{
+  const finance=await login('finance@gkuc.lk'),site=await login('supervisor@gkuc.lk');
+  const period={companyId:1,start:'2041-01-01',end:'2041-03-31'};
+  assert.equal((await call(finance,'POST','/finance/vat/periods',{...period,start:'2041-02-30'})).status,400);
+  assert.equal((await call(site,'POST','/finance/vat/periods',period)).status,403);
+  assert.equal((await call(site,'GET','/finance/vat/periods?companyId=1')).status,403);
+  const made=await call(finance,'POST','/finance/vat/periods',period);
+  assert.equal(made.status,201,JSON.stringify(made.body));assert.equal(made.body.period.status,'Draft');
+  assert.equal((await call(finance,'POST','/finance/vat/periods',period)).status,409);
+  assert.equal((await call(finance,'POST','/finance/vat/periods',{...period,start:'2041-02-01'})).status,409);
+  const second=await call(finance,'POST','/finance/vat/periods',{...period,companyId:2});
+  assert.equal(second.status,201,JSON.stringify(second.body));
+  const list=await call(finance,'GET','/finance/vat/periods?companyId=1');
+  assert.ok(list.body.some(row=>row.id===made.body.period.id));
+  assert.ok(!list.body.some(row=>row.id===second.body.period.id));
+  const [[counts]]=await admin.query(`SELECT (SELECT COUNT(*) FROM ${testDatabase}.incomes) incomes,(SELECT COUNT(*) FROM ${testDatabase}.expenses) expenses`);
+  const entry={...period,direction:'Output',documentDate:'2041-01-15',documentNumber:`MANUAL-VAT-${Date.now()}`,counterparty:'VAT entry QA',taxableAmount:2000,vatRate:18};
+  assert.equal((await call(site,'POST','/finance/vat/entries',entry)).status,403);
+  const output=await call(finance,'POST','/finance/vat/entries',entry);
+  assert.equal(output.status,201,JSON.stringify(output.body));assert.equal(output.body.vatAmount,360);
+  assert.equal((await call(finance,'POST','/finance/vat/entries',entry)).status,409);
+  assert.equal((await call(finance,'POST','/finance/vat/entries',{...entry,documentDate:'2040-12-31'})).status,400);
+  assert.equal((await call(finance,'POST','/finance/vat/entries',{...entry,start:'2043-01-01',end:'2043-03-31',documentDate:'2043-01-15'})).status,409);
+  const reconciled=await call(finance,'PUT','/finance/vat/period',{...period,status:'Reconciled'});
+  assert.equal(reconciled.status,200,JSON.stringify(reconciled.body));
+  const input=await call(finance,'POST','/finance/vat/entries',{...entry,direction:'Input',taxableAmount:1000});
+  assert.equal(input.status,201,JSON.stringify(input.body));
+  let schedule=(await call(finance,'GET',`/finance/vat?companyId=1&start=${period.start}&end=${period.end}`)).body;
+  assert.equal(schedule.period.status,'Draft','new manual entries require reconciliation again');
+  assert.equal(schedule.totals.outputVat,360);assert.equal(schedule.totals.inputVat,180);assert.equal(schedule.totals.netVatPayable,180);
+  assert.equal(schedule.output.find(row=>row.id===`vat-manual-${output.body.id}`).source,'Manual VAT entry');
+  const otherSchedule=(await call(finance,'GET',`/finance/vat?companyId=2&start=${period.start}&end=${period.end}`)).body;
+  assert.equal(otherSchedule.totals.netVatPayable,0);
+  const [[afterCounts]]=await admin.query(`SELECT (SELECT COUNT(*) FROM ${testDatabase}.incomes) incomes,(SELECT COUNT(*) FROM ${testDatabase}.expenses) expenses`);
+  assert.deepEqual(afterCounts,counts);
+  const [[source]]=await admin.query(`SELECT reference FROM ${testDatabase}.client_invoices WHERE company_id=1 AND status NOT IN ('Draft','Cancelled') LIMIT 1`);
+  if(source)assert.equal((await call(finance,'POST','/finance/vat/entries',{...entry,documentNumber:source.reference})).status,409);
+  const filed={...period,status:'Filed',filingReference:'VAT-QA-FILING'};
+  assert.equal((await call(finance,'PUT','/finance/vat/period',filed)).status,200);
+  assert.equal((await call(finance,'PUT','/finance/vat/period',{...filed,outputAdjustment:10,adjustmentNote:'Attempted change'})).status,409);
+  assert.equal((await call(finance,'POST','/finance/vat/entries',{...entry,documentNumber:'FILED-ENTRY'})).status,409);
+  const concurrent=await Promise.all([1,2].map(()=>call(finance,'POST','/finance/vat/periods',{companyId:1,start:'2042-01-01',end:'2042-03-31'})));
+  assert.deepEqual(concurrent.map(row=>row.status).sort(),[201,409]);
+});
+
 test('VAT periods reconcile accrual schedules, export Excel and keep SVAT historical',async()=>{
   const owner=lastOwnerToken||await login();
   const date=today(),start=`${date.slice(0,7)}-01`;
   const schedule=await call(owner,'GET',`/finance/vat?companyId=1&start=${start}&end=${date}`);
   assert.equal(schedule.status,200,JSON.stringify(schedule.body));
-  assert.equal(schedule.body.basis,'Invoice date (accrual)');
+  assert.equal(schedule.body.basis,'Invoice date (accrual); manual taxable income by receipt date');
   assert.ok(Array.isArray(schedule.body.output));
   assert.ok(Array.isArray(schedule.body.input));
   const saved=await call(owner,'PUT','/finance/vat/period',{companyId:1,start,end:date,status:'Reconciled',

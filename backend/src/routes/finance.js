@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { audit, getOne, pool, query, spendSql, transaction } from '../db.js';
 import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { assertUniqueManualEntry } from '../lib/ledger-duplicates.js';
+import {incomeTax,incomeTaxFields} from '../lib/income-tax.js';
 import { managementPack } from '../lib/management-accounts.js';
 import { cashOutflows } from '../lib/cash-outflows.js';
 import { cashComparison } from '../lib/cash-comparison.js';
@@ -366,8 +367,68 @@ router.get('/vat',auth,permit('finance.vatSchedules'),wrap(async(req,res)=>{
     ].sort((a,b)=>String(b.date).localeCompare(String(a.date)))});
 }));
 
+const vatDate=isoDate.refine(value=>{
+  const date=new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime())&&date.toISOString().slice(0,10)===value;
+},'Enter a valid calendar date');
+const vatPeriodDates=z.object({companyId:z.number().int().positive(),start:vatDate,end:vatDate})
+  .refine(value=>value.start<=value.end,{message:'The VAT period end cannot be before its start',path:['end']});
+const vatFail=(message,status=409)=>Object.assign(new Error(message),{status});
+async function lockVatCompany(connection,companyId){
+  const [[company]]=await connection.execute('SELECT id FROM companies WHERE id=? FOR UPDATE',[companyId]);
+  if(!company)throw vatFail('Company not found',404);
+}
+router.get('/vat/periods',auth,permit('finance.vatSchedules'),wrap(async(req,res)=>{
+  const companyId=companyParam(req);
+  if(!companyId)return res.status(400).json({error:'Choose a company'});
+  res.json(await query(`SELECT id,period_start start,period_end end,status,filing_reference filingReference
+    FROM vat_periods WHERE company_id=? ORDER BY period_start DESC,id DESC`,[companyId]));
+}));
+router.post('/vat/periods',auth,permit('finance.vatSchedules'),validate(vatPeriodDates),wrap(async(req,res)=>{
+  const b=req.body;
+  await transaction(async connection=>{
+    await lockVatCompany(connection,b.companyId);
+    const [[overlap]]=await connection.execute('SELECT id FROM vat_periods WHERE company_id=? AND period_start<=? AND period_end>=? LIMIT 1 FOR UPDATE',[b.companyId,b.end,b.start]);
+    if(overlap)throw vatFail('A VAT ledger already covers these dates. Open the existing ledger.');
+    const [created]=await connection.execute('INSERT INTO vat_periods(company_id,period_start,period_end,updated_by) VALUES (?,?,?,?)',[b.companyId,b.start,b.end,req.user.id]);
+    await audit(connection,req.user.id,'CREATE','vat_period',created.insertId,null,b,req.ip);
+  });
+  res.status(201).json(await vatSchedule(b.companyId,b.start,b.end));
+}));
+router.post('/vat/entries',auth,permit('finance.vatSchedules'),validate(z.object({
+  companyId:z.number().int().positive(),start:vatDate,end:vatDate,direction:z.enum(['Input','Output']),
+  documentDate:vatDate,documentNumber:z.string().trim().min(1).max(120),counterparty:z.string().trim().min(2).max(180),
+  counterpartyVatNumber:z.string().trim().max(100).optional(),taxableAmount:z.number().positive(),vatRate:z.number().positive().max(100),
+  notes:z.string().trim().max(600).optional()
+})),wrap(async(req,res)=>{
+  const b=req.body;
+  if(b.start>b.end||b.documentDate<b.start||b.documentDate>b.end)return res.status(400).json({error:'The document date must fall inside the VAT ledger period'});
+  const result=await transaction(async connection=>{
+    await lockVatCompany(connection,b.companyId);
+    const [[period]]=await connection.execute('SELECT * FROM vat_periods WHERE company_id=? AND period_start=? AND period_end=? FOR UPDATE',[b.companyId,b.start,b.end]);
+    if(!period)throw vatFail('Create the VAT ledger before adding entries');
+    const [[filed]]=await connection.execute("SELECT id FROM vat_periods WHERE company_id=? AND status='Filed' AND period_start<=? AND period_end>=? LIMIT 1 FOR UPDATE",[b.companyId,b.documentDate,b.documentDate]);
+    if(filed)throw vatFail('A filed VAT period is locked. Add corrections to an open period.');
+    const [manual]=await connection.execute('SELECT id FROM vat_manual_entries WHERE company_id=? AND direction=? AND document_number=?',[b.companyId,b.direction,b.documentNumber]);
+    if(manual.length)throw vatFail('This VAT document is already recorded');
+    const [source]=b.direction==='Output'
+      ?await connection.execute(`SELECT reference FROM client_invoices WHERE company_id=? AND reference=? AND status NOT IN ('Draft','Cancelled')
+        UNION ALL SELECT reference FROM incomes WHERE company_id=? AND reference=? AND tax_treatment='Standard'`,[b.companyId,b.documentNumber,b.companyId,b.documentNumber])
+      :await connection.execute(`SELECT invoice_no FROM supplier_invoices WHERE company_id=? AND invoice_no=?
+        UNION ALL SELECT reference FROM operating_bills WHERE company_id=? AND reference=? AND status<>'Cancelled'`,[b.companyId,b.documentNumber,b.companyId,b.documentNumber]);
+    if(source.length)throw vatFail('This document already exists in a source ledger. Use that record rather than adding VAT twice.');
+    const tax=incomeTax(b.taxableAmount,{taxTreatment:'Standard',vatRate:b.vatRate});
+    const [inserted]=await connection.execute(`INSERT INTO vat_manual_entries(company_id,direction,document_date,document_number,counterparty,counterparty_vat_number,taxable_amount,vat_rate,vat_amount,total_amount,notes,created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,[b.companyId,b.direction,b.documentDate,b.documentNumber,b.counterparty,b.counterpartyVatNumber||null,tax.netAmount,tax.vatRate,tax.vatAmount,tax.totalAmount,b.notes||null,req.user.id]);
+    if(period.status==='Reconciled')await connection.execute("UPDATE vat_periods SET status='Draft',reconciled_at=NULL,updated_by=? WHERE id=?",[req.user.id,period.id]);
+    await audit(connection,req.user.id,'CREATE','vat_manual_entry',inserted.insertId,null,{...b,...tax},req.ip);
+    return {id:inserted.insertId,...tax};
+  });
+  res.status(201).json(result);
+}));
+
 router.put('/vat/period',auth,permit('finance.vatSchedules'),validate(z.object({
-  companyId:z.number().int().positive(),start:isoDate,end:isoDate,
+  companyId:z.number().int().positive(),start:vatDate,end:vatDate,
   status:z.enum(['Draft','Reconciled','Filed']).default('Draft'),
   outputAdjustment:z.number().finite().default(0),inputAdjustment:z.number().finite().default(0),
   adjustmentNote:z.string().trim().max(600).nullable().optional(),
@@ -379,10 +440,15 @@ router.put('/vat/period',auth,permit('finance.vatSchedules'),validate(z.object({
     return res.status(400).json({error:'Explain every manual VAT adjustment before reconciling the period.'});
   if(b.status==='Filed'&&!b.filingReference)
     return res.status(400).json({error:'Enter the filing reference before marking this period as filed.'});
-  if(!await getOne('SELECT id FROM companies WHERE id=?',[b.companyId]))return res.status(404).json({error:'Company not found.'});
-  const prior=await getOne('SELECT * FROM vat_periods WHERE company_id=? AND period_start=? AND period_end=?',[b.companyId,b.start,b.end]);
-  if(prior?.status==='Filed'&&b.status!=='Filed')return res.status(409).json({error:'A filed VAT period cannot be reopened from this screen. Record a correcting adjustment in a new period.'});
-  await query(`INSERT INTO vat_periods
+  await transaction(async connection=>{
+  await lockVatCompany(connection,b.companyId);
+  const [[prior]]=await connection.execute('SELECT * FROM vat_periods WHERE company_id=? AND period_start=? AND period_end=? FOR UPDATE',[b.companyId,b.start,b.end]);
+  if(prior?.status==='Filed')throw vatFail('A filed VAT period is locked. Record a correcting adjustment in a new period.');
+  if(!prior){
+    const [[overlap]]=await connection.execute('SELECT id FROM vat_periods WHERE company_id=? AND period_start<=? AND period_end>=? LIMIT 1 FOR UPDATE',[b.companyId,b.end,b.start]);
+    if(overlap)throw vatFail('A VAT ledger already covers these dates. Open the existing ledger.');
+  }
+  await connection.execute(`INSERT INTO vat_periods
     (company_id,period_start,period_end,status,output_adjustment,input_adjustment,adjustment_note,filing_reference,
      updated_by,reconciled_at,filed_at) VALUES (?,?,?,?,?,?,?,?,?,IF(? IN ('Reconciled','Filed'),NOW(),NULL),IF(?='Filed',NOW(),NULL))
     ON DUPLICATE KEY UPDATE status=VALUES(status),output_adjustment=VALUES(output_adjustment),
@@ -391,8 +457,9 @@ router.put('/vat/period',auth,permit('finance.vatSchedules'),validate(z.object({
       filed_at=IF(VALUES(status)='Filed',COALESCE(filed_at,NOW()),NULL)`,
     [b.companyId,b.start,b.end,b.status,b.outputAdjustment,b.inputAdjustment,b.adjustmentNote||null,
       b.filingReference||null,req.user.id,b.status,b.status]);
-  const after=await getOne('SELECT * FROM vat_periods WHERE company_id=? AND period_start=? AND period_end=?',[b.companyId,b.start,b.end]);
-  await audit(pool,req.user.id,prior?'UPDATE':'CREATE','vat_period',after.id,prior,after,req.ip);
+  const [[after]]=await connection.execute('SELECT * FROM vat_periods WHERE company_id=? AND period_start=? AND period_end=?',[b.companyId,b.start,b.end]);
+  await audit(connection,req.user.id,prior?'UPDATE':'CREATE','vat_period',after.id,prior,after,req.ip);
+  });
   res.json(await vatSchedule(b.companyId,b.start,b.end));
 }));
 
@@ -511,7 +578,8 @@ router.get('/income', auth, permit('finance.view','finance.manage'), wrap(async 
   if (req.query.projectId) { filters.push('i.project_id=?'); params.push(req.query.projectId); }
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   res.json(await query(`SELECT i.id,i.description,i.amount,i.received_date receivedDate,i.method,i.reference,
-    i.origin_type originType,i.origin_id originId,ci.id invoiceId,p.name project,i.project_id projectId,u.name recordedBy
+    i.income_source incomeSource,i.tax_treatment taxTreatment,i.vat_rate vatRate,i.vat_amount vatAmount,COALESCE(i.net_amount,i.amount) netAmount,
+    i.origin_type originType,i.origin_id originId,ci.id invoiceId,COALESCE(p.name,'Other') project,i.project_id projectId,u.name recordedBy
     FROM incomes i LEFT JOIN projects p ON p.id=i.project_id JOIN users u ON u.id=i.created_by
     LEFT JOIN client_receipts cr ON i.origin_type='client_receipt' AND cr.id=CAST(i.origin_id AS UNSIGNED)
     LEFT JOIN client_invoices ci ON ci.id=cr.invoice_id ${where}
@@ -519,7 +587,10 @@ router.get('/income', auth, permit('finance.view','finance.manage'), wrap(async 
 }));
 
 router.post('/income', auth, permit('finance.manage'), validate(z.object({
-  projectId: z.number().int().positive(),
+  projectId: z.number().int().positive().nullable().optional(),
+  companyId:z.number().int().positive().optional(),
+  incomeSource:z.string().trim().min(1).max(180).optional(),
+  ...incomeTaxFields,
   description: z.string().min(2).max(400),
   amount: z.number().positive(),
   receivedDate: isoDate,
@@ -528,13 +599,18 @@ router.post('/income', auth, permit('finance.manage'), validate(z.object({
 })), fromOptions({ method: 'income.method' }), wrap(async (req, res) => {
   const body = req.body;
   if (body.method === 'Cheque') return res.status(400).json({ error: 'Record cheques in Received cheques so clearing is tracked once' });
+  if(!body.projectId&&!body.incomeSource)return res.status(400).json({error:'Enter an income source for Other income'});
+  const tax=incomeTax(body.amount,body);
   const result = await transaction(async connection => {
-    await assertUniqueManualEntry(connection, 'incomes', { projectId: body.projectId, reference: body.reference,
-      amount: body.amount, date: body.receivedDate, description: body.description });
-    const [[project]] = await connection.execute('SELECT company_id FROM projects WHERE id=?', [body.projectId]);
-    if (!project) throw Object.assign(new Error('Choose an existing project'), { status: 400 });
-    const [inserted] = await connection.execute('INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,created_by) VALUES (?,?,?,?,?,?,?,?)',
-      [body.projectId, project.company_id, body.description, body.amount, body.receivedDate, body.method, body.reference?.trim() || null, req.user.id]);
+    const [[project]] = body.projectId?await connection.execute('SELECT company_id FROM projects WHERE id=?',[body.projectId]):[[]];
+    if(body.projectId&&!project)throw Object.assign(new Error('Choose an existing project'),{status:400});
+    if(project&&body.companyId&&Number(project.company_id)!==body.companyId)throw Object.assign(new Error('That project belongs to the other company'),{status:400});
+    const companyId=project?.company_id||body.companyId;
+    if(!companyId)throw Object.assign(new Error('Choose a company for Other income'),{status:400});
+    await assertUniqueManualEntry(connection, 'incomes', { projectId: body.projectId,companyId,reference: body.reference,
+      amount: tax.totalAmount, date: body.receivedDate, description: body.description });
+    const [inserted] = await connection.execute('INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,created_by,tax_treatment,vat_rate,vat_amount,net_amount,income_source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [body.projectId||null,companyId,body.description,tax.totalAmount,body.receivedDate,body.method,body.reference?.trim()||null,req.user.id,tax.taxTreatment,tax.vatRate,tax.vatAmount,tax.netAmount,body.projectId?null:body.incomeSource]);
     return inserted;
   });
   const row = await getOne('SELECT * FROM incomes WHERE id=?', [result.insertId]);

@@ -62,7 +62,7 @@ export default function AccountMenu({ user, onAccount, onLogout, onTour }) {
 
         <button type="button" role="menuitem" onClick={() => choose(onAccount)}>
           <UserRound size={15} />My account
-          <small>Change your password</small>
+          <small>Display name and password</small>
         </button>
 
         <button type="button" role="menuitem" className="account-signout" onClick={() => choose(onLogout)}>

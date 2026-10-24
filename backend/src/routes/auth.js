@@ -110,6 +110,15 @@ router.post('/logout', auth, wrap(async (req, res) => {
 
 router.get('/me', auth, (req, res) => res.json({ user: req.user }));
 
+router.patch('/me', auth, validate(z.object({
+  name: z.string().trim().min(1).max(120).refine(value => !/[\u0000-\u001f\u007f]/.test(value), 'Display name cannot contain control characters')
+}).strict()), wrap(async (req, res) => {
+  await query('UPDATE users SET name=? WHERE id=?', [req.body.name, req.user.id]);
+  await audit(pool, req.user.id, 'DISPLAY_NAME_CHANGE', 'user', req.user.id,
+    { name: req.user.name }, { name: req.body.name }, req.ip);
+  res.json({ user: { ...req.user, name: req.body.name } });
+}));
+
 router.post('/password', auth, validate(z.object({ current: z.string().min(1), password: strongPassword })), wrap(async (req, res) => {
   const { hashPassword } = await import('../db.js');
   const user = await getOne('SELECT * FROM users WHERE id=?', [req.user.id]);

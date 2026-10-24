@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool, query, getOne, audit, transaction, nextReference } from '../db.js';
 import { auth, permit, validate, fail } from '../lib/http.js';
 import { certificate } from '../lib/invoice-maths.js';
+import {incomeTax,incomeTaxFields} from '../lib/income-tax.js';
 import { publishChange } from '../lib/realtime.js';
 import { notify } from '../alerts.js';
 import { sendDailySummary } from '../lib/daily-summary.js';
@@ -514,7 +515,7 @@ router.post('/receivables/invoices/:id/receipts', auth, permit('finance.invoice'
 /* ---- cheques received from clients -------------------------------------- */
 router.get('/receivables/cheques', auth, permit('finance.view','finance.invoice'), async (req,res,next) => {
   try { const companyId=companyParam(req); res.json(await query(`SELECT c.id,c.project_id projectId,c.invoice_id invoiceId,c.cheque_number chequeNumber,
-    c.bank,c.payer,c.purpose,c.amount,c.received_date receivedDate,c.cheque_date chequeDate,c.deposit_by depositBy,
+    c.bank,c.payer,c.purpose,c.income_source incomeSource,c.amount,c.received_date receivedDate,c.cheque_date chequeDate,c.deposit_by depositBy,
     c.reminder_days reminderDays,c.status,c.notes,c.deposited_at depositedAt,c.confirmed_at confirmedAt,
     p.name project,i.reference invoiceReference,DATEDIFF(c.deposit_by,CURDATE()) daysToDeposit,
     DATEDIFF(c.cheque_date,CURDATE()) daysToCheque,u.name createdBy,cu.name confirmedBy
@@ -526,6 +527,8 @@ router.get('/receivables/cheques', auth, permit('finance.view','finance.invoice'
 });
 
 router.post('/receivables/cheques', auth, permit('finance.invoice'), validate(z.object({
+  incomeSource:z.string().trim().min(1).max(180).optional(),
+  ...incomeTaxFields,
   companyId:z.coerce.number().int().positive().default(1),
   projectId:z.coerce.number().int().positive().nullable().optional(),invoiceId:z.coerce.number().int().positive().nullable().optional(),
   chequeNumber:z.string().trim().min(1).max(80),bank:z.string().trim().min(2).max(180),payer:z.string().trim().min(2).max(180),
@@ -534,9 +537,12 @@ router.post('/receivables/cheques', auth, permit('finance.invoice'), validate(z.
   reminderDays:z.coerce.number().int().min(0).max(30).default(2),notes:z.string().max(600).optional()
 })),async(req,res,next)=>{try{
   let projectId=req.body.projectId||null;
+  if(!projectId&&!req.body.invoiceId&&!req.body.incomeSource)throw fail(400,'Enter an income source for Other income');
+  const tax=incomeTax(req.body.amount,req.body);
   if(req.body.chequeDate<req.body.receivedDate) throw fail(400,'Cheque date cannot be before it was received');
   if(req.body.depositBy<req.body.receivedDate) throw fail(400,'Deposit reminder date cannot be before receipt');
   if(req.body.invoiceId){
+    if(req.body.taxTreatment==='Standard')throw fail(400,'Invoice-linked cheques use the invoice tax calculation');
     const invoice=await getOne('SELECT * FROM client_invoices WHERE id=?',[req.body.invoiceId]);
     if(!invoice) throw fail(404,'Client invoice not found');
     if(['Draft','Cancelled'].includes(invoice.status)) throw fail(409,'The linked client invoice must be issued');
@@ -545,15 +551,16 @@ router.post('/receivables/cheques', auth, permit('finance.invoice'), validate(z.
     projectId=invoice.project_id;
     if(req.body.amount>Number(invoice.net_payable)-Number(invoice.paid_amount)+0.001) throw fail(409,'Cheque amount exceeds the client invoice balance');
   }
-  if(!projectId && !req.body.invoiceId) throw fail(400,'Choose a project or link a client invoice');
+  if(!await getOne('SELECT id FROM companies WHERE id=?',[req.body.companyId]))throw fail(400,'Choose an existing company');
   if(projectId){
     const project=await getOne('SELECT id FROM projects WHERE id=? AND company_id=?',[projectId,req.body.companyId]);
     if(!project) throw fail(400,'That project belongs to the other company');
   }
   const result=await query(`INSERT INTO received_cheques
-    (company_id,project_id,invoice_id,cheque_number,bank,payer,purpose,amount,received_date,cheque_date,deposit_by,reminder_days,notes,created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[req.body.companyId,projectId,req.body.invoiceId||null,req.body.chequeNumber,req.body.bank,req.body.payer,
-    req.body.purpose,req.body.amount,req.body.receivedDate,req.body.chequeDate,req.body.depositBy,req.body.reminderDays,req.body.notes||null,req.user.id]);
+    (company_id,project_id,invoice_id,cheque_number,bank,payer,purpose,amount,received_date,cheque_date,deposit_by,reminder_days,notes,created_by,tax_treatment,vat_rate,vat_amount,net_amount,income_source)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[req.body.companyId,projectId,req.body.invoiceId||null,req.body.chequeNumber,req.body.bank,req.body.payer,
+    req.body.purpose,tax.totalAmount,req.body.receivedDate,req.body.chequeDate,req.body.depositBy,req.body.reminderDays,req.body.notes||null,req.user.id,
+    tax.taxTreatment,tax.vatRate,tax.vatAmount,tax.netAmount,projectId?null:req.body.incomeSource||null]);
   const row=await getOne('SELECT * FROM received_cheques WHERE id=?',[result.insertId]);
   await audit(pool,req.user.id,'RECEIVE','received_cheque',row.id,null,row,req.ip);publishChange('receivables',{});res.status(201).json(row);
 }catch(error){if(error.code==='ER_DUP_ENTRY') return res.status(409).json({error:'That received cheque is already recorded'});next(error);}});
@@ -581,6 +588,8 @@ router.patch('/receivables/cheques/:id',auth,permit('finance.invoice'),validate(
         VALUES (?,?,?,?,CURDATE(),'Cheque',?,?,?,?)`,[cheque.project_id,cheque.company_id,
           `Cheque cleared — ${cheque.purpose}`,cheque.amount,cheque.cheque_number,
           receiptId?'client_receipt':'received_cheque',String(receiptId||cheque.id),req.user.id]);
+      if(!receiptId)await connection.execute(`UPDATE incomes SET tax_treatment=?,vat_rate=?,vat_amount=?,net_amount=?,income_source=?
+        WHERE origin_type='received_cheque' AND origin_id=?`,[cheque.tax_treatment,cheque.vat_rate,cheque.vat_amount,cheque.net_amount,cheque.income_source,String(cheque.id)]);
     }
     await connection.execute(`UPDATE received_cheques SET status=?,notes=COALESCE(?,notes),
       deposited_at=CASE WHEN ? IN ('Deposited','Re-deposited') THEN CURDATE() ELSE deposited_at END,

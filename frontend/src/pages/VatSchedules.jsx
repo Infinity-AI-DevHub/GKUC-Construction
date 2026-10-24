@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
+import { CircleDollarSign, TrendingUp, Wallet, Plus } from 'lucide-react';
 import { api, fetchDownload, post, rupees, shortDate, slug } from '../api.js';
 import { Badge, Field, FormModal, Row, SelectField, Summary, Table } from '../ui.jsx';
 
@@ -18,20 +18,30 @@ export default function VatSchedules({ companyId, company, can }) {
   const quarter=currentQuarter();
   const [start,setStart]=useState(quarter.start),[end,setEnd]=useState(priorDay(quarter.end));
   const [data,setData]=useState(null),[error,setError]=useState(''),[saving,setSaving]=useState(false),[svatOpen,setSvatOpen]=useState(false);
+  const [periods,setPeriods]=useState([]),[creating,setCreating]=useState(false),[addingEntry,setAddingEntry]=useState(false);
+  const loadPeriods=()=>api(`/finance/vat/periods?companyId=${companyId}`).then(setPeriods);
+  useEffect(()=>{setPeriods([]);setCreating(false);setAddingEntry(false);loadPeriods().catch(failure=>setError(failure.message));},[companyId]);
   const [form,setForm]=useState({status:'Draft',outputAdjustment:0,inputAdjustment:0,adjustmentNote:'',filingReference:''});
   const load=async()=>{setError('');try{const result=await api(`/finance/vat?companyId=${companyId}&start=${start}&end=${end}`);setData(result);setForm({
     status:result.period.status,outputAdjustment:Number(result.period.outputAdjustment||0),inputAdjustment:Number(result.period.inputAdjustment||0),
     adjustmentNote:result.period.adjustmentNote||'',filingReference:result.period.filingReference||''});}catch(failure){setError(failure.message);setData(null);}};
   useEffect(()=>{load();},[companyId,start,end]);
   const save=async()=>{setSaving(true);setError('');try{const result=await api('/finance/vat/period',{method:'PUT',body:JSON.stringify({
-    companyId,start,end,...form,outputAdjustment:Number(form.outputAdjustment||0),inputAdjustment:Number(form.inputAdjustment||0)})});setData(result);}catch(failure){setError(failure.message);}finally{setSaving(false);}};
+    companyId,start,end,...form,outputAdjustment:Number(form.outputAdjustment||0),inputAdjustment:Number(form.inputAdjustment||0)})});setData(result);await loadPeriods();}catch(failure){setError(failure.message);}finally{setSaving(false);}};
   const download=async()=>{const url=await fetchDownload(`/finance/vat/export?companyId=${companyId}&start=${start}&end=${end}`);const link=document.createElement('a');link.href=url;link.download=`VAT-${start}-to-${end}.xlsx`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
   const template='115px 155px minmax(180px,1.3fr) 145px 125px 125px 125px 110px';
   return <>
     <section className="finance-period-panel">
-      <div><p className="eyebrow">Company tax period</p><h3>{company?.name || 'Selected company'} VAT schedules</h3><p>Invoice-date basis. Issued sales invoices feed Output Schedule 01; supplier invoices and operating bills feed Input Schedule 02.</p></div>
+      <div><p className="eyebrow">Company tax period</p><h3>{company?.name || 'Selected company'} VAT schedules</h3><p>Output and input VAT from source documents, taxable receipts and manual VAT entries.</p></div>
       <div className="finance-period-controls"><label>From<input type="date" value={start} onChange={event=>setStart(event.target.value)}/></label><label>To<input type="date" value={end} onChange={event=>setEnd(event.target.value)}/></label></div>
     </section>
+    <div className="vat-ledger-actions">
+      <label>Saved VAT ledger<select value={String(periods.find(row=>row.start===start&&row.end===end)?.id||'')} onChange={event=>{
+        const period=periods.find(row=>String(row.id)===event.target.value);if(period){setStart(period.start);setEnd(period.end);}
+      }}><option value="">Selected dates (preview)</option>{periods.map(row=><option value={row.id} key={row.id}>{shortDate(row.start)} - {shortDate(row.end)} · {row.status}</option>)}</select></label>
+      {can.finance&&<button className="primary" type="button" onClick={()=>setCreating(true)}><Plus size={16}/>Create VAT ledger</button>}
+      {can.finance&&data?.period.id&&data.period.status!=='Filed'&&<button className="secondary" type="button" onClick={()=>setAddingEntry(true)}><Plus size={16}/>Add VAT entry</button>}
+    </div>
     {error&&<p className="form-error">{error}</p>}
     {data&&<>
       <div className="attendance-summary"><Summary label="Adjusted output VAT" value={rupees(data.totals.adjustedOutputVat)} icon={TrendingUp}/><Summary label="Adjusted input VAT" value={rupees(data.totals.adjustedInputVat)} icon={CircleDollarSign}/><Summary label="VAT payable / (credit)" value={rupees(data.totals.netVatPayable)} icon={Wallet}/></div>
@@ -40,13 +50,36 @@ export default function VatSchedules({ companyId, company, can }) {
         <div className="vat-form-grid"><label>Status<select value={form.status} disabled={!can.finance||data.period.status==='Filed'} onChange={event=>setForm({...form,status:event.target.value})}><option>Draft</option><option>Reconciled</option><option>Filed</option></select></label><label>Output VAT adjustment<input type="number" step="0.01" value={form.outputAdjustment} disabled={!can.finance||data.period.status==='Filed'} onChange={event=>setForm({...form,outputAdjustment:event.target.value})}/></label><label>Input VAT adjustment<input type="number" step="0.01" value={form.inputAdjustment} disabled={!can.finance||data.period.status==='Filed'} onChange={event=>setForm({...form,inputAdjustment:event.target.value})}/></label><label>Filing reference<input value={form.filingReference} disabled={!can.finance||data.period.status==='Filed'} onChange={event=>setForm({...form,filingReference:event.target.value})}/></label><label className="wide">Adjustment explanation<textarea value={form.adjustmentNote} disabled={!can.finance||data.period.status==='Filed'} onChange={event=>setForm({...form,adjustmentNote:event.target.value})}/></label></div>
         <div className="row-actions">{can.finance&&data.period.status!=='Filed'&&<button className="primary" onClick={save} disabled={saving}>{saving?'Saving…':'Save reconciliation'}</button>}<button className="secondary" onClick={download}>Download Excel schedules</button></div>
       </section>
-      <Table columns={['Date','Invoice','Customer','VAT number','Taxable value','Output VAT','Total','Status']} template={template} title={`Output Schedule 01 · ${data.output.length} document${data.output.length===1?'':'s'}`} empty="No issued standard-VAT client invoices fall inside this period.">{data.output.map(row=><Row template={template} key={row.id}><span>{shortDate(row.documentDate)}</span><strong>{row.documentNumber}</strong><span>{row.counterparty}</span><span>{row.counterpartyVatNumber||'Not recorded'}</span><span>{rupees(row.taxableAmount)}</span><strong>{rupees(row.vatAmount)}</strong><span>{rupees(row.totalAmount)}</span><Badge tone={slug(row.status)}>{row.status}</Badge></Row>)}</Table>
+      <Table columns={['Date','Document','Customer / description','VAT number','Taxable value','Output VAT','Total','Status']} template={template} title={`Output Schedule 01 · ${data.output.length} document${data.output.length===1?'':'s'}`} empty="No standard-VAT invoices or taxable manual income fall inside this period.">{data.output.map(row=><Row template={template} key={row.id}><span>{shortDate(row.documentDate)}</span><div><strong>{row.documentNumber}</strong><small>{row.source}</small></div><span>{row.counterparty}</span><span>{row.counterpartyVatNumber||'Not recorded'}</span><span>{rupees(row.taxableAmount)}</span><strong>{rupees(row.vatAmount)}</strong><span>{rupees(row.totalAmount)}</span><Badge tone={slug(row.status)}>{row.status}</Badge></Row>)}</Table>
       <div style={{height:16}}/><Table columns={['Date','Invoice / bill','Supplier','VAT number','Taxable value','Input VAT','Total','Status']} template={template} title={`Input Schedule 02 · ${data.input.length} document${data.input.length===1?'':'s'}`} empty="No standard-VAT supplier invoices or operating bills fall inside this period.">{data.input.map(row=><Row template={template} key={`${row.source}-${row.id}`}><span>{shortDate(row.documentDate)}</span><div><strong>{row.documentNumber}</strong><small>{row.source}</small></div><span>{row.counterparty}</span><span>{row.counterpartyVatNumber||'Not recorded'}</span><span>{rupees(row.taxableAmount)}</span><strong>{rupees(row.vatAmount)}</strong><span>{rupees(row.totalAmount)}</span><Badge tone={slug(row.status)}>{row.status}</Badge></Row>)}</Table>
       <section className="svat-history"><div><p className="eyebrow">Historical records only</p><h3>SVAT schedules</h3><p>SVAT ended on 30 September 2025. Current periods cannot create SVAT entries; earlier records remain available and export with the period.</p></div>{can.finance&&data.svatAllowed&&<button className="secondary" onClick={()=>setSvatOpen(true)}>Add historical SVAT entry</button>}</section>
       {data.historicalSvat.length>0&&<Table columns={['Date','Direction','Schedule','Document','Counterparty','Taxable value','Suspended VAT']} template="115px 100px 120px 155px minmax(190px,1fr) 140px 140px" title="Historical SVAT records">{data.historicalSvat.map(row=><Row template="115px 100px 120px 155px minmax(190px,1fr) 140px 140px" key={row.id}><span>{shortDate(row.documentDate)}</span><Badge tone={row.direction==='Output'?'active':'pending'}>{row.direction}</Badge><span>{row.scheduleType}</span><strong>{row.documentNumber}</strong><span>{row.counterparty}</span><span>{rupees(row.taxableAmount)}</span><strong>{rupees(row.suspendedVat)}</strong></Row>)}</Table>}
     </>}
     {svatOpen&&<SvatForm companyId={companyId} start={start} end={end} close={()=>setSvatOpen(false)} reload={load}/>} 
+    {creating&&<FormModal title="Create VAT ledger" close={()=>setCreating(false)} label="Create ledger" onSubmit={async values=>{
+      await post('/finance/vat/periods',{companyId,start:values.start,end:values.end});
+      setData(null);setStart(values.start);setEnd(values.end);await loadPeriods();
+      if(values.start===start&&values.end===end)await load();
+    }}><Field name="start" label="Period from" type="date" defaultValue={start}/><Field name="end" label="Period to" type="date" defaultValue={end}/></FormModal>}
+    {addingEntry&&<VatEntryForm key={`${companyId}-${start}-${end}`} companyId={companyId} start={start} end={end}
+      close={()=>setAddingEntry(false)} reload={async()=>{await load();await loadPeriods();}}/>}
   </>;
+}
+
+function VatEntryForm({companyId,start,end,close,reload}){
+  return <FormModal title="Add VAT entry" close={close} label="Save VAT entry" onSubmit={async values=>{
+    await post('/finance/vat/entries',{companyId,start,end,direction:values.direction,documentDate:values.documentDate,
+      documentNumber:values.documentNumber,counterparty:values.counterparty,counterpartyVatNumber:values.counterpartyVatNumber||undefined,
+      taxableAmount:Number(values.taxableAmount),vatRate:Number(values.vatRate),notes:values.notes||undefined});await reload();
+  }}>
+    <SelectField name="direction" label="VAT direction" options={['Output','Input']}/>
+    <Field name="documentDate" label="Document date" type="date" min={start} max={end} defaultValue={start}/>
+    <Field name="documentNumber" label="Document reference"/><Field name="counterparty" label="Customer or supplier"/>
+    <Field name="counterpartyVatNumber" label="VAT registration number" required={false}/>
+    <Field name="taxableAmount" label="Taxable value before VAT (LKR)" type="number" min="0.01" step="0.01"/>
+    <Field name="vatRate" label="VAT rate (%)" type="number" min="0.001" max="100" step="0.001"/>
+    <Field name="notes" label="Notes" required={false} wide/>
+  </FormModal>;
 }
 
 function SvatForm({companyId,start,end,close,reload}) { return <FormModal title="Add a historical SVAT schedule entry" close={close} label="Save historical entry" onSubmit={async values=>{await post('/finance/vat/svat-entries',{companyId,periodStart:start,periodEnd:end,direction:values.direction,scheduleType:values.scheduleType,documentDate:values.documentDate,documentNumber:values.documentNumber,counterparty:values.counterparty,counterpartyVatNumber:values.counterpartyVatNumber||undefined,counterpartySvatNumber:values.counterpartySvatNumber||undefined,taxableAmount:Number(values.taxableAmount),suspendedVat:Number(values.suspendedVat),creditVoucherNumber:values.creditVoucherNumber||undefined,notes:values.notes||undefined});await reload();}}>

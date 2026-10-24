@@ -30,6 +30,7 @@ export default function NavBar({ items, activePage, openTasks, onSelect }) {
 
     const buttons = [...nav.querySelectorAll('[data-nav-item]')];
     const style = getComputedStyle(nav);
+    if(style.flexDirection==='column') { nav.classList.remove('measuring');setVisibleCount(items.length);return; }
     const gap = parseFloat(style.columnGap || style.gap) || 0;
     const available = nav.clientWidth;
 
@@ -65,6 +66,7 @@ export default function NavBar({ items, activePage, openTasks, onSelect }) {
      a fresh array on every render, which had this tearing down and rebuilding the observer
      continuously. */
   const signature = items.map(([name]) => name).join('|');
+  useEffect(()=>{setMenuOpen(false);},[signature]);
 
   useLayoutEffect(() => {
     measure();

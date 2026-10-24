@@ -17,7 +17,7 @@ import VatSchedules from './VatSchedules.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
-const TABS = ['Financial reports','Management accounts','Cash comparison','Daily expenses','Vehicle expenses','Expected outflows','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Supplier statements','Categories'];
+const TABS = ['Financial reports','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Supplier statements','Categories'];
 const TAB_PERMISSIONS = {
   'Financial reports':['finance.reports'], 'Management accounts':['finance.managementAccounts'],
   'Cash comparison':['finance.cashComparison'], 'Daily expenses':['finance.dailyExpenses'],
@@ -26,11 +26,11 @@ const TAB_PERMISSIONS = {
   'Supplier statements':['finance.supplierStatements'], 'Daily cost review':['finance.costReview'],
   'Budget monitoring':['finance.view'], Invoices:['finance.invoice'], Cheques:['finance.invoice'],
   Bonds:['finance.invoice'], 'Petty cash':['finance.manage'], Bills:['finance.manage'],
-  'Credit cards':['finance.manage'], Expenses:['finance.manage'], Income:['finance.manage'],
+  'Credit cards':['finance.manage'], Expenses:['finance.manage','finance.dailyExpenses'], Income:['finance.manage'],
   'Supplier invoices':['finance.pay'], Categories:['finance.manage']
 };
 const TAB_GROUPS = [
-  { label: 'Overview & review', tabs: ['Financial reports', 'Management accounts', 'Cash comparison', 'Daily expenses', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
+  { label: 'Overview & review', tabs: ['Financial reports', 'Management accounts', 'Cash comparison', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
   { label: 'Money in', tabs: ['Invoices', 'Income', 'VAT ledger'] },
   { label: 'Money out', tabs: ['Expected outflows', 'Bills', 'Supplier invoices', 'Supplier statements', 'Expenses', 'Petty cash', 'Credit cards'] },
   { label: 'Controls', tabs: ['VAT clearance', 'Cheques', 'Bonds', 'Categories'] }
@@ -38,7 +38,7 @@ const TAB_GROUPS = [
 
 /** PID 2.10 — costs, payments and profitability in one view, watched continuously. */
 export default function Finance({ data, reload, can, companyId, company }) {
-  const [tab, setTab] = useState(() => TABS.find(section => slug(section) === window.location.pathname.split('/')[2]) || TABS[0]);
+  const [tab, setTab] = useState(() => window.location.pathname.split('/')[2] === 'daily-expenses' ? 'Expenses' : TABS.find(section => slug(section) === window.location.pathname.split('/')[2]) || TABS[0]);
   const [open, setOpen] = useState('');
   const [summary, setSummary] = useState(null);
   const visibleTabs = TABS.filter(name => (TAB_PERMISSIONS[name] || []).some(key => can.has(key)));
@@ -83,7 +83,6 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {tab === 'Financial reports' && <FinanceReports projects={data.projects} companyId={companyId} company={company} />}
     {tab === 'Management accounts' && <ManagementAccounts projects={data.projects.filter(project => Number(project.companyId) === Number(companyId))} companyId={companyId} company={company} can={featureCan('finance.managementAccountsManage')} />}
     {tab === 'Cash comparison' && <CashComparison companyId={companyId} company={company} can={featureCan('finance.cashComparison')} />}
-    {tab === 'Daily expenses' && <DailyExpenses companyId={companyId} company={company} can={featureCan('finance.dailyExpenses')} />}
     {tab === 'Vehicle expenses' && <VehicleExpenseReport companyId={companyId} company={company} />}
     {tab === 'Expected outflows' && <ExpectedOutflows companyId={companyId} company={company} can={featureCan('finance.expectedOutflows')} projects={data.projects} />}
     {tab === 'Budget monitoring' && <BudgetMonitoring summary={summary} />}
@@ -96,14 +95,21 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {tab === 'Cheques' && <Cheques can={can} data={data} companyId={companyId} />}
     {tab === 'Bonds' && <Bonds data={data} can={can} companyId={companyId} />}
     {tab === 'Petty cash' && <PettyCash data={data} can={can} companyId={companyId} />}
-    {tab === 'Expenses' && <Expenses companyId={companyId} can={can} />}
+    {tab === 'Expenses' && <div className="expenses-workspace">
+      {can.has('finance.dailyExpenses') && <DailyExpenses companyId={companyId} company={company} can={featureCan('finance.dailyExpenses')} />}
+      {can.has('finance.manage') && <section className="expenses-ledger-section" aria-label="Project expense ledger">
+        <h2>Project expense ledger</h2>
+        <p>Recorded project costs, including unpaid expenses. Recording payment details updates the existing expense without creating another cost.</p>
+        <Expenses companyId={companyId} can={can} />
+      </section>}
+    </div>}
     {tab === 'Income' && <Income companyId={companyId} />}
     {tab === 'Supplier invoices' && <Invoices can={can} refresh={refresh} companyId={companyId} />}
     {tab === 'Supplier statements' && <SupplierStatements companyId={companyId} />}
     {tab === 'Categories' && <Categories companyId={companyId} />}
 
     {open === 'Expenses' && <ExpenseForm data={data} close={() => setOpen('')} reload={refresh} />}
-    {open === 'Income' && <IncomeForm data={data} close={() => setOpen('')} reload={refresh} />}
+    {open === 'Income' && <IncomeForm data={data} companyId={companyId} close={() => setOpen('')} reload={refresh} />}
     {open === 'Supplier invoices' && <InvoiceForm companyId={companyId} close={() => setOpen('')} reload={refresh} />}
     {open === 'Categories' && <CategoryForm close={() => setOpen('')} reload={refresh} />}
   </Page></RecordScopeProvider>;
@@ -229,6 +235,8 @@ function Income({ companyId }) {
     {rows.map(row => <Row template={LEDGER_TEMPLATE} key={row.id}>
       <span>{shortDate(row.receivedDate)}</span>
       <div><strong>{row.description}</strong><small>{row.reference || '—'}</small>
+        {row.incomeSource&&<small>Income source: {row.incomeSource}</small>}
+        {!row.invoiceId&&<small>{row.taxTreatment==='Standard'?`VAT ${row.vatRate}%: ${rupees(row.vatAmount)}`:'Excluded from VAT and other tax calculations'}</small>}
         {row.invoiceId&&<small>Also visible in <a href={`/finance/invoices?record=${row.invoiceId}`}>invoice payments and receipts</a>. This income was posted from that receipt.</small>}
         {row.originType==='received_cheque'&&<small>Also visible in <a href="/finance/cheques">received cheques</a>. This income was posted when the cheque cleared.</small>}
       </div>
@@ -355,11 +363,27 @@ function ExpenseForm({ data, close, reload }) {
   </FormModal>;
 }
 
-function IncomeForm({ data, close, reload }) {
+function IncomeForm({ data, companyId, close, reload }) {
   const payMethods = useOptions('income.method');
-  return <FormModal title="Record income" close={close} label="Save income" repeat onSubmit={async values => {
+  const [method,setMethod]=useState('Cash');
+  const [taxTreatment,setTaxTreatment]=useState('None');
+  const [projectId,setProjectId]=useState('other');
+  const cheque=method==='Cheque';
+  return <FormModal title="Record income" close={close} label={cheque?'Record cheque':'Save income'} repeat={!cheque&&taxTreatment==='None'} onSubmit={async values => {
+    if(values.method==='Cheque') {
+      await post('/receivables/cheques',{companyId,projectId:values.projectId==='other'?null:Number(values.projectId),purpose:values.description,
+        incomeSource:values.projectId==='other'?values.incomeSource:undefined,
+        taxTreatment:values.taxTreatment,vatRate:values.taxTreatment==='Standard'?Number(values.vatRate):0,
+        amount:Number(values.amount),receivedDate:values.receivedDate,chequeNumber:values.chequeNumber,
+        bank:values.bank,payer:values.payer,chequeDate:values.chequeDate,depositBy:values.depositBy,
+        reminderDays:2,notes:values.reference||undefined});
+      await reload();
+      return;
+    }
     await post('/finance/income', {
-      projectId: Number(values.projectId),
+      projectId: values.projectId==='other'?null:Number(values.projectId),companyId,
+      incomeSource:values.projectId==='other'?values.incomeSource:undefined,
+      taxTreatment:values.taxTreatment,vatRate:values.taxTreatment==='Standard'?Number(values.vatRate):0,
       description: values.description,
       amount: Number(values.amount),
       receivedDate: values.receivedDate,
@@ -367,15 +391,34 @@ function IncomeForm({ data, close, reload }) {
       reference: values.reference || undefined
     });
     await reload();
+    setProjectId('other');
   }}>
-    <p className="form-note wide">Use this form only for income that is not an invoice payment or received cheque. Record client payments on the invoice and clear cheques in Received cheques; their income appears here automatically.</p>
-    <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
-    <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" />
+    <p className="form-note wide">Record invoice payments on the invoice. Cheques entered here are tracked in Received cheques and become income only after clearing.</p>
+    <label>Project *<select name="projectId" required value={projectId} onChange={event=>setProjectId(event.target.value)}>
+      <option value="other">Other (no project)</option>
+      {data.projects.filter(project=>!project.companyId||Number(project.companyId)===Number(companyId)).map(project=><option value={project.id} key={project.id}>{project.name}</option>)}
+    </select></label>
+    {projectId==='other'&&<Field name="incomeSource" label="Income source"/>}
+    <Field name="amount" label={taxTreatment==='Standard'?'Amount before VAT (LKR)':'Amount (LKR)'} type="number" step="any" min="0" />
     <Field name="receivedDate" label="Received on" type="date" defaultValue={todayInput()} />
-    <SelectField name="method" label="Method" options={payMethods.filter(method => method !== 'Cheque')} />
+    <label>VAT tracking *<select name="taxTreatment" required value={taxTreatment} onChange={event=>setTaxTreatment(event.target.value)}>
+      <option value="None">Do not track VAT</option><option value="Standard">Calculate and track VAT</option>
+    </select></label>
+    {taxTreatment==='Standard'&&<>
+      <Field name="vatRate" label="VAT rate (%)" type="number" min="0.001" max="100" step="0.001"/>
+    </>}
+    <label>Method *<select name="method" required value={method} onChange={event=>setMethod(event.target.value)}>
+      {[...new Set(['Cash',...payMethods,'Cheque'])].map(value=><option key={value}>{value}</option>)}
+    </select></label>
+    {cheque&&<>
+      <Field name="chequeNumber" label="Cheque number"/><Field name="bank" label="Drawer bank"/>
+      <Field name="payer" label="Received from"/>
+      <Field name="chequeDate" label="Cheque date" type="date" defaultValue={todayInput()}/>
+      <Field name="depositBy" label="Deposit by" type="date" defaultValue={todayInput()}/>
+    </>}
     <Field name="reference" label="Reference" required={false} />
     <Field name="description" label="Description" wide />
-    <p className="invoice-note">Use Received cheques for cheques and Invoices for client payments. Those workflows post income automatically.</p>
+    {cheque&&<p className="invoice-note">The cheque will be saved as On hand, not cleared income. Manage deposit, clearing or return in Received cheques.</p>}
   </FormModal>;
 }
 
