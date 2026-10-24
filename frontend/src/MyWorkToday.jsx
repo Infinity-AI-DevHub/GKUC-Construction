@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight, CalendarClock, ClipboardCheck, CornerDownLeft, Handshake } from 'lucide-react';
-import { api, onDataChanged, patch } from './api.js';
-import { Modal } from './ui.jsx';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, ArrowUpRight, CalendarClock, ChevronLeft, ChevronRight, ClipboardCheck, CornerDownLeft, Handshake, PencilLine } from 'lucide-react';
+import { api, onDataChanged, patch, post } from './api.js';
+import { Modal,Row,Table } from './ui.jsx';
+import AttendanceCorrection from './pages/AttendanceCorrection.jsx';
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Colombo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const datePart = value => String(value || '').slice(0, 10);
@@ -84,14 +85,22 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
   const [clearance, setClearance] = useState(null);
   const [clearanceNote, setClearanceNote] = useState('');
   const [clearanceError, setClearanceError] = useState('');
-  const load = () => api(`/dashboard/queue?companyId=${companyId}`)
-    .then(result => { setQueue(result); setError(''); })
-    .catch(failure => setError(failure.message));
+  const [checkoutOpen,setCheckoutOpen]=useState(false);
+  const queueRequest=useRef(0);
+  const checkoutAccess=['hr.view','hr.manage','hr.attendance'].some(key=>can.has(key));
+  const load = () => {
+    const request=++queueRequest.current;
+    return api(`/dashboard/queue?companyId=${companyId}`)
+      .then(result => { if(request===queueRequest.current){setQueue(result);setError('');} })
+      .catch(failure => {if(request===queueRequest.current)setError(failure.message);});
+  };
   useEffect(() => {
     setQueue({ sheets: [], claims: [], invoicesDue: [], work: [] });
     load();
-    return onDataChanged(load);
-  }, [companyId]);
+    const unsubscribe=onDataChanged(load);
+    const timer=setInterval(load,60000);
+    return ()=>{queueRequest.current++;unsubscribe();if(timer)clearInterval(timer);};
+  }, [companyId,user.id,(user.permissions||[]).join('|')]);
   const groups = useMemo(() => buildWorkQueues({ data, queue, can, user }), [data, queue, can, user]);
   const open = item => {
     if (['offboarding-access','offboarding-payroll','offboarding-store','offboarding-vehicle'].includes(item.kind)) {
@@ -123,6 +132,20 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
       <h2 id="my-work-title">My work today</h2><p>{user.role || 'Your role'} · live records you can act on</p></div></div>
     {error && <p className="form-error" role="alert">Some work queues could not load: {error}</p>}
     {clearanceError && !clearance && <p className="form-error" role="alert">{clearanceError}</p>}
+    {(queue.creditReminders||[]).map(reminder=><div key={reminder.id} className="my-work-checkout-warning" role="status">
+      <AlertTriangle size={24}/><div><strong>Credit payment reminder · {reminder.supplier}</strong>
+        <p>{reminder.invoiceNo} · {reminder.description}</p>
+        <p>LKR {Number(reminder.outstanding).toLocaleString('en-LK',{minimumFractionDigits:2})} outstanding · Due {reminder.dueDate} · {reminder.frequency}</p></div>
+      <button type="button" className="primary" onClick={async()=>{
+        try{await post(`/dashboard/credit-reminders/${reminder.id}/acknowledge`,{});await load();}
+        catch(failure){setError(failure.message);}
+      }}>{reminder.frequency==='Once'?'Acknowledge':`Remind me ${reminder.frequency.toLowerCase()}`}</button>
+    </div>)}
+    {checkoutAccess&&queue.missingCheckouts?.employeeCount>0&&<div className="my-work-checkout-warning" role="status">
+      <AlertTriangle size={24}/><div><strong>{queue.missingCheckouts.employeeCount} employee{queue.missingCheckouts.employeeCount===1?'':'s'} not checked out</strong>
+      <p>{queue.missingCheckouts.recordCount} overdue attendance record{queue.missingCheckouts.recordCount===1?'':'s'} need immediate review. Today is included after {queue.missingCheckouts.shiftEnd} (Sri Lanka time).</p></div>
+      <button type="button" className="primary" onClick={()=>setCheckoutOpen(true)}>Resolve immediately<ArrowUpRight size={16}/></button>
+    </div>}
     <div className="my-work-grid">{SECTIONS.map(section => {
       const Icon = section.icon;
       const items = groups[section.key];
@@ -137,6 +160,8 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
         </button>)}{!items.length && <p>{section.empty}</p>}</div>
       </div>;
     })}</div>
+    {checkoutOpen&&checkoutAccess&&<MissingCheckoutReview key={companyId} companyId={companyId} projects={data.projects||[]}
+      canCorrect={can.has('hr.manage')||can.has('hr.attendance')} close={()=>setCheckoutOpen(false)} refresh={load}/>}
     {clearance && <Modal title={clearance.item.title} close={() => setClearance(null)}>
       <div className="report-form"><p className="wide">{clearance.result.offboarding?.reason}</p>
         <p className="wide">Return status: {clearance.result.assets.length} HR assets, {clearance.result.store.length} store tools, {clearance.result.vehicles.length} vehicles and {clearance.result.tasks.length} open tasks.</p>
@@ -160,4 +185,36 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
       </div>
     </Modal>}
   </section>;
+}
+
+function MissingCheckoutReview({companyId,projects,canCorrect,close,refresh}){
+  const [result,setResult]=useState(null),[offset,setOffset]=useState(0),[error,setError]=useState(''),[correcting,setCorrecting]=useState(null);
+  const load=async()=>{
+    setError('');
+    try{setResult(await api(`/dashboard/missing-checkouts?companyId=${companyId}&offset=${offset}`));}
+    catch(failure){setResult(null);setError(failure.message);}
+  };
+  useEffect(()=>{setResult(null);load();},[companyId,offset]);
+  const template='120px minmax(170px,1fr) 100px minmax(160px,1fr) 150px 70px';
+  return <Modal title="Resolve missing checkouts" close={close} wide>
+    <div className="report-form">
+      {error&&<p className="form-error wide" role="alert">{error}</p>}
+      {!result&&!error&&<p>Loading unresolved attendance...</p>}
+      {result&&<>
+        <p className="wide">{result.employeeCount} employee{result.employeeCount===1?'':'s'} · {result.recordCount} overdue record{result.recordCount===1?'':'s'}</p>
+        <div className="wide"><Table title="Missing checkout records" columns={['Date','Employee','Check in','Site','Recorded status','']} template={template}
+          empty="No overdue missing checkouts remain.">
+          {result.records.map(row=><Row template={template} key={row.id} className="attendance-missing-checkout">
+            <span>{row.workDate}</span><div><strong>{row.name}</strong><small>{row.employeeCode}</small></div><span>{row.in}</span><span>{row.site}</span><span>{row.state}</span>
+            {canCorrect?<button type="button" className="icon-btn" title={`Correct attendance for ${row.name} on ${row.workDate}`} aria-label={`Correct attendance for ${row.name} on ${row.workDate}`} onClick={()=>setCorrecting(row)}><PencilLine size={16}/></button>:<span>View only</span>}
+          </Row>)}
+        </Table></div>
+        <div className="form-actions wide"><button type="button" className="secondary" disabled={!offset} onClick={()=>setOffset(Math.max(0,offset-50))}><ChevronLeft size={16}/>Previous</button>
+          <button type="button" className="secondary" disabled={!result.hasMore} onClick={()=>setOffset(offset+50)}>Next<ChevronRight size={16}/></button></div>
+      </>}
+    </div>
+    {correcting&&<AttendanceCorrection record={correcting}
+      projects={correcting.projectId&&!projects.some(row=>Number(row.id)===Number(correcting.projectId))?[...projects,{id:correcting.projectId,name:correcting.site}]:projects}
+      close={()=>setCorrecting(null)} reload={async()=>{await load();await refresh();}}/>}
+  </Modal>;
 }

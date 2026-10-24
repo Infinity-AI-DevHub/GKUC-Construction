@@ -2,6 +2,7 @@
 const documentPaths = [
   /^\/qs\/quotations\/\d+\/document$/,
   /^\/boq\/\d+\/document$/,
+  /^\/progress-claims\/\d+\/document$/,
   /^\/receivables\/invoices\/\d+\/document$/,
   /^\/receivables\/receipts\/\d+\/document$/,
   /^\/employees\/\d+\/letters\/(?:probation|one-year)\/document$/,
@@ -16,7 +17,9 @@ export function canonicalDocumentDownloadPath(value) {
   if (parsed.origin !== 'https://siteops.invalid' || parsed.hash || !documentPaths.some(pattern => pattern.test(parsed.pathname)))
     return null;
   const entries = [...parsed.searchParams.entries()];
-  if (entries.some(([key]) => !['download', 'preview', 'companyId'].includes(key)) ||
+  const progress=/^\/progress-claims\/\d+\/document$/.test(parsed.pathname);
+  if(parsed.searchParams.has('type')&&(!progress||parsed.searchParams.getAll('type').length!==1||!['application','letter','certificate','invoice'].includes(parsed.searchParams.get('type'))))return null;
+  if (entries.some(([key]) => !['download', 'preview', 'companyId',...(progress?['type']:[])].includes(key)) ||
       Number(parsed.searchParams.getAll('download').length === 1 && parsed.searchParams.get('download') === 'pdf') +
         Number(parsed.searchParams.getAll('preview').length === 1 && parsed.searchParams.get('preview') === 'pdf') !== 1 ||
       parsed.searchParams.getAll('companyId').length > 1 ||

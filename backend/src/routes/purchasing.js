@@ -411,13 +411,18 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
 }));
 
 /* Supplier invoices and payments */
+router.get('/credit-reminder-users',auth,permit('finance.pay'),wrap(async(_req,res)=>{
+  res.json(await query('SELECT id,name,role FROM users WHERE active=1 ORDER BY name'));
+}));
 router.get('/invoices', auth, permit('finance.view','finance.pay'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 0);
   res.json(await query(`SELECT i.id,i.company_id companyId,i.supplier_id supplierId,i.invoice_no invoiceNo,i.amount,i.paid_amount paidAmount,
     i.net_amount netAmount,i.tax_treatment taxTreatment,i.vat_rate vatRate,i.vat_amount vatAmount,
     i.invoice_date invoiceDate,i.due_date dueDate,i.status,s.name supplier,o.reference orderReference,
-    i.payment_exception_approved_by paymentExceptionApprovedBy,i.recorded_by recordedById,i.verified_at verifiedAt
+    i.payment_exception_approved_by paymentExceptionApprovedBy,i.recorded_by recordedById,i.verified_at verifiedAt,
+    cr.description creditDescription,cr.frequency reminderFrequency
     FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN purchase_orders o ON o.id=i.order_id
+    LEFT JOIN supplier_credit_reminders cr ON cr.invoice_id=i.id
     ${companyId ? 'WHERE i.company_id=?' : ''} ORDER BY i.id DESC`, companyId ? [companyId] : []));
 }));
 
@@ -463,7 +468,12 @@ const supplierInvoiceSchema=z.object({
   taxTreatment: z.enum(['Standard','Exempt']).default('Exempt'),
   vatRate: z.number().min(0).max(100).default(0),
   invoiceDate: isoDate,
-  dueDate: isoDate.optional(),riskAccepted:z.boolean().default(false),riskReason:z.string().trim().max(500).optional()
+  dueDate: isoDate.optional(),riskAccepted:z.boolean().default(false),riskReason:z.string().trim().max(500).optional(),
+  creditReminder:z.object({description:z.string().trim().min(1).max(500),
+    startDate:isoDate.refine(value=>!Number.isNaN(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value,'Enter a valid reminder date'),
+    frequency:z.enum(['Once','Daily','Weekly','Monthly']),
+    userIds:z.array(z.number().int().positive()).min(1).max(200)
+  }).optional()
 }).refine(value=>value.amount||value.netAmount,{message:'Enter the invoice amount',path:['amount']});
 router.post('/invoices/check',auth,permit('finance.pay'),validate(supplierInvoiceSchema),wrap(async(req,res)=>{
   const body=req.body,net=Number(body.netAmount??body.amount);
@@ -487,14 +497,30 @@ router.post('/invoices', auth, permit('finance.pay'), validate(supplierInvoiceSc
     const warnings=await invoiceWarnings(body,total);
     if(warnings.length&&(!body.riskAccepted||!body.riskReason||body.riskReason.length<10))
       return res.status(409).json({error:'Possible duplicate invoice. Check the document and explain why this is a separate invoice.',warnings});
-    const result = await query(`INSERT INTO supplier_invoices
+    if(body.creditReminder&&!body.dueDate)return res.status(400).json({error:'Enter the credit payment due date.'});
+    const row = await transaction(async connection=>{
+    const recipients=[...new Set(body.creditReminder?.userIds||[])];
+    if(recipients.length){
+      const [users]=await connection.execute(`SELECT id FROM users WHERE active=1 AND id IN (${recipients.map(()=>'?').join(',')}) FOR UPDATE`,recipients);
+      if(users.length!==recipients.length)throw Object.assign(new Error('Choose active reminder recipients.'),{status:400});
+    }
+    const [result] = await connection.execute(`INSERT INTO supplier_invoices
       (company_id,order_id,supplier_id,invoice_no,amount,net_amount,tax_treatment,vat_rate,vat_amount,invoice_date,due_date,recorded_by)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       [body.companyId,body.orderId||null,body.supplierId,body.invoiceNo,total,net,body.taxTreatment,
         body.taxTreatment==='Standard'?body.vatRate:0,vat,body.invoiceDate,body.dueDate||null,req.user.id]);
-    const row = await getOne('SELECT * FROM supplier_invoices WHERE id=?', [result.insertId]);
-    await audit(pool, req.user.id, 'CREATE', 'supplier_invoice', row.id, null,
-      {...row,warnings,riskReason:body.riskReason||null},req.ip);
+    const [rows]=await connection.execute('SELECT * FROM supplier_invoices WHERE id=?',[result.insertId]);
+    const row=rows[0];
+    if(body.creditReminder){
+      await connection.execute('INSERT INTO supplier_credit_reminders(invoice_id,description,frequency) VALUES (?,?,?)',
+        [row.id,body.creditReminder.description,body.creditReminder.frequency]);
+      for(const id of recipients)await connection.execute('INSERT INTO supplier_credit_reminder_users(invoice_id,user_id,next_date) VALUES (?,?,?)',
+        [row.id,id,body.creditReminder.startDate]);
+    }
+    await audit(connection, req.user.id, 'CREATE', 'supplier_invoice', row.id, null,
+      {...row,warnings,creditReminder:body.creditReminder,riskReason:body.riskReason||null},req.ip);
+    return row;
+    });
     for(const warning of warnings)await raiseFinding({rule:`precommit_${warning.code}`,category:'Control',severity:'High',
       entity:'supplier_invoice',entityId:row.id,subjectUserId:req.user.id,amount:total,
       title:`Supplier invoice ${body.invoiceNo} needs investigation`,detail:warning.message,
@@ -502,6 +528,7 @@ router.post('/invoices', auth, permit('finance.pay'), validate(supplierInvoiceSc
     res.status(201).json(row);
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'That invoice number is already recorded for this supplier' });
+    if(error.status)return res.status(error.status).json({error:error.message});
     throw error;
   }
 }));

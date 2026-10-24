@@ -314,9 +314,17 @@ export async function generatePayroll(req, res) {
         const [claims]=await connection.query(`SELECT c.* FROM visible_hr_payroll_claims c WHERE c.employee_id=? AND c.work_date BETWEEN ? AND ? AND c.status='Approved' AND NOT EXISTS(SELECT 1 FROM payslip_components pc WHERE pc.claim_id=c.id) FOR UPDATE`,[employee.id,periodStart,periodEnd]);
         for(const claim of claims){
           const c=typeof claim.calculation==='string'?JSON.parse(claim.calculation):claim.calculation;
-          employeeComponents.push({id:null,claimId:claim.id,name:claim.kind==='Travel'?'Long-distance site allowance':claim.kind==='Mileage'?'Motorcycle mileage reimbursement':claim.kind==='Supervisor site charge'?'Supervisor site charge':`${claim.kind} allowance`,kind:claim.kind==='Mileage'?'Reimbursement':'Allowance',amount:claim.kind==='Travel'?c.allowance:claim.kind==='Mileage'?c.total:c.amount,formula:JSON.stringify({claimId:claim.id,date:claim.work_date,projectId:claim.project_id,calculation:c})});
+          if(claim.kind==='Salary deduction'){
+            const detail=typeof claim.detail==='string'?JSON.parse(claim.detail):claim.detail;
+            employeeComponents.push({id:null,claimId:claim.id,name:`One-time salary deduction: ${detail.notes}`,kind:'Deduction',amount:c.amount,
+              formula:JSON.stringify({claimId:claim.id,date:claim.work_date,reason:detail.notes,calculation:c})});
+            continue;
+          }
+          employeeComponents.push({id:null,claimId:claim.id,name:claim.kind==='Travel'?(c.method==='Manual'?'Manual travel allowance':'Long-distance site allowance'):claim.kind==='Mileage'?'Motorcycle mileage reimbursement':claim.kind==='Supervisor site charge'?'Supervisor site charge':`${claim.kind} allowance`,kind:claim.kind==='Mileage'?'Reimbursement':'Allowance',amount:claim.kind==='Travel'?c.allowance:claim.kind==='Mileage'?c.total:c.amount,formula:JSON.stringify({claimId:claim.id,date:claim.work_date,projectId:claim.project_id,calculation:c})});
         }
         const calculation = calculatePayslip(employee, policy, employeeComponents, payFrequency);
+        if(claims.some(claim=>claim.kind==='Salary deduction')&&calculation.deductions>calculation.grossEarnings+calculation.reimbursementTotal)
+          throw fail(409,`Deductions exceed available pay for ${employee.name}. Review the one-time deduction before generating payroll.`);
         total += calculation.netPay;
         const [slip] = await connection.execute(`INSERT INTO payslips
           (run_id,employee_id,days_present,days_absent,overtime_hours,basic,contribution_base,overtime_pay,

@@ -4,6 +4,7 @@ import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFiel
 import Hiring from './Hiring.jsx';
 import Insurance from './Insurance.jsx';
 import PayrollInputs from './PayrollInputs.jsx';
+import {filterEmployeeRegister} from '../employee-register-filter.js';
 import { ArrowDownToLine, Check, Clock3, FileSpreadsheet, PencilLine, RotateCcw, Search, ShieldCheck, Trash2, Upload, UserRoundCheck, UserRoundMinus, XCircle } from 'lucide-react';
 import { api, del, fetchDownload, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { allowedTabs, Avatar, Badge, Field, FormModal, WorkflowForm, Modal, Page, Required, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
@@ -128,6 +129,7 @@ const NO_PAY_TEMPLATE = 'minmax(190px,1.4fr) 100px minmax(140px,1fr) minmax(140p
 
 function Employees({ data, can, onOpen, onImport, focusRequest, reload }) {
   const [search, setSearch] = useState('');
+  const [filters,setFilters]=useState({department:'',workerType:'',status:''});
   const [deactivating, setDeactivating] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -137,8 +139,9 @@ function Employees({ data, can, onOpen, onImport, focusRequest, reload }) {
   const columns = [...(showsPay ? EMPLOYEE_COLUMNS : NO_PAY_COLUMNS), ...(can.hr ? [''] : [])];
   const template = `${showsPay ? EMPLOYEE_TEMPLATE : NO_PAY_TEMPLATE}${can.hr ? ' 48px' : ''}`;
   const term = search.trim().toLocaleLowerCase();
-  const employees = term ? data.employees.filter(employee => [employee.name, employee.code, employee.department]
-    .some(value => String(value || '').toLocaleLowerCase().includes(term))) : data.employees;
+  const employees = filterEmployeeRegister(data.employees,{search,...filters});
+  const filterOptions=key=>[...new Set(data.employees.map(employee=>employee[key]).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const filtered=Boolean(term||Object.values(filters).some(Boolean));
   return <>
     <div className="attendance-summary">
       <Summary label="Employees" value={data.employees.length} icon={UserRoundCheck} />
@@ -146,13 +149,21 @@ function Employees({ data, can, onOpen, onImport, focusRequest, reload }) {
       <Summary label="On leave" value={data.employees.filter(row => row.status === 'On leave').length} icon={Clock3} />
       <Summary label="Departments" value={data.departments.length} icon={ShieldCheck} />
     </div>
-    <Table columns={columns} template={template} title="Employee register"
-      empty={term ? `No employees match “${search.trim()}”.` : 'No employees have been added yet.'}
-      tools={<div className="employee-register-tools"><label className="employee-search"><Search size={16} aria-hidden="true" />
+    <div className="employee-register-filters">
+      <label className="employee-register-search">Search employees<div><Search size={16} aria-hidden="true" />
         <input ref={searchInput} type="search" value={search} onChange={event => setSearch(event.target.value)}
-          placeholder="Search name, code or department" aria-label="Search employees by name, code or department" />
-        <span aria-live="polite">{employees.length} of {data.employees.length}</span>
-      </label>{can.hr && <button className="secondary" type="button" onClick={onImport}><FileSpreadsheet size={16}/>Import employees</button>}</div>}>
+          placeholder="Name, code, department or designation" aria-label="Search employees" />
+      </div></label>
+      {[['department','Department'],['workerType','Employee type'],['status','Status']].map(([key,label])=><label key={key}>{label}
+        <select aria-label={`Filter by ${label.toLowerCase()}`} value={filters[key]} onChange={event=>setFilters(current=>({...current,[key]:event.target.value}))}>
+          <option value="">All</option>{filterOptions(key).map(value=><option key={value} value={value}>{value}</option>)}
+        </select></label>)}
+      {filtered&&<button type="button" className="secondary" onClick={()=>{setSearch('');setFilters({department:'',workerType:'',status:''});}}>Clear filters</button>}
+    </div>
+    <Table columns={columns} template={template} title="Employee register"
+      empty={filtered?'No employees match the selected search and filters.':'No employees have been added yet.'}
+      tools={<div className="employee-register-tools"><span aria-live="polite">{employees.length} of {data.employees.length} employees</span>
+        {can.hr && <button className="secondary" type="button" onClick={onImport}><FileSpreadsheet size={16}/>Import employees</button>}</div>}>
       {employees.map(employee => <Row template={template} key={employee.id}
         onClick={() => onOpen(employee.id)}>
         <div className="person"><Avatar name={employee.name} /><div><strong>{employee.name}</strong><small>{employee.code}</small></div></div>

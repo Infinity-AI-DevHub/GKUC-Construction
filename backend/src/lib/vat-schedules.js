@@ -14,7 +14,7 @@ export async function vatSchedule(companyId, start, end) {
       FROM vat_periods WHERE company_id=? AND period_start=? AND period_end=?`, [companyId, start, end]),
     query(`SELECT i.id,'Client invoice' source,i.reference documentNumber,i.invoice_date documentDate,
       i.client counterparty,COALESCE(NULLIF(i.buyer_vat_number,''),c.vat_number) counterpartyVatNumber,
-      i.gross taxableAmount,i.vat_rate vatRate,i.vat_amount vatAmount,i.net_payable totalAmount,i.status
+      COALESCE(i.taxable_base,i.gross) taxableAmount,i.vat_rate vatRate,i.vat_amount vatAmount,i.net_payable totalAmount,i.status
       FROM client_invoices i LEFT JOIN clients c ON c.id=i.client_id
       WHERE i.company_id=? AND i.invoice_date BETWEEN ? AND ? AND i.status NOT IN ('Draft','Cancelled')
         AND i.tax_treatment='Standard' ORDER BY i.invoice_date,i.reference`, [companyId, start, end]),

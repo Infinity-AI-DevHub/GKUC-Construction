@@ -407,6 +407,35 @@ test('navigation department metadata comes from the linked employee without chan
   }
 });
 
+test('dashboard missing checkouts count employees once, respect scope and clear after audited corrections',async()=>{
+  const hr=await login('hr@gkuc.lk'),finance=await login('finance@gkuc.lk');
+  const before=(await call(hr,'GET','/dashboard/queue?companyId=1')).body.missingCheckouts;
+  const financeQueue=(await call(finance,'GET','/dashboard/queue?companyId=1')).body;
+  assert.equal(financeQueue.missingCheckouts,null);
+  assert.equal((await call(finance,'GET','/dashboard/missing-checkouts?companyId=1')).status,403);
+  assert.equal((await call(hr,'GET','/dashboard/missing-checkouts?companyId=1&offset=-1')).status,400);
+  const ids=[];
+  for(const companyId of [1,2]){
+    const person=await call(hr,'POST','/employees',{code:`CHECKOUT-${companyId}-${Date.now()}`,name:`Missing Checkout QA ${companyId}`,joinDate:'2020-01-01',payrollCompanyId:companyId});
+    assert.equal(person.status,201,JSON.stringify(person.body));ids.push(person.body.id);
+    for(const [day,state,checkIn,checkOut] of [['01','On site','07:30',null],['02','Late','07:30',null],
+      ['03','Checked out','07:30','16:30'],['04','Absent',null,null],['05','Business trip','07:30',null],['06','Checked out',null,'16:30']])
+      await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out,work_location) VALUES (?,?,'Worker',?,?,?,?, 'Office')`,[person.body.id,person.body.name,`2020-01-${day}`,state,checkIn,checkOut]);
+  }
+  const summary=(await call(hr,'GET','/dashboard/queue?companyId=1')).body.missingCheckouts;
+  assert.equal(summary.employeeCount,before.employeeCount+1);assert.equal(summary.recordCount,before.recordCount+2);
+  const detail=await call(hr,'GET','/dashboard/missing-checkouts?companyId=1');
+  assert.equal(detail.status,200,`${JSON.stringify(detail.body)} ${serverOutput.slice(-2500)}`);
+  const rows=detail.body.records.filter(row=>Number(row.employeeId)===Number(ids[0]));
+  assert.equal(rows.length,2);assert.ok(!detail.body.records.some(row=>Number(row.employeeId)===Number(ids[1])));
+  for(const row of rows){
+    const correction=await call(hr,'PATCH',`/attendance/${row.id}`,{state:'Checked out',checkIn:row.in,checkOut:'16:30',workDate:row.workDate,workLocation:'Office',projectId:null,reason:'Verified missing checkout with HR evidence'});
+    assert.equal(correction.status,200,JSON.stringify(correction.body));
+  }
+  const after=(await call(hr,'GET','/dashboard/queue?companyId=1')).body.missingCheckouts;
+  assert.equal(after.employeeCount,before.employeeCount);assert.equal(after.recordCount,before.recordCount);
+});
+
 test('document designer cannot be opened or changed through the API', async () => {
   const owner = await login();
   for (const [method, path] of [['GET', '/document-design'], ['PUT', '/document-design'],
@@ -4414,6 +4443,178 @@ test('HR leave policy and individual entitlements enforce yearly, monthly and wa
   assert.equal((await request('2035-06-01','2035-06-01','Paid','Casual')).status,201);
   assert.equal((await request('2035-06-02','2035-06-02','Paid','Casual')).status,409);
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
+});
+
+test('credit purchase reminders are targeted, recurring, company scoped and stop after payment',async()=>{
+  const owner=await login(),site=await login('supervisor@gkuc.lk');
+  const users=await call(owner,'GET','/purchasing/credit-reminder-users');
+  assert.equal(users.status,200);
+  assert.equal((await call(site,'GET','/purchasing/credit-reminder-users')).status,403);
+  const ownerId=users.body.find(user=>user.role==='Managing Director').id;
+  const creditReminder={description:'Cement bought on credit',startDate:today(),frequency:'Daily',userIds:[ownerId,ownerId]};
+  const payload={companyId:1,supplierId:2,invoiceNo:`CREDIT-${Date.now()}`,amount:12345.67,
+    invoiceDate:today(),dueDate:shift(7),creditReminder,riskAccepted:true,riskReason:'Distinct credit purchase for reminder integration testing.'};
+  assert.equal((await call(owner,'POST','/purchasing/invoices',{...payload,creditReminder:{...creditReminder,userIds:[]}})).status,400);
+  assert.equal((await call(owner,'POST','/purchasing/invoices',{...payload,creditReminder:{...creditReminder,userIds:[999999999]}})).status,400);
+  const created=await call(owner,'POST','/purchasing/invoices',payload);
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.id;
+  const reminders=async(token,company=1)=>(await call(token,'GET',`/dashboard/queue?companyId=${company}`)).body.creditReminders;
+  assert.equal((await reminders(owner)).filter(row=>row.id===id).length,1);
+  assert.equal((await reminders(site)).some(row=>row.id===id),false);
+  assert.equal((await reminders(owner,2)).some(row=>row.id===id),false);
+  assert.equal((await call(site,'POST',`/dashboard/credit-reminders/${id}/acknowledge`,{})).status,404);
+  assert.equal((await call(owner,'POST',`/dashboard/credit-reminders/${id}/acknowledge`,{})).status,204);
+  assert.equal((await reminders(owner)).some(row=>row.id===id),false);
+  assert.equal((await call(owner,'POST',`/dashboard/credit-reminders/${id}/acknowledge`,{})).status,404);
+  await admin.query(`UPDATE ${testDatabase}.supplier_credit_reminder_users SET next_date='2000-01-01' WHERE invoice_id=?`,[id]);
+  await admin.query(`UPDATE ${testDatabase}.supplier_invoices SET paid_amount=1000 WHERE id=?`,[id]);
+  assert.equal(Number((await reminders(owner)).find(row=>row.id===id).outstanding),11345.67);
+  await admin.query(`UPDATE ${testDatabase}.supplier_invoices SET paid_amount=amount,status='Paid' WHERE id=?`,[id]);
+  assert.equal((await reminders(owner)).some(row=>row.id===id),false);
+});
+
+test('bonds accept a pending number, support audited edits and confirmed deletion without other data changes',async()=>{
+  const owner=await login(),site=await login('supervisor@gkuc.lk');
+  const payload={companyId:1,kind:'Other',beneficiary:'Bond QA beneficiary',bank:'QA Bank',amount:5000,
+    marginHeld:1000,commission:50,issuedDate:'2026-01-01',expiryDate:'2027-01-01',reminderDays:0};
+  const created=await call(owner,'POST','/receivables/bonds',payload);assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.id;
+  assert.equal((await call(site,'PUT',`/receivables/bonds/${id}`,payload)).status,403);
+  assert.equal((await call(site,'DELETE',`/receivables/bonds/${id}`)).status,403);
+  assert.equal((await call(owner,'PUT',`/receivables/bonds/${id}`,{...payload,companyId:2})).status,400);
+  assert.equal((await call(owner,'PUT',`/receivables/bonds/${id}`,{...payload,expiryDate:'2026-02-30'})).status,400);
+  assert.equal((await call(owner,'POST',`/receivables/bonds/${id}/extend`,{newExpiryDate:'2027-06-01',extendedOn:'2026-12-01',reminderDays:20,additionalCommission:25})).status,200);
+  const updated={...payload,bondNumber:'BANK-123',amount:6000,expiryDate:'2027-06-01',commission:75,notes:'Corrected guarantee'};
+  assert.equal((await call(owner,'PUT',`/receivables/bonds/${id}`,updated)).status,204);
+  const row=(await call(owner,'GET','/receivables/bonds?companyId=1')).body.find(row=>row.id===id);
+  assert.equal(row.bond_number,'BANK-123');assert.equal(Number(row.amount),6000);assert.equal(Number(row.extensions),1);assert.equal(row.reminderDays,0);
+  assert.equal((await call(owner,'DELETE',`/receivables/bonds/${id}`)).status,204);
+  assert.equal((await call(owner,'GET','/receivables/bonds?companyId=1')).body.some(row=>row.id===id),false);
+  assert.equal((await call(owner,'DELETE',`/receivables/bonds/${id}`)).status,404);
+  const [logs]=await admin.query(`SELECT before_json FROM ${testDatabase}.audit_logs WHERE entity='bank_bond' AND entity_id=? AND action='DELETE'`,[String(id)]);
+  assert.equal(logs.length,1);const snapshot=typeof logs[0].before_json==='string'?JSON.parse(logs[0].before_json):logs[0].before_json;
+  assert.equal(snapshot.bond_number,'BANK-123');assert.equal(snapshot.extensions.length,1);
+});
+
+test('one-time salary deductions require approval and reduce payroll once, including draft recalculation',async()=>{
+  const owner=await login(),site=await login('supervisor@gkuc.lk');
+  const person=await call(owner,'POST','/employees',{code:`DEDUCT-${Date.now()}`,name:'Deduction Payroll QA',joinDate:'2038-01-01',compensationEffectiveFrom:'2038-01-01',
+    payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1600,epfEligible:false,etfEligible:false});
+  assert.equal(person.status,201,JSON.stringify(person.body));const employeeId=person.body.id;
+  await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out,project_id)
+    VALUES (?,?,'Worker','2038-02-01','Checked out','07:30','16:30',1)`,[employeeId,person.body.name]);
+  const input={kind:'Salary deduction',employeeId,workDate:'2038-02-01',amount:275,source:'Management instruction',notes:'Agreed one-time deduction'};
+  assert.equal((await call(site,'POST','/payroll/inputs',input)).status,403);
+  assert.equal((await call(owner,'POST','/payroll/inputs',{...input,amount:-1})).status,400);
+  assert.equal((await call(owner,'POST','/payroll/inputs',{...input,notes:''})).status,400);
+  const created=await call(owner,'POST','/payroll/inputs',input);assert.equal(created.status,201,JSON.stringify(created.body));
+  const body={companyId:1,payFrequency:'Daily',periodStart:'2038-02-01',periodEnd:'2038-02-01'};
+  const initial=await call(owner,'POST','/payroll',body);assert.equal(initial.status,201,JSON.stringify(initial.body));
+  const slip=async()=>(await call(owner,'GET',`/payroll/${initial.body.id}`)).body.payslips.find(row=>row.employeeCode===person.body.code);
+  assert.equal(Number((await slip()).otherDeduction),0);
+  assert.equal((await call(owner,'PATCH',`/payroll/inputs/${created.body.id}/review`,{status:'Approved',reason:'Checked agreement'})).status,409);
+  for(const status of ['Confirmed','Approved'])assert.equal((await call(owner,'PATCH',`/payroll/inputs/${created.body.id}/review`,{status,reason:'Checked agreement'})).status,200);
+  for(let attempt=0;attempt<2;attempt++){
+    assert.equal((await call(owner,'POST','/payroll',body)).status,201);
+    assert.equal(Number((await slip()).otherDeduction),275);assert.equal(Number((await slip()).netPay),1325);
+  }
+  const later=await call(owner,'POST','/payroll',{...body,periodStart:'2038-02-02',periodEnd:'2038-02-02'});
+  assert.equal(later.status,201,JSON.stringify(later.body));
+  const next=(await call(owner,'GET',`/payroll/${later.body.id}`)).body.payslips.find(row=>row.employeeCode===person.body.code);
+  assert.equal(Number(next.otherDeduction),0);
+});
+
+test('travel allowances support manual amounts and existing calculated claims without adding manual travel OT',async()=>{
+  const owner=await login();
+  const person=await call(owner,'POST','/employees',{code:`MANUAL-TRAVEL-${Date.now()}`,name:'Manual Travel QA',joinDate:'2039-01-01',compensationEffectiveFrom:'2039-01-01',payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1600,epfEligible:false,etfEligible:false});
+  assert.equal(person.status,201);const employeeId=person.body.id;
+  const input={kind:'Travel',calculationMethod:'Manual',employeeId,workDate:'2039-02-01',amount:875,source:'Management instruction',notes:'Approved fixed travel allowance'};
+  for(const bad of [{amount:0},{amount:-1},{notes:''},{workDate:'2039-02-30'}])assert.equal((await call(owner,'POST','/payroll/inputs',{...input,...bad})).status,400);
+  const preview=await call(owner,'POST','/payroll/inputs',{...input,preview:true});assert.equal(preview.status,200,JSON.stringify(preview.body));assert.equal(preview.body.calculation.allowance,875);assert.equal(preview.body.calculation.travelHours,0);
+  const created=await call(owner,'POST','/payroll/inputs',input);assert.equal(created.status,201);
+  for(const status of ['Confirmed','Approved'])assert.equal((await call(owner,'PATCH',`/payroll/inputs/${created.body.id}/review`,{status,reason:'Verified fixed travel approval'})).status,200);
+  const run=await call(owner,'POST','/payroll',{companyId:1,payFrequency:'Daily',periodStart:'2039-02-01',periodEnd:'2039-02-01'});assert.equal(run.status,201,JSON.stringify(run.body));
+  const slip=(await call(owner,'GET',`/payroll/${run.body.id}`)).body.payslips.find(row=>row.employeeCode===person.body.code);
+  assert.equal(Number(slip.allowanceTotal),875);assert.equal(Number(slip.travelOtPay),0);assert.equal(Number(slip.netPay),875);
+  const calculated=await call(owner,'POST','/payroll/inputs',{employeeId,kind:'Travel',workDate:'2039-02-02',projectId:1,departure:'07:00',arrival:'08:00',hours:1,distance:60,source:'Signed timesheet',preview:true});
+  assert.equal(calculated.status,200,JSON.stringify(calculated.body));assert.equal(calculated.body.calculation.travelHours,1);assert.notEqual(calculated.body.calculation.method,'Manual');
+});
+
+test('batch payroll allowances preview separately and save atomically without duplicates',async()=>{
+  const owner=await login(),site=await login('supervisor@gkuc.lk');const ids=[];
+  for(let i=0;i<2;i++){
+    const person=await call(owner,'POST','/employees',{code:`BATCH-CLAIM-${Date.now()}-${i}`,name:`Batch Allowance QA ${i}`,joinDate:'2040-01-01',compensationEffectiveFrom:'2040-01-01'});
+    assert.equal(person.status,201);ids.push(person.body.id);
+  }
+  const claim={kind:'Travel',calculationMethod:'Manual',workDate:'2040-02-01',amount:875,source:'Management instruction',notes:'Same fixed travel allowance for team'};
+  const body={employeeIds:ids,claim};
+  assert.equal((await call(site,'POST','/payroll/inputs/batch',body)).status,403);
+  assert.equal((await call(owner,'POST','/payroll/inputs/batch',{...body,employeeIds:[ids[0],ids[0]]})).status,400);
+  const preview=await call(owner,'POST','/payroll/inputs/batch',{...body,claim:{...claim,preview:true}});
+  assert.equal(preview.status,200,JSON.stringify(preview.body));assert.equal(preview.body.results.length,2);
+  for(const row of preview.body.results)assert.equal(row.calculation.allowance,875);
+  const count=async()=>{const [[row]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.hr_payroll_claims WHERE employee_id IN (?,?)`,ids);return Number(row.n);};
+  assert.equal(await count(),0);
+  assert.equal((await call(owner,'POST','/payroll/inputs/batch',{...body,employeeIds:[ids[0],999999999]})).status,400);
+  assert.equal(await count(),0,'failed second employee rolls back the first claim');
+  const saved=await call(owner,'POST','/payroll/inputs/batch',body);assert.equal(saved.status,201,JSON.stringify(saved.body));
+  assert.equal(saved.body.results.length,2);assert.equal(await count(),2);
+  assert.equal((await call(owner,'POST','/payroll/inputs/batch',body)).status,409);assert.equal(await count(),2);
+});
+
+test('progress claims freeze BOQ versions, separate certification and reuse one receivable for optional invoicing and payments',async()=>{
+  const owner=await login(),site=await login('supervisor@gkuc.lk');
+  const project=await call(owner,'POST','/projects',{companyId:1,name:`Progress billing QA ${Date.now()}`,client:'Progress Client',manager:'Project Manager',site:'QA Site',stage:'Planning'});
+  assert.equal(project.status,201,JSON.stringify(project.body));const projectId=project.body.id;
+  const scheduleBody={projectId,source:'QS prepared',revisionReason:'Initial measured valuation schedule',items:[{code:'D1',description:'Drainage work',unit:'m',quantity:100,rate:100}]};
+  assert.equal((await call(site,'POST','/progress-claims/schedules',scheduleBody)).status,403);
+  const schedule=await call(owner,'POST','/progress-claims/schedules',scheduleBody);assert.equal(schedule.status,201,JSON.stringify(schedule.body));
+  const application={scheduleId:schedule.body.id,applicationDate:'2042-02-28',periodFrom:'2042-02-01',periodTo:'2042-02-28',quantities:{D1:30}};
+  assert.equal((await call(owner,'POST','/progress-claims',application)).status,409);
+  assert.equal((await call(owner,'PUT',`/progress-claims/schedules/${schedule.body.id}`,scheduleBody)).status,204);
+  assert.equal((await call(owner,'PATCH',`/progress-claims/schedules/${schedule.body.id}`,{status:'Internally approved',reference:'Approved QS estimate QA'})).status,204);
+  const claim=await call(owner,'POST','/progress-claims',application);assert.equal(claim.status,201,JSON.stringify(claim.body));
+  assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,{...application,quantities:{D1:35}})).status,204);
+  assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,application)).status,204);
+  assert.equal((await call(owner,'POST','/progress-claims',application)).status,409);
+  assert.equal((await call(owner,'PUT',`/progress-claims/schedules/${schedule.body.id}`,scheduleBody)).status,409);
+  assert.equal((await call(owner,'POST','/progress-claims/schedules',scheduleBody)).status,409);
+  assert.equal((await call(owner,'PATCH',`/progress-claims/${claim.body.id}/status`,{status:'Submitted',reason:'Measured works submitted'})).status,204);
+  assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,application)).status,409);
+  const certificate={certificateReference:'CLIENT-PC-1',certifiedDate:'2042-03-01',dueDate:'2042-03-15',quantities:{D1:20},retention:200,retentionReleaseDate:'2043-03-01',advance:300,other:10,stampDuty:25,vatRate:18,taxBasis:'After recoveries',reason:'Client measured twenty metres only'};
+  assert.equal((await call(site,'POST',`/progress-claims/${claim.body.id}/certify`,certificate)).status,403);
+  assert.equal((await call(owner,'POST',`/progress-claims/${claim.body.id}/certify`,{...certificate,quantities:{D1:31}})).status,400);
+  const certified=await call(owner,'POST',`/progress-claims/${claim.body.id}/certify`,certificate);assert.equal(certified.status,201,JSON.stringify(certified.body));
+  assert.equal(certified.body.gross,2000);assert.equal(certified.body.net,1733.2);
+  assert.equal((await call(owner,'POST',`/progress-claims/${claim.body.id}/certify`,certificate)).status,409);
+  const invoiceId=certified.body.invoiceId;
+  assert.equal((await call(owner,'POST',`/receivables/invoices/${invoiceId}/receipts`,{amount:1000,receivedDate:'2042-03-02',method:'Bank transfer',reference:'PROGRESS-PAY-1'})).status,201);
+  assert.equal((await call(owner,'POST',`/progress-claims/${claim.body.id}/invoice`,{})).status,201);
+  assert.equal((await call(owner,'POST',`/progress-claims/${claim.body.id}/invoice`,{})).status,409);
+  const [[count]]=await admin.query(`SELECT COUNT(*) n,SUM(paid_amount) paid FROM ${testDatabase}.client_invoices WHERE project_id=?`,[projectId]);
+  assert.equal(Number(count.n),1);assert.equal(Number(count.paid),1000);
+  const legacyInvoice=await call(owner,'POST','/receivables/invoices',{companyId:1,projectId,kind:'Interim',title:'Must not create another balance',invoiceDate:'2042-03-01',taxTreatment:'Exempt',documentType:'Invoice',items:[{description:'Duplicate progress work',quantity:1,rate:2000}]});
+  assert.equal(legacyInvoice.status,409,JSON.stringify(legacyInvoice.body));
+  const [[tax]]=await admin.query(`SELECT taxable_base FROM ${testDatabase}.client_invoices WHERE id=?`,[invoiceId]);assert.equal(Number(tax.taxable_base),1490);
+  assert.equal((await call(owner,'PATCH',`/progress-claims/schedules/${schedule.body.id}`,{status:'Client agreed',reference:'Signed client measurement agreement'})).status,204);
+  const doc=await fetch(`${base}/progress-claims/${claim.body.id}/document`,{headers:{authorization:`Bearer ${owner}`}});
+  assert.equal(doc.status,200);const html=await doc.text();assert.ok(html.includes('Internally approved'));assert.ok(html.includes('3,000.00'));
+  const ticket=await call(owner,'POST','/document-download-tickets',{path:`/progress-claims/${claim.body.id}/document?type=application&download=pdf`});
+  assert.equal(ticket.status,200,JSON.stringify(ticket.body));
+  assert.equal((await fetch(`http://127.0.0.1:${port}${ticket.body.url.replace('type=application','type=letter')}`)).status,401);
+  const pdf=await fetch(`http://127.0.0.1:${port}${ticket.body.url}`);assert.equal(pdf.status,200);
+  assert.match(pdf.headers.get('content-type'),/^application\/pdf/);assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
+  assert.equal((await fetch(`http://127.0.0.1:${port}${ticket.body.url}`)).status,401);
+  assert.equal((await call(owner,'POST','/progress-claims/schedules',{...scheduleBody,items:[{...scheduleBody.items[0],rate:200}]})).status,409);
+  const revision=await call(owner,'POST','/progress-claims/schedules',{...scheduleBody,revisionReason:'Add new approved extra work',items:[...scheduleBody.items,{code:'V1',description:'Extra work',unit:'sum',quantity:1,rate:500}]});
+  assert.equal(revision.status,201,JSON.stringify(revision.body));
+  assert.equal((await call(owner,'PATCH',`/progress-claims/schedules/${revision.body.id}`,{status:'Internally approved',reference:'Approved variation QA'})).status,204);
+  const next=await call(owner,'POST','/progress-claims',{...application,scheduleId:revision.body.id,applicationDate:'2042-03-31',periodFrom:'2042-02-01',periodTo:'2042-03-31',quantities:{D1:40,V1:1}});
+  assert.equal(next.status,201,JSON.stringify(next.body));
+  const all=await call(owner,'GET','/progress-claims?companyId=1');
+  assert.equal(Number(all.body.claims.find(row=>row.id===next.body.id).submitted_amount),2500,'uses certified 2000 baseline, not claimed 3000 or paid 1000');
+  assert.equal((await call(owner,'GET','/progress-claims?companyId=2')).body.claims.some(row=>row.id===claim.body.id),false);
 });
 
 test('payment suspension blocks business data while status and session hygiene remain available',async()=>{

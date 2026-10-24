@@ -14,11 +14,13 @@ import SupplierStatements from './SupplierStatements.jsx';
 import VatClearance from './VatClearance.jsx';
 import VehicleExpenseReport from './VehicleExpenseReport.jsx';
 import VatSchedules from './VatSchedules.jsx';
+import ProgressClaims from './ProgressClaims.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
-const TABS = ['Financial reports','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Supplier invoices','Supplier statements','Categories'];
+const TABS = ['Financial reports','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Progress claims','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Credit purchases','Supplier invoices','Supplier statements','Categories'];
 const TAB_PERMISSIONS = {
+  'Progress claims':['finance.view','finance.invoice'],
   'Financial reports':['finance.reports'], 'Management accounts':['finance.managementAccounts'],
   'Cash comparison':['finance.cashComparison'], 'Daily expenses':['finance.dailyExpenses'],
   'Vehicle expenses':['finance.vehicleExpenses'], 'Expected outflows':['finance.expectedOutflows'],
@@ -27,12 +29,12 @@ const TAB_PERMISSIONS = {
   'Budget monitoring':['finance.view'], Invoices:['finance.invoice'], Cheques:['finance.invoice'],
   Bonds:['finance.invoice'], 'Petty cash':['finance.manage'], Bills:['finance.manage'],
   'Credit cards':['finance.manage'], Expenses:['finance.manage','finance.dailyExpenses'], Income:['finance.manage'],
-  'Supplier invoices':['finance.pay'], Categories:['finance.manage']
+  'Supplier invoices':['finance.pay'], 'Credit purchases':['finance.pay'], Categories:['finance.manage']
 };
 const TAB_GROUPS = [
   { label: 'Overview & review', tabs: ['Financial reports', 'Management accounts', 'Cash comparison', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
-  { label: 'Money in', tabs: ['Invoices', 'Income', 'VAT ledger'] },
-  { label: 'Money out', tabs: ['Expected outflows', 'Bills', 'Supplier invoices', 'Supplier statements', 'Expenses', 'Petty cash', 'Credit cards'] },
+  { label: 'Money in', tabs: ['Invoices', 'Progress claims', 'Income', 'VAT ledger'] },
+  { label: 'Money out', tabs: ['Expected outflows', 'Bills', 'Credit purchases', 'Supplier invoices', 'Supplier statements', 'Expenses', 'Petty cash', 'Credit cards'] },
   { label: 'Controls', tabs: ['VAT clearance', 'Cheques', 'Bonds', 'Categories'] }
 ];
 
@@ -69,7 +71,8 @@ export default function Finance({ data, reload, can, companyId, company }) {
     'Petty cash': null,
     Expenses: can.finance && 'Record expense',
     Income: can.finance && 'Record income',
-    'Supplier invoices': can.finance && 'Record invoice',
+    'Supplier invoices': can.supplierPay && 'Record invoice',
+    'Credit purchases': can.supplierPay && 'Record credit purchase',
     'Supplier statements': null,
     Categories: can.finance && 'Add category'
   };
@@ -104,13 +107,16 @@ export default function Finance({ data, reload, can, companyId, company }) {
       </section>}
     </div>}
     {tab === 'Income' && <Income companyId={companyId} />}
-    {tab === 'Supplier invoices' && <Invoices can={can} refresh={refresh} companyId={companyId} />}
+    {tab === 'Progress claims' && <ProgressClaims companyId={companyId} can={can}/>}
+    {tab === 'Supplier invoices' && <Invoices key="invoices" can={can} refresh={refresh} companyId={companyId} />}
+    {tab === 'Credit purchases' && <Invoices key="credit" creditOnly can={can} refresh={refresh} companyId={companyId} />}
     {tab === 'Supplier statements' && <SupplierStatements companyId={companyId} />}
     {tab === 'Categories' && <Categories companyId={companyId} />}
 
     {open === 'Expenses' && <ExpenseForm data={data} close={() => setOpen('')} reload={refresh} />}
     {open === 'Income' && <IncomeForm data={data} companyId={companyId} close={() => setOpen('')} reload={refresh} />}
     {open === 'Supplier invoices' && <InvoiceForm companyId={companyId} close={() => setOpen('')} reload={refresh} />}
+    {open === 'Credit purchases' && <InvoiceForm creditOnly companyId={companyId} close={() => setOpen('')} reload={refresh} />}
     {open === 'Categories' && <CategoryForm close={() => setOpen('')} reload={refresh} />}
   </Page></RecordScopeProvider>;
 }
@@ -251,11 +257,11 @@ function Income({ companyId }) {
 const INVOICE_COLUMNS = ['Invoice','Supplier','Order','Due date','Net / VAT','Total','Outstanding','Status',''];
 const INVOICE_TEMPLATE = 'minmax(130px,1fr) minmax(160px,1.2fr) 130px 120px 140px 125px 130px 120px 110px';
 
-function Invoices({ can, refresh, companyId }) {
+function Invoices({ can, refresh, companyId, creditOnly=false }) {
   const [rows, setRows] = useState([]);
   const [paying, setPaying] = useState(null);
   const [error, setError] = useState('');
-  const load = () => api(`/purchasing/invoices?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
+  const load = () => api(`/purchasing/invoices?companyId=${companyId}`).then(result=>setRows(result.filter(row=>creditOnly?Boolean(row.creditDescription):!row.creditDescription))).catch(failure => {setRows([]);setError(failure.message);});
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
 
@@ -275,9 +281,9 @@ function Invoices({ can, refresh, companyId }) {
   };
   return <>
     {error && <p className="form-error">{error}</p>}
-    <Table columns={INVOICE_COLUMNS} template={INVOICE_TEMPLATE} title="Supplier invoices" empty="No invoices recorded.">
+    <Table columns={INVOICE_COLUMNS} template={INVOICE_TEMPLATE} title={creditOnly?'Credit purchases':'Supplier invoices'} empty={creditOnly?'No credit purchases recorded.':'No invoices recorded.'}>
       {rows.map(row => <Row template={INVOICE_TEMPLATE} key={row.id}>
-        <strong>{row.invoiceNo}</strong>
+        <div><strong>{row.invoiceNo}</strong>{row.creditDescription&&<small>Credit · {row.creditDescription} · {row.reminderFrequency} reminders</small>}</div>
         <span>{row.supplier}</span>
         <span>{row.orderReference || '—'}</span>
         <span className={row.dueDate && new Date(row.dueDate) < new Date() && row.status !== 'Paid' ? 'overdue' : ''}>{shortDate(row.dueDate)}</span>
@@ -422,14 +428,19 @@ function IncomeForm({ data, companyId, close, reload }) {
   </FormModal>;
 }
 
-function InvoiceForm({ companyId, close, reload }) {
+function InvoiceForm({ companyId, close, reload, creditOnly=false }) {
   const [suppliers, setSuppliers] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [credit,setCredit]=useState(creditOnly);
+  const [users,setUsers]=useState([]);
+  const [recipients,setRecipients]=useState([]);
+  const [userError,setUserError]=useState('');
   useEffect(() => {
     api('/purchasing/suppliers').then(setSuppliers).catch(() => setSuppliers([]));
     api(`/purchasing/orders?companyId=${companyId}`).then(setOrders).catch(() => setOrders([]));
+    api('/purchasing/credit-reminder-users').then(setUsers).catch(error=>setUserError(error.message));
   }, [companyId]);
-  return <FormModal title="Record supplier invoice" close={close} label="Save invoice" repeat onSubmit={async values => {
+  return <FormModal title={creditOnly?'Record credit purchase':'Record supplier invoice'} close={close} label={creditOnly?'Save credit purchase':'Save invoice'} onSubmit={async values => {
     const payload = {
       companyId,
       supplierId: Number(values.supplierId),
@@ -437,7 +448,9 @@ function InvoiceForm({ companyId, close, reload }) {
       invoiceNo: values.invoiceNo,
       amount: Number(values.amount),
       invoiceDate: values.invoiceDate,
-      dueDate: values.dueDate || undefined
+      dueDate: values.dueDate || undefined,
+      creditReminder:credit?{description:values.creditDescription,startDate:values.reminderStart,
+        frequency:values.reminderFrequency,userIds:recipients}:undefined
     };
     const check = await post('/purchasing/invoices/check', payload);
     if (check.warnings.length) {
@@ -450,11 +463,22 @@ function InvoiceForm({ companyId, close, reload }) {
     await reload();
   }}>
     <SelectField name="supplierId" label="Supplier" options={suppliers.map(supplier => [supplier.id, supplier.name])} />
-    <SelectField name="orderId" label="Against order" options={[['', 'No order'], ...orders.map(order => [order.id, `${order.reference} — ${order.supplier}`])]} />
+    <SelectField name="orderId" label="Against order" required={false} options={[['', 'No order'], ...orders.map(order => [order.id, `${order.reference} — ${order.supplier}`])]} />
     <Field name="invoiceNo" label="Invoice number" />
     <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" />
     <Field name="invoiceDate" label="Invoice date" type="date" defaultValue={todayInput()} />
-    <Field name="dueDate" label="Payment due" type="date" defaultValue={todayInput()} required={false} />
+    <Field name="dueDate" label="Payment due" type="date" defaultValue={todayInput()} required={credit} />
+    {!creditOnly&&<label className="wide"><input type="checkbox" checked={credit} onChange={event=>setCredit(event.target.checked)}/> Credit purchase with payment reminders</label>}
+    {credit&&<>
+      <Field name="creditDescription" label="Materials / items purchased" maxLength={500} wide />
+      <Field name="reminderStart" label="First reminder" type="date" defaultValue={todayInput()}/>
+      <SelectField name="reminderFrequency" label="Reminder frequency" options={['Once','Daily','Weekly','Monthly']}/>
+      <fieldset className="wide"><legend>Remind users</legend>
+        {userError&&<p className="form-error" role="alert">{userError}</p>}
+        {users.map(user=><label key={user.id} style={{display:'block'}}><input type="checkbox" checked={recipients.includes(user.id)}
+          onChange={event=>setRecipients(ids=>event.target.checked?[...ids,user.id]:ids.filter(id=>id!==user.id))}/>{user.name} · {user.role}</label>)}
+      </fieldset>
+    </>}
   </FormModal>;
 }
 
