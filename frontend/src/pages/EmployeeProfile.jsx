@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, BriefcaseBusiness, CalendarDays, CheckCircle2, ClipboardCheck,
+import { AlertTriangle, ArrowLeft, BriefcaseBusiness, CalendarDays, CheckCircle2, ClipboardCheck,
   Clock3, Mail, MapPin, PencilLine, Phone, ShieldCheck, Star, TrendingUp, UserRound } from 'lucide-react';
 import { api, inputDate, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, Row, SelectField, Table, TextArea } from '../ui.jsx';
@@ -7,6 +7,7 @@ import Attachments from '../Attachments.jsx';
 import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFields.jsx';
 import AttendanceCorrection from './AttendanceCorrection.jsx';
 import EmployeeAssets from './EmployeeAssets.jsx';
+import {missingCheckout} from '../attendance-flags.js';
 
 function RateRing({ value, label }) {
   return <div className="people-rate-ring" style={{ '--people-rate': `${Math.max(0, Math.min(100, value || 0))}%` }}>
@@ -181,6 +182,7 @@ export default function EmployeeProfile({ employeeId, close, canManage, canPayro
   if (!employee) return <div className="employee-profile-loading">Loading employee profile…</div>;
 
   const stats = employee.attendanceStats;
+  const missingCheckouts=employee.attendance.filter(missingCheckout).length;
   return <div className="employee-profile">
     <button className="employee-back" onClick={close}><ArrowLeft size={16} />All people</button>
 
@@ -299,11 +301,12 @@ export default function EmployeeProfile({ employeeId, close, canManage, canPayro
 
     <section className="employee-panel employee-wide-panel">
       <div className="employee-section-title"><div><span>Daily record</span><h2>Attendance history</h2></div><CalendarDays size={20} /></div>
+      {missingCheckouts>0&&<p className="attendance-checkout-summary"><AlertTriangle size={16}/>{missingCheckouts} attendance record{missingCheckouts===1?' has':'s have'} a check-in but no checkout.</p>}
       <Table columns={canCorrect ? ['Date', 'Site', 'In', 'Out', 'Status', 'Source', ''] : ['Date', 'Site', 'In', 'Out', 'Status', 'Source']}
-        template={canCorrect ? '120px minmax(170px,1fr) 90px 90px 110px 100px 48px' : '120px minmax(170px,1fr) 90px 90px 110px 100px'} empty="No attendance recorded.">
-        {employee.attendance.map(row => <Row template={canCorrect ? '120px minmax(170px,1fr) 90px 90px 110px 100px 48px' : '120px minmax(170px,1fr) 90px 90px 110px 100px'} key={row.id}>
+        template={canCorrect ? '120px minmax(170px,1fr) 90px 90px 155px 100px 48px' : '120px minmax(170px,1fr) 90px 90px 155px 100px'} empty="No attendance recorded.">
+        {employee.attendance.map(row => <Row template={canCorrect ? '120px minmax(170px,1fr) 90px 90px 155px 100px 48px' : '120px minmax(170px,1fr) 90px 90px 155px 100px'} key={row.id} className={missingCheckout(row)?'attendance-missing-checkout':''}>
           <span>{shortDate(row.workDate)}</span><span>{row.site}</span><span>{row.in || '—'}</span><span>{row.out || '—'}</span>
-          <Badge tone={slug(row.state)}>{row.state}</Badge><span>{row.source}{row.correctionReason ? <small>Corrected: {row.correctionReason}</small> : null}</span>
+          {missingCheckout(row)?<div className="attendance-checkout-status"><span><AlertTriangle size={14}/>Not checked out</span><small>{row.state}</small></div>:<Badge tone={slug(row.state)}>{row.state}</Badge>}<span>{row.source}{row.correctionReason ? <small>Corrected: {row.correctionReason}</small> : null}</span>
           {canCorrect && <button className="icon-btn" type="button" title={`Edit attendance for ${shortDate(row.workDate)}`}
             aria-label={`Edit attendance for ${shortDate(row.workDate)}`} onClick={() => setCorrecting({ ...row, name: employee.name })}>
             <PencilLine size={15} />

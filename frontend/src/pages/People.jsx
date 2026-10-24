@@ -527,7 +527,7 @@ function PayComponentForm({ employee, close, reload }) {
 }
 
 function PayrollDetail({ run, close }) {
-  const template = 'minmax(160px,1.3fr) 75px 85px 85px 110px 110px 110px 110px 110px 110px 120px 115px 110px 110px 115px 115px 120px 125px';
+  const template = 'minmax(160px,1.3fr) 75px 85px 85px 110px 110px 110px 110px 110px 110px 170px 115px 110px 110px 115px 115px 120px 125px';
   const advances = run.payslips.flatMap(slip => slip.advanceRecoveries || []);
   const components = run.payslips.flatMap(slip => (slip.components || []).map(component => ({ ...component, employee: slip.employee, employeeCode: slip.employeeCode })));
   const gross = run.payslips.reduce((sum, slip) => sum + Number(slip.grossEarnings), 0);
@@ -580,7 +580,7 @@ function PayrollDetail({ run, close }) {
           <div className="payroll-payslip-net"><span>Take-home pay</span><strong>{rupees(slip.netPay)}</strong></div>
         </div>)}
       </div>
-      <details className="payroll-breakdown-details wide"><summary>Show full salary calculation table</summary>
+      <details className="payroll-breakdown-details payroll-salary-breakdown wide"><summary>Show full salary calculation table</summary>
         <Table columns={['Employee', 'Worked', 'Paid leave', 'Unpaid leave', 'Earned salary', 'EPF/ETF basis', 'Office OT', 'Site OT', 'Travel OT', 'Allowances', 'Reimbursements', 'Gross', 'Late deduction', 'EPF employee', 'Other deductions', 'Salary advance', 'Net pay', 'Employer cost']} template={template} title="Salary sheet breakdown">
           {run.payslips.map(slip => <Row template={template} key={slip.id}>
             <div><strong>{slip.employee}</strong><small>{slip.employeeCode}</small></div>

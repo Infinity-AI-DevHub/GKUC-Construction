@@ -192,6 +192,12 @@ main .reference-dashboard :is(.dashboard-card,.metric){border-radius:16px;border
 .modal-content .table-panel :is(.table-head,.table-row){min-height:48px;align-items:center;column-gap:16px}
 .modal-content .table-panel .table-head{color:#536b7f;background:#f4f7fa;font-weight:800}
 .modal-content .table-panel .table-row{border-bottom:1px solid #e8eef3}
+.payroll-salary-breakdown .table-head>span{min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere;line-height:1.4}
+.payroll-salary-breakdown .table-grid{column-gap:16px}
+.attendance-checkout-summary{display:flex;align-items:center;gap:8px;margin:12px 18px;padding:12px;color:#794b0b;background:#fff6e5;border:1px solid #ecd3a5;border-radius:6px;font-size:12px}
+.attendance-checkout-summary>svg,.attendance-checkout-status svg{flex:none}
+.table-row.attendance-missing-checkout,.table-row.attendance-missing-checkout:hover{background:#fff8eb;box-shadow:inset 3px 0 #bc761d}
+.attendance-checkout-status>span{display:flex;align-items:center;gap:6px;white-space:normal;color:#794b0b;font-size:12px;font-weight:700;line-height:1.4}
 
 @media(max-width:800px){.modal-backdrop .report-form :is(input,select,textarea){font-size:16px}}
 .invoice-payments-history .table-wrap{margin:0}

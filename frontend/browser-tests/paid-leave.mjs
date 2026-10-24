@@ -50,6 +50,22 @@ try {
     await page.goto(base+'/__paid-leave?mode=payroll');
     await page.getByText(/Includes.*1,600/).waitFor();
     await page.getByText('Employee EPF: LKR 2,400',{exact:true}).waitFor();
+    await page.getByText('Show full salary calculation table',{exact:true}).click();
+    await page.evaluate(()=>document.fonts.ready);
+    const salaryTable=page.locator('.table-panel').filter({has:page.getByRole('heading',{name:'Salary sheet breakdown',exact:true})});
+    const heads=await salaryTable.locator('.table-head>span').evaluateAll(cells=>cells.map(cell=>{
+      const range=document.createRange();range.selectNodeContents(cell);
+      const text=range.getBoundingClientRect(),box=cell.getBoundingClientRect();
+      return {label:cell.textContent,textLeft:text.left,textRight:text.right,left:box.left,right:box.right};
+    }));
+    for(let i=0;i<heads.length;i++){
+      assert.ok(heads[i].textLeft>=heads[i].left-1&&heads[i].textRight<=heads[i].right+1,JSON.stringify(heads[i]));
+      if(i+1<heads.length)assert.ok(heads[i].textRight<heads[i+1].textLeft,heads[i].label+' overlaps '+heads[i+1].label);
+    }
+    const salaryScroll=salaryTable.locator('.table-scroll');
+    await salaryScroll.evaluate(el=>{const cell=el.querySelector('.table-head').children[10];el.scrollLeft+=cell.getBoundingClientRect().left-el.getBoundingClientRect().left-24;});
+    await salaryTable.scrollIntoViewIfNeeded();
+    await page.screenshot({path:'/tmp/gkuc-payroll-headings-'+name+'.png'});
     await page.getByText('OT, leave and late deductions by work date',{exact:true}).click();
     await page.getByText('Approved leave in payroll',{exact:true}).waitFor();
     assert.equal(await page.getByText('Paid',{exact:true}).count(),1);
