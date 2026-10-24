@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Download } from 'lucide-react';
 import { api, localDate, todayInput } from '../api.js';
 import { Field, Page, Row, Table, Tabs } from '../ui.jsx';
+import {REPORT_PERMISSIONS} from '../navigation.js';
 
 const REPORTS = [
   ['projects', 'Projects'],
@@ -23,8 +24,10 @@ const cell = value => (NUMERIC.test(String(value)) && String(value).length > 4
   : String(value ?? '—'));
 
 /** PID 2.12 — on-demand reports generated from live data instead of compiled by hand. */
-export default function Reports() {
-  const [type, setType] = useState('projects');
+export default function Reports({can}) {
+  const available=REPORTS.filter(([key])=>REPORT_PERMISSIONS[key].some(permission=>can.has(permission)));
+  const [selectedType, setType] = useState('projects');
+  const type=available.some(([key])=>key===selectedType)?selectedType:available[0]?.[0];
   const [range, setRange] = useState(() => {
     const to = todayInput();
     const from = new Date();
@@ -36,9 +39,13 @@ export default function Reports() {
 
   useEffect(() => {
     setReport(null);
+    setError('');
+    if(!type)return;
+    let active=true;
     api(`/analytics/${type}?from=${range.from}&to=${range.to}`)
-      .then(setReport)
-      .catch(failure => setError(failure.message));
+      .then(result=>{if(active)setReport(result);})
+      .catch(failure => {if(active)setError(failure.message);});
+    return ()=>{active=false;};
   }, [type, range.from, range.to]);
 
   /** Exports what is on screen, so the figures in the file always match the system. */
@@ -58,7 +65,7 @@ export default function Reports() {
   const template = report ? `repeat(${report.columns.length}, minmax(120px, 1fr))` : '1fr';
 
   return <Page title="Reports" subtitle="System-generated reports across every operational area.">
-    <Tabs tabs={REPORTS.map(([, name]) => name)} active={label}
+    <Tabs tabs={available.map(([, name]) => name)} active={label}
       onChange={name => setType(REPORTS.find(([, item]) => item === name)[0])} />
 
     <div className="toolbar" style={{ width: '100%', justifyContent: 'space-between', marginBottom: '14px' }}>

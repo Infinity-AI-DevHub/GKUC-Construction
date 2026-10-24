@@ -234,6 +234,8 @@
    Wide tables, tab strips, and action toolbars should scroll inside their own panel instead
    of increasing the page width. These rules apply to every module that uses the shared UI. */
 html,body,#root { width:100%;max-width:100%;overflow-x:hidden }
+/* Clip wide content without creating a scroll ancestor for workspace sidebars. */
+html:has(.module-layout,.qs-layout),body:has(.module-layout,.qs-layout),#root:has(.module-layout,.qs-layout){overflow-x:clip}
 .app,.workspace,main,.page-heading,.panel,.table-panel,.toolbar,.report-form { min-width:0;max-width:100% }
 main { width:100% }
 .page-heading > div { min-width:0 }
@@ -752,7 +754,7 @@ nav.measuring .nav-overflowed { display: flex; visibility: hidden; position: abs
 /* On the mobile drawer the bar is a vertical list with room for everything. */
 @media (max-width: 1023px) {
   nav .nav-overflowed { display: flex; }
-  .nav-more { display: none; }
+  nav .nav-more { display: none; }
 }
 
 /* ============================================================================

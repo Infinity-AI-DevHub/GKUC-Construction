@@ -3289,6 +3289,17 @@ export async function migrate() {
     UNIQUE KEY uq_svat_historical_document(company_id,direction,document_number),
     INDEX idx_svat_period(company_id,period_start,period_end)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS vat_manual_entries (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,company_id TINYINT UNSIGNED NOT NULL,
+    direction ENUM('Output','Input') NOT NULL,document_date DATE NOT NULL,document_number VARCHAR(120) NOT NULL,
+    counterparty VARCHAR(180) NOT NULL,counterparty_vat_number VARCHAR(100) NULL,
+    taxable_amount DECIMAL(15,2) NOT NULL,vat_rate DECIMAL(6,3) NOT NULL,vat_amount DECIMAL(15,2) NOT NULL,
+    total_amount DECIMAL(15,2) NOT NULL,notes VARCHAR(600) NULL,created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(company_id) REFERENCES companies(id),FOREIGN KEY(created_by) REFERENCES users(id),
+    UNIQUE KEY uq_manual_vat_document(company_id,direction,document_number),
+    INDEX idx_manual_vat_date(company_id,document_date)
+  ) ENGINE=InnoDB`);
   await createReportDetailTables();
   await createAttachmentTables();
   await createLifecycleTables();
@@ -3440,6 +3451,13 @@ export async function migrate() {
     INDEX idx_compliance_renewal(compliance_id,expiry_date)
   ) ENGINE=InnoDB`);
   await addColumn('employees', 'deactivated_at', 'DATETIME NULL');
+  for(const table of ['incomes','received_cheques']){
+    await addColumn(table,'income_source','VARCHAR(180) NULL');
+    await addColumn(table,'tax_treatment',"VARCHAR(20) NOT NULL DEFAULT 'None'");
+    await addColumn(table,'vat_rate','DECIMAL(6,3) NOT NULL DEFAULT 0');
+    await addColumn(table,'vat_amount','DECIMAL(15,2) NOT NULL DEFAULT 0');
+    await addColumn(table,'net_amount','DECIMAL(15,2) NULL');
+  }
   await addColumn('employees', 'deactivated_by', 'BIGINT UNSIGNED NULL');
   await migrateAttendanceIdentity(query);
   await migrateEmployeeOtRates({query, transaction});

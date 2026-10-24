@@ -17,6 +17,7 @@ import Chat from './Chat.jsx';
 import Drive from './Drive.jsx';
 import { onRealtime, startRealtime, stopRealtime } from './realtime.js';
 import NavBar from './NavBar.jsx';
+import {navigationItems} from './navigation.js';
 import AccountMenu from './AccountMenu.jsx';
 import AccountPanel from './AccountPanel.jsx';
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'));
@@ -50,22 +51,10 @@ const ADMIN_TABS = ['Users', 'Access control', 'Company', 'Documents', 'Import c
  * so the menu and the server now agree about who may do what.
  */
 const NAV = [
-  ['Dashboard', LayoutDashboard, []],
-  ['Coordination', Radar, ['projects.view']],
-  ['Projects', Building2, ['projects.view']],
-  ['Tasks', ClipboardCheck, ['projects.view', 'site.tasks']],
-  ['Quantity Surveying', Calculator, ['qs.view', 'qs.costControl']],
-  ['People', Users, ['hr.view', 'hr.manage', 'hr.attendance', 'hr.leave', 'hr.payroll', 'hr.settings', 'hr.conduct', 'hr.hiring', 'hr.insurance','hr.assets']],
-  ['Materials', Warehouse, ['store.view', 'store.manage', 'projects.manage']],
-  ['Stock locations', Warehouse, ['store.view', 'store.manage', 'projects.view']],
-  ['Fleet', Truck, ['transport.view', 'transport.manage', 'store.lending']],
-  ['Finance', CircleDollarSign, ['finance.view', 'finance.manage', 'finance.invoice', 'finance.pay', 'finance.costReview', 'finance.reports', 'finance.managementAccounts', 'finance.managementAccountsManage', 'finance.cashComparison', 'finance.dailyExpenses', 'finance.vehicleExpenses', 'finance.expectedOutflows', 'finance.vatSchedules', 'finance.vatClearance', 'finance.supplierStatements']],
-  ['Daily reports', FileText, ['projects.view']],
-  ['Site Today', ClipboardList, ['site.reports']],
-  ['Chat', MessageSquare, ['chat.use']],
-  ['Drive', HardDrive, ['drive.use']],
-  ['Reports', ClipboardList, []],
-  ['Administration', ShieldCheck, ['admin.users', 'admin.roles', 'admin.audit', 'admin.integrity', 'admin.importCentre', 'admin.lists', 'admin.notifications', 'admin.company','admin.documents', 'clients.manage', 'subcontractors.manage', 'projects.manage', 'qs.boq', 'qs.quotation', 'qs.costControl', 'qs.retention']]
+  ['Dashboard', LayoutDashboard],['Coordination', Radar],['Projects', Building2],['Tasks', ClipboardCheck],
+  ['Quantity Surveying', Calculator],['People', Users],['Materials', Warehouse],['Stock locations', Warehouse],
+  ['Fleet', Truck],['Finance', CircleDollarSign],['Daily reports', FileText],['Site Today', ClipboardList],
+  ['Chat', MessageSquare],['Drive', HardDrive],['Reports', ClipboardList],['Administration', ShieldCheck]
 ];
 
 /**
@@ -269,6 +258,11 @@ function App() {
   const [menu, setMenu] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [user, setUser] = useState(null);
+  useEffect(() => {
+    const updateName = event => setUser(current => current ? { ...current, name: event.detail } : current);
+    window.addEventListener('account-name-changed', updateName);
+    return () => window.removeEventListener('account-name-changed', updateName);
+  }, []);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [serviceAccess, setServiceAccess] = useState(null);
@@ -421,7 +415,7 @@ function App() {
     }
   };
 
-  const visibleNav = NAV.filter(([, , keys]) => !keys.length || keys.some(key => can.has(key)));
+  const visibleNav = navigationItems(NAV,user);
   /*
    * The page being viewed is state, but whether it may be viewed is not — it follows the
    * permissions, which can change underneath it: signing in as someone else, or the MD
@@ -431,7 +425,8 @@ function App() {
    */
   /* Every signed-in employee may work an alert case addressed to them, even when they
      have no Administration permission. Admin itself still gates its other sections. */
-  const activePage = visibleNav.some(([name]) => name === page) || page === 'Administration' ? page : 'Dashboard';
+  const ownAccountPage=page==='Administration'&&['Notifications','My account'].includes(adminTab);
+  const activePage = visibleNav.some(([name]) => name === page) || ownAccountPage ? page : 'Dashboard';
 
   /*
    * Keep the address bar honest.

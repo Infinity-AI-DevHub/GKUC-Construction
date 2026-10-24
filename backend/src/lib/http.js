@@ -62,7 +62,9 @@ export const auth = wrap(async (req, res, next) => {
   if (!token && !ticketSessionId) return res.status(401).json({ error: 'Authentication required' });
   const hash = token ? tokenHash(token) : null;
   const rows = await query(
-    `SELECT u.id,u.name,u.email,u.role,u.role_id,u.tour_seen_at,s.id session_id,s.last_seen_at
+    `SELECT u.id,u.name,u.email,u.role,u.role_id,u.tour_seen_at,s.id session_id,s.last_seen_at,
+      (SELECT d.name FROM visible_employees e JOIN departments d ON d.id=e.department_id
+        WHERE e.user_id=u.id ORDER BY e.id LIMIT 1) department
      FROM sessions s JOIN users u ON u.id=s.user_id
      WHERE ${ticketSessionId ? 's.id' : 's.token_hash'}=? AND s.expires_at>NOW() AND u.active=1`, [ticketSessionId || hash]);
   if (!rows[0]) return res.status(401).json({ error: 'Session expired' });
@@ -83,7 +85,7 @@ export const auth = wrap(async (req, res, next) => {
 
   req.user = {
     id: session.id, name: session.name, email: session.email,
-    role: session.role, role_id: session.role_id, sessionId: session.session_id,
+    role: session.role, role_id: session.role_id, sessionId: session.session_id,department:session.department,
     /* Null until they have been shown round, which is what triggers the introduction. */
     tourSeenAt: session.tour_seen_at
   };

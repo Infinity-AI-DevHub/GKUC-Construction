@@ -45,13 +45,26 @@ export async function vatSchedule(companyId, start, end) {
         AND i.tax_treatment='SVAT' AND i.invoice_date<=? ORDER BY i.invoice_date,i.reference`, [companyId, start, end, SVAT_LAST_DATE])
   ]);
   if (!company) return null;
-  const input = [...supplier, ...bills].sort((a, b) => String(a.documentDate).localeCompare(String(b.documentDate)));
+  const manualOutput=await query(`SELECT CONCAT('income-',i.id) id,'Manual income' source,
+    COALESCE(NULLIF(i.reference,''),CONCAT('INC-',i.id)) documentNumber,i.received_date documentDate,
+    i.description counterparty,NULL counterpartyVatNumber,i.net_amount taxableAmount,i.vat_rate vatRate,
+    i.vat_amount vatAmount,i.amount totalAmount,'Received' status FROM incomes i
+    WHERE i.company_id=? AND i.received_date BETWEEN ? AND ? AND i.tax_treatment='Standard'
+      AND (i.origin_type IS NULL OR i.origin_type='received_cheque')`,[companyId,start,end]);
+  output.push(...manualOutput);
+  const manualEntries=await query(`SELECT CONCAT('vat-manual-',id) id,'Manual VAT entry' source,direction,
+    document_date documentDate,document_number documentNumber,counterparty,counterparty_vat_number counterpartyVatNumber,
+    taxable_amount taxableAmount,vat_rate vatRate,vat_amount vatAmount,total_amount totalAmount,'Recorded' status,notes
+    FROM vat_manual_entries WHERE company_id=? AND document_date BETWEEN ? AND ?`,[companyId,start,end]);
+  output.push(...manualEntries.filter(row=>row.direction==='Output'));
+  output.sort((a,b)=>String(a.documentDate).localeCompare(String(b.documentDate)));
+  const input = [...supplier, ...bills,...manualEntries.filter(row=>row.direction==='Input')].sort((a, b) => String(a.documentDate).localeCompare(String(b.documentDate)));
   const outputVat = total(output, 'vatAmount');
   const inputVat = total(input, 'vatAmount');
   const outputAdjustment = money(period?.outputAdjustment);
   const inputAdjustment = money(period?.inputAdjustment);
   return {
-    company, start, end, basis: 'Invoice date (accrual)',
+    company, start, end, basis: 'Invoice date (accrual); manual taxable income by receipt date',
     period: period || { status: 'Draft', outputAdjustment: 0, inputAdjustment: 0 },
     output, input, historicalSvat: [...invoiceSvat, ...manualSvat].sort((a,b)=>String(a.documentDate).localeCompare(String(b.documentDate))),
     totals: {
@@ -77,7 +90,7 @@ export function vatWorkbook(schedule) {
   const inputHeader = ['Date','Invoice / bill number','Supplier','Supplier VAT number','Taxable value','Input VAT','Document total','Status'].map(h);
   const reconciliation = [
     [h('VAT reconciliation'), h('Amount (LKR)')],
-    [c('Output VAT from issued tax invoices'), m(schedule.totals.outputVat)],
+    [c('Output VAT from invoices and taxable income'), m(schedule.totals.outputVat)],
     [c('Output adjustment'), m(schedule.period.outputAdjustment)],
     [c('Adjusted output VAT'), m(schedule.totals.adjustedOutputVat)],
     [c('Input VAT from supplier invoices and bills'), m(schedule.totals.inputVat)],

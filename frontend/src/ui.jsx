@@ -237,11 +237,13 @@ export function Table({ columns, template, children, title, tools, empty = 'No r
    */
   return <section className="table-panel">
     {(title || tools) && <div className="table-tools"><div className="table-tools-context"><h2>{title}</h2><RecordScopeBadge compact /></div>{tools}</div>}
+    <div className="table-scroll" role="region" aria-label={typeof title === 'string' ? title : 'Table records'} tabIndex={0}>
     <div className="table-grid" style={{ gridTemplateColumns: template }}>
       <div className="table-head" style={{ gridTemplateColumns: template }}>
         {columns.map(column => <span key={column}>{column}</span>)}
       </div>
       {rows.length ? rows : <div className="table-row table-empty"><span>{empty}{emptyAction && <button type="button" className="status-button" onClick={emptyAction}>{emptyActionLabel || 'Get started'}</button>}</span></div>}
+    </div>
     </div>
   </section>;
 }
