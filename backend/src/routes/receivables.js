@@ -248,9 +248,10 @@ const createInvoice = async (req, res, next) => {
             unit: 'term', quantity: 1, rate: base }] };
       }
       const project = req.body.projectId ? await getOne(`SELECT p.id,p.name,p.site,COALESCE(c.name,p.client) client,
-        p.client_id clientId,p.company_id companyId FROM projects p LEFT JOIN clients c ON c.id=p.client_id
+        p.client_id clientId,p.company_id companyId,p.billing_route billingRoute FROM projects p LEFT JOIN clients c ON c.id=p.client_id
         WHERE p.id=? AND p.active=1`, [req.body.projectId]) : null;
       if (req.body.projectId && !project) throw fail(404, 'That project does not exist');
+      if(project?.billingRoute==='Progress claims')throw fail(409,'This project uses progress claims. Issue the optional invoice against its certificate in Progress claims to avoid a second receivable.');
       if (!project && !req.body.clientId) throw fail(400, 'Choose a saved client for an invoice without a project');
       if (project?.clientId && req.body.clientId && Number(req.body.clientId) !== Number(project.clientId))
         throw fail(400, 'The selected client does not match the project client. Choose a project for that client.');
@@ -621,8 +622,10 @@ router.get('/receivables/bonds', auth, permit('finance.view', 'finance.invoice')
     } catch (error) { next(error); }
   });
 
-router.post('/receivables/bonds', auth, permit('finance.invoice'),
-  validate(z.object({
+const bondDate=z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value=>{
+  const date=new Date(value);return !Number.isNaN(date.getTime())&&date.toISOString().slice(0,10)===value;
+},'Enter a valid calendar date');
+const bondFields=z.object({
     companyId: z.coerce.number().int().positive().default(1),
     projectId: z.coerce.number().int().positive().nullable().optional(),
     kind: z.enum(['Advance payment', 'Performance', 'Retention', 'Bid', 'Other']),
@@ -632,11 +635,46 @@ router.post('/receivables/bonds', auth, permit('finance.invoice'),
     amount: z.coerce.number().positive(),
     marginHeld: z.coerce.number().min(0).default(0),
     commission: z.coerce.number().min(0).default(0),
-    issuedDate: z.string().min(10).max(10),
-    expiryDate: z.string().min(10).max(10),
+    issuedDate: bondDate,
+    expiryDate: bondDate,
     reminderDays: z.coerce.number().int().min(0).max(180).default(30),
     notes: z.string().trim().max(600).optional()
-  })),
+  }).refine(value=>value.expiryDate>=value.issuedDate,{message:'Expiry must not precede the issue date',path:['expiryDate']});
+
+router.put('/receivables/bonds/:id',auth,permit('finance.invoice'),validate(bondFields),async(req,res,next)=>{
+  try{
+    await transaction(async connection=>{
+      const [rows]=await connection.execute('SELECT * FROM bank_bonds WHERE id=? FOR UPDATE',[req.params.id]);
+      const before=rows[0];if(!before)throw fail(404,'That bond was not found');
+      if(Number(before.company_id)!==req.body.companyId)throw fail(400,'A bond cannot be moved to another company');
+      if(req.body.projectId){
+        const [projects]=await connection.execute('SELECT id FROM projects WHERE id=? AND company_id=?',[req.body.projectId,before.company_id]);
+        if(!projects.length)throw fail(400,'That project belongs to the other company');
+      }
+      await connection.execute(`UPDATE bank_bonds SET project_id=?,kind=?,beneficiary=?,bank=?,bond_number=?,amount=?,
+        margin_held=?,commission=?,issued_date=?,expiry_date=?,reminder_days=?,notes=? WHERE id=?`,
+        [req.body.projectId||null,req.body.kind,req.body.beneficiary,req.body.bank,req.body.bondNumber||null,req.body.amount,
+          req.body.marginHeld,req.body.commission,req.body.issuedDate,req.body.expiryDate,req.body.reminderDays,req.body.notes||null,before.id]);
+      await audit(connection,req.user.id,'UPDATE','bank_bond',before.id,before,req.body,req.ip);
+    });
+    publishChange('receivables',{});res.status(204).end();
+  }catch(error){next(error);}
+});
+
+router.delete('/receivables/bonds/:id',auth,permit('finance.invoice'),async(req,res,next)=>{
+  try{
+    await transaction(async connection=>{
+      const [rows]=await connection.execute('SELECT * FROM bank_bonds WHERE id=? FOR UPDATE',[req.params.id]);
+      const bond=rows[0];if(!bond)throw fail(404,'That bond was not found');
+      const [extensions]=await connection.execute('SELECT * FROM bank_bond_extensions WHERE bond_id=?',[bond.id]);
+      await audit(connection,req.user.id,'DELETE','bank_bond',bond.id,{...bond,extensions},null,req.ip);
+      await connection.execute('DELETE FROM bank_bonds WHERE id=?',[bond.id]);
+    });
+    publishChange('receivables',{});res.status(204).end();
+  }catch(error){next(error);}
+});
+
+router.post('/receivables/bonds', auth, permit('finance.invoice'),validate(bondFields),
   async (req, res, next) => {
     try {
       if (req.body.projectId) {

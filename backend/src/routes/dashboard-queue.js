@@ -1,8 +1,29 @@
 import { Router } from 'express';
-import { query } from '../db.js';
-import { auth, can, wrap } from '../lib/http.js';
+import { query, transaction, audit } from '../db.js';
+import { auth, can, permit, wrap } from '../lib/http.js';
+import {missingCheckouts} from '../lib/missing-checkouts.js';
 
 const router = Router();
+
+router.post('/credit-reminders/:id/acknowledge',auth,wrap(async(req,res)=>{
+  const id=Number(req.params.id);
+  if(!Number.isSafeInteger(id)||id<1)return res.status(400).json({error:'Invalid reminder.'});
+  const found=await transaction(async connection=>{
+    const [rows]=await connection.execute(`SELECT r.frequency,u.next_date FROM supplier_credit_reminder_users u
+      JOIN supplier_credit_reminders r ON r.invoice_id=u.invoice_id
+      WHERE u.invoice_id=? AND u.user_id=? AND u.next_date<=DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+05:30')) FOR UPDATE`,[id,req.user.id]);
+    if(!rows.length)return false;
+    const frequency=rows[0].frequency;
+    const interval={Daily:'1 DAY',Weekly:'1 WEEK',Monthly:'1 MONTH'}[frequency];
+    await connection.execute(`UPDATE supplier_credit_reminder_users SET next_date=${interval?
+      `DATE_ADD(DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+05:30')),INTERVAL ${interval})`:'NULL'}
+      WHERE invoice_id=? AND user_id=?`,[id,req.user.id]);
+    await audit(connection,req.user.id,'ACKNOWLEDGE_CREDIT_REMINDER','supplier_invoice',id,null,{frequency},req.ip);
+    return true;
+  });
+  if(!found)return res.status(404).json({error:'No due reminder assigned to you.'});
+  res.status(204).end();
+}));
 
 // Return only records that this session may work on. The dashboard must not turn a
 // hidden Finance or HR workspace into a data leak through its summary cards.
@@ -175,7 +196,21 @@ router.get('/queue', auth, wrap(async (req, res) => {
       AND NOT EXISTS(SELECT 1 FROM daily_reports r WHERE r.project_id=p.id AND r.report_date=a.work_date)
       GROUP BY p.id,a.work_date ORDER BY a.work_date LIMIT 60`,[companyId],r=>({kind:'daily-site-close',id:`${r.id}-${r.deadline}`,title:`Close site day · ${r.project}`,detail:`Attendance exists for ${r.deadline}, but the daily report is missing`,owner:r.owner,deadline:r.deadline,createdAt:r.createdAt,risk:'Work, issues and materials may not be captured',action:'Complete site report',escalation:'Project management',target:['Daily reports',null,r.id],workDate:r.deadline}))
   ]);
-  res.json({ sheets: sheets.filter(sheet => sheet.status === 'Submitted' ? financeReview || qsReview : qsReview), claims, invoicesDue, work });
+  const checkoutSummary=['hr.view','hr.manage','hr.attendance'].some(key=>can(req,key))?await missingCheckouts(companyId):null;
+  const creditReminders=await query(`SELECT i.id,i.invoice_no invoiceNo,s.name supplier,r.description,r.frequency,
+    DATE_FORMAT(i.due_date,'%Y-%m-%d') dueDate,i.amount-i.paid_amount outstanding
+    FROM supplier_credit_reminder_users u JOIN supplier_credit_reminders r ON r.invoice_id=u.invoice_id
+    JOIN supplier_invoices i ON i.id=r.invoice_id JOIN suppliers s ON s.id=i.supplier_id
+    WHERE u.user_id=? AND i.company_id=? AND i.amount>i.paid_amount
+    AND u.next_date<=DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+05:30')) ORDER BY i.due_date,i.id`,[req.user.id,companyId]);
+  res.json({ sheets: sheets.filter(sheet => sheet.status === 'Submitted' ? financeReview || qsReview : qsReview), claims, invoicesDue, work,missingCheckouts:checkoutSummary,creditReminders });
+}));
+
+router.get('/missing-checkouts',auth,permit('hr.view','hr.manage','hr.attendance'),wrap(async(req,res)=>{
+  const companyId=Number(req.query.companyId),offset=Number(req.query.offset||0);
+  if(!Number.isInteger(companyId)||companyId<1||!Number.isSafeInteger(offset)||offset<0)
+    return res.status(400).json({error:'Choose a company and a valid page'});
+  res.json(await missingCheckouts(companyId,{details:true,offset}));
 }));
 
 export default router;

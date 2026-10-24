@@ -5,6 +5,7 @@ import { Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, S
 import BoqImport from '../BoqImport.jsx';
 import BoqChanges from '../BoqChanges.jsx';
 import CostControl from './CostControl.jsx';
+import ProgressClaims from './ProgressClaims.jsx';
 import './quantity-surveying.css';
 import { RecordScopeProvider } from '../record-scope.jsx';
 import WorkflowChecklist from '../WorkflowChecklist.jsx';
@@ -23,8 +24,9 @@ function BoqList({ companyId }) {
 }
 import { BoqForm } from './Projects.jsx';
 
-const TABS = ['Cost control', 'Quotations', 'Bills of quantities', 'Tenders', 'Retention', 'Subcontractors'];
+const TABS = ['Cost control', 'Quotations', 'Bills of quantities', 'Progress claims', 'Tenders', 'Retention', 'Subcontractors'];
 const QS_SECTIONS = {
+  'Progress claims':{icon:FileText,caption:'Applications & certificates',description:'Valuation BOQs, measured applications and client-certified payments.'},
   'Cost control': { icon: ChartNoAxesCombined, caption: 'Daily costs & forecasts', description: 'Keep the daily site ledger, approved costs and commercial outlook connected.' },
   Quotations: { icon: FileText, caption: 'Client pricing & templates', description: 'Prepare, review and share client-ready quotations, with reusable wording in one place.' },
   'Bills of quantities': { icon: Calculator, caption: 'Estimates & measured work', description: 'Build a bill manually or bring in an Excel or PDF document, then verify it before saving.' },
@@ -51,13 +53,14 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
     <div className="qs-layout">
       <aside className="qs-navigation" aria-label="Quantity surveying sections">
         <div className="qs-navigation-title"><Layers size={17} /><span>Commercial desk</span></div>
-        <nav>{TABS.map(section => { const Icon=QS_SECTIONS[section].icon; return <button type="button" key={section} className={tab===section?'is-active':''} aria-current={tab===section?'page':undefined} onClick={()=>setTab(section)}><span className="qs-nav-icon"><Icon size={19}/></span><span><strong>{section}</strong><small>{QS_SECTIONS[section].caption}</small></span><ChevronRight size={14}/></button>; })}</nav>
+        <nav>{TABS.filter(section=>section!=='Progress claims'||['qs.view','qs.boq','qs.approve'].some(key=>can.has(key))).map(section => { const Icon=QS_SECTIONS[section].icon; return <button type="button" key={section} className={tab===section?'is-active':''} aria-current={tab===section?'page':undefined} onClick={()=>setTab(section)}><span className="qs-nav-icon"><Icon size={19}/></span><span><strong>{section}</strong><small>{QS_SECTIONS[section].caption}</small></span><ChevronRight size={14}/></button>; })}</nav>
         <div className="qs-navigation-note"><ShieldCheck size={19}/><strong>One connected workflow</strong><p>Estimate. Quote. Review.<br/>Track every project cost.</p></div>
       </aside>
       <div className="qs-content" key={tab}>
         {tab !== 'Cost control' && <header className="qs-section-intro"><span>Commercial management</span><h2>{tab}</h2><p>{QS_SECTIONS[tab].description}</p></header>}
 
     {tab === 'Cost control' && <CostControl projects={data.projects} can={can} />}
+    {tab === 'Progress claims' && ['qs.view','qs.boq','qs.approve'].some(key=>can.has(key)) && <ProgressClaims companyId={companyId} can={can}/>}
     {tab === 'Quotations' && <Quotations can={can} reload={reload} companyId={companyId} />}
     {tab === 'Bills of quantities' && <>
       {can.boq && <BoqImport projects={data.projects} onDone={reload} onCreate={() => setOpen('Create BOQ')} />}

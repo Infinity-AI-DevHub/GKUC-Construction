@@ -3351,7 +3351,7 @@ export async function migrate() {
     FOREIGN KEY(employee_id) REFERENCES employees(id),FOREIGN KEY(project_id) REFERENCES projects(id),
     FOREIGN KEY(policy_id) REFERENCES payroll_policies(id),FOREIGN KEY(created_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
-  await modifyColumn('hr_payroll_claims','kind',"ENUM('Travel','Mileage','Special duty','Machine/operator','Supervisor site charge') NOT NULL");
+  await modifyColumn('hr_payroll_claims','kind',"ENUM('Travel','Mileage','Special duty','Machine/operator','Supervisor site charge','Salary deduction') NOT NULL");
   await addColumn('payslip_components','claim_id','BIGINT UNSIGNED NULL');
   await addIndex('payslip_components','uq_paid_claim','UNIQUE KEY uq_paid_claim(claim_id)');
   await query(`CREATE TABLE IF NOT EXISTS payroll_project_allocations (
@@ -3458,7 +3458,48 @@ export async function migrate() {
     await addColumn(table,'vat_amount','DECIMAL(15,2) NOT NULL DEFAULT 0');
     await addColumn(table,'net_amount','DECIMAL(15,2) NULL');
   }
+  await query(`CREATE TABLE IF NOT EXISTS supplier_credit_reminders (
+    invoice_id BIGINT UNSIGNED PRIMARY KEY,
+    description VARCHAR(500) NOT NULL,
+    frequency ENUM('Once','Daily','Weekly','Monthly') NOT NULL,
+    FOREIGN KEY(invoice_id) REFERENCES supplier_invoices(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS supplier_credit_reminder_users (
+    invoice_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NOT NULL,
+    next_date DATE NULL,
+    PRIMARY KEY(invoice_id,user_id), INDEX(next_date,user_id),
+    FOREIGN KEY(invoice_id) REFERENCES supplier_credit_reminders(invoice_id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await addColumn('employees', 'deactivated_by', 'BIGINT UNSIGNED NULL');
+  await addColumn('projects','billing_route',"VARCHAR(30) NOT NULL DEFAULT 'Quotation and invoice'");
+  await modifyColumn('client_invoices','document_type',"ENUM('Tax Invoice','Invoice','Payment Certificate') NOT NULL DEFAULT 'Tax Invoice'");
+  await addColumn('client_invoices','taxable_base','DECIMAL(15,2) NULL');
+  await query(`CREATE TABLE IF NOT EXISTS progress_schedules (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,project_id BIGINT UNSIGNED NOT NULL,
+    version_no INT UNSIGNED NOT NULL,source VARCHAR(30) NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'Draft',contract_reference VARCHAR(180) NULL,
+    agreement_reference VARCHAR(500) NULL,internal_reference VARCHAR(500) NULL,revision_reason VARCHAR(1000) NOT NULL,
+    items JSON NOT NULL,created_by BIGINT UNSIGNED NOT NULL,approved_by BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_progress_version(project_id,version_no),
+    FOREIGN KEY(project_id) REFERENCES projects(id),FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS progress_claims (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,reference VARCHAR(60) NOT NULL UNIQUE,
+    project_id BIGINT UNSIGNED NOT NULL,schedule_id BIGINT UNSIGNED NOT NULL,
+    application_date DATE NOT NULL,period_from DATE NOT NULL,period_to DATE NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'Draft',submitted_items JSON NOT NULL,schedule_snapshot JSON NOT NULL,
+    submitted_amount DECIMAL(15,2) NOT NULL,certified_items JSON NULL,certification JSON NULL,
+    certificate_reference VARCHAR(180) NULL,certified_date DATE NULL,
+    invoice_id BIGINT UNSIGNED NULL UNIQUE,invoice_reference VARCHAR(60) NULL UNIQUE,
+    notes VARCHAR(1000) NULL,created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(project_id) REFERENCES projects(id),FOREIGN KEY(schedule_id) REFERENCES progress_schedules(id),
+    FOREIGN KEY(invoice_id) REFERENCES client_invoices(id),FOREIGN KEY(created_by) REFERENCES users(id),
+    INDEX idx_progress_project(project_id,status),UNIQUE KEY uq_progress_certificate(project_id,certificate_reference)
+  ) ENGINE=InnoDB`);
   await migrateAttendanceIdentity(query);
   await migrateEmployeeOtRates({query, transaction});
   await createEmployeeReadViews(query);

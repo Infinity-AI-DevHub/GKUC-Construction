@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Landmark, TriangleAlert, Wallet } from 'lucide-react';
+import { Landmark, TriangleAlert, Wallet, PencilLine, Trash2 } from 'lucide-react';
 import { api, openDocument, post, rupees, shortDate, slug, todayInput } from './api.js';
 import {
   Badge, EmptyState, Field, FormModal, WorkflowForm, Modal, Row, SelectField, Summary, Table, TextArea, useLiveList
@@ -190,7 +190,7 @@ function AgeingTable({ rows }) {
   </Table>;
 }
 
-function ReceiptForm({ invoice, close, reload }) {
+export function ReceiptForm({ invoice, close, reload }) {
   const outstanding = Number(invoice.outstanding);
   return <FormModal title={`Payment against ${invoice.reference}`} close={close} label="Record payment"
     onSubmit={async values => {
@@ -455,13 +455,17 @@ function CertificateForm({ data, companyId, close, reload }) {
 /* ---- bank guarantees ------------------------------------------------------ */
 
 const BOND_COLUMNS = ['Reference','Kind','In favour of','Bank','Amount','Margin held','Expires','Status',''];
-const BOND_TEMPLATE = 'minmax(120px,1fr) 140px minmax(160px,1.2fr) minmax(130px,1fr) 130px 130px 140px 110px 100px';
+const BOND_TEMPLATE = 'minmax(120px,1fr) 140px minmax(160px,1.2fr) minmax(130px,1fr) 130px 130px 140px 110px 190px';
 
 export function Bonds({ data, can, companyId }) {
   const [bonds, setBonds] = useState([]);
   const [recording, setRecording] = useState(false);
   const [extending,setExtending]=useState(null);
-  const load = () => api(`/receivables/bonds?companyId=${companyId}`).then(setBonds).catch(() => setBonds([]));
+  const [editing,setEditing]=useState(null);
+  const [deleting,setDeleting]=useState(null);
+  const [error,setError]=useState('');
+  const [busy,setBusy]=useState(false);
+  const load = () => api(`/receivables/bonds?companyId=${companyId}`).then(setBonds).catch(failure => setError(failure.message));
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
   useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id && bonds.some(row => Number(row.id) === id)) document.getElementById(`bond-${id}`)?.scrollIntoView({ block: 'center' }); }, [bonds]);
@@ -471,13 +475,14 @@ export function Bonds({ data, can, companyId }) {
       : Number(bond.daysLeft) <= Number(bond.reminderDays) ? 'watch' : 'on-track');
 
   return <>
+    {error&&<p className="form-error" role="alert">{error}</p>}
     <Table columns={BOND_COLUMNS} template={BOND_TEMPLATE} title="Bank guarantees"
       empty="No bonds recorded."
       tools={can.invoice
         ? <button className="secondary" onClick={() => setRecording(true)}>Record a bond</button>
         : null}>
       {bonds.map(bond => <Row template={BOND_TEMPLATE} key={bond.id} id={`bond-${bond.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(bond.id) ? 'linked-record' : ''}>
-        <div><strong>{bond.reference}</strong><small>{bond.bond_number || bond.project || '—'}</small></div>
+        <div><strong>{bond.reference}</strong><small>{bond.bond_number || 'Bond number pending'}</small>{bond.project&&<small>{bond.project}</small>}</div>
         <span>{bond.kind}</span>
         <span>{bond.beneficiary}</span>
         <span>{bond.bank}</span>
@@ -496,17 +501,31 @@ export function Bonds({ data, can, companyId }) {
           <small>{Number(bond.extensions) > 0 ? `${bond.extensions} extension${Number(bond.extensions) === 1 ? '' : 's'} · ` : ''}remind {bond.reminderDays} days before</small>
         </div>
         <Badge tone={tone(bond)}>{bond.status}</Badge>
-        {can.invoice&&bond.status==='Live'?<button className="status-button" onClick={()=>setExtending(bond)}>Extend</button>:<span>—</span>}
+        {can.invoice?<div className="row-actions">
+          <button type="button" className="icon-button" title={`Edit ${bond.reference}`} aria-label={`Edit ${bond.reference}`} onClick={()=>setEditing(bond)}><PencilLine size={16}/></button>
+          <button type="button" className="icon-button" title={`Delete ${bond.reference}`} aria-label={`Delete ${bond.reference}`} onClick={()=>{setError('');setDeleting(bond);}}><Trash2 size={16}/></button>
+          {bond.status==='Live'&&<button className="status-button" onClick={()=>setExtending(bond)}>Extend</button>}
+        </div>:<span>—</span>}
       </Row>)}
     </Table>
     {recording && <BondForm data={data} companyId={companyId} close={() => setRecording(false)} reload={load} />}
+    {editing&&<BondForm bond={editing} data={data} companyId={companyId} close={()=>setEditing(null)} reload={load}/>}
+    {deleting&&<Modal title={`Delete ${deleting.reference}?`} close={()=>{if(!busy)setDeleting(null);}}>
+      <div className="report-form"><p className="wide">This removes the bond from the register, reports and expiry reminders. Its details and extension history remain in the audit log. No payment or expense records will be deleted.</p>
+        {error&&<p className="wide form-error" role="alert">{error}</p>}
+        <button type="button" className="secondary" disabled={busy} onClick={()=>setDeleting(null)}>Cancel</button>
+        <button type="button" className="primary" disabled={busy} onClick={async()=>{
+          setBusy(true);try{await api(`/receivables/bonds/${deleting.id}`,{method:'DELETE'});setDeleting(null);await load();}
+          catch(failure){setError(failure.message);}finally{setBusy(false);}
+        }}>{busy?'Deleting…':'Delete bond'}</button>
+      </div></Modal>}
     {extending&&<BondExtensionForm bond={extending} close={()=>setExtending(null)} reload={load}/>}
   </>;
 }
 
-function BondForm({ data, companyId, close, reload }) {
-  return <FormModal title="Record a bank guarantee" close={close} label="Save bond" onSubmit={async values => {
-    await post('/receivables/bonds', {
+function BondForm({ data, companyId, close, reload, bond=null }) {
+  return <FormModal title={bond?`Edit ${bond.reference}`:'Record a bank guarantee'} close={close} label={bond?'Save changes':'Save bond'} onSubmit={async values => {
+    const payload={
       companyId,
       projectId: values.projectId ? Number(values.projectId) : null,
       kind: values.kind,
@@ -518,25 +537,29 @@ function BondForm({ data, companyId, close, reload }) {
       commission: Number(values.commission) || 0,
       issuedDate: values.issuedDate,
       expiryDate: values.expiryDate,
-      reminderDays:Number(values.reminderDays||30),
+      reminderDays:Number(values.reminderDays),
       notes: values.notes || undefined
-    });
+    };
+    if(bond)await api(`/receivables/bonds/${bond.id}`,{method:'PUT',body:JSON.stringify(payload)});
+    else await post('/receivables/bonds',payload);
     await reload();
   }}>
     <SelectField name="kind" label="Kind"
+      defaultValue={bond?.kind}
       options={['Advance payment', 'Performance', 'Retention', 'Bid', 'Other']} />
     <SelectField name="projectId" label="Project" required={false}
-      options={[['', 'Not project specific'], ...data.projects.map(project => [project.id, project.name])]} />
-    <Field name="beneficiary" label="In favour of" wide placeholder="Road Development Authority" />
-    <Field name="bank" label="Issuing bank" />
-    <Field name="bondNumber" label="Bond number" required={false} />
-    <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" />
-    <Field name="marginHeld" label="Margin held by the bank" type="number" step="any" min="0" required={false} />
-    <Field name="commission" label="Commission paid" type="number" step="any" min="0" required={false} />
-    <Field name="issuedDate" label="Issued on" type="date" defaultValue={todayInput()} />
-    <Field name="expiryDate" label="Expires on" type="date" />
-    <Field name="reminderDays" label="Remind before expiry (days)" type="number" min="0" max="180" defaultValue="30" />
-    <TextArea name="notes" label="Notes" required={false} rows={2} />
+      defaultValue={bond?.project_id||''}
+      options={[['', 'Not project specific'], ...data.projects.filter(project=>Number(project.companyId)===Number(companyId)||Number(project.id)===Number(bond?.project_id)).map(project => [project.id, project.name])]} />
+    <Field name="beneficiary" label="In favour of" wide placeholder="Road Development Authority" defaultValue={bond?.beneficiary}/>
+    <Field name="bank" label="Issuing bank" defaultValue={bond?.bank}/>
+    <Field name="bondNumber" label="Bond number (optional)" required={false} defaultValue={bond?.bond_number||''}/>
+    <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" defaultValue={bond?.amount}/>
+    <Field name="marginHeld" label="Margin held by the bank" type="number" step="any" min="0" required={false} defaultValue={bond?.margin_held}/>
+    <Field name="commission" label="Commission paid" type="number" step="any" min="0" required={false} defaultValue={bond?.commission}/>
+    <Field name="issuedDate" label="Issued on" type="date" defaultValue={bond?String(bond.issued_date).slice(0,10):todayInput()} />
+    <Field name="expiryDate" label="Expires on" type="date" defaultValue={bond?String(bond.expiry_date).slice(0,10):''}/>
+    <Field name="reminderDays" label="Remind before expiry (days)" type="number" min="0" max="180" defaultValue={bond?.reminderDays??30} />
+    <TextArea name="notes" label="Notes" required={false} rows={2} defaultValue={bond?.notes||''}/>
   </FormModal>;
 }
 

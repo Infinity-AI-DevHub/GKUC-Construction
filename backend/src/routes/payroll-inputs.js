@@ -27,18 +27,26 @@ router.get('/',wrap(async(req,res)=>{
   res.json({claims:claims.map(c=>({...c,detail:parse(c.detail),calculation:parse(c.calculation)})),suggestions,issues});
 }));
 const claimSchema=z.object({employeeId:z.number().int().positive(),workDate:date,projectId:z.number().int().positive().nullable().default(null),kind:z.enum(['Travel','Mileage','Special duty','Machine/operator','Supervisor site charge']),siteChargeReason:z.enum(['Site visit','Labour mobilization','Both']).optional(),departure:time.optional(),arrival:time.optional(),hours:z.number().nonnegative().max(24).default(0),distance:z.number().nonnegative().default(0),distanceType:z.enum(['One way','Return']).default('One way'),foodSupplied:z.boolean().default(false),startOdometer:z.number().nonnegative().optional(),endOdometer:z.number().nonnegative().optional(),approvedKm:z.number().nonnegative().optional(),fixedTravel:z.boolean().default(false),amount:z.number().nonnegative().default(0),source:z.string().trim().min(2).max(120),notes:z.string().max(2000).default(''),preview:z.boolean().default(false)});
-router.post('/',validate(claimSchema),wrap(async(req,res)=>{
-  const b=req.body;
-  const id=await transaction(async conn=>{
+const deductionSchema=z.object({employeeId:z.number().int().positive(),workDate:date.refine(value=>{
+  const parsed=new Date(value);return !Number.isNaN(parsed.getTime())&&parsed.toISOString().slice(0,10)===value;
+},'Enter a valid date'),amount:z.number().positive().max(999999999.99),notes:z.string().trim().min(3).max(2000),source:z.string().trim().min(2).max(120),kind:z.literal('Salary deduction'),projectId:z.null().default(null),preview:z.boolean().default(false)});
+const manualTravelSchema=deductionSchema.extend({kind:z.literal('Travel'),calculationMethod:z.literal('Manual'),
+  projectId:z.number().int().positive().nullable().default(null)});
+const payrollClaimSchema=z.union([manualTravelSchema,claimSchema.extend({calculationMethod:z.literal('Calculated').default('Calculated')}),deductionSchema]);
+async function recordClaim(req,conn,b){
     const q=async(sql,values)=>(await conn.query(sql,values))[0];
     const [employee]=await q('SELECT * FROM visible_employees WHERE id=? FOR UPDATE',[b.employeeId]);if(!employee||employee.status==='Left')throw fail(400,'Select an active employee.');
     const [policy]=await q('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.payroll_company_id,b.workDate]);if(!policy)throw fail(409,'Configure an effective payroll policy before recording this claim.');
     if(b.projectId){const [project]=await q('SELECT id,company_id FROM projects WHERE id=? AND active=1',[b.projectId]);if(!project)throw fail(400,'Choose an active project.');if(b.kind==='Supervisor site charge'&&Number(project.company_id)!==Number(employee.payroll_company_id))throw fail(400,'This supervisor and project belong to different payroll companies. Ask HR to check the assignment.');}
     const eligibility=parse(employee.allowance_eligibility);
     const key={Travel:'longDistance',Mileage:'motorcycle','Special duty':'specialDuty','Machine/operator':'machine'}[b.kind];
-    if(b.kind!=='Travel'&&b.kind!=='Supervisor site charge'&&!eligibility[key])throw fail(409,'Enable the employee’s applicable allowance eligibility in Payroll settings before recording this claim.');
+    if(!['Travel','Supervisor site charge','Salary deduction'].includes(b.kind)&&!eligibility[key])throw fail(409,'Enable the employee’s applicable allowance eligibility in Payroll settings before recording this claim.');
     const rules=rulesFor(policy);let calculation;
-    if(b.kind==='Travel'){
+    if(b.kind==='Travel'&&b.calculationMethod==='Manual'){
+      if(b.projectId){const [project]=await q('SELECT company_id FROM projects WHERE id=?',[b.projectId]);
+        if(Number(project.company_id)!==Number(employee.payroll_company_id))throw fail(400,'Choose a project in the employee payroll company.');}
+      calculation={allowance:b.amount,travelHours:0,travelRate:0,intervals:[],method:'Manual'};
+    }else if(b.kind==='Travel'){
       if(!b.projectId||!b.departure||!b.arrival||minutes(b.arrival)<=minutes(b.departure))throw fail(400,'Travel needs a project and return time after departure. Split overnight travel into separate dates.');
       if(b.hours>(minutes(b.arrival)-minutes(b.departure))/60)throw fail(400,'Travel OT hours cannot exceed the recorded travel interval.');
       const intervals=[[minutes(b.departure),minutes(b.arrival)]];
@@ -57,7 +65,34 @@ router.post('/',validate(claimSchema),wrap(async(req,res)=>{
     if(b.preview)return {calculation,policyId:policy.id};
     const result=await q('INSERT INTO hr_payroll_claims(employee_id,work_date,project_id,kind,detail,calculation,policy_id,created_by) VALUES(?,?,?,?,?,?,?,?)',[b.employeeId,b.workDate,b.projectId,b.kind,JSON.stringify(b),JSON.stringify(calculation),policy.id,req.user.id]);
     await audit(conn,req.user.id,'CREATE','payroll_claim',result.insertId,null,{...b,calculation},req.ip);return result.insertId;
-  });res.status(b.preview?200:201).json(b.preview?id:{id});
+}
+router.post('/batch',validate(z.object({employeeIds:z.array(z.number().int().positive()).min(2).max(200),claim:z.record(z.unknown())})),wrap(async(req,res)=>{
+  const ids=[...new Set(req.body.employeeIds)].sort((a,b)=>a-b);
+  if(ids.length<2)throw fail(400,'Select at least two different employees.');
+  const parsed=payrollClaimSchema.safeParse({...req.body.claim,employeeId:ids[0]});
+  if(!parsed.success)return res.status(400).json({error:'Invalid claim details',issues:parsed.error.flatten()});
+  const body=parsed.data;
+  if(body.kind==='Salary deduction')throw fail(400,'Record salary deductions individually.');
+  const results=await transaction(async conn=>{
+    const results=[];let companyId;
+    for(const employeeId of ids){
+      const [employees]=await conn.query('SELECT name,payroll_company_id FROM visible_employees WHERE id=? FOR UPDATE',[employeeId]);
+      const employee=employees[0];if(!employee)throw fail(400,'Select active employees.');
+      companyId??=employee.payroll_company_id;
+      if(Number(companyId)!==Number(employee.payroll_company_id))throw fail(400,'Choose employees from the same payroll company.');
+      const [existing]=await conn.query('SELECT id FROM hr_payroll_claims WHERE employee_id=? AND work_date=? AND kind=?',[employeeId,body.workDate,body.kind]);
+      if(existing.length)throw fail(409,`${employee.name}: a claim of this type already exists for this date. No claims were saved.`);
+      try{results.push({employeeId,employee:employee.name,...(body.preview?await recordClaim(req,conn,{...body,employeeId}):{id:await recordClaim(req,conn,{...body,employeeId})})});}
+      catch(error){error.message=`${employee.name}: ${error.message}`;throw error;}
+    }
+    return results;
+  });
+  res.status(body.preview?200:201).json({results});
+}));
+router.post('/',validate(payrollClaimSchema),wrap(async(req,res)=>{
+  const b=req.body;
+  const id=await transaction(conn=>recordClaim(req,conn,b));
+  res.status(b.preview?200:201).json(b.preview?id:{id});
 }));
 router.patch('/:id/review',validate(z.object({status:z.enum(['Confirmed','Approved','Rejected']),reason:z.string().trim().min(3).max(1000)})),wrap(async(req,res)=>{
   await transaction(async conn=>{
