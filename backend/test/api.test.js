@@ -4577,6 +4577,29 @@ test('bonds accept a pending number, support audited edits and confirmed deletio
   assert.equal(snapshot.bond_number,'BANK-123');assert.equal(snapshot.extensions.length,1);
 });
 
+test('bond register supports workbook security references, dates, types and release records',async()=>{
+  const owner=await login();
+  const payload={companyId:2,kind:'ESHS performance',beneficiary:'Deputy Project Director, '.repeat(12),bank:'Peoples Bank',
+    amount:214224.60,issuedDate:'2025-03-20',startDate:'2025-03-21',expiryDate:'2026-11-18',
+    fdReference:'1856001149014 & 1856001148998',projectDescription:'Unawarded tender / historical project',
+    processNotes:'Letter issued; awaiting release',status:'Live'};
+  const created=await call(owner,'POST','/receivables/bonds',payload);
+  assert.equal(created.status,201,JSON.stringify(created.body));const id=created.body.id;
+  const read=async()=>(await call(owner,'GET','/receivables/bonds?companyId=2')).body.find(row=>row.id===id);
+  let row=await read();assert.equal(row.fd_reference,payload.fdReference);assert.equal(row.start_date,payload.startDate);
+  assert.equal(row.project_description,payload.projectDescription);assert.equal(row.process_notes,payload.processNotes);
+  assert.equal(row.beneficiary,payload.beneficiary.trim());assert.equal(row.kind,'ESHS performance');
+  assert.equal((await call(owner,'POST','/receivables/bonds',{...payload,startDate:'2026-11-19'})).status,400);
+  assert.equal((await call(owner,'POST','/receivables/bonds',{...payload,startDate:'2025-06-31'})).status,400);
+  assert.equal((await call(owner,'PUT',`/receivables/bonds/${id}`,{...payload,kind:'Cash',status:'Released',releasedDate:'2026-10-26',processNotes:'Released by bank'})).status,204);
+  row=await read();assert.equal(row.kind,'Cash');assert.equal(row.status,'Released');assert.equal(row.released_date,'2026-10-26');
+  const {fdReference,projectDescription,startDate,processNotes,status,...legacy}=payload;
+  assert.equal((await call(owner,'PUT',`/receivables/bonds/${id}`,legacy)).status,204);
+  row=await read();assert.equal(row.fd_reference,payload.fdReference);assert.equal(row.status,'Released');
+  assert.equal((await call(owner,'GET','/receivables/bonds?companyId=1')).body.some(row=>row.id===id),false);
+  assert.equal((await call(owner,'DELETE',`/receivables/bonds/${id}`)).status,204);
+});
+
 test('one-time salary deductions require approval and reduce payroll once, including draft recalculation',async()=>{
   const owner=await login(),site=await login('supervisor@gkuc.lk');
   const person=await call(owner,'POST','/employees',{code:`DEDUCT-${Date.now()}`,name:'Deduction Payroll QA',joinDate:'2038-01-01',compensationEffectiveFrom:'2038-01-01',
