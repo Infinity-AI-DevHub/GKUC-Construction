@@ -513,7 +513,7 @@ export function invoiceDocument({ company, invoice, items, settings: given, desi
 export function receiptDocument({ company, receipt, settings: given, design: givenDesign }) {
   const settings = settingsFor(given);
   const design = normaliseDesign(givenDesign);
-  const receiptReference = `RCPT-${new Date(receipt.receivedDate).getFullYear()}-${String(receipt.id).padStart(5, '0')}`;
+  const receiptReference = receipt.receiptNumber || `RCPT-${new Date(receipt.receivedDate).getFullYear()}-${String(receipt.id).padStart(5, '0')}`;
   const blocks = {
     letterhead: letterhead(company, 'Payment Receipt', receiptReference, receipt.receivedDate, design),
     parties: `<div class="parties" data-block="parties"><div class="party"><h3>Received by</h3><strong>${escape(company.name)}</strong>

@@ -10,7 +10,7 @@ import {INITIAL_HR_RULES} from '../src/lib/hr-payroll-rules.js';
 import { writeWorkbook } from '../src/lib/xlsx-write.js';
 
 const port = 43971;
-const base = `http://127.0.0.1:${port}/api`;
+const base = `http://${process.env.GKUC_TEST_HOST || '127.0.0.1'}:${port}/api`;
 const testDatabase = 'gkuc_siteops_test';
 let server;
 let serverOutput = '';
@@ -1811,6 +1811,51 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
   assert.equal(Number(acceptedProject.body.budget), 51920);
 });
 
+test('finance numbering continues existing series and preserves payment records', async () => {
+  const finance=await login('finance@gkuc.lk'),owner=await login(),site=await login('store@gkuc.lk');
+  const client=await call(owner,'POST','/clients',{type:'Organisation',name:'Numbering Test Client',contactPerson:'Accounts'});
+  assert.equal(client.status,201,JSON.stringify(client.body));
+  const clients={body:[client.body]};
+  const settings={companyId:1,format:'TEST-INV/{YYYY}/{N}',padding:5,nextValue:145,reason:'Continue previously issued documents'};
+  assert.equal((await call(site,'PUT','/document-numbering/INV',settings)).status,403);
+  assert.equal((await call(finance,'PUT','/document-numbering/INV',settings)).status,200);
+  assert.equal((await call(finance,'PUT','/document-numbering/RCPT',{...settings,format:'TEST-R/{N}',nextValue:77})).status,200);
+  assert.equal((await call(finance,'PUT','/document-numbering/INV',{...settings,format:'BAD/{N}/{N}'})).status,400);
+  assert.equal((await call(finance,'PUT','/document-numbering/QUO',{...settings,format:'TEST-Q/{N}',nextValue:200})).status,200);
+  const quote=await call(owner,'POST','/qs/quotations/manual',{companyId:1,clientId:clients.body[0].id,title:'Numbering quotation',quoteDate:today(),markupPercent:0,vatPercent:0,lines:[{category:'Work',description:'Numbering work',unit:'item',quantity:1,rate:1000}]});
+  assert.equal(quote.status,201,JSON.stringify(quote.body));
+  assert.equal(quote.body.reference,'TEST-Q/00200');
+  assert.equal((await call(finance,'POST',`/qs/quotations/${quote.body.id}/finalize`,{})).status,200);
+  assert.equal((await call(owner,'PATCH',`/qs/quotations/${quote.body.id}`,{status:'Accepted'})).status,200);
+  const plan=await call(finance,'POST','/receivables/quotation-plans',{quotationId:quote.body.id,documentType:'Invoice',taxTreatment:'Exempt',vatRate:0,terms:[{label:'Full payment',percentage:100}]});
+  assert.equal(plan.status,201,JSON.stringify(plan.body));
+  const plans=await call(finance,'GET','/receivables/quotation-plans?companyId=1');
+  const term=plans.body.find(item=>item.id===plan.body.id).terms[0];
+  const converted=await call(finance,'POST',`/receivables/quotation-terms/${term.id}/invoice`,{invoiceDate:today(),reuseQuotationNumber:true});
+  assert.equal(converted.status,201,JSON.stringify(converted.body));
+  assert.equal(converted.body.reference,quote.body.reference);
+  const body={companyId:1,clientId:clients.body[0].id,kind:'Other',title:'Numbering invoice',documentType:'Invoice',taxTreatment:'Exempt',invoiceDate:today(),items:[{description:'Services',quantity:1,rate:1000}]};
+  const invoice=await call(finance,'POST','/receivables/invoices',body);
+  assert.equal(invoice.status,201,JSON.stringify(invoice.body));
+  assert.equal(invoice.body.reference,`TEST-INV/${new Date().getFullYear()}/00145`);
+  const renamed=await call(finance,'PATCH',`/document-numbering/INV/${invoice.body.id}`,{reference:'LEGACY/146',previousReference:invoice.body.reference,reason:'Continue legacy book'});
+  assert.equal(renamed.status,200,JSON.stringify(renamed.body));
+  assert.equal((await call(finance,'POST',`/receivables/invoices/${invoice.body.id}/issue`,{})).status,204);
+  const receipt=await call(finance,'POST',`/receivables/invoices/${invoice.body.id}/receipts`,{amount:100,receivedDate:today(),method:'Cash',reference:'BANK-REF',receiptNumber:'LEGACY-R/099'});
+  assert.equal(receipt.status,201,JSON.stringify(receipt.body));
+  assert.equal((await call(finance,'PATCH',`/document-numbering/RCPT/${receipt.body.receiptId}`,{reference:'LEGACY-R/100',previousReference:'LEGACY-R/099',reason:'Correct receipt book'})).status,200);
+  const detail=await call(finance,'GET',`/receivables/invoices/${invoice.body.id}`);
+  assert.equal(detail.body.receipts[0].receiptNumber,'LEGACY-R/100');
+  assert.equal(detail.body.receipts[0].reference,'BANK-REF');
+  assert.equal(Number(detail.body.receipts[0].amount),100);
+  const secondReceipt=await call(finance,'POST',`/receivables/invoices/${invoice.body.id}/receipts`,{amount:50,receivedDate:today(),method:'Cash'});
+  assert.equal(secondReceipt.status,201,JSON.stringify(secondReceipt.body));
+  const after=await call(finance,'GET',`/receivables/invoices/${invoice.body.id}`);
+  assert.equal(after.body.receipts[1].receiptNumber,'TEST-R/00077');
+  assert.equal((await call(finance,'POST','/receivables/invoices',{...body,reference:'LEGACY/146'})).status,409);
+  await admin.query(`DELETE FROM ${testDatabase}.document_numbering WHERE company_id=1`);
+});
+
 test('quotation revisions preserve the original and finalization is independently authorised', async () => {
   const owner = await login();
   const supervisor = await login('supervisor@gkuc.lk');
@@ -1842,7 +1887,7 @@ test('quotation revisions preserve the original and finalization is independentl
   assert.equal(revised.status, 201, JSON.stringify(revised.body));
   assert.equal(revised.body.revisionNumber, 1);
   assert.equal(revised.body.revisedFromId, created.body.id);
-  assert.match(revised.body.reference, /-R1$/);
+  assert.equal(revised.body.reference, created.body.reference);
   const original = await call(owner, 'GET', `/qs/quotations/${created.body.id}`);
   assert.equal(Number(original.body.total), 354);
   assert.equal(Number(revised.body.total), 590);
@@ -1852,6 +1897,11 @@ test('quotation revisions preserve the original and finalization is independentl
   assert.equal(final.body.preparedBy, 'Another Preparer');
   assert.equal(final.body.preparedByDesignation, 'Managing Director');
   assert.ok(final.body.revisions.some(row => Number(row.id) === Number(created.body.id)));
+  const finance=await login('finance@gkuc.lk');
+  const renumbered=await call(finance,'PATCH',`/document-numbering/QUO/${revised.body.id}`,{reference:'HISTORICAL/Q/145',previousReference:revised.body.reference,reason:'Match previously issued quotation book'});
+  assert.equal(renumbered.status,200,JSON.stringify(renumbered.body));
+  const family=await call(owner,'GET',`/qs/quotations/${created.body.id}`);
+  assert.ok(family.body.revisions.every(row=>row.reference==='HISTORICAL/Q/145'));
   assert.ok(identity.body.company);
 });
 

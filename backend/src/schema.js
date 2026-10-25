@@ -3501,6 +3501,21 @@ export async function migrate() {
     INDEX idx_progress_project(project_id,status),UNIQUE KEY uq_progress_certificate(project_id,certificate_reference)
   ) ENGINE=InnoDB`);
   await migrateAttendanceIdentity(query);
+  await query(`CREATE TABLE IF NOT EXISTS document_numbering (
+    company_id TINYINT UNSIGNED NOT NULL,document_type VARCHAR(8) NOT NULL,format VARCHAR(40) NOT NULL,
+    padding INT NOT NULL,next_value BIGINT UNSIGNED NOT NULL,PRIMARY KEY(company_id,document_type),
+    FOREIGN KEY(company_id) REFERENCES companies(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('client_receipts','receipt_number','VARCHAR(60) NULL');
+  await query("UPDATE client_receipts SET receipt_number=CONCAT('RCPT-',YEAR(received_date),'-',LPAD(id,GREATEST(5,CHAR_LENGTH(id)),'0')) WHERE receipt_number IS NULL");
+  const receiptIndexes=await query("SHOW INDEX FROM client_receipts WHERE Key_name='uq_receipt_number'");
+  if(!receiptIndexes.length)await query('ALTER TABLE client_receipts ADD UNIQUE KEY uq_receipt_number(receipt_number)');
+  await query('CREATE OR REPLACE VIEW receipt_number_registry AS SELECT receipt_number reference FROM client_receipts');
+  const quoteIndexes=await query('SHOW INDEX FROM quotations_client');
+  if(!quoteIndexes.some(index=>index.Key_name==='uq_quote_revision_number'))await query('ALTER TABLE quotations_client ADD UNIQUE KEY uq_quote_revision_number(reference,revision_number)');
+  for(const index of quoteIndexes.filter(index=>index.Column_name==='reference'&&!index.Non_unique&&index.Key_name!=='uq_quote_revision_number')) {
+    if(quoteIndexes.filter(other=>other.Key_name===index.Key_name).length===1)await query(`ALTER TABLE quotations_client DROP INDEX \`${index.Key_name}\``);
+  }
   await migrateEmployeeOtRates({query, transaction});
   await createEmployeeReadViews(query);
   await seedWorkMethods();

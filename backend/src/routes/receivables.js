@@ -9,6 +9,7 @@ import { notify } from '../alerts.js';
 import { sendDailySummary } from '../lib/daily-summary.js';
 import { documentContext, invoiceDocument, receiptDocument } from '../lib/documents.js';
 import { sendDocument } from '../lib/document-pdf.js';
+import {documentNumber} from '../lib/document-numbering.js';
 
 const router = Router();
 
@@ -161,6 +162,7 @@ router.get('/receivables/ageing', auth, permit('finance.view', 'finance.invoice'
   });
 
 const invoiceSchema = z.object({
+  reference: z.string().trim().min(1).max(60).regex(/^[A-Za-z0-9][A-Za-z0-9 ./_-]*$/).optional(),
   companyId: z.coerce.number().int().positive().optional(),
   projectId: z.coerce.number().int().positive().nullable().optional(),
   clientId: z.coerce.number().int().positive().optional(),
@@ -298,7 +300,8 @@ const createInvoice = async (req, res, next) => {
       const gross = priced.reduce((sum, item) => sum + item.quantity * item.rate, 0);
       const sums = certificate({ ...req.body, gross, vatRate });
       if (sums.netPayable <= 0) throw fail(400, 'Invoice deductions cannot be equal to or greater than the amount payable');
-      const reference = await nextReference('INV', 'client_invoices');
+      if(req.body.reuseQuotationNumber && !billingTerm) throw fail(400,'Choose a quotation billing term to reuse its number.');
+      const reference = await documentNumber('INV',companyId,req.body.reuseQuotationNumber ? billingTerm.quotationReference : req.body.reference);
 
       const id = await transaction(async connection => {
         const requestedBoqQuantities = new Map();
@@ -355,6 +358,8 @@ router.post('/receivables/invoices', auth, permit('finance.invoice'), validate(i
 
 router.post('/receivables/quotation-terms/:id/invoice', auth, permit('finance.invoice'),
   validate(z.object({ invoiceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    reference: z.string().trim().min(1).max(60).regex(/^[A-Za-z0-9][A-Za-z0-9 ./_-]*$/).optional(),
+    reuseQuotationNumber: z.boolean().default(false),
     deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     placeOfSupply: z.string().trim().max(300).optional(),
     paymentMode: z.enum(['Cheque','Cash','Bank transfer','Card','Other']).optional(),
@@ -416,7 +421,7 @@ router.get('/receivables/invoices/:id', auth, permit('finance.view', 'finance.in
         'SELECT description,unit,quantity,rate,amount FROM client_invoice_items WHERE invoice_id=?',
         [req.params.id]);
       invoice.receipts = await query(`
-        SELECT r.id,r.amount,r.received_date receivedDate,r.method,r.reference,u.name recordedBy
+        SELECT r.id,r.amount,r.received_date receivedDate,r.method,r.reference,r.receipt_number receiptNumber,u.name recordedBy
           FROM client_receipts r JOIN users u ON u.id=r.recorded_by
          WHERE r.invoice_id=? ORDER BY r.received_date,r.id`, [req.params.id]);
       res.json(invoice);
@@ -426,14 +431,14 @@ router.get('/receivables/invoices/:id', auth, permit('finance.view', 'finance.in
 router.get('/receivables/receipts/:id/document', auth, permit('finance.view', 'finance.invoice'),
   async (req, res, next) => {
     try {
-      const receipt = await getOne(`SELECT r.id,r.amount,r.received_date receivedDate,r.method,r.reference,
+      const receipt = await getOne(`SELECT r.id,r.amount,r.received_date receivedDate,r.method,r.reference,r.receipt_number receiptNumber,
         i.reference invoiceReference,i.title invoiceTitle,i.client,i.buyer_address buyerAddress,
         i.net_payable netPayable,i.paid_amount paidAmount,i.company_id companyId,p.name project
         FROM client_receipts r JOIN client_invoices i ON i.id=r.invoice_id
         LEFT JOIN projects p ON p.id=i.project_id WHERE r.id=?`, [req.params.id]);
       if (!receipt) throw fail(404, 'That payment receipt was not found.');
       const context = await documentContext(getOne, receipt.companyId);
-      const name = `RCPT-${new Date(receipt.receivedDate).getFullYear()}-${String(receipt.id).padStart(5, '0')}.pdf`;
+      const name = `${receipt.receiptNumber}.pdf`;
       await sendDocument(req, res, receiptDocument({ ...context, receipt }), name);
     } catch (error) { next(error); }
   });
@@ -468,7 +473,8 @@ router.post('/receivables/invoices/:id/receipts', auth, permit('finance.invoice'
     amount: z.coerce.number().positive(),
     receivedDate: z.string().min(10).max(10),
     method: z.enum(['Cash','Cheque','Bank transfer','Card']).default('Bank transfer'),
-    reference: z.string().trim().max(120).optional()
+    reference: z.string().trim().max(120).optional(),
+    receiptNumber: z.string().trim().min(1).max(60).regex(/^[A-Za-z0-9][A-Za-z0-9 ./_-]*$/).optional()
   })),
   async (req, res, next) => {
     try {
@@ -489,6 +495,8 @@ router.post('/receivables/invoices/:id/receipts', auth, permit('finance.invoice'
            VALUES (?,?,?,?,?,?)`,
           [invoice.id, req.body.amount, req.body.receivedDate, req.body.method,
             req.body.reference || null, req.user.id]);
+        const receiptNumber=await documentNumber('RCPT',invoice.company_id,req.body.receiptNumber);
+        await connection.query('UPDATE client_receipts SET receipt_number=? WHERE id=?',[receiptNumber,created.insertId]);
         const paid = Number(invoice.paid_amount) + req.body.amount;
         await connection.execute('UPDATE client_invoices SET paid_amount=?, status=? WHERE id=?',
           [paid, paid >= Number(invoice.net_payable) - 0.001 ? 'Paid' : 'Part paid', invoice.id]);
@@ -584,6 +592,8 @@ router.patch('/receivables/cheques/:id',auth,permit('finance.invoice'),validate(
         const [receipt] = await connection.execute(`INSERT INTO client_receipts (invoice_id,amount,received_date,method,reference,recorded_by)
           VALUES (?,?,CURDATE(),'Cheque',?,?)`,[invoice.id,cheque.amount,cheque.cheque_number,req.user.id]);
         receiptId=receipt.insertId;invoiceReference=invoice.reference;
+        const receiptNumber=await documentNumber('RCPT',invoice.company_id);
+        await connection.query('UPDATE client_receipts SET receipt_number=? WHERE id=?',[receiptNumber,receiptId]);
       }
       await connection.execute(`INSERT INTO incomes (project_id,company_id,description,amount,received_date,method,reference,origin_type,origin_id,created_by)
         VALUES (?,?,?,?,CURDATE(),'Cheque',?,?,?,?)`,[cheque.project_id,cheque.company_id,
