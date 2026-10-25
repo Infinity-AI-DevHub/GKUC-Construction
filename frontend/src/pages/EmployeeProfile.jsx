@@ -7,6 +7,7 @@ import Attachments from '../Attachments.jsx';
 import EmployeePersonalFields, { personalDetails } from '../EmployeePersonalFields.jsx';
 import AttendanceCorrection from './AttendanceCorrection.jsx';
 import EmployeeAssets from './EmployeeAssets.jsx';
+import EmployeeAccountLink from '../EmployeeAccountLink.jsx';
 import {missingCheckout} from '../attendance-flags.js';
 
 function RateRing({ value, label }) {
@@ -163,6 +164,7 @@ export default function EmployeeProfile({ employeeId, close, canManage, canPayro
   const [correcting, setCorrecting] = useState(null);
   const [editing, setEditing] = useState(false);
   const [editingJob, setEditingJob] = useState(false);
+  const [linkingAccount, setLinkingAccount] = useState(false);
   const reloadEmployee = async () => setEmployee(await api(`/employees/${employeeId}`));
   useEffect(() => {
     setEmployee(null); setError('');
@@ -185,6 +187,8 @@ export default function EmployeeProfile({ employeeId, close, canManage, canPayro
   const missingCheckouts=employee.attendance.filter(missingCheckout).length;
   return <div className="employee-profile">
     <button className="employee-back" onClick={close}><ArrowLeft size={16} />All people</button>
+    {canAccess && <button className="secondary" type="button" onClick={() => setLinkingAccount(true)}><ShieldCheck size={16} />User account link</button>}
+    {linkingAccount && <EmployeeAccountLink employeeId={employee.id} close={() => setLinkingAccount(false)} reload={reloadEmployee} />}
 
     <section className="employee-hero">
       <div className="employee-hero-copy">

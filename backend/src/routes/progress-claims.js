@@ -1,7 +1,7 @@
 import {Router} from 'express';
 import {z} from 'zod';
 import {query,getOne,transaction,audit,nextReference} from '../db.js';
-import {auth,permit,validate,wrap,fail} from '../lib/http.js';
+import {auth,permit,can,validate,wrap,fail} from '../lib/http.js';
 import {money,valueProgress,progressTotals} from '../lib/progress-valuation.js';
 import {documentContext,invoiceDocument,progressDocument} from '../lib/documents.js';
 import {sendDocument} from '../lib/document-pdf.js';
@@ -66,6 +66,26 @@ router.post('/schedules',permit('qs.boq'),validate(z.object({projectId:z.number(
     await connection.execute("UPDATE projects SET billing_route='Progress claims' WHERE id=?",[b.projectId]);
     await audit(connection,req.user.id,'CREATE','progress_schedule',result.insertId,null,b,req.ip);return result.insertId;
   });publishChange('progress-claims',{});res.status(201).json({id});
+}));
+router.delete('/schedules/:id',permit('qs.boq'),validate(z.object({reason:z.string().trim().min(3).max(1000)})),wrap(async(req,res)=>{
+  await transaction(async connection=>{
+    const [initial]=await connection.execute('SELECT project_id FROM progress_schedules WHERE id=?',[req.params.id]);
+    if(!initial.length)throw fail(404,'Valuation BOQ not found.');
+    const project=await lockedProject(connection,initial[0].project_id);
+    const [rows]=await connection.execute('SELECT * FROM progress_schedules WHERE id=? FOR UPDATE',[req.params.id]);
+    const before=rows[0];if(!before)throw fail(404,'Valuation BOQ not found.');
+    if(before.status!=='Draft'&&!can(req,'qs.approve'))throw fail(403,'Deleting an approved valuation BOQ requires QS approval permission.');
+    const [latest]=await connection.execute('SELECT id FROM progress_schedules WHERE project_id=? ORDER BY version_no DESC LIMIT 1',[before.project_id]);
+    if(latest[0].id!==before.id)throw fail(409,'Only the latest unused BOQ version can be deleted.');
+    const [used]=await connection.execute('SELECT id FROM progress_claims WHERE schedule_id=? LIMIT 1',[before.id]);
+    if(used.length)throw fail(409,'This BOQ is referenced by an application and cannot be deleted, including withdrawn applications.');
+    await connection.execute('DELETE FROM progress_schedules WHERE id=?',[before.id]);
+    const [remaining]=await connection.execute('SELECT id FROM progress_schedules WHERE project_id=? LIMIT 1',[before.project_id]);
+    const restored=!remaining.length;
+    if(restored)await connection.execute("UPDATE projects SET billing_route='Quotation and invoice' WHERE id=?",[before.project_id]);
+    await audit(connection,req.user.id,'DELETE','progress_schedule',before.id,before,{reason:req.body.reason,
+      projectId:before.project_id,billingRoute:restored?'Quotation and invoice':project.billing_route},req.ip);
+  });publishChange('progress-claims',{});res.status(204).end();
 }));
 router.patch('/schedules/:id',permit('qs.approve'),validate(z.object({status:z.enum(['Internally approved','Client agreed']),reference:z.string().trim().min(3).max(500)})),wrap(async(req,res)=>{
   await transaction(async connection=>{

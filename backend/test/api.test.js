@@ -1093,6 +1093,36 @@ test('HR previews, corrects and atomically imports employees from Excel', async 
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE code LIKE ?`, [`BULK-${suffix}-%`]);
 });
 
+test('existing accounts can relink and unlink employees without deleting either record', async () => {
+  const owner = await login();
+  const roles = await call(owner, 'GET', '/users/roles');
+  const created = await call(owner, 'POST', '/users', { name: 'Relink Account', email: 'relink.account@gkuc.lk', password: 'TempPass2026!', roleId: roles.body[0].id });
+  assert.equal(created.status, 201);
+  const userId = created.body.id;
+  const original = created.body.employeeId;
+  const [insert] = await admin.query(`INSERT INTO ${testDatabase}.employees(code,name,designation,join_date,daily_rate) VALUES ('RELINK-TEST','Existing HR Profile','Officer','2026-01-01',1600)`);
+  const target = insert.insertId;
+  const path = `/users/${userId}/employee-link`;
+  const site = await login('store@gkuc.lk');
+  assert.equal((await call(site, 'GET', '/users/employee-links')).status, 403);
+  assert.equal((await call(site, 'PUT', path, { employeeId: target, previousEmployeeIds: [original], reason: 'Unauthorized change' })).status, 403);
+  const change = (employeeId, previousEmployeeIds) => call(owner, 'PUT', path, { employeeId, previousEmployeeIds, reason: 'Correct employee identity' });
+  assert.equal((await change(target, [])).status, 409);
+  assert.equal((await change(target, [original])).status, 200);
+  const [profiles] = await admin.query(`SELECT id,user_id,daily_rate FROM ${testDatabase}.employees WHERE id IN (?,?) ORDER BY id`, [original,target]);
+  assert.equal(profiles.length, 2);
+  assert.equal(profiles.find(row => Number(row.id) === Number(original)).user_id, null);
+  assert.equal(Number(profiles.find(row => Number(row.id) === Number(target)).user_id), Number(userId));
+  assert.equal(Number(profiles.find(row => Number(row.id) === Number(target)).daily_rate), 1600);
+  const other = await call(owner, 'POST', '/users', { name: 'Other Relink Account', email: 'other.relink@gkuc.lk', password: 'TempPass2026!', roleId: roles.body[0].id });
+  assert.equal((await call(owner, 'PUT', `/users/${other.body.id}/employee-link`, { employeeId: target, previousEmployeeIds: [other.body.employeeId], reason: 'Attempt occupied profile' })).status, 409);
+  assert.equal((await change(null, [target])).status, 200);
+  const [accounts] = await admin.query(`SELECT id FROM ${testDatabase}.users WHERE id=?`, [userId]);
+  assert.equal(accounts.length, 1);
+  const [logs] = await admin.query(`SELECT id FROM ${testDatabase}.audit_logs WHERE entity='user_employee_link' AND entity_id=?`, [userId]);
+  assert.equal(logs.length, 2);
+});
+
 test('creating system access creates or links an employee without duplicating their profile', async () => {
   const owner = await login();
   const roles = await call(owner, 'GET', '/users/roles');
@@ -4575,6 +4605,7 @@ test('progress claims freeze BOQ versions, separate certification and reuse one 
   assert.equal((await call(owner,'PUT',`/progress-claims/schedules/${schedule.body.id}`,scheduleBody)).status,204);
   assert.equal((await call(owner,'PATCH',`/progress-claims/schedules/${schedule.body.id}`,{status:'Internally approved',reference:'Approved QS estimate QA'})).status,204);
   const claim=await call(owner,'POST','/progress-claims',application);assert.equal(claim.status,201,JSON.stringify(claim.body));
+  assert.equal((await call(owner,'DELETE',`/progress-claims/schedules/${schedule.body.id}`,{reason:'Cannot delete a used version'})).status,409);
   assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,{...application,quantities:{D1:35}})).status,204);
   assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,application)).status,204);
   assert.equal((await call(owner,'POST','/progress-claims',application)).status,409);
@@ -4615,6 +4646,22 @@ test('progress claims freeze BOQ versions, separate certification and reuse one 
   const all=await call(owner,'GET','/progress-claims?companyId=1');
   assert.equal(Number(all.body.claims.find(row=>row.id===next.body.id).submitted_amount),2500,'uses certified 2000 baseline, not claimed 3000 or paid 1000');
   assert.equal((await call(owner,'GET','/progress-claims?companyId=2')).body.claims.some(row=>row.id===claim.body.id),false);
+});
+
+test('unused approved valuation BOQ deletion is audited and restores the original billing route',async()=>{
+  const owner=await login(),site=await login('supervisor@gkuc.lk');
+  const project=await call(owner,'POST','/projects',{companyId:1,name:`Delete test valuation ${Date.now()}`,client:'QA client',manager:'Project Manager',site:'QA site',stage:'Planning'});
+  assert.equal(project.status,201);
+  const created=await call(owner,'POST','/progress-claims/schedules',{projectId:project.body.id,source:'QS prepared',revisionReason:'Temporary test valuation',items:[{code:'A1',description:'Test item',unit:'sum',quantity:1,rate:100}]});
+  assert.equal(created.status,201);const id=created.body.id;
+  assert.equal((await call(owner,'PATCH',`/progress-claims/schedules/${id}`,{status:'Internally approved',reference:'Test approval'})).status,204);
+  assert.equal((await call(site,'DELETE',`/progress-claims/schedules/${id}`,{reason:'Test removal'})).status,403);
+  assert.equal((await call(owner,'DELETE',`/progress-claims/schedules/${id}`,{reason:''})).status,400);
+  assert.equal((await call(owner,'DELETE',`/progress-claims/schedules/${id}`,{reason:'Remove test valuation'})).status,204);
+  const [[row]]=await admin.query(`SELECT billing_route FROM ${testDatabase}.projects WHERE id=?`,[project.body.id]);assert.equal(row.billing_route,'Quotation and invoice');
+  const [logs]=await admin.query(`SELECT before_json FROM ${testDatabase}.audit_logs WHERE entity='progress_schedule' AND entity_id=? AND action='DELETE'`,[String(id)]);
+  assert.equal(logs.length,1);const snapshot=typeof logs[0].before_json==='string'?JSON.parse(logs[0].before_json):logs[0].before_json;assert.equal(snapshot.status,'Internally approved');
+  assert.equal((await call(owner,'DELETE',`/progress-claims/schedules/${id}`,{reason:'Repeat deletion'})).status,404);
 });
 
 test('payment suspension blocks business data while status and session hygiene remain available',async()=>{

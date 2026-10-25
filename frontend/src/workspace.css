@@ -475,3 +475,5 @@ main .notification-case{margin-top:20px;overflow:hidden}
 .progress-claim-toolbar label{display:grid;gap:7px;min-width:0;flex:1 1 260px}
 .progress-claim-toolbar select{width:100%;min-width:0;padding:12px;border:1px solid #dbe3ea;border-radius:6px;background:#fff;font:inherit}
 .progress-claim-toolbar button{white-space:normal;max-width:100%}
+.progress-schedule-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}
+.progress-schedule-actions button{max-width:100%;white-space:normal}

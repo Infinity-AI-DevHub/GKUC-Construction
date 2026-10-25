@@ -28,8 +28,10 @@ export default function ProgressClaims({companyId,can}){
       <Table title="Valuation BOQ versions" columns={['Version','Source','Contract','Approval','Reference','Actions']} template="90px 140px minmax(140px,1fr) 160px minmax(160px,1fr) 180px">
         {schedules.map(row=><Row key={row.id} template="90px 140px minmax(140px,1fr) 160px minmax(160px,1fr) 180px">
           <strong>v{row.version_no}</strong><span>{row.source}</span><span>{row.contract_reference||'Not supplied'}</span><Badge>{row.status}</Badge><span>{row.agreement_reference||row.internal_reference||'Not client agreed'}</span>
-          <div>{row.id===latest?.id&&allowed('qs.approve')&&row.status!=='Client agreed'&&<button className="secondary" onClick={()=>setForm({type:'approval',schedule:row})}>{row.status==='Draft'?'Approve internally':'Record client agreement'}</button>}
+          <div className="progress-schedule-actions">{row.id===latest?.id&&allowed('qs.approve')&&row.status!=='Client agreed'&&<button className="secondary" onClick={()=>setForm({type:'approval',schedule:row})}>{row.status==='Draft'?'Approve internally':'Record client agreement'}</button>}
             {row.status==='Draft'&&allowed('qs.boq')&&<button className="icon-button" title="Edit draft valuation BOQ" aria-label="Edit draft valuation BOQ" onClick={()=>setForm({type:'schedule',base:row,editing:true})}><PencilLine size={16}/></button>}
+            {row.id===latest?.id&&allowed('qs.boq')&&(row.status==='Draft'||allowed('qs.approve'))&&!claims.some(claim=>Number(claim.schedule_id)===Number(row.id))&&
+              <button type="button" className="icon-button" title={`Delete valuation BOQ v${row.version_no}`} aria-label={`Delete valuation BOQ v${row.version_no}`} onClick={()=>setForm({type:'delete-schedule',schedule:row})}><Trash2 size={16}/></button>}
           </div>
         </Row>)}
       </Table>
@@ -42,6 +44,11 @@ export default function ProgressClaims({companyId,can}){
       </Table>
     </>}
     {form?.type==='schedule'&&<ScheduleForm projectId={Number(projectId)} base={form.base} editing={form.editing} companyId={companyId} close={()=>setForm(null)} reload={load}/>}
+    {form?.type==='delete-schedule'&&<FormModal title={`Delete valuation BOQ v${form.schedule.version_no}?`} close={()=>setForm(null)} label="Delete valuation BOQ" onSubmit={async values=>{
+      await api(`/progress-claims/schedules/${form.schedule.id}`,{method:'DELETE',body:JSON.stringify({reason:values.reason})});await load();
+    }}><p className="wide">This removes the unused valuation BOQ. Its full details remain in the audit log. If it is the last version, this project returns to Quotation and invoice billing. No original BOQs, applications, invoices or payments will be deleted.</p>
+      <TextArea name="reason" label="Deletion reason" minLength={3} maxLength={1000}/>
+    </FormModal>}
     {form?.type==='approval'&&<FormModal title={form.schedule.status==='Draft'?'Internal BOQ approval':'Record client agreement'} close={()=>setForm(null)} label="Save approval" onSubmit={async values=>{
       await patch(`/progress-claims/schedules/${form.schedule.id}`,{status:form.schedule.status==='Draft'?'Internally approved':'Client agreed',reference:values.reference});await load();
     }}><TextArea name="reference" label="Approval / client agreement reference" minLength={3} maxLength={500}/></FormModal>}

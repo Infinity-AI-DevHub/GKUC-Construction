@@ -22,6 +22,9 @@ try{
     await page.route('**/api/**',route=>{
       const req=route.request(),url=new URL(req.url()),body=req.postData()?req.postDataJSON():{};
       if(req.method()==='GET')return route.fulfill({json:url.pathname.endsWith('/progress-claims')?data:[]});
+      if(req.method()==='DELETE'){
+        assert.ok(body.reason.length>=3);data.schedules=[];data.projects[0].billingRoute='Quotation and invoice';return route.fulfill({status:204});
+      }
       if(url.pathname.endsWith('/schedules')){
         data.schedules=[{id:1,project_id:1,version_no:1,source:body.source,status:'Draft',revision_reason:body.revisionReason,items:body.items}];data.projects[0].billingRoute='Progress claims';
       }else if(url.pathname.endsWith('/schedules/1')){data.schedules[0].status=body.status;data.schedules[0].agreement_reference=body.reference;}
@@ -46,9 +49,25 @@ try{
     await page.getByRole('button',{name:'Save valuation BOQ draft',exact:true}).click();
     await page.getByRole('button',{name:'Approve internally',exact:true}).click();await page.locator('[name=reference]').fill('Approved estimate QA');
     await page.getByRole('button',{name:'Save approval',exact:true}).click();
+    await page.getByRole('button',{name:'Delete valuation BOQ v1',exact:true}).click();
+    await page.getByRole('button',{name:'Cancel',exact:true}).click();assert.equal(data.schedules.length,1);
+    await page.getByRole('button',{name:'Delete valuation BOQ v1',exact:true}).click();
+    await page.locator('[name=reason]').fill('Delete unused test valuation');
+    await page.screenshot({path:'/tmp/gkuc-delete-valuation-'+width+'.png'});
+    await page.getByRole('button',{name:'Delete valuation BOQ',exact:true}).click();
+    await page.getByRole('button',{name:'Create valuation BOQ',exact:true}).waitFor();assert.equal(data.schedules.length,0);
+    await page.getByRole('button',{name:'Create valuation BOQ',exact:true}).click();
+    await page.locator('[name=revisionReason]').fill('QS prepared initial valuation');
+    await page.getByLabel('code item 1',{exact:true}).fill('D1');await page.getByLabel('description item 1',{exact:true}).fill('Drainage work');
+    await page.getByLabel('quantity item 1',{exact:true}).fill('100');await page.getByLabel('rate item 1',{exact:true}).fill('100');
+    await page.getByRole('button',{name:'Save valuation BOQ draft',exact:true}).click();
+    await page.getByRole('button',{name:'Approve internally',exact:true}).click();await page.locator('[name=reference]').fill('Approved estimate QA');
+    await page.getByRole('button',{name:'Save approval',exact:true}).click();
     await page.getByRole('button',{name:'New interim application',exact:true}).click();
     await page.locator('[name=applicationDate]').fill('2042-02-28');await page.locator('[name=periodFrom]').fill('2042-02-01');await page.locator('[name=periodTo]').fill('2042-02-28');
     await page.getByLabel('Cumulative quantity D1',{exact:true}).fill('30');await page.getByRole('button',{name:'Save application draft',exact:true}).click();
+    await page.getByRole('button',{name:'Save application draft',exact:true}).waitFor({state:'detached'});
+    await page.getByRole('button',{name:'Delete valuation BOQ v1',exact:true}).waitFor({state:'detached'});
     await page.getByRole('button',{name:'Open',exact:true}).click();await page.getByRole('button',{name:'Submit application',exact:true}).click();
     await page.locator('[name=reason]').fill('Measured application submitted');await page.getByRole('button',{name:'Confirm',exact:true}).click();
     await page.getByRole('button',{name:'Record client certificate',exact:true}).click();

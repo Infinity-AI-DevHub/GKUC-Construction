@@ -19,6 +19,11 @@ Save Draft, approve internally with a reference, then optionally record Client
 agreed with its supporting reference. An internally approved valuation may be
 used before client agreement, but the application clearly retains that status.
 Drafts are editable; approved versions require a new version and revision reason.
+The latest unused version can be deleted with a reason and confirmation. QS BOQ
+permission is required, plus QS approval permission if already approved. Any
+application reference, even withdrawn, blocks deletion. The complete deleted
+record is preserved in audit. Removing the final unused version returns the
+project to Quotation and invoice billing without changing any financial records.
 Previously certified item codes/rates must remain. Use new variation item codes
 for revised pricing and keep original certified quantities. New items and revised
 unclaimed quantities can be included in the next approved version.
