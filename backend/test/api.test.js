@@ -4643,6 +4643,34 @@ test('batch payroll allowances preview separately and save atomically without du
   assert.equal((await call(owner,'POST','/payroll/inputs/batch',body)).status,409);assert.equal(await count(),2);
 });
 
+test('QS printable applications and payment letters persist authoring details and percentage-valued sums',async()=>{
+  const owner=await login(),site=await login('store@gkuc.lk');
+  const project=await call(owner,'POST','/projects',{companyId:1,name:`Printable QS ${Date.now()}`,client:'Document Client',manager:'Project Manager',site:'Office',stage:'Planning'});
+  assert.equal(project.status,201,JSON.stringify(project.body));
+  const schedule=await call(owner,'POST','/progress-claims/schedules',{projectId:project.body.id,source:'QS prepared',revisionReason:'Prepare printable application',items:[
+    {code:'A-1',basis:'Note',description:'Preliminaries\nContract conditions apply.',unit:'Note',quantity:1,rate:0},
+    {code:'A-2',basis:'Percentage',description:'Insurance',unit:'P.S',quantity:1,rate:165000},
+    {code:'A-4',basis:'Percentage',description:'Contractor facilities',unit:'L.Sum',quantity:1,rate:50000}]});
+  assert.equal(schedule.status,201,JSON.stringify(schedule.body));
+  assert.equal((await call(owner,'PATCH',`/progress-claims/schedules/${schedule.body.id}`,{status:'Internally approved',reference:'Approved QS valuation'})).status,204);
+  const body={scheduleId:schedule.body.id,applicationDate:'2042-03-01',periodFrom:'2042-02-01',periodTo:'2042-02-28',quantities:{'A-1':0,'A-2':1,'A-4':.8},
+    documentDetails:{billNumber:'02',projectReference:'S/232/26',recipientTitle:'Deputy General Manager',recipientOrganisation:'Example Corporation',recipientAddress:'P.O. Box 56\nRajagiriya',signatoryName:'Authorised Signatory',signatoryDesignation:'Managing Director',letterBody:'Please arrange payment for bill 02.\n<script>unsafe()</script>'}};
+  const claim=await call(owner,'POST','/progress-claims',body);assert.equal(claim.status,201,JSON.stringify(claim.body));
+  assert.equal((await call(site,'PUT',`/progress-claims/${claim.body.id}`,body)).status,403);
+  const document=await fetch(`${base}/progress-claims/${claim.body.id}/document?type=application`,{headers:{authorization:`Bearer ${owner}`}});
+  const html=await document.text();assert.equal(document.status,200);assert.match(html,/Interim Payment Application No 02/);assert.match(html,/80%/);assert.match(html,/40,000.00/);assert.match(html,/205,000.00/);
+  const letter=await fetch(`${base}/progress-claims/${claim.body.id}/document?type=letter`,{headers:{authorization:`Bearer ${owner}`}});
+  const text=await letter.text();assert.match(text,/Deputy General Manager/);assert.match(text,/Authorised Signatory/);assert.match(text,/&lt;script&gt;/);assert.doesNotMatch(text,/<script>unsafe/);
+  const {documentDetails,...oldClientBody}=body;
+  assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,oldClientBody)).status,204);
+  const data=await call(owner,'GET','/progress-claims?companyId=1');
+  const saved=data.body.claims.find(row=>row.id===claim.body.id);
+  assert.equal(saved.document_details.billNumber,'02');assert.equal(Number(saved.submitted_amount),205000);
+  assert.equal(saved.invoice_id,null,'printing claims must not create invoices or income');
+  assert.equal((await call(owner,'PATCH',`/progress-claims/${claim.body.id}/status`,{status:'Submitted',reason:'Send approved application'})).status,204);
+  assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,body)).status,409);
+});
+
 test('progress claims freeze BOQ versions, separate certification and reuse one receivable for optional invoicing and payments',async()=>{
   const owner=await login(),site=await login('supervisor@gkuc.lk');
   const project=await call(owner,'POST','/projects',{companyId:1,name:`Progress billing QA ${Date.now()}`,client:'Progress Client',manager:'Project Manager',site:'QA Site',stage:'Planning'});

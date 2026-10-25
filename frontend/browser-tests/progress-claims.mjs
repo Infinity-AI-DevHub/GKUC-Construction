@@ -6,7 +6,8 @@ const source=`import React from 'react';import {createRoot} from 'react-dom/clie
 import '/src/styles.css';import '/src/theme.css';import '/src/reference.css';import '/src/responsive.css';import '/src/workspace.css';
 const permissions=location.search.includes('readonly')?['qs.view']:['qs.view','qs.boq','qs.approve','finance.invoice'];
 createRoot(document.getElementById('root')).render(React.createElement('main',null,React.createElement(ProgressClaims,{companyId:1,can:{has:key=>permissions.includes(key)}})));`;
-const server=await createServer({root:new URL('..',import.meta.url).pathname,server:{host:'127.0.0.1',port:0},plugins:[{
+const host=process.env.GKUC_BROWSER_HOST||'127.0.0.1';
+const server=await createServer({root:new URL('..',import.meta.url).pathname,server:{host,port:0},plugins:[{
   name:'progress-fixture',resolveId:v=>v==='/__progress.js'?id:null,load:v=>v===id?source:null,
   configureServer(dev){dev.middlewares.use(async(req,res,next)=>{
     if(!req.url.startsWith('/__progress?'))return next();
@@ -29,9 +30,10 @@ try{
         data.schedules=[{id:1,project_id:1,version_no:1,source:body.source,status:'Draft',revision_reason:body.revisionReason,items:body.items}];data.projects[0].billingRoute='Progress claims';
       }else if(url.pathname.endsWith('/schedules/1')){data.schedules[0].status=body.status;data.schedules[0].agreement_reference=body.reference;}
       else if(url.pathname.endsWith('/progress-claims')){
+        assert.equal(body.documentDetails.billNumber,'02');assert.equal(body.documentDetails.recipientTitle,'Deputy General Manager');
         const item=data.schedules[0].items[0];
         data.claims=[{id:1,reference:'IPA-QA-1',project_id:1,schedule_id:1,application_date:body.applicationDate,period_from:body.periodFrom,period_to:body.periodTo,status:'Draft',schedule_snapshot:data.schedules[0],submitted_amount:3000,
-          submitted_items:[{...item,boqQuantity:100,quantity:30,previousQuantity:0,previousAmount:0,current:3000,cumulative:3000}],paidAmount:0}];
+          document_details:body.documentDetails,submitted_items:[{...item,boqQuantity:100,quantity:30,previousQuantity:0,previousAmount:0,current:3000,cumulative:3000}],paidAmount:0}];
       }else if(url.pathname.endsWith('/status')){data.claims[0].status=body.status;}
       else if(url.pathname.endsWith('/certify')){
         const claim=data.claims[0];claim.status='Certified';claim.certified_items=[{...claim.submitted_items[0],quantity:20,current:2000,cumulative:2000}];claim.netPayable=2000;claim.invoice_id=1;claim.receivableReference='IPC-QA-1';
@@ -40,7 +42,7 @@ try{
       else if(url.pathname.endsWith('/receipts')){data.claims[0].paidAmount=Number(body.amount);}
       return route.fulfill({status:req.method()==='PATCH'?204:201,...(req.method()==='PATCH'?{}:{json:{id:1}})});
     });
-    const base='http://127.0.0.1:'+server.httpServer.address().port;
+    const base=`http://${host.includes(':')?`[${host}]`:host}:`+server.httpServer.address().port;
     await page.goto(base+'/__progress?test');await page.getByLabel('Progress claim project',{exact:true}).selectOption('1');
     await page.getByRole('button',{name:'Create valuation BOQ',exact:true}).click();
     await page.locator('[name=revisionReason]').fill('QS prepared initial valuation');
@@ -65,6 +67,9 @@ try{
     await page.getByRole('button',{name:'Save approval',exact:true}).click();
     await page.getByRole('button',{name:'New interim application',exact:true}).click();
     await page.locator('[name=applicationDate]').fill('2042-02-28');await page.locator('[name=periodFrom]').fill('2042-02-01');await page.locator('[name=periodTo]').fill('2042-02-28');
+    await page.locator('[name=billNumber]').fill('02');await page.locator('[name=recipientTitle]').fill('Deputy General Manager');
+    await page.locator('[name=recipientAddress]').fill('P.O. Box 56\nRajagiriya');await page.locator('[name=signatoryName]').fill('Sample Signatory');
+    await page.locator('[name=letterBody]').fill('Please arrange payment for the enclosed bill.');
     await page.getByLabel('Cumulative quantity D1',{exact:true}).fill('30');await page.getByRole('button',{name:'Save application draft',exact:true}).click();
     await page.getByRole('button',{name:'Save application draft',exact:true}).waitFor({state:'detached'});
     await page.getByRole('button',{name:'Delete valuation BOQ v1',exact:true}).waitFor({state:'detached'});

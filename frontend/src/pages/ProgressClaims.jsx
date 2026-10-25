@@ -1,10 +1,10 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {Plus,Trash2,Download,PencilLine} from 'lucide-react';
-import {api,post,patch,openDocument,rupees,todayInput} from '../api.js';
+import {Plus,Trash2,Download,PencilLine,Printer} from 'lucide-react';
+import {api,post,patch,openDocument,openPrintDocument,rupees,todayInput} from '../api.js';
 import {Field,SelectField,TextArea,FormModal,Modal,Table,Row,Badge,useLiveList} from '../ui.jsx';
 import {ReceiptForm} from '../Receivables.jsx';
 
-const blank=()=>({code:'1',description:'',unit:'item',quantity:1,rate:0});
+const blank=()=>({code:'1',description:'',unit:'item',quantity:1,rate:0,basis:'Quantity'});
 export default function ProgressClaims({companyId,can}){
   const [data,setData]=useState({projects:[],schedules:[],claims:[]}),[projectId,setProjectId]=useState(''),[error,setError]=useState(''),[form,setForm]=useState(null);
   const request=useRef(0);
@@ -35,11 +35,13 @@ export default function ProgressClaims({companyId,can}){
           </div>
         </Row>)}
       </Table>
-      <Table title="Interim applications and certificates" columns={['Application / period','Claimed','Certified payable','Received','Outstanding','Status','']} template="minmax(210px,1fr) 135px 145px 135px 135px 110px 100px">
-        {claims.map(row=><Row key={row.id} template="minmax(210px,1fr) 135px 145px 135px 135px 110px 100px">
+      <Table title="Interim applications and certificates" columns={['Application / period','Claimed','Certified payable','Received','Outstanding','Status','Documents']} template="minmax(210px,1fr) 135px 145px 135px 135px 110px 190px">
+        {claims.map(row=><Row key={row.id} template="minmax(210px,1fr) 135px 145px 135px 135px 110px 190px">
           <span><strong>{row.reference}</strong><small>{row.period_from} to {row.period_to}</small></span><span>{rupees(row.submitted_amount)}</span>
           <span>{row.status==='Certified'?rupees(row.netPayable):'Not certified'}</span><span>{rupees(row.paidAmount||0)}</span><span>{rupees(Number(row.netPayable||0)-Number(row.paidAmount||0))}</span><Badge>{row.status}</Badge>
-          <button className="secondary" onClick={()=>setForm({type:'detail',id:row.id})}>Open</button>
+          <div className="row-actions"><button className="secondary" onClick={()=>setForm({type:'detail',id:row.id})}>Open</button>
+            <button className="icon-button" title="Print interim payment application" aria-label={`Print application ${row.reference}`} onClick={()=>openPrintDocument(`/progress-claims/${row.id}/document?type=application`)}><Printer size={16}/></button>
+            <button className="icon-button" title="Print payment request letter" aria-label={`Print letter ${row.reference}`} onClick={()=>openPrintDocument(`/progress-claims/${row.id}/document?type=letter`)}><Printer size={16}/></button></div>
         </Row>)}
       </Table>
     </>}
@@ -74,9 +76,13 @@ function ScheduleForm({projectId,base,editing,companyId,close,reload}){
     <label>Copy existing project BOQ<select defaultValue="" onChange={async event=>{if(!event.target.value)return;try{
       const boq=await api(`/boq/${event.target.value}`);setItems(boq.items.map((row,index)=>({code:String(index+1),description:row.description,unit:row.unit,quantity:row.quantity,rate:row.rate})));
     }catch(failure){setError(failure.message);}}}><option value="">Enter items manually</option>{boqs.map(row=><option value={row.id} key={row.id}>{row.reference} · {row.title}</option>)}</select></label>
-    <div className="wide"><Table title="Valuation items" columns={['Code','Description','Unit','BOQ quantity','Rate (LKR)','']} template="90px minmax(220px,1fr) 90px 130px 130px 45px">
-      {items.map((row,index)=><Row key={index} template="90px minmax(220px,1fr) 90px 130px 130px 45px">
-        {['code','description','unit','quantity','rate'].map(key=><input key={key} aria-label={`${key} item ${index+1}`} required type={['quantity','rate'].includes(key)?'number':'text'}
+    <div className="wide"><Table title="Valuation items" columns={['Code','Description','Valuation','Unit','BOQ quantity','Rate / full sum (LKR)','']} template="90px minmax(260px,1fr) 150px 90px 130px 160px 45px">
+      {items.map((row,index)=><Row key={index} template="90px minmax(260px,1fr) 150px 90px 130px 160px 45px">
+        <input aria-label={`code item ${index+1}`} required value={row.code} onChange={event=>change(index,'code',event.target.value)}/>
+        <textarea aria-label={`description item ${index+1}`} required rows={3} maxLength={3000} value={row.description} onChange={event=>change(index,'description',event.target.value)}/>
+        <select aria-label={`Valuation basis item ${index+1}`} value={row.basis||'Quantity'} onChange={event=>{const basis=event.target.value;setItems(rows=>rows.map((item,i)=>i===index?{...item,basis,quantity:1,rate:basis==='Note'?0:item.rate,unit:basis==='Note'?'Note':basis==='Percentage'?'P.S':item.unit}:item));}}><option>Quantity</option><option>Percentage</option><option>Note</option></select>
+        {['unit','quantity','rate'].map(key=><input key={key} aria-label={`${key} item ${index+1}`} required type={['quantity','rate'].includes(key)?'number':'text'}
+          readOnly={(row.basis==='Percentage'&&key==='quantity')||(row.basis==='Note'&&key!=='unit')}
           min={key==='quantity'?'0.001':'0'} step={key==='quantity'?'0.001':'0.01'} value={row[key]} onChange={event=>change(index,key,event.target.value)}/>)}
         <button type="button" className="icon-button" title="Remove item" aria-label={`Remove item ${index+1}`} disabled={items.length===1} onClick={()=>setItems(rows=>rows.filter((_,i)=>i!==index))}><Trash2 size={16}/></button>
       </Row>)}
@@ -86,21 +92,30 @@ function ScheduleForm({projectId,base,editing,companyId,close,reload}){
 
 function Quantities({items,defaults={},prefix='qty'}){
   return <div className="wide"><Table title="Cumulative completed quantities" columns={['Code / description','Unit','Rate','BOQ quantity','Cumulative quantity']} template="minmax(240px,1fr) 85px 120px 120px 160px">
-    {items.map(row=><Row key={row.code} template="minmax(240px,1fr) 85px 120px 120px 160px"><span>{row.code} · {row.description}</span><span>{row.unit}</span><span>{rupees(row.rate)}</span><span>{row.boqQuantity??row.quantity}</span>
-      <input aria-label={`Cumulative quantity ${row.code}`} name={`${prefix}:${row.code}`} type="number" min="0" max={row.boqQuantity??row.quantity} step="0.001" required defaultValue={defaults[row.code]??0}/>
+    {items.map(row=><Row key={row.code} template="minmax(240px,1fr) 85px 120px 120px 160px"><span>{row.code} · {row.description}</span><span>{row.unit}</span><span>{row.basis==='Note'?'—':rupees(row.rate)}</span><span>{row.basis==='Note'?'—':row.boqQuantity??row.quantity}</span>
+      {row.basis==='Note'?<input type="hidden" name={`${prefix}:${row.code}`} value="0"/>:<input aria-label={`${row.basis==='Percentage'?'Cumulative percentage':'Cumulative quantity'} ${row.code}`} name={`${prefix}:${row.code}`} type="number" min="0" max={row.basis==='Percentage'?100:row.boqQuantity??row.quantity} step={row.basis==='Percentage'?'0.1':'0.001'} required defaultValue={row.basis==='Percentage'?(defaults[row.code]??0)*100:defaults[row.code]??0}/>}
     </Row>)}
   </Table></div>;
 }
-const entered=(items,values)=>Object.fromEntries(items.map(row=>[row.code,Number(values[`qty:${row.code}`])]));
+const entered=(items,values)=>Object.fromEntries(items.map(row=>[row.code,row.basis==='Note'?0:row.basis==='Percentage'?Number((Number(values[`qty:${row.code}`])/100).toFixed(3)):Number(values[`qty:${row.code}`])]));
 function ApplicationForm({schedule,previous=[],claim=null,close,reload}){
   return <FormModal wide title={claim?'Edit application draft':'New interim payment application'} label={claim?'Save application changes':'Save application draft'} close={close} onSubmit={async values=>{
-    const body={scheduleId:schedule.id,applicationDate:values.applicationDate,periodFrom:values.periodFrom,periodTo:values.periodTo,quantities:entered(schedule.items,values),notes:values.notes};
+    const documentDetails=Object.fromEntries(['billNumber','projectReference','recipientTitle','recipientOrganisation','recipientAddress','salutation','subject','letterBody','signatoryName','signatoryDesignation'].map(key=>[key,values[key]||'']));
+    const body={scheduleId:schedule.id,applicationDate:values.applicationDate,periodFrom:values.periodFrom,periodTo:values.periodTo,quantities:entered(schedule.items,values),notes:values.notes,documentDetails};
     if(claim)await api(`/progress-claims/${claim.id}`,{method:'PUT',body:JSON.stringify(body)});else await post('/progress-claims',body);await reload();
   }}>
     <Field name="applicationDate" label="Application date" type="date" defaultValue={claim?.application_date||todayInput()}/><Field name="periodFrom" label="Period from" type="date" defaultValue={claim?.period_from}/>
     <Field name="periodTo" label="Period to" type="date" defaultValue={claim?.period_to}/>
+    <Field name="billNumber" label="Printed application / bill number" required={false} defaultValue={claim?.document_details?.billNumber}/>
+    <Field name="projectReference" label="Project / contract number on document" required={false} defaultValue={claim?.document_details?.projectReference}/>
     <Quantities items={schedule.items} defaults={Object.fromEntries((claim?.submitted_items||previous).map(row=>[row.code,row.quantity]))}/>
     <TextArea name="notes" label="Application notes" required={false} maxLength={1000} defaultValue={claim?.notes||''}/>
+    <h3 className="wide">Payment request letter</h3>
+    {['recipientTitle','recipientOrganisation','signatoryName','signatoryDesignation'].map((name,index)=><Field key={name} name={name} label={['Recipient title','Recipient organisation','Signatory name','Signatory designation'][index]} required={false} defaultValue={claim?.document_details?.[name]}/>)}
+    <TextArea name="recipientAddress" label="Recipient postal address" required={false} defaultValue={claim?.document_details?.recipientAddress}/>
+    <Field name="salutation" label="Salutation" required={false} defaultValue={claim?.document_details?.salutation||'Dear Sir / Madam,'}/>
+    <Field name="subject" label="Letter subject" required={false} defaultValue={claim?.document_details?.subject||'Request for Payment'}/>
+    <TextArea name="letterBody" label="Letter wording (optional; blank uses standard payment request)" required={false} rows={5} defaultValue={claim?.document_details?.letterBody}/>
   </FormModal>;
 }
 
@@ -114,6 +129,8 @@ function ClaimDetail({claim,can,close,reload}){
     <div className="progress-claim-toolbar">
       <button className="secondary" onClick={()=>doc('application')}><Download size={16}/>Application PDF</button>
       <button className="secondary" onClick={()=>doc('letter')}><Download size={16}/>Covering letter</button>
+      <button className="secondary" onClick={()=>openPrintDocument(`/progress-claims/${claim.id}/document?type=application`)}><Printer size={16}/>Print application</button>
+      <button className="secondary" onClick={()=>openPrintDocument(`/progress-claims/${claim.id}/document?type=letter`)}><Printer size={16}/>Print letter</button>
       {claim.status==='Draft'&&permitted('qs.boq')&&<button className="primary" onClick={()=>setForm('Submitted')}>Submit application</button>}
       {claim.status==='Draft'&&permitted('qs.boq')&&<button className="secondary" onClick={()=>setForm('edit')}>Edit draft</button>}
       {['Draft','Submitted'].includes(claim.status)&&permitted('qs.boq')&&<button className="secondary" onClick={()=>setForm('Withdrawn')}>Withdraw</button>}

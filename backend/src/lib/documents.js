@@ -740,37 +740,40 @@ export function commitmentsDocument({ company, tender, commitments, totals, asAt
 /** The company identity and presentation settings a document needs, in one call. */
 export function progressDocument({company,settings:given,design:givenDesign,claim,type}){
   const settings=settingsFor(given),design=normaliseDesign(givenDesign);
-  const heading={application:'Interim Payment Application',letter:'Request for Payment',certificate:'Client Certification Record'}[type];
+  const details=claim.document_details||{};
+  const heading={application:`Interim Payment Application${details.billNumber?` No ${details.billNumber}`:''}`,letter:details.subject||'Request for Payment',certificate:'Client Certification Record'}[type];
+  const printedReference=details.projectReference||claim.contractReference||claim.reference;
+  const progressQuantity=(line,value)=>line.basis==='Percentage'?`${quantity(Number(value)*100)}%`:quantity(value);
   const items=type==='certificate'?claim.certified_items:claim.submitted_items;
   const totals=claim.certification;
   const blocks={
-    letterhead:letterhead(company,heading,claim.reference,claim.application_date,design),
-    subject:`<div class="subject"><strong>${escape(claim.project)}</strong><p>Client: ${escape(claim.client)}</p>
-      <p>Period: ${escape(claim.period_from)} to ${escape(claim.period_to)}</p>
-      <p>Valuation BOQ v${escape(claim.versionNo)} / ${escape(claim.source)} / ${escape(claim.approvalStatus)}</p>
-      <p>Contract reference: ${escape(claim.contractReference||'Not supplied')}</p>
-      <p>Internal approval: ${escape(claim.internalReference||'Not recorded')} / Client agreement: ${escape(claim.agreementReference||'Not client agreed')}</p>
-      <p>Status: ${escape(claim.status)}${claim.status==='Draft'?' — NOT SUBMITTED':''}</p></div>`,
-    table:type==='letter'?`<p>Dear Sir / Madam,</p><p>Please arrange assessment and payment for the enclosed interim payment application ${escape(claim.reference)}
+    letterhead:letterhead(company,heading,printedReference,claim.application_date,design),
+    subject:type==='letter'?`<div class="progress-letter-address">${[details.recipientTitle,details.recipientOrganisation||claim.client,details.recipientAddress].filter(Boolean).map(value=>`<div>${escape(value)}</div>`).join('')}</div>`:`<div class="subject"><strong>${escape(claim.project)}</strong><p>Client: ${escape(claim.client)}</p>
+      <p>Period: ${escape(claim.period_from)} to ${escape(claim.period_to)} / Project reference: ${escape(printedReference)}</p>
+      <p>Valuation BOQ v${escape(claim.versionNo)} / ${escape(claim.source)} / ${escape(claim.approvalStatus)}${claim.agreementReference?` / Client agreement: ${escape(claim.agreementReference)}`:''}</p>
+      ${['Draft','Withdrawn'].includes(claim.status)?`<p><strong>${escape(claim.status.toUpperCase())}${claim.status==='Draft'?' - NOT SUBMITTED':''}</strong></p>`:''}</div>`,
+    table:type==='letter'?`<div class="progress-letter">${claim.status==='Draft'?'<p><strong>DRAFT - NOT SUBMITTED</strong></p>':''}<p>${escape(details.salutation||'Dear Sir / Madam,')}</p><h2>${escape(details.subject||'Request for Payment')}</h2>
+      <p><strong>Project: ${escape(claim.project)}${details.projectReference?` - ${escape(details.projectReference)}`:''}</strong></p>
+      ${details.letterBody?`<div class="progress-letter-body">${escape(details.letterBody)}</div>`:`<p>Please arrange assessment and payment for the enclosed interim payment application ${escape(details.billNumber||claim.reference)}
       for ${escape(claim.project)}, with a current claimed work value of LKR ${money(claim.submitted_amount)}.</p>
-      <p>The application is subject to measurement and certification under the applicable agreement.</p><p>Yours faithfully,</p>`:
+      <p>The application is subject to measurement and certification under the applicable agreement.</p>`}<p>Thank you.</p><p>Yours faithfully,</p></div>`:
       `<table class="progress-valuation"><thead><tr><th rowspan="2">Item</th><th rowspan="2">Description</th><th rowspan="2">Unit</th><th rowspan="2">Rate</th><th colspan="2">BOQ</th><th colspan="2">Previous certified</th><th colspan="2">This ${type==='certificate'?'certified':'application'}</th><th colspan="2">Cumulative</th></tr>
       <tr>${Array.from({length:4},()=>'<th>Qty</th><th>Amount</th>').join('')}</tr></thead>
-      <tbody>${items.map(line=>`<tr><td>${escape(line.code)}</td><td>${escape(line.description)}</td><td>${escape(line.unit)}</td><td class="num">${money(line.rate)}</td><td class="num">${quantity(line.boqQuantity)}</td><td class="num">${money(line.boqQuantity*line.rate)}</td>
-      <td class="num">${quantity(line.previousQuantity)}</td><td class="num">${money(line.previousAmount)}</td><td class="num">${quantity(line.quantity-line.previousQuantity)}</td><td class="num">${money(line.current)}</td><td class="num">${quantity(line.quantity)}</td><td class="num">${money(line.cumulative)}</td></tr>`).join('')}</tbody></table>
+      <tbody>${items.map(line=>line.basis==='Note'?`<tr><td>${escape(line.code)}</td><td class="progress-description">${escape(line.description)}</td><td>Note</td><td colspan="9"></td></tr>`:`<tr><td>${escape(line.code)}</td><td class="progress-description">${escape(line.description)}</td><td>${escape(line.unit)}</td><td class="num">${line.basis==='Percentage'?'—':money(line.rate)}</td><td class="num">${line.basis==='Percentage'?'—':quantity(line.boqQuantity)}</td><td class="num">${money(line.boqQuantity*line.rate)}</td>
+      <td class="num">${progressQuantity(line,line.previousQuantity)}</td><td class="num">${money(line.previousAmount)}</td><td class="num">${progressQuantity(line,line.quantity-line.previousQuantity)}</td><td class="num">${money(line.current)}</td><td class="num">${progressQuantity(line,line.quantity)}</td><td class="num">${money(line.cumulative)}</td></tr>`).join('')}</tbody></table>
       <div class="terms"><p><strong>Current ${type==='certificate'?'certified':'claimed'} work value: LKR ${money(items.reduce((sum,line)=>sum+Number(line.current),0))}</strong></p>
       ${type==='certificate'?`<p>Client certificate: ${escape(claim.certificate_reference)} / ${escape(claim.certified_date)}</p>
       <p>Retention: ${money(totals.retention)} / Advance recovery: ${money(totals.advance)} / Other deductions: ${money(totals.other)}</p>
       <p>VAT ${quantity(totals.vatRate)}% / basis: ${escape(totals.taxBasis)} / VAT amount: ${money(totals.vat)} / Stamp duty: ${money(totals.stampDuty)}</p>
       <p><strong>Net certified payable: LKR ${money(totals.net)}</strong></p><p>${escape(totals.reason)}</p>`:''}</div>`,
-    notes:`<p>${escape(claim.notes||'')}</p>`,signatures:`<div class="sign"><div>Prepared for ${escape(company.name)}<br><br>Name / signature</div></div>`,
+    notes:type==='letter'?'':`<p>${escape(claim.notes||'')}</p>`,signatures:`<div class="sign"><div><br><br>________________________<br>${escape(details.signatoryName||'Name / signature')}<br>${escape(details.signatoryDesignation||'')}<br>${escape(company.name)}</div></div>`,
     footer:footer(company,claim.reference,settings)
   };
   const html=page({design,company,blocks,settings,title:`${heading} ${claim.reference}`,heading,reference:claim.reference,date:claim.application_date});
-  if(type==='letter')return html;
+  if(type==='letter')return html.replace('</head>',`<style>[data-piece="docTitle"]{visibility:hidden}.progress-letter-address,.progress-letter-body{white-space:pre-line;line-height:1.8}.progress-letter-address{margin:22px 0 30px}.progress-letter{font-size:12px;line-height:1.9}.progress-letter h2{text-align:center;text-decoration:underline;font-size:16px;margin:22px 0}.progress-letter p{margin:18px 0}.sign{break-inside:avoid;border-top:0}</style></head>`);
   return html.replace('</head>',`<style>@page{size:A4 landscape}.sheet{width:297mm;min-height:210mm}
-    .progress-valuation{table-layout:auto}.progress-valuation th,.progress-valuation td{font-size:9px;padding:5px;overflow-wrap:normal;word-break:normal}
-    .progress-valuation tbody td:first-child{min-width:35px}.progress-valuation tbody td:nth-child(2){width:23%}.progress-valuation tbody td:nth-child(3){min-width:35px}
+    .subject p{margin:6px 0;font-size:11px}.sign{border-top:0}.progress-valuation{table-layout:auto}.progress-valuation th,.progress-valuation td{font-size:9px;padding:5px;overflow-wrap:normal;word-break:normal}
+    .progress-valuation tbody td:first-child{min-width:35px}.progress-valuation tbody td:nth-child(2){width:23%;white-space:pre-line}.progress-valuation tbody td:nth-child(3){min-width:35px}
     @media print{.sheet{width:auto;min-height:0}}</style></head>`);
 }
 

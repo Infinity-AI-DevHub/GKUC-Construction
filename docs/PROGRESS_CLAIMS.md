@@ -1,5 +1,15 @@
 # Progress claims and versioned valuation BOQs
 
+## Printable QS Documents (2026-10-26)
+
+QS > Progress claims prepares full interim payment applications and payment-request letters. Prepare or copy a valuation BOQ, approve its basis, then choose New interim application. Draft authoring includes a printed bill number, project reference, recipient title/organisation/address, salutation, subject, letter wording and signatory/designation. Details are saved with the application and locked on submission. Existing records without these fields still print using standard wording.
+
+Valuation lines support Quantity, Percentage and Note. For percentage-valued provisional or lump sums, BOQ quantity is 1 and the rate is the complete approved sum; enter completion as a percentage. Thus 80% of LKR 50,000 is LKR 40,000. Previous certified value is subtracted to determine this application's amount. Note rows print explanatory text but have no monetary value. Certification and payment logic are unchanged.
+
+The register and application detail provide Print application and Print letter controls. Requests authenticate, resolve local branding, wait for assets, then open the browser print dialog. Application PDF and Covering letter provide PDF preview/download. Applications use landscape A4 grouped BOQ/previous/this/cumulative columns; letters use portrait company stationery. Drafts are marked. Creating or printing documents does not create invoices or income.
+
+Backend startup adds nullable `progress_claims.document_details` JSON without rewriting existing records. Deploy backend and frontend together. Local verification covers persistence, permissions, submission locks, escaped text, percentage calculations, mobile/desktop forms, print controls, PDF generation and rendered pages. No production deployment performed.
+
 ## Entry Points
 
 Quantity Surveying > Progress claims is for QS preparation and approval.

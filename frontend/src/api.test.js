@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { api, readableError, openDocument } from './api.js';
+import { api, readableError, openDocument, openPrintDocument } from './api.js';
 import { onNotice } from './notices.js';
 
 test('document preview uses same-site inline PDF and a separate one-use download link', async () => {
@@ -34,6 +34,21 @@ test('document preview uses same-site inline PDF and a separate one-use download
     globalThis.window = originals.window;
     globalThis.sessionStorage = originals.sessionStorage;
   }
+});
+
+test('print documents authenticate, resolve local branding and wait for assets before printing', async () => {
+  const originals={fetch:globalThis.fetch,window:globalThis.window,sessionStorage:globalThis.sessionStorage};
+  let written='',printed=false,decoded=false;
+  const tab={document:{write:html=>{written=html;},open(){},close(){},images:[{decode:async()=>{decoded=true;}}],fonts:{ready:Promise.resolve()}},focus(){},print(){assert.equal(decoded,true);printed=true;},close(){}};
+  globalThis.window={open:()=>tab,location:{origin:'https://siteops.example'}};
+  globalThis.sessionStorage={getItem:()=> 'test-token'};
+  globalThis.fetch=async(path,options)=>{
+    assert.equal(path,'/api/progress-claims/7/document?type=letter');
+    assert.equal(options.headers.Authorization,'Bearer test-token');
+    return new Response('<html><head></head><body>Request for Payment</body></html>',{headers:{'content-type':'text/html'}});
+  };
+  try{assert.equal(await openPrintDocument('/progress-claims/7/document?type=letter'),true);assert.equal(printed,true);assert.match(written,/<base href="https:\/\/siteops.example\/">/);}
+  finally{Object.assign(globalThis,originals);}
 });
 
 test('Safari opens the inline PDF directly instead of a blank embedded frame', async () => {

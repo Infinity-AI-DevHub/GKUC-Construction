@@ -3501,6 +3501,7 @@ export async function migrate() {
     INDEX idx_progress_project(project_id,status),UNIQUE KEY uq_progress_certificate(project_id,certificate_reference)
   ) ENGINE=InnoDB`);
   await migrateAttendanceIdentity(query);
+  await addColumn('progress_claims','document_details','JSON NULL');
   await query(`CREATE TABLE IF NOT EXISTS document_numbering (
     company_id TINYINT UNSIGNED NOT NULL,document_type VARCHAR(8) NOT NULL,format VARCHAR(40) NOT NULL,
     padding INT NOT NULL,next_value BIGINT UNSIGNED NOT NULL,PRIMARY KEY(company_id,document_type),
