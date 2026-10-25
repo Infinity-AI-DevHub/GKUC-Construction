@@ -1,12 +1,13 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Building2, Calculator, CircleDollarSign, ClipboardCheck, ClipboardList, FileText, LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse, MessageSquare, HardDrive, LockKeyhole, RefreshCw, Eye, EyeOff, ArrowRight } from 'lucide-react';
+import { Building2, Calculator, CircleDollarSign, ClipboardCheck, ClipboardList, FileText, LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse, MessageSquare, HardDrive, LockKeyhole, RefreshCw, Eye, EyeOff, ArrowRight, Mail } from 'lucide-react';
 import './styles.css';
 import './theme.css';
 import './reference.css';
 import './responsive.css';
 import './workspace.css';
 import './login.css';
+import LoginArchitecture from './LoginArchitecture.jsx';
 
 import { announceDataChanged, api, onServiceAccessChanged, post, setUploadLimit, slug, token } from './api.js';
 import { Modal } from './ui.jsx';
@@ -128,6 +129,7 @@ function Login({ onLogin }) {
 
   const submit = async event => {
     event.preventDefault();
+    if (busy) return;
     setBusy(true);
     setError('');
     const form = new FormData(event.currentTarget);
@@ -143,19 +145,17 @@ function Login({ onLogin }) {
   };
 
   return <div className="login-page">
-    <img className="login-scene" src="/construction-site.jpg" alt="Construction team at work on site" />
-    <div className="login-scene-shade" aria-hidden="true" />
+    <LoginArchitecture />
     <div className="login-brand">
       <span><img src="/brand/gkuc-mark-256.png" alt="" width="34" height="37" /></span>
-      <strong>GKUC</strong><small>CONSTRUCTION</small>
+      <strong>GKUC</strong><small>CONSTRUCTION / READYMIX</small>
     </div>
-    <div className="login-site-label"><span aria-hidden="true" />GKUC SiteOps<span className="login-site-rule" /></div>
+    <div className="login-wordmark" aria-hidden="true"><span>SiteOps<span className="login-brand-dot">.</span></span><i/></div>
     <form className="login-panel" onSubmit={submit}>
       <div>
-        <span className="login-access-icon"><LockKeyhole size={23} /></span>
-        <p className="eyebrow">STAFF PORTAL</p>
-        <h1>GKUC SiteOps</h1>
-        <p>Welcome back. Sign in to your account.</p>
+        <div className="login-form-top"><span className="login-access-icon"><LockKeyhole size={20} /></span><span className="eyebrow">STAFF PORTAL</span></div>
+        <h1>Welcome back.</h1>
+        <p>Sign in to your GKUC SiteOps account.</p>
       </div>
       {/*
         * Never prefilled in a build.
@@ -164,19 +164,19 @@ function Login({ onLogin }) {
         * client could click straight in during review. Shipped, that hands the top account
         * to anyone who opens the page, so the convenience is limited to the dev server.
         */}
-      <label>Email address<input type="email" name="email" autoComplete="username"
-        placeholder="you@gkuc.lk" defaultValue={import.meta.env.DEV ? 'owner@gkuc.lk' : ''} required /></label>
-      <label htmlFor="login-password">Password</label>
-      <div className="login-password"><input id="login-password" type={showPassword ? 'text' : 'password'} name="password" autoComplete="current-password"
+      <div className="login-field"><label htmlFor="login-email">Email address</label><div className="login-input"><Mail size={18} aria-hidden="true"/><input id="login-email" type="email" name="email" autoComplete="username"
+        placeholder="you@gkuc.lk" defaultValue={import.meta.env.DEV ? 'owner@gkuc.lk' : ''} required /></div></div>
+      <div className="login-field"><label htmlFor="login-password">Password</label>
+      <div className="login-input login-password"><LockKeyhole size={18} aria-hidden="true"/><input id="login-password" type={showPassword ? 'text' : 'password'} name="password" autoComplete="current-password"
         placeholder="Enter your password" defaultValue={import.meta.env.DEV ? 'GKUC@2026' : ''} required />
         <button type="button" aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={19} /> : <Eye size={19} />}</button>
-      </div>
+      </div></div>
       {error && <p className="login-error" role="alert">{error}</p>}
-      <button className="primary" disabled={busy} aria-busy={busy}>{busy ? 'Signing in...' : 'Sign in'}<ArrowRight size={18} /></button>
+      <button className="primary" disabled={busy} aria-busy={busy}><span>{busy ? 'Signing in...' : 'Sign in'}</span>{busy ? <RefreshCw className="login-spinner" size={18}/> : <ArrowRight size={18} />}</button>
       <div className="login-security"><ShieldCheck size={15} />Authorized personnel only</div>
       {import.meta.env.DEV && <small className="demo-note">Development sign-in: owner@gkuc.lk</small>}
     </form>
-    <footer className="login-footer">GKUC Construction <span>Site operations workspace</span></footer>
+    <footer className="login-footer"><span>GKUC Construction <b>/</b> GKUC Readymix</span><span><ShieldCheck size={13}/>Private workspace</span></footer>
   </div>;
 }
 
