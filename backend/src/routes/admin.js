@@ -150,6 +150,43 @@ router.get('/users/roles', auth, permit('admin.users', 'admin.roles'), wrap(asyn
 router.get('/users/employee-options', auth, permit('admin.users'), wrap(async (_req, res) =>
   res.json(await query("SELECT id,code,name,email FROM visible_employees WHERE user_id IS NULL AND status='Active' ORDER BY name"))));
 
+router.get('/users/employee-links', auth, permit('admin.users'), wrap(async (_req, res) =>
+  res.json(await query('SELECT id,code,name,user_id userId,status FROM visible_employees ORDER BY name'))));
+
+router.put('/users/:id/employee-link', auth, permit('admin.users'), validate(z.object({
+  employeeId: z.number().int().positive().nullable(),
+  previousEmployeeIds: z.array(z.number().int().positive()).max(200),
+  reason: z.string().trim().min(3).max(1000)
+}).strict()), wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid account.' });
+  const result = await transaction(async connection => {
+    // Lock accounts before employees, including account creation, to serialize link changes.
+    const [users] = await connection.query('SELECT id,role_id FROM users ORDER BY id FOR UPDATE');
+    const target = users.find(user => Number(user.id) === id);
+    if (!target) throw Object.assign(new Error('Account not found.'), { status: 404 });
+    const theirs = new Set(await permissionsFor(id, target.role_id));
+    if (id !== Number(req.user.id) && PRIVILEGED_KEYS.some(key => theirs.has(key) && !req.user.permissions.includes(key))) {
+      throw Object.assign(new Error('You cannot change this account because it has higher administrative authority.'), { status: 403 });
+    }
+    const [employees] = await connection.query('SELECT id,user_id FROM employees WHERE user_id=? ORDER BY id FOR UPDATE', [id]);
+    const actual = employees.map(employee => Number(employee.id));
+    const expected = [...new Set(req.body.previousEmployeeIds)].sort((a,b) => a-b);
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) throw Object.assign(new Error('This link changed. Refresh and try again.'), { status: 409 });
+    if (req.body.employeeId !== null) {
+      const [rows] = await connection.query('SELECT id,user_id,status FROM visible_employees WHERE id=? FOR UPDATE', [req.body.employeeId]);
+      if (!rows.length || rows[0].status !== 'Active') throw Object.assign(new Error('Choose an active employee profile.'), { status: 409 });
+      if (rows[0].user_id && Number(rows[0].user_id) !== id) throw Object.assign(new Error('That employee already has another account. Unlink that account first.'), { status: 409 });
+    }
+    await connection.query('UPDATE employees SET user_id=NULL WHERE user_id=?', [id]);
+    if (req.body.employeeId !== null) await connection.query('UPDATE employees SET user_id=? WHERE id=?', [id, req.body.employeeId]);
+    await audit(connection, req.user.id, 'UPDATE', 'user_employee_link', id,
+      { employeeIds: actual }, { employeeId: req.body.employeeId, reason: req.body.reason }, req.ip);
+    return { userId: id, employeeId: req.body.employeeId };
+  });
+  res.json(result);
+}));
+
 router.post('/users', auth, permit('admin.users'), validate(z.object({
   name: z.string().min(2).max(120),
   email: z.string().email(),
@@ -162,6 +199,7 @@ router.post('/users', auth, permit('admin.users'), validate(z.object({
   const role = await getOne('SELECT id,name FROM roles WHERE id=?', [body.roleId]);
   if (!role) return res.status(400).json({ error: 'Unknown role' });
   const row = await transaction(async connection => {
+    await connection.query('SELECT id FROM users ORDER BY id FOR UPDATE');
     const [matches] = await connection.query(body.employeeId
       ? 'SELECT id,user_id FROM visible_employees WHERE id=? FOR UPDATE'
       : 'SELECT id,user_id FROM visible_employees WHERE LOWER(email)=? FOR UPDATE',

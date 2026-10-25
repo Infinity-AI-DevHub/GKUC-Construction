@@ -143,7 +143,7 @@ export async function nextReference(prefix, table) {
 
   const result = await query(
     `INSERT INTO document_sequences (scope,next_value) VALUES (?, LAST_INSERT_ID(?))
-     ON DUPLICATE KEY UPDATE next_value = LAST_INSERT_ID(next_value + 1)`,
+     ON DUPLICATE KEY UPDATE next_value = LAST_INSERT_ID(GREATEST(next_value + 1, VALUES(next_value)))`,
     [scope, Number(existing.high) + 1]);
 
   /* insertId carries whatever LAST_INSERT_ID() was set to, on either branch. */

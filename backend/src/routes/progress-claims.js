@@ -1,7 +1,7 @@
 import {Router} from 'express';
 import {z} from 'zod';
 import {query,getOne,transaction,audit,nextReference} from '../db.js';
-import {auth,permit,validate,wrap,fail} from '../lib/http.js';
+import {auth,permit,can,validate,wrap,fail} from '../lib/http.js';
 import {money,valueProgress,progressTotals} from '../lib/progress-valuation.js';
 import {documentContext,invoiceDocument,progressDocument} from '../lib/documents.js';
 import {sendDocument} from '../lib/document-pdf.js';
@@ -15,9 +15,12 @@ const read=permit('qs.view','qs.boq','qs.approve','finance.view','finance.invoic
 const json=value=>typeof value==='string'?JSON.parse(value):value;
 const snapshot=value=>{const row=json(value);return row?{...row,items:json(row.items)}:null;};
 const day=z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value=>{const date=new Date(value);return !Number.isNaN(+date)&&date.toISOString().slice(0,10)===value;},'Enter a valid date');
-const item=z.object({code:z.string().trim().regex(/^[A-Za-z0-9_.-]{1,30}$/),description:z.string().trim().min(1).max(300),
+const item=z.object({code:z.string().trim().regex(/^[A-Za-z0-9_.-]{1,30}$/),description:z.string().trim().min(1).max(3000),
+  basis:z.enum(['Quantity','Percentage','Note']).default('Quantity'),
   unit:z.string().trim().min(1).max(30),quantity:z.number().positive().max(999999999).multipleOf(0.001),rate:z.number().nonnegative().max(999999999).multipleOf(0.01)})
-  .refine(row=>row.quantity*row.rate<=9e12,{message:'Item value exceeds the supported amount.',path:['rate']});
+  .refine(row=>row.quantity*row.rate<=9e12,{message:'Item value exceeds the supported amount.',path:['rate']})
+  .refine(row=>row.basis!=='Note'||row.rate===0,{message:'Note rows cannot have a financial value.',path:['rate']})
+  .refine(row=>row.basis!=='Percentage'||row.quantity===1,{message:'Percentage-valued sums must have BOQ quantity 1.',path:['quantity']});
 const quantities=z.record(z.number().nonnegative().max(999999999).multipleOf(0.001));
 const cash=z.number().nonnegative().max(9e12).multipleOf(0.01);
 const lockedProject=async(connection,id)=>{const [rows]=await connection.execute('SELECT * FROM projects WHERE id=? AND active=1 FOR UPDATE',[id]);if(!rows.length)throw fail(404,'Active project not found.');return rows[0];};
@@ -43,6 +46,7 @@ router.get('/',read,wrap(async(req,res)=>{
     FROM progress_claims c JOIN projects p ON p.id=c.project_id LEFT JOIN client_invoices i ON i.id=c.invoice_id
     WHERE p.company_id=? ORDER BY c.id DESC`,[companyId]);
   res.json({projects,schedules:schedules.map(row=>({...row,items:json(row.items)})),claims:claims.map(row=>({...row,
+    document_details:json(row.document_details),
     schedule_snapshot:snapshot(row.schedule_snapshot),submitted_items:json(row.submitted_items),certified_items:json(row.certified_items),certification:json(row.certification)}))});
 }));
 router.post('/schedules',permit('qs.boq'),validate(z.object({projectId:z.number().int().positive(),
@@ -67,6 +71,26 @@ router.post('/schedules',permit('qs.boq'),validate(z.object({projectId:z.number(
     await audit(connection,req.user.id,'CREATE','progress_schedule',result.insertId,null,b,req.ip);return result.insertId;
   });publishChange('progress-claims',{});res.status(201).json({id});
 }));
+router.delete('/schedules/:id',permit('qs.boq'),validate(z.object({reason:z.string().trim().min(3).max(1000)})),wrap(async(req,res)=>{
+  await transaction(async connection=>{
+    const [initial]=await connection.execute('SELECT project_id FROM progress_schedules WHERE id=?',[req.params.id]);
+    if(!initial.length)throw fail(404,'Valuation BOQ not found.');
+    const project=await lockedProject(connection,initial[0].project_id);
+    const [rows]=await connection.execute('SELECT * FROM progress_schedules WHERE id=? FOR UPDATE',[req.params.id]);
+    const before=rows[0];if(!before)throw fail(404,'Valuation BOQ not found.');
+    if(before.status!=='Draft'&&!can(req,'qs.approve'))throw fail(403,'Deleting an approved valuation BOQ requires QS approval permission.');
+    const [latest]=await connection.execute('SELECT id FROM progress_schedules WHERE project_id=? ORDER BY version_no DESC LIMIT 1',[before.project_id]);
+    if(latest[0].id!==before.id)throw fail(409,'Only the latest unused BOQ version can be deleted.');
+    const [used]=await connection.execute('SELECT id FROM progress_claims WHERE schedule_id=? LIMIT 1',[before.id]);
+    if(used.length)throw fail(409,'This BOQ is referenced by an application and cannot be deleted, including withdrawn applications.');
+    await connection.execute('DELETE FROM progress_schedules WHERE id=?',[before.id]);
+    const [remaining]=await connection.execute('SELECT id FROM progress_schedules WHERE project_id=? LIMIT 1',[before.project_id]);
+    const restored=!remaining.length;
+    if(restored)await connection.execute("UPDATE projects SET billing_route='Quotation and invoice' WHERE id=?",[before.project_id]);
+    await audit(connection,req.user.id,'DELETE','progress_schedule',before.id,before,{reason:req.body.reason,
+      projectId:before.project_id,billingRoute:restored?'Quotation and invoice':project.billing_route},req.ip);
+  });publishChange('progress-claims',{});res.status(204).end();
+}));
 router.patch('/schedules/:id',permit('qs.approve'),validate(z.object({status:z.enum(['Internally approved','Client agreed']),reference:z.string().trim().min(3).max(500)})),wrap(async(req,res)=>{
   await transaction(async connection=>{
     const [rows]=await connection.execute('SELECT * FROM progress_schedules WHERE id=? FOR UPDATE',[req.params.id]);const before=rows[0];if(!before)throw fail(404,'Valuation BOQ not found.');
@@ -89,7 +113,13 @@ router.put('/schedules/:id',permit('qs.boq'),validate(z.object({source:z.enum(['
     await audit(connection,req.user.id,'UPDATE','progress_schedule',before.id,before,req.body,req.ip);
   });publishChange('progress-claims',{});res.status(204).end();
 }));
+const documentDetails=z.object({billNumber:z.string().trim().max(60).default(''),projectReference:z.string().trim().max(180).default(''),
+  recipientTitle:z.string().trim().max(180).default(''),recipientOrganisation:z.string().trim().max(180).default(''),
+  recipientAddress:z.string().trim().max(1000).default(''),salutation:z.string().trim().max(100).default('Dear Sir / Madam,'),
+  subject:z.string().trim().max(200).default('Request for Payment'),letterBody:z.string().trim().max(4000).default(''),
+  signatoryName:z.string().trim().max(180).default(''),signatoryDesignation:z.string().trim().max(180).default('')});
 const applicationSchema=z.object({scheduleId:z.number().int().positive(),applicationDate:day,periodFrom:day,periodTo:day,
+  documentDetails:documentDetails.optional(),
   quantities,notes:z.string().trim().max(1000).default('')});
 router.put('/:id',permit('qs.boq'),validate(applicationSchema),wrap(async(req,res)=>{
   const b=req.body;if(b.periodFrom>b.periodTo||b.applicationDate<b.periodTo)throw fail(400,'Check the application date and work period.');
@@ -102,8 +132,8 @@ router.put('/:id',permit('qs.boq'),validate(applicationSchema),wrap(async(req,re
     if(previous[0]&&b.periodTo<previous[0].period_to)throw fail(409,'The valuation cutoff cannot precede the previous certificate.');
     const schedule=json(before.schedule_snapshot),lines=valued(json(schedule.items),b.quantities,await previousCertificate(connection,before.project_id));
     const amount=money(lines.reduce((sum,line)=>sum+line.current,0));if(amount<=0)throw fail(400,'Enter additional completed quantities.');
-    await connection.execute('UPDATE progress_claims SET application_date=?,period_from=?,period_to=?,submitted_items=?,submitted_amount=?,notes=? WHERE id=?',
-      [b.applicationDate,b.periodFrom,b.periodTo,JSON.stringify(lines),amount,b.notes||null,before.id]);
+    await connection.execute('UPDATE progress_claims SET application_date=?,period_from=?,period_to=?,submitted_items=?,submitted_amount=?,notes=?,document_details=? WHERE id=?',
+      [b.applicationDate,b.periodFrom,b.periodTo,JSON.stringify(lines),amount,b.notes||null,JSON.stringify(b.documentDetails??json(before.document_details)??{}),before.id]);
     await audit(connection,req.user.id,'UPDATE','progress_claim',before.id,before,{...b,lines,amount},req.ip);
   });publishChange('progress-claims',{});res.status(204).end();
 }));
@@ -121,8 +151,8 @@ router.post('/',permit('qs.boq'),validate(applicationSchema),wrap(async(req,res)
     if(previous[0]&&b.periodTo<previous[0].period_to)throw fail(409,'The valuation cutoff cannot precede the previous certificate.');
     const lines=valued(json(schedule.items),b.quantities,await previousCertificate(connection,schedule.project_id));
     const amount=money(lines.reduce((sum,line)=>sum+line.current,0));if(amount<=0)throw fail(400,'Enter additional completed quantities.');
-    const [result]=await connection.execute(`INSERT INTO progress_claims(reference,project_id,schedule_id,application_date,period_from,period_to,submitted_items,schedule_snapshot,submitted_amount,notes,created_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`,[reference,schedule.project_id,schedule.id,b.applicationDate,b.periodFrom,b.periodTo,JSON.stringify(lines),JSON.stringify(schedule),amount,b.notes||null,req.user.id]);
+    const [result]=await connection.execute(`INSERT INTO progress_claims(reference,project_id,schedule_id,application_date,period_from,period_to,submitted_items,schedule_snapshot,submitted_amount,notes,created_by,document_details)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,[reference,schedule.project_id,schedule.id,b.applicationDate,b.periodFrom,b.periodTo,JSON.stringify(lines),JSON.stringify(schedule),amount,b.notes||null,req.user.id,JSON.stringify(b.documentDetails||{})]);
     await audit(connection,req.user.id,'CREATE','progress_claim',result.insertId,null,{...b,lines,amount},req.ip);return result.insertId;
   });publishChange('progress-claims',{});res.status(201).json({id,reference});
 }));
@@ -206,6 +236,6 @@ router.get('/:id/document',read,wrap(async(req,res)=>{
   const snapshot=json(claim.schedule_snapshot);
   await sendDocument(req,res,progressDocument({...context,claim:{...claim,source:snapshot.source,approvalStatus:snapshot.status,contractReference:snapshot.contract_reference,
     agreementReference:snapshot.agreement_reference,internalReference:snapshot.internal_reference,versionNo:snapshot.version_no,
-    submitted_items:json(claim.submitted_items),certified_items:json(claim.certified_items),certification:json(claim.certification)},type}),`${claim.reference}-${type}.pdf`);
+    document_details:json(claim.document_details),submitted_items:json(claim.submitted_items),certified_items:json(claim.certified_items),certification:json(claim.certification)},type}),`${claim.reference}-${type}.pdf`);
 }));
 export default router;

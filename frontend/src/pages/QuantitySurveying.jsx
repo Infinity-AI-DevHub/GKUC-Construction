@@ -130,7 +130,7 @@ function Quotations({ can, reload, companyId }) {
       title="Client quotations" tools={can.templates ? <button className="secondary" onClick={() => setTemplatesOpen(true)}>Quotation templates</button> : null}
       empty="No quotations yet. Create one from a BOQ or enter it manually.">
       {rows.map(row => <Row template={QUOTE_TEMPLATE} key={row.id}>
-        <div><strong>{row.reference}</strong><small>{row.boqReference || 'Manual'}</small></div>
+        <div><strong>{row.reference}</strong><small>{row.boqReference || 'Manual'} · Rev {row.revisionNumber || 0}</small></div>
         <span>{row.title}</span>
         <span>{row.client}</span>
         <strong>{rupees(row.total)}</strong>
@@ -293,7 +293,7 @@ function QuotationDetail({ quotation, close }) {
             <strong>{rupees(subtotal)} / {rupees(marked * Number(quotation.vatPercent || 0) / 100)} / {rupees(marked * (1 + Number(quotation.vatPercent || 0) / 100))}</strong></div>; })}
       </div>}
       {quotation.revisions?.length > 1 && <div className="wide"><strong>Revision history</strong>
-        <p>{quotation.revisions.map(row => `${row.reference} · ${shortDate(row.quoteDate)} · ${row.status}`).join('  |  ')}</p></div>}
+        <p>{quotation.revisions.map(row => `${row.reference} · Rev ${row.revisionNumber || 0} · ${shortDate(row.quoteDate)} · ${row.status}`).join('  |  ')}</p></div>}
       <div className="form-actions">
         <button type="button" className="secondary" onClick={close}>Close</button>
         <button type="button" className="primary" onClick={download}><Download size={16} />Download quotation</button>

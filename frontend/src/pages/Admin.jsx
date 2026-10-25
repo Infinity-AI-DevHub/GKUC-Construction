@@ -10,6 +10,7 @@ import Messaging from '../Messaging.jsx';
 import OptionLists from '../OptionLists.jsx';
 import Integrity from '../Integrity.jsx';
 import ImportCentre from '../ImportCentre.jsx';
+import EmployeeAccountLink from '../EmployeeAccountLink.jsx';
 
 export const TABS = ['Users', 'Access control', 'Company', 'Documents', 'Import centre', 'Notifications', 'Evening summary', 'Messages', 'Lists', 'Fraud watch', 'Audit log', 'My account'];
 
@@ -59,6 +60,7 @@ function Users({ can, currentUser, creating, closeCreate }) {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
   const [resetUser, setResetUser] = useState(null);
+  const [linkUser, setLinkUser] = useState(null);
   const [notice, setNotice] = useState('');
   const load = () => api('/users').then(setRows).catch(failure => setError(failure.message));
   useLiveList(load);
@@ -75,6 +77,7 @@ function Users({ can, currentUser, creating, closeCreate }) {
         <span>{user.role}</span>
         <Badge tone={user.active ? 'on-track' : 'inactive'}>{user.active ? 'Active' : 'Inactive'}</Badge>
         <div className="user-account-actions">
+          {can.manage && <button type="button" className="status-button" onClick={() => setLinkUser(user)}>Employee link</button>}
           {currentUser?.role === 'Managing Director' && Number(currentUser.id) !== Number(user.id) &&
             <button type="button" className="status-button" onClick={() => { setNotice(''); setResetUser(user); }}>Reset password</button>}
           {can.manage && <button type="button" className="status-button" onClick={() => toggle(user)}>{user.active ? 'Deactivate' : 'Reactivate'}</button>}
@@ -82,6 +85,7 @@ function Users({ can, currentUser, creating, closeCreate }) {
       </Row>)}
     </Table>
     {creating && <UserForm close={closeCreate} reload={load} />}
+    {linkUser && <EmployeeAccountLink user={linkUser} close={() => setLinkUser(null)} reload={load} />}
     {resetUser && <FormModal title={`Reset password · ${resetUser.name}`} close={() => setResetUser(null)} label="Reset password"
       onSubmit={async values => {
         if (values.password !== values.confirmPassword) throw new Error('The two passwords do not match. Enter the same password in both fields.');

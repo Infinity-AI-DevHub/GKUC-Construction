@@ -5,6 +5,7 @@ import {
   Badge, EmptyState, Field, FormModal, WorkflowForm, Modal, Row, SelectField, Summary, Table, TextArea, useLiveList
 } from './ui.jsx';
 import WorkflowChecklist from './WorkflowChecklist.jsx';
+import DocumentNumbering,{NumberEdit} from './DocumentNumbering.jsx';
 import { clientCollectionSteps } from './workflow-paths.js';
 
 /*
@@ -28,6 +29,7 @@ export function ClientInvoices({ data, can, companyId }) {
   const [raising, setRaising] = useState(false);
   const [receipting, setReceipting] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [numberEdit,setNumberEdit]=useState(null);
   const openedFromLink = useRef(false);
   const [error, setError] = useState('');
 
@@ -61,6 +63,8 @@ export function ClientInvoices({ data, can, companyId }) {
     </div>}
 
     {error && <p className="form-error">{error}</p>}
+    {can.invoice&&<DocumentNumbering key={companyId} companyId={companyId} reloadInvoices={load}/>}
+    {numberEdit&&<NumberEdit type="INV" record={numberEdit} close={()=>setNumberEdit(null)} reload={load}/>}
     <Table columns={['Accepted quotation', 'Client / project', 'Agreed total', 'Billing terms']} template="minmax(140px,1fr) minmax(180px,1.5fr) 140px minmax(260px,2fr)"
       title="Quotation to invoice" empty="No accepted quotations for this company yet. QS marks a quotation Accepted before Finance sets its terms."
       tools={can.invoice && acceptedQuotes.some(quote => !quote.billingPlanId)
@@ -105,6 +109,7 @@ export function ClientInvoices({ data, can, companyId }) {
         <Badge tone={slug(invoice.status)}>{invoice.status}</Badge>
         <div className="row-actions">
           <button className="status-button" onClick={() => setSelected(invoice)}>Payments</button>
+          {can.invoice&&<button className="status-button" onClick={()=>setNumberEdit(invoice)}>Edit number</button>}
           <button className="status-button" onClick={() => openDocument(`/receivables/invoices/${invoice.id}/document`)}>View / PDF</button>
           {can.invoice && invoice.status === 'Draft'
             ? <button className="status-button" onClick={() => issue(invoice)}>Issue</button>
@@ -126,6 +131,7 @@ export function ClientInvoices({ data, can, companyId }) {
       onSubmit={async values => {
         await post(`/receivables/quotation-terms/${termInvoice.id}/invoice`, {
           invoiceDate: values.invoiceDate, deliveryDate: values.deliveryDate || undefined,
+          reference: values.reference || undefined, reuseQuotationNumber: values.numberChoice==='Quotation number',
           placeOfSupply: values.placeOfSupply || undefined, paymentMode: values.paymentMode || undefined,
           notes: values.notes || undefined
         });
@@ -133,6 +139,8 @@ export function ClientInvoices({ data, can, companyId }) {
       }}>
       <p className="invoice-note">This invoice is linked to the accepted quotation and this term. The company, client, amount and tax choice come from the approved billing plan.</p>
       <Field name="invoiceDate" label="Invoice date" type="date" defaultValue={todayInput()} />
+      <SelectField name="numberChoice" label="Invoice numbering" options={['Invoice sequence / custom number','Quotation number']} />
+      <Field name="reference" label="Custom invoice number (optional)" required={false} />
       <Field name="deliveryDate" label="Date of delivery" type="date" required={false} />
       <Field name="placeOfSupply" label="Place of supply" required={false} />
       <SelectField name="paymentMode" label="Expected payment mode" options={['Bank transfer','Cheque','Cash','Card','Other']} />
@@ -148,8 +156,10 @@ export function ClientInvoices({ data, can, companyId }) {
 function InvoicePayments({ invoice, close, onPayment, canRecord }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
+  const [numberEdit,setNumberEdit]=useState(null);
   useEffect(() => { api(`/receivables/invoices/${invoice.id}`).then(setDetail).catch(failure => setError(failure.message)); }, [invoice.id]);
   return <Modal title={`${invoice.reference} — payments`} close={close} wide>
+    {numberEdit&&<NumberEdit type="RCPT" record={{id:numberEdit.id,reference:numberEdit.receiptNumber}} close={()=>setNumberEdit(null)} reload={async()=>setDetail(await api(`/receivables/invoices/${invoice.id}`))}/>}
     <div className="invoice-payments-dialog">
     {error && <p className="form-error">{error}</p>}
     <WorkflowChecklist title="Client invoice & collection" steps={clientCollectionSteps(invoice, detail?.receipts || [])} />
@@ -160,11 +170,12 @@ function InvoicePayments({ invoice, close, onPayment, canRecord }) {
     </div>
     <div className="invoice-payments-history"><div className="invoice-payments-history-heading"><h3>Payment history</h3><span>{detail ? `${detail.receipts.length} recorded` : 'Loading'}</span></div>
     {!detail ? <p className="invoice-payments-empty">Loading payments…</p> : detail.receipts.length ? <div className="table-wrap"><table className="invoice-payments-table">
-      <thead><tr><th scope="col">Date</th><th scope="col">Method</th><th scope="col">Reference</th><th scope="col">Amount</th><th scope="col">Receipt</th></tr></thead>
+      <thead><tr><th scope="col">Date</th><th scope="col">Method</th><th scope="col">Reference</th><th scope="col">Amount</th><th scope="col">Receipt</th><th scope="col">Receipt number</th></tr></thead>
       <tbody>{detail.receipts.map(receipt => <tr key={receipt.id}>
         <td>{shortDate(receipt.receivedDate)}</td><td>{receipt.method}</td>
         <td className="payment-reference">{receipt.reference || '—'}</td><td className="payment-amount"><strong>{rupees(receipt.amount)}</strong></td>
         <td><button type="button" className="status-button" onClick={() => openDocument(`/receivables/receipts/${receipt.id}/document`)}>View receipt</button></td>
+        <td>{receipt.receiptNumber}{canRecord&&<button type="button" className="status-button" onClick={()=>setNumberEdit(receipt)}>Edit receipt number</button>}</td>
       </tr>)}</tbody>
     </table></div> : <p className="invoice-payments-empty">No payments recorded yet. Once this invoice is issued and a payment is received, it will appear here.</p>}</div>
     {canRecord && invoice.status !== 'Draft' && invoice.status !== 'Paid' && <button className="primary" onClick={onPayment}>Record another payment</button>}
@@ -198,7 +209,8 @@ export function ReceiptForm({ invoice, close, reload }) {
         amount: Number(values.amount),
         receivedDate: values.receivedDate,
         method: values.method,
-        reference: values.reference || undefined
+        reference: values.reference || undefined,
+        receiptNumber: values.receiptNumber || undefined
       });
       await reload();
     }}>
@@ -207,6 +219,7 @@ export function ReceiptForm({ invoice, close, reload }) {
     <Field name="receivedDate" label="Received on" type="date" defaultValue={todayInput()} />
     <SelectField name="method" label="Method" options={['Bank transfer', 'Card', 'Cash']} />
     <Field name="reference" label="Bank reference" required={false} />
+    <Field name="receiptNumber" label="Receipt number (optional; blank uses sequence)" required={false} />
     <p className="invoice-note">For cheques, use Received cheques and link this invoice. Clearing the cheque records its receipt automatically.</p>
   </FormModal>;
 }
@@ -341,6 +354,7 @@ function CertificateForm({ data, companyId, close, reload }) {
         clientId: Number(values.clientId),
         kind: values.kind,
         title: values.title,
+        reference: values.reference || undefined,
         invoiceDate: values.invoiceDate,
         deliveryDate: values.deliveryDate || undefined,
         placeOfSupply: values.placeOfSupply || undefined,
@@ -353,6 +367,7 @@ function CertificateForm({ data, companyId, close, reload }) {
       await reload();
     }}>
     <div className="qs-form-section wide"><span>01</span><div><h3>Invoice recipient</h3><p>Select the client, project and billing type.</p></div></div>
+    <Field name="reference" label="Invoice number (optional; blank uses sequence)" required={false} />
     <label>Client *<select name="clientId" value={clientId} required onChange={event=>{const chosen=event.target.value;setClientId(chosen);setProjectId('');setLines([{...BLANK_LINE}]);}}>
       <option value="">Choose saved client…</option>{clients.map(client=><option key={client.id} value={client.id}>{client.name}</option>)}
     </select></label>

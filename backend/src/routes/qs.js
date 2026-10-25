@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, spendSql, today, transaction } from '../db.js';
+import {documentNumber} from '../lib/document-numbering.js';
 import { auth, can, permit, validate, wrap } from '../lib/http.js';
 import { checksumFile, contentMatchesType, isLocalStore, localPathFor, pipeStoredObject, readUpload, remove, store } from '../lib/storage.js';
 import { parseSubcontractQuotePdf, suggestSubcontractors } from '../lib/subcontract-quote-pdf.js';
@@ -135,7 +136,7 @@ router.get('/quotation-preparers', auth, permit('qs.view', 'qs.quotation'), wrap
  * GKUC format, ready to send to the client". It is produced from the record itself, so the
  * figure quoted and the figure the project is measured against cannot drift apart.
  */
-router.get('/quotations/:id/document', auth, permit('qs.view'), wrap(async (req, res) => {
+router.get('/quotations/:id/document', auth, permit('qs.view','finance.invoice'), wrap(async (req, res) => {
   const quotation = await getOne(`${quoteSelect} WHERE q.id=? AND (q.project_id IS NULL OR p.active=1)`, [req.params.id]);
   if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
 
@@ -348,7 +349,7 @@ router.post('/quotations/from-methods', auth, permit('qs.quotation'), validate(z
   /* The methods offered, in the order they appear, name the quotation. */
   const codes = [...new Set(priced.map(line => byId.get(line.methodId).code))];
   const names = [...new Set(priced.map(line => byId.get(line.methodId).name))];
-  const reference = await nextReference('QUO', 'quotations_client');
+  const reference = await documentNumber('QUO',body.companyId);
 
   /* Where a method has no terms of its own, the first one that does speaks for the job. */
   const terms = body.paymentTerms
@@ -462,7 +463,7 @@ router.post('/quotations/manual', auth, permit('qs.quotation'), validate(z.objec
   const calculated = calculateQuotation(rawLines, body);
   const lines = calculated.lines;
   const { subtotal, total } = calculated;
-  const reference = await nextReference('QUO', 'quotations_client');
+  const reference = await documentNumber('QUO',body.companyId);
   if (body.bankAccountId && !await getOne('SELECT id FROM company_bank_accounts WHERE id=? AND company_id=? AND active=1', [body.bankAccountId, body.companyId]))
     return res.status(400).json({ error: 'Choose an active bank account for the selected company.' });
   const presentation = body.visibility ? await quotationPresentation(
@@ -529,7 +530,7 @@ router.post('/quotations', auth, permit('qs.quotation'), validate(z.object({
 
   const calculated = calculateQuotation(items, req.body);
   const { subtotal, total } = calculated;
-  const reference = await nextReference('QUO', 'quotations_client');
+  const reference = await documentNumber('QUO',boq.company_id);
   if (req.body.bankAccountId && !await getOne('SELECT id FROM company_bank_accounts WHERE id=? AND company_id=? AND active=1', [req.body.bankAccountId, boq.company_id]))
     return res.status(400).json({ error: 'Choose an active bank account for this project company.' });
   const presentation = req.body.visibility ? await quotationPresentation(
@@ -601,7 +602,7 @@ router.post('/quotations/:id/revisions', auth, permit('qs.quotationRevise'), val
     const [locked] = await connection.execute('SELECT reference FROM quotations_client WHERE id=? FOR UPDATE', [rootId]);
     const [latest] = await connection.execute('SELECT COALESCE(MAX(revision_number),0) revision FROM quotations_client WHERE id=? OR root_quotation_id=?', [rootId, rootId]);
     const revisionNumber = Number(latest[0].revision) + 1;
-    const reference = `${locked[0].reference.replace(/-R\d+$/i, '')}-R${revisionNumber}`;
+    const reference = locked[0].reference;
     const [result] = await connection.execute(`INSERT INTO quotations_client
       (company_id,reference,boq_id,project_id,inquiry_id,client_id,client_name,title,quote_date,valid_until,
        subtotal,markup_percent,vat_percent,total,notes,terms,payment_terms,additional_notes,bank_account_id,
@@ -627,7 +628,7 @@ router.post('/quotations/:id/revisions', auth, permit('qs.quotationRevise'), val
   res.status(201).json(await getOne(`${quoteSelect} WHERE q.id=?`, [id]));
 }));
 
-router.post('/quotations/:id/finalize', auth, permit('qs.quotationFinalize'), wrap(async (req, res) => {
+router.post('/quotations/:id/finalize', auth, permit('qs.quotationFinalize','finance.invoice'), wrap(async (req, res) => {
   const quotation = await getOne('SELECT * FROM quotations_client WHERE id=?', [req.params.id]);
   if (!quotation) return res.status(404).json({ error: 'Quotation not found' });
   if (quotation.status !== 'Draft') return res.status(409).json({ error: 'Only a draft quotation can be finalized.' });

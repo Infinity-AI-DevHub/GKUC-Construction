@@ -5,6 +5,10 @@ export function valueProgress(items,quantities,previous=[]){
   const known=new Set(items.map(item=>item.code));
   if(Object.keys(quantities).some(code=>!known.has(code)))throw new Error('Unknown valuation item.');
   return items.map(item=>{
+    if(item.basis==='Note'){
+      if(Number(quantities[item.code]||0)!==0)throw new Error(`${item.code}: note rows do not have completed quantities.`);
+      return {...item,rate:0,quantity:0,boqQuantity:0,previousQuantity:0,previousAmount:0,cumulative:0,current:0};
+    }
     const quantity=Number(quantities[item.code]??0),before=byCode.get(item.code);
     if(!Number.isFinite(quantity)||quantity<Number(before?.quantity||0)||quantity>Number(item.quantity)+0.0001)
       throw new Error(`${item.code}: cumulative quantity must be between the previous certified quantity and the BOQ quantity.`);

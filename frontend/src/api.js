@@ -338,6 +338,30 @@ export const openAttachment = async id => {
 };
 
 /** Shows a same-site PDF URL so Safari can use its native viewer (blob frames go blank). */
+export const openPrintDocument = async path => {
+  const tab = window.open('', '_blank');
+  if (!tab) { notice(POPUP_BLOCKED); return false; }
+  tab.document.write('<p style="font:14px sans-serif;padding:20px">Preparing print preview...</p>');
+  try {
+    const response = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token.get()}` } });
+    if (!response.ok) throw new Error(responseError(response, await response.json().catch(() => null)));
+    if (!(response.headers.get('content-type') || '').includes('text/html')) throw new Error('The print document could not be read.');
+    const html = await response.text();
+    tab.document.open();
+    tab.document.write(html.replace('<head>', `<head><base href="${window.location.origin}/">`));
+    tab.document.close();
+    await Promise.all([...tab.document.images].map(image => image.decode?.().catch(() => {}) ));
+    await tab.document.fonts?.ready;
+    tab.focus();
+    tab.print();
+    return true;
+  } catch (failure) {
+    tab.close();
+    notice({ title: 'Document could not be printed', message: failure.message });
+    return false;
+  }
+};
+
 export const openDocument = async path => {
   const tab = window.open('', '_blank');
   if (!tab) { notice(POPUP_BLOCKED); return false; }

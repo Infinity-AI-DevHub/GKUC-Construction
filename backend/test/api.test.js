@@ -10,7 +10,7 @@ import {INITIAL_HR_RULES} from '../src/lib/hr-payroll-rules.js';
 import { writeWorkbook } from '../src/lib/xlsx-write.js';
 
 const port = 43971;
-const base = `http://127.0.0.1:${port}/api`;
+const base = `http://${process.env.GKUC_TEST_HOST || '127.0.0.1'}:${port}/api`;
 const testDatabase = 'gkuc_siteops_test';
 let server;
 let serverOutput = '';
@@ -1093,6 +1093,36 @@ test('HR previews, corrects and atomically imports employees from Excel', async 
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE code LIKE ?`, [`BULK-${suffix}-%`]);
 });
 
+test('existing accounts can relink and unlink employees without deleting either record', async () => {
+  const owner = await login();
+  const roles = await call(owner, 'GET', '/users/roles');
+  const created = await call(owner, 'POST', '/users', { name: 'Relink Account', email: 'relink.account@gkuc.lk', password: 'TempPass2026!', roleId: roles.body[0].id });
+  assert.equal(created.status, 201);
+  const userId = created.body.id;
+  const original = created.body.employeeId;
+  const [insert] = await admin.query(`INSERT INTO ${testDatabase}.employees(code,name,designation,join_date,daily_rate) VALUES ('RELINK-TEST','Existing HR Profile','Officer','2026-01-01',1600)`);
+  const target = insert.insertId;
+  const path = `/users/${userId}/employee-link`;
+  const site = await login('store@gkuc.lk');
+  assert.equal((await call(site, 'GET', '/users/employee-links')).status, 403);
+  assert.equal((await call(site, 'PUT', path, { employeeId: target, previousEmployeeIds: [original], reason: 'Unauthorized change' })).status, 403);
+  const change = (employeeId, previousEmployeeIds) => call(owner, 'PUT', path, { employeeId, previousEmployeeIds, reason: 'Correct employee identity' });
+  assert.equal((await change(target, [])).status, 409);
+  assert.equal((await change(target, [original])).status, 200);
+  const [profiles] = await admin.query(`SELECT id,user_id,daily_rate FROM ${testDatabase}.employees WHERE id IN (?,?) ORDER BY id`, [original,target]);
+  assert.equal(profiles.length, 2);
+  assert.equal(profiles.find(row => Number(row.id) === Number(original)).user_id, null);
+  assert.equal(Number(profiles.find(row => Number(row.id) === Number(target)).user_id), Number(userId));
+  assert.equal(Number(profiles.find(row => Number(row.id) === Number(target)).daily_rate), 1600);
+  const other = await call(owner, 'POST', '/users', { name: 'Other Relink Account', email: 'other.relink@gkuc.lk', password: 'TempPass2026!', roleId: roles.body[0].id });
+  assert.equal((await call(owner, 'PUT', `/users/${other.body.id}/employee-link`, { employeeId: target, previousEmployeeIds: [other.body.employeeId], reason: 'Attempt occupied profile' })).status, 409);
+  assert.equal((await change(null, [target])).status, 200);
+  const [accounts] = await admin.query(`SELECT id FROM ${testDatabase}.users WHERE id=?`, [userId]);
+  assert.equal(accounts.length, 1);
+  const [logs] = await admin.query(`SELECT id FROM ${testDatabase}.audit_logs WHERE entity='user_employee_link' AND entity_id=?`, [userId]);
+  assert.equal(logs.length, 2);
+});
+
 test('creating system access creates or links an employee without duplicating their profile', async () => {
   const owner = await login();
   const roles = await call(owner, 'GET', '/users/roles');
@@ -1781,6 +1811,51 @@ test('QS creates a manual quotation without a BOQ and the server calculates ever
   assert.equal(Number(acceptedProject.body.budget), 51920);
 });
 
+test('finance numbering continues existing series and preserves payment records', async () => {
+  const finance=await login('finance@gkuc.lk'),owner=await login(),site=await login('store@gkuc.lk');
+  const client=await call(owner,'POST','/clients',{type:'Organisation',name:'Numbering Test Client',contactPerson:'Accounts'});
+  assert.equal(client.status,201,JSON.stringify(client.body));
+  const clients={body:[client.body]};
+  const settings={companyId:1,format:'TEST-INV/{YYYY}/{N}',padding:5,nextValue:145,reason:'Continue previously issued documents'};
+  assert.equal((await call(site,'PUT','/document-numbering/INV',settings)).status,403);
+  assert.equal((await call(finance,'PUT','/document-numbering/INV',settings)).status,200);
+  assert.equal((await call(finance,'PUT','/document-numbering/RCPT',{...settings,format:'TEST-R/{N}',nextValue:77})).status,200);
+  assert.equal((await call(finance,'PUT','/document-numbering/INV',{...settings,format:'BAD/{N}/{N}'})).status,400);
+  assert.equal((await call(finance,'PUT','/document-numbering/QUO',{...settings,format:'TEST-Q/{N}',nextValue:200})).status,200);
+  const quote=await call(owner,'POST','/qs/quotations/manual',{companyId:1,clientId:clients.body[0].id,title:'Numbering quotation',quoteDate:today(),markupPercent:0,vatPercent:0,lines:[{category:'Work',description:'Numbering work',unit:'item',quantity:1,rate:1000}]});
+  assert.equal(quote.status,201,JSON.stringify(quote.body));
+  assert.equal(quote.body.reference,'TEST-Q/00200');
+  assert.equal((await call(finance,'POST',`/qs/quotations/${quote.body.id}/finalize`,{})).status,200);
+  assert.equal((await call(owner,'PATCH',`/qs/quotations/${quote.body.id}`,{status:'Accepted'})).status,200);
+  const plan=await call(finance,'POST','/receivables/quotation-plans',{quotationId:quote.body.id,documentType:'Invoice',taxTreatment:'Exempt',vatRate:0,terms:[{label:'Full payment',percentage:100}]});
+  assert.equal(plan.status,201,JSON.stringify(plan.body));
+  const plans=await call(finance,'GET','/receivables/quotation-plans?companyId=1');
+  const term=plans.body.find(item=>item.id===plan.body.id).terms[0];
+  const converted=await call(finance,'POST',`/receivables/quotation-terms/${term.id}/invoice`,{invoiceDate:today(),reuseQuotationNumber:true});
+  assert.equal(converted.status,201,JSON.stringify(converted.body));
+  assert.equal(converted.body.reference,quote.body.reference);
+  const body={companyId:1,clientId:clients.body[0].id,kind:'Other',title:'Numbering invoice',documentType:'Invoice',taxTreatment:'Exempt',invoiceDate:today(),items:[{description:'Services',quantity:1,rate:1000}]};
+  const invoice=await call(finance,'POST','/receivables/invoices',body);
+  assert.equal(invoice.status,201,JSON.stringify(invoice.body));
+  assert.equal(invoice.body.reference,`TEST-INV/${new Date().getFullYear()}/00145`);
+  const renamed=await call(finance,'PATCH',`/document-numbering/INV/${invoice.body.id}`,{reference:'LEGACY/146',previousReference:invoice.body.reference,reason:'Continue legacy book'});
+  assert.equal(renamed.status,200,JSON.stringify(renamed.body));
+  assert.equal((await call(finance,'POST',`/receivables/invoices/${invoice.body.id}/issue`,{})).status,204);
+  const receipt=await call(finance,'POST',`/receivables/invoices/${invoice.body.id}/receipts`,{amount:100,receivedDate:today(),method:'Cash',reference:'BANK-REF',receiptNumber:'LEGACY-R/099'});
+  assert.equal(receipt.status,201,JSON.stringify(receipt.body));
+  assert.equal((await call(finance,'PATCH',`/document-numbering/RCPT/${receipt.body.receiptId}`,{reference:'LEGACY-R/100',previousReference:'LEGACY-R/099',reason:'Correct receipt book'})).status,200);
+  const detail=await call(finance,'GET',`/receivables/invoices/${invoice.body.id}`);
+  assert.equal(detail.body.receipts[0].receiptNumber,'LEGACY-R/100');
+  assert.equal(detail.body.receipts[0].reference,'BANK-REF');
+  assert.equal(Number(detail.body.receipts[0].amount),100);
+  const secondReceipt=await call(finance,'POST',`/receivables/invoices/${invoice.body.id}/receipts`,{amount:50,receivedDate:today(),method:'Cash'});
+  assert.equal(secondReceipt.status,201,JSON.stringify(secondReceipt.body));
+  const after=await call(finance,'GET',`/receivables/invoices/${invoice.body.id}`);
+  assert.equal(after.body.receipts[1].receiptNumber,'TEST-R/00077');
+  assert.equal((await call(finance,'POST','/receivables/invoices',{...body,reference:'LEGACY/146'})).status,409);
+  await admin.query(`DELETE FROM ${testDatabase}.document_numbering WHERE company_id=1`);
+});
+
 test('quotation revisions preserve the original and finalization is independently authorised', async () => {
   const owner = await login();
   const supervisor = await login('supervisor@gkuc.lk');
@@ -1812,7 +1887,7 @@ test('quotation revisions preserve the original and finalization is independentl
   assert.equal(revised.status, 201, JSON.stringify(revised.body));
   assert.equal(revised.body.revisionNumber, 1);
   assert.equal(revised.body.revisedFromId, created.body.id);
-  assert.match(revised.body.reference, /-R1$/);
+  assert.equal(revised.body.reference, created.body.reference);
   const original = await call(owner, 'GET', `/qs/quotations/${created.body.id}`);
   assert.equal(Number(original.body.total), 354);
   assert.equal(Number(revised.body.total), 590);
@@ -1822,6 +1897,11 @@ test('quotation revisions preserve the original and finalization is independentl
   assert.equal(final.body.preparedBy, 'Another Preparer');
   assert.equal(final.body.preparedByDesignation, 'Managing Director');
   assert.ok(final.body.revisions.some(row => Number(row.id) === Number(created.body.id)));
+  const finance=await login('finance@gkuc.lk');
+  const renumbered=await call(finance,'PATCH',`/document-numbering/QUO/${revised.body.id}`,{reference:'HISTORICAL/Q/145',previousReference:revised.body.reference,reason:'Match previously issued quotation book'});
+  assert.equal(renumbered.status,200,JSON.stringify(renumbered.body));
+  const family=await call(owner,'GET',`/qs/quotations/${created.body.id}`);
+  assert.ok(family.body.revisions.every(row=>row.reference==='HISTORICAL/Q/145'));
   assert.ok(identity.body.company);
 });
 
@@ -4563,6 +4643,34 @@ test('batch payroll allowances preview separately and save atomically without du
   assert.equal((await call(owner,'POST','/payroll/inputs/batch',body)).status,409);assert.equal(await count(),2);
 });
 
+test('QS printable applications and payment letters persist authoring details and percentage-valued sums',async()=>{
+  const owner=await login(),site=await login('store@gkuc.lk');
+  const project=await call(owner,'POST','/projects',{companyId:1,name:`Printable QS ${Date.now()}`,client:'Document Client',manager:'Project Manager',site:'Office',stage:'Planning'});
+  assert.equal(project.status,201,JSON.stringify(project.body));
+  const schedule=await call(owner,'POST','/progress-claims/schedules',{projectId:project.body.id,source:'QS prepared',revisionReason:'Prepare printable application',items:[
+    {code:'A-1',basis:'Note',description:'Preliminaries\nContract conditions apply.',unit:'Note',quantity:1,rate:0},
+    {code:'A-2',basis:'Percentage',description:'Insurance',unit:'P.S',quantity:1,rate:165000},
+    {code:'A-4',basis:'Percentage',description:'Contractor facilities',unit:'L.Sum',quantity:1,rate:50000}]});
+  assert.equal(schedule.status,201,JSON.stringify(schedule.body));
+  assert.equal((await call(owner,'PATCH',`/progress-claims/schedules/${schedule.body.id}`,{status:'Internally approved',reference:'Approved QS valuation'})).status,204);
+  const body={scheduleId:schedule.body.id,applicationDate:'2042-03-01',periodFrom:'2042-02-01',periodTo:'2042-02-28',quantities:{'A-1':0,'A-2':1,'A-4':.8},
+    documentDetails:{billNumber:'02',projectReference:'S/232/26',recipientTitle:'Deputy General Manager',recipientOrganisation:'Example Corporation',recipientAddress:'P.O. Box 56\nRajagiriya',signatoryName:'Authorised Signatory',signatoryDesignation:'Managing Director',letterBody:'Please arrange payment for bill 02.\n<script>unsafe()</script>'}};
+  const claim=await call(owner,'POST','/progress-claims',body);assert.equal(claim.status,201,JSON.stringify(claim.body));
+  assert.equal((await call(site,'PUT',`/progress-claims/${claim.body.id}`,body)).status,403);
+  const document=await fetch(`${base}/progress-claims/${claim.body.id}/document?type=application`,{headers:{authorization:`Bearer ${owner}`}});
+  const html=await document.text();assert.equal(document.status,200);assert.match(html,/Interim Payment Application No 02/);assert.match(html,/80%/);assert.match(html,/40,000.00/);assert.match(html,/205,000.00/);
+  const letter=await fetch(`${base}/progress-claims/${claim.body.id}/document?type=letter`,{headers:{authorization:`Bearer ${owner}`}});
+  const text=await letter.text();assert.match(text,/Deputy General Manager/);assert.match(text,/Authorised Signatory/);assert.match(text,/&lt;script&gt;/);assert.doesNotMatch(text,/<script>unsafe/);
+  const {documentDetails,...oldClientBody}=body;
+  assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,oldClientBody)).status,204);
+  const data=await call(owner,'GET','/progress-claims?companyId=1');
+  const saved=data.body.claims.find(row=>row.id===claim.body.id);
+  assert.equal(saved.document_details.billNumber,'02');assert.equal(Number(saved.submitted_amount),205000);
+  assert.equal(saved.invoice_id,null,'printing claims must not create invoices or income');
+  assert.equal((await call(owner,'PATCH',`/progress-claims/${claim.body.id}/status`,{status:'Submitted',reason:'Send approved application'})).status,204);
+  assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,body)).status,409);
+});
+
 test('progress claims freeze BOQ versions, separate certification and reuse one receivable for optional invoicing and payments',async()=>{
   const owner=await login(),site=await login('supervisor@gkuc.lk');
   const project=await call(owner,'POST','/projects',{companyId:1,name:`Progress billing QA ${Date.now()}`,client:'Progress Client',manager:'Project Manager',site:'QA Site',stage:'Planning'});
@@ -4575,6 +4683,7 @@ test('progress claims freeze BOQ versions, separate certification and reuse one 
   assert.equal((await call(owner,'PUT',`/progress-claims/schedules/${schedule.body.id}`,scheduleBody)).status,204);
   assert.equal((await call(owner,'PATCH',`/progress-claims/schedules/${schedule.body.id}`,{status:'Internally approved',reference:'Approved QS estimate QA'})).status,204);
   const claim=await call(owner,'POST','/progress-claims',application);assert.equal(claim.status,201,JSON.stringify(claim.body));
+  assert.equal((await call(owner,'DELETE',`/progress-claims/schedules/${schedule.body.id}`,{reason:'Cannot delete a used version'})).status,409);
   assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,{...application,quantities:{D1:35}})).status,204);
   assert.equal((await call(owner,'PUT',`/progress-claims/${claim.body.id}`,application)).status,204);
   assert.equal((await call(owner,'POST','/progress-claims',application)).status,409);
@@ -4615,6 +4724,22 @@ test('progress claims freeze BOQ versions, separate certification and reuse one 
   const all=await call(owner,'GET','/progress-claims?companyId=1');
   assert.equal(Number(all.body.claims.find(row=>row.id===next.body.id).submitted_amount),2500,'uses certified 2000 baseline, not claimed 3000 or paid 1000');
   assert.equal((await call(owner,'GET','/progress-claims?companyId=2')).body.claims.some(row=>row.id===claim.body.id),false);
+});
+
+test('unused approved valuation BOQ deletion is audited and restores the original billing route',async()=>{
+  const owner=await login(),site=await login('supervisor@gkuc.lk');
+  const project=await call(owner,'POST','/projects',{companyId:1,name:`Delete test valuation ${Date.now()}`,client:'QA client',manager:'Project Manager',site:'QA site',stage:'Planning'});
+  assert.equal(project.status,201);
+  const created=await call(owner,'POST','/progress-claims/schedules',{projectId:project.body.id,source:'QS prepared',revisionReason:'Temporary test valuation',items:[{code:'A1',description:'Test item',unit:'sum',quantity:1,rate:100}]});
+  assert.equal(created.status,201);const id=created.body.id;
+  assert.equal((await call(owner,'PATCH',`/progress-claims/schedules/${id}`,{status:'Internally approved',reference:'Test approval'})).status,204);
+  assert.equal((await call(site,'DELETE',`/progress-claims/schedules/${id}`,{reason:'Test removal'})).status,403);
+  assert.equal((await call(owner,'DELETE',`/progress-claims/schedules/${id}`,{reason:''})).status,400);
+  assert.equal((await call(owner,'DELETE',`/progress-claims/schedules/${id}`,{reason:'Remove test valuation'})).status,204);
+  const [[row]]=await admin.query(`SELECT billing_route FROM ${testDatabase}.projects WHERE id=?`,[project.body.id]);assert.equal(row.billing_route,'Quotation and invoice');
+  const [logs]=await admin.query(`SELECT before_json FROM ${testDatabase}.audit_logs WHERE entity='progress_schedule' AND entity_id=? AND action='DELETE'`,[String(id)]);
+  assert.equal(logs.length,1);const snapshot=typeof logs[0].before_json==='string'?JSON.parse(logs[0].before_json):logs[0].before_json;assert.equal(snapshot.status,'Internally approved');
+  assert.equal((await call(owner,'DELETE',`/progress-claims/schedules/${id}`,{reason:'Repeat deletion'})).status,404);
 });
 
 test('payment suspension blocks business data while status and session hygiene remain available',async()=>{

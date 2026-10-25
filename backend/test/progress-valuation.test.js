@@ -2,6 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {valueProgress,progressTotals} from '../src/lib/progress-valuation.js';
 const items=[{code:'A1',description:'Drain',unit:'m',quantity:100,rate:1000}];
+test('provisional sums use percentage completion and note rows never add money',()=>{
+  const schedule=[{code:'N',basis:'Note',description:'Contract conditions',quantity:1,rate:0},
+    {code:'PS',basis:'Percentage',description:'Facilities',quantity:1,rate:50000}];
+  const before=valueProgress(schedule,{N:0,PS:.5});
+  const current=valueProgress(schedule,{N:0,PS:.8},before);
+  assert.equal(current[0].current,0);assert.equal(current[1].current,15000);assert.equal(current[1].cumulative,40000);
+  assert.throws(()=>valueProgress(schedule,{N:1,PS:.8}));
+});
 test('progress applications use certified history rather than payments or previous submitted totals',()=>{
   const previous=valueProgress(items,{A1:20});
   const lines=valueProgress(items,{A1:50},previous);
