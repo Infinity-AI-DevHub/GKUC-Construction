@@ -469,11 +469,14 @@ function CertificateForm({ data, companyId, close, reload }) {
 
 /* ---- bank guarantees ------------------------------------------------------ */
 
-const BOND_COLUMNS = ['Reference','Kind','In favour of','Bank','Amount','Margin held','Expires','Status',''];
+const BOND_COLUMNS = ['Reference / project','Kind','In favour of','Bank / FD or facility','Amount','Margin held','Dates / process','Status',''];
 const BOND_TEMPLATE = 'minmax(120px,1fr) 140px minmax(160px,1.2fr) minmax(130px,1fr) 130px 130px 140px 110px 190px';
 
 export function Bonds({ data, can, companyId }) {
   const [bonds, setBonds] = useState([]);
+  const [search,setSearch]=useState('');
+  const [statusFilter,setStatusFilter]=useState('');
+  const [kindFilter,setKindFilter]=useState('');
   const [recording, setRecording] = useState(false);
   const [extending,setExtending]=useState(null);
   const [editing,setEditing]=useState(null);
@@ -491,19 +494,27 @@ export function Bonds({ data, can, companyId }) {
 
   return <>
     {error&&<p className="form-error" role="alert">{error}</p>}
+    <div className="toolbar">
+      <label>Search bonds<input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Number, project, beneficiary, bank or FD"/></label>
+      <label>Status<select aria-label="Status" value={statusFilter} onChange={event=>setStatusFilter(event.target.value)}><option value="">All statuses</option>{['Live','Expired','Released','Called'].map(value=><option key={value}>{value}</option>)}</select></label>
+      <label>Bond type<select aria-label="Bond type" value={kindFilter} onChange={event=>setKindFilter(event.target.value)}><option value="">All types</option>{['Advance payment','Performance','ESHS performance','Retention','Bid','Cash','Other'].map(value=><option key={value}>{value}</option>)}</select></label>
+    </div>
     <Table columns={BOND_COLUMNS} template={BOND_TEMPLATE} title="Bank guarantees"
       empty="No bonds recorded."
       tools={can.invoice
         ? <button className="secondary" onClick={() => setRecording(true)}>Record a bond</button>
         : null}>
-      {bonds.map(bond => <Row template={BOND_TEMPLATE} key={bond.id} id={`bond-${bond.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(bond.id) ? 'linked-record' : ''}>
-        <div><strong>{bond.reference}</strong><small>{bond.bond_number || 'Bond number pending'}</small>{bond.project&&<small>{bond.project}</small>}</div>
+      {bonds.filter(bond=>(!statusFilter||bond.status===statusFilter)&&(!kindFilter||bond.kind===kindFilter)&&
+        [bond.reference,bond.bond_number,bond.project,bond.project_description,bond.beneficiary,bond.bank,bond.fd_reference,bond.process_notes].some(value=>String(value||'').toLowerCase().includes(search.trim().toLowerCase()))).map(bond => <Row template={BOND_TEMPLATE} key={bond.id} id={`bond-${bond.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(bond.id) ? 'linked-record' : ''}>
+        <div><strong>{bond.reference}</strong><small>{bond.bond_number || 'Bond number pending'}</small>{(bond.project||bond.project_description)&&<small>{bond.project||bond.project_description}</small>}</div>
         <span>{bond.kind}</span>
         <span>{bond.beneficiary}</span>
-        <span>{bond.bank}</span>
+        <div><span>{bond.bank}</span>{bond.fd_reference&&<small>FD / facility: {bond.fd_reference}</small>}</div>
         <span>{rupees(bond.amount)}</span>
         <span>{Number(bond.margin_held) > 0 ? rupees(bond.margin_held) : '—'}</span>
         <div>
+          <small>Issued {shortDate(bond.issued_date)}</small>
+          {bond.start_date&&<small>Starts {shortDate(bond.start_date)}</small>}
           <span className={bond.status === 'Live' && Number(bond.daysLeft) < 0 ? 'overdue' : ''}>
             {shortDate(bond.expiry_date)}
           </span>
@@ -514,6 +525,8 @@ export function Bonds({ data, can, companyId }) {
               : `in ${bond.daysLeft} days`}
           </small> : null}
           <small>{Number(bond.extensions) > 0 ? `${bond.extensions} extension${Number(bond.extensions) === 1 ? '' : 's'} · ` : ''}remind {bond.reminderDays} days before</small>
+          {bond.process_notes&&<small>{bond.process_notes}</small>}
+          {bond.released_date&&<small>Released {shortDate(bond.released_date)}</small>}
         </div>
         <Badge tone={tone(bond)}>{bond.status}</Badge>
         {can.invoice?<div className="row-actions">
@@ -544,6 +557,12 @@ function BondForm({ data, companyId, close, reload, bond=null }) {
       companyId,
       projectId: values.projectId ? Number(values.projectId) : null,
       kind: values.kind,
+      fdReference:values.fdReference||'',
+      projectDescription:values.projectDescription||'',
+      startDate:values.startDate||null,
+      processNotes:values.processNotes||'',
+      status:values.status,
+      releasedDate:values.releasedDate||null,
       beneficiary: values.beneficiary,
       bank: values.bank,
       bondNumber: values.bondNumber || undefined,
@@ -561,18 +580,24 @@ function BondForm({ data, companyId, close, reload, bond=null }) {
   }}>
     <SelectField name="kind" label="Kind"
       defaultValue={bond?.kind}
-      options={['Advance payment', 'Performance', 'Retention', 'Bid', 'Other']} />
+      options={['Advance payment', 'Performance', 'ESHS performance', 'Retention', 'Bid', 'Cash', 'Other']} />
     <SelectField name="projectId" label="Project" required={false}
       defaultValue={bond?.project_id||''}
       options={[['', 'Not project specific'], ...data.projects.filter(project=>Number(project.companyId)===Number(companyId)||Number(project.id)===Number(bond?.project_id)).map(project => [project.id, project.name])]} />
     <Field name="beneficiary" label="In favour of" wide placeholder="Road Development Authority" defaultValue={bond?.beneficiary}/>
+    <Field name="projectDescription" label="Project / tender description (if not linked above)" wide required={false} maxLength={1000} defaultValue={bond?.project_description||''}/>
     <Field name="bank" label="Issuing bank" defaultValue={bond?.bank}/>
+    <Field name="fdReference" label="FD number(s) / credit facility" required={false} maxLength={180} defaultValue={bond?.fd_reference||''}/>
     <Field name="bondNumber" label="Bond number (optional)" required={false} defaultValue={bond?.bond_number||''}/>
     <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" defaultValue={bond?.amount}/>
     <Field name="marginHeld" label="Margin held by the bank" type="number" step="any" min="0" required={false} defaultValue={bond?.margin_held}/>
     <Field name="commission" label="Commission paid" type="number" step="any" min="0" required={false} defaultValue={bond?.commission}/>
     <Field name="issuedDate" label="Issued on" type="date" defaultValue={bond?String(bond.issued_date).slice(0,10):todayInput()} />
+    <Field name="startDate" label="Starting date" type="date" required={false} defaultValue={bond?.start_date?String(bond.start_date).slice(0,10):''}/>
     <Field name="expiryDate" label="Expires on" type="date" defaultValue={bond?String(bond.expiry_date).slice(0,10):''}/>
+    <SelectField name="status" label="Status" defaultValue={bond?.status||'Live'} options={['Live','Expired','Released','Called']}/>
+    <Field name="releasedDate" label="Released on (if known)" type="date" required={false} defaultValue={bond?.released_date?String(bond.released_date).slice(0,10):''}/>
+    <TextArea name="processNotes" label="Process / follow-up notes" required={false} rows={2} defaultValue={bond?.process_notes||''}/>
     <Field name="reminderDays" label="Remind before expiry (days)" type="number" min="0" max="180" defaultValue={bond?.reminderDays??30} />
     <TextArea name="notes" label="Notes" required={false} rows={2} defaultValue={bond?.notes||''}/>
   </FormModal>;

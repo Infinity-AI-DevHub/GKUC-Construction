@@ -2792,6 +2792,15 @@ async function migrateExistingInstalls() {
   await addForeignKey('received_cheques', 'fk_received_cheque_company', 'CONSTRAINT fk_received_cheque_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await addColumn('bank_bonds', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
   await addColumn('bank_bonds', 'reminder_days', 'SMALLINT UNSIGNED NOT NULL DEFAULT 30');
+  await addColumn('bank_bonds', 'fd_reference', 'VARCHAR(180) NULL');
+  await addColumn('bank_bonds', 'project_description', 'VARCHAR(1000) NULL');
+  await addColumn('bank_bonds', 'start_date', 'DATE NULL');
+  await addColumn('bank_bonds', 'process_notes', 'VARCHAR(1000) NULL');
+  const bondColumns = await query("SELECT COLUMN_TYPE,CHARACTER_MAXIMUM_LENGTH,COLUMN_NAME FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='bank_bonds' AND COLUMN_NAME IN ('kind','beneficiary')");
+  if (!bondColumns.find(column=>column.COLUMN_NAME==='kind')?.COLUMN_TYPE.includes("'Cash'"))
+    await query("ALTER TABLE bank_bonds MODIFY kind ENUM('Advance payment','Performance','Retention','Bid','Other','ESHS performance','Cash') NOT NULL DEFAULT 'Performance'");
+  if (Number(bondColumns.find(column=>column.COLUMN_NAME==='beneficiary')?.CHARACTER_MAXIMUM_LENGTH)<1000)
+    await query('ALTER TABLE bank_bonds MODIFY beneficiary VARCHAR(1000) NOT NULL');
   await addForeignKey('bank_bonds', 'fk_bond_company', 'CONSTRAINT fk_bond_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await addColumn('petty_cash_floats', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
   await addForeignKey('petty_cash_floats', 'fk_float_company', 'CONSTRAINT fk_float_company FOREIGN KEY(company_id) REFERENCES companies(id)');

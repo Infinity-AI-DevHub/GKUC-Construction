@@ -638,8 +638,14 @@ const bondDate=z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value=>{
 const bondFields=z.object({
     companyId: z.coerce.number().int().positive().default(1),
     projectId: z.coerce.number().int().positive().nullable().optional(),
-    kind: z.enum(['Advance payment', 'Performance', 'Retention', 'Bid', 'Other']),
-    beneficiary: z.string().trim().min(2).max(180),
+    kind: z.enum(['Advance payment', 'Performance', 'Retention', 'Bid', 'Other', 'ESHS performance', 'Cash']),
+    beneficiary: z.string().trim().min(2).max(1000),
+    fdReference: z.string().trim().max(180).optional(),
+    projectDescription: z.string().trim().max(1000).optional(),
+    startDate: bondDate.nullable().optional(),
+    processNotes: z.string().trim().max(1000).optional(),
+    status: z.enum(['Live','Expired','Released','Called']).optional(),
+    releasedDate: bondDate.nullable().optional(),
     bank: z.string().trim().min(2).max(180),
     bondNumber: z.string().trim().max(80).optional(),
     amount: z.coerce.number().positive(),
@@ -649,7 +655,8 @@ const bondFields=z.object({
     expiryDate: bondDate,
     reminderDays: z.coerce.number().int().min(0).max(180).default(30),
     notes: z.string().trim().max(600).optional()
-  }).refine(value=>value.expiryDate>=value.issuedDate,{message:'Expiry must not precede the issue date',path:['expiryDate']});
+  }).refine(value=>value.expiryDate>=value.issuedDate,{message:'Expiry must not precede the issue date',path:['expiryDate']})
+    .refine(value=>!value.startDate||value.expiryDate>=value.startDate,{message:'Closing date must not precede the starting date',path:['startDate']});
 
 router.put('/receivables/bonds/:id',auth,permit('finance.invoice'),validate(bondFields),async(req,res,next)=>{
   try{
@@ -666,6 +673,10 @@ router.put('/receivables/bonds/:id',auth,permit('finance.invoice'),validate(bond
         [req.body.projectId||null,req.body.kind,req.body.beneficiary,req.body.bank,req.body.bondNumber||null,req.body.amount,
           req.body.marginHeld,req.body.commission,req.body.issuedDate,req.body.expiryDate,req.body.reminderDays,req.body.notes||null,before.id]);
       await audit(connection,req.user.id,'UPDATE','bank_bond',before.id,before,req.body,req.ip);
+      await connection.execute(`UPDATE bank_bonds SET fd_reference=?,project_description=?,start_date=?,process_notes=?,status=?,released_date=? WHERE id=?`,
+        [req.body.fdReference??before.fd_reference,req.body.projectDescription??before.project_description,
+          req.body.startDate===undefined?before.start_date:req.body.startDate,req.body.processNotes??before.process_notes,
+          req.body.status??before.status,req.body.releasedDate===undefined?before.released_date:req.body.releasedDate,before.id]);
     });
     publishChange('receivables',{});res.status(204).end();
   }catch(error){next(error);}
@@ -695,13 +706,16 @@ router.post('/receivables/bonds', auth, permit('finance.invoice'),validate(bondF
       const reference = await nextReference('BND', 'bank_bonds');
       const result = await query(
         `INSERT INTO bank_bonds (company_id,reference,project_id,kind,beneficiary,bank,bond_number,amount,
-           margin_held,commission,issued_date,expiry_date,reminder_days,notes,created_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           margin_held,commission,issued_date,expiry_date,reminder_days,notes,created_by,
+           fd_reference,project_description,start_date,process_notes,status,released_date)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [req.body.companyId, reference, req.body.projectId || null, req.body.kind, req.body.beneficiary, req.body.bank,
           req.body.bondNumber || null, req.body.amount, req.body.marginHeld, req.body.commission,
-          req.body.issuedDate,req.body.expiryDate,req.body.reminderDays,req.body.notes||null,req.user.id]);
+          req.body.issuedDate,req.body.expiryDate,req.body.reminderDays,req.body.notes||null,req.user.id,
+          req.body.fdReference||null,req.body.projectDescription||null,req.body.startDate||null,
+          req.body.processNotes||null,req.body.status||'Live',req.body.releasedDate||null]);
       await audit(pool, req.user.id, 'CREATE', 'bank_bond', result.insertId, null,
-        { reference, kind: req.body.kind, amount: req.body.amount }, req.ip);
+        { reference, ...req.body }, req.ip);
       publishChange('receivables', {});
       res.status(201).json({ id: result.insertId, reference });
     } catch (error) { next(error); }
