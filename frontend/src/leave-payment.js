@@ -8,6 +8,6 @@ export function leavePaymentEligibility(start,policies,fromDate) {
   target.setUTCDate(Math.min(day,last));
   const eligibleFrom=target.toISOString().slice(0,10);
   const paidAllowed=fromDate>=eligibleFrom;
-  const unpaidAllowed=paidAllowed||Boolean(Number(policy.allow_unpaid_during_wait));
+  const unpaidAllowed=true;
   return {policy,eligibleFrom,paidAllowed,unpaidAllowed,options:[...(paidAllowed?['Paid']:[]),...(unpaidAllowed?['Unpaid']:[])]};
 }
