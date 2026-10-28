@@ -4515,7 +4515,11 @@ test('HR leave policy and individual entitlements enforce yearly, monthly and wa
   assert.equal((await call(site,'PUT',`/employees/${id}/leave-entitlement`,{annual:4,casual:1})).status,403);
   assert.equal((await call(owner,'PUT',`/employees/${id}/leave-entitlement`,{annual:4,casual:1})).status,200);
   const request=(fromDate,toDate,paymentType='Paid',leaveType='Annual')=>call(owner,'POST',`/employees/${id}/leave`,{leaveType,paymentType,fromDate,toDate,reason:'Policy check'});
-  assert.equal((await request('2035-02-01','2035-02-01','Unpaid')).status,409);
+  assert.equal((await request('2035-02-01','2035-02-01','Paid')).status,409);
+  const probation=await request('2035-02-01','2035-02-01','Unpaid');
+  assert.equal(probation.status,201);assert.equal(probation.body.payment_type,'Unpaid');
+  assert.equal((await call(owner,'PATCH',`/employees/leave/${probation.body.id}`,{status:'Approved'})).status,200);
+  assert.equal((await call(owner,'PATCH',`/employees/leave/${probation.body.id}`,{status:'Rejected'})).status,200);
   assert.equal((await request('2035-04-01','2035-04-02')).status,201);
   assert.equal((await request('2035-04-03','2035-04-03')).status,409);
   assert.equal((await request('2035-05-01','2035-05-02')).status,201);
@@ -4598,6 +4602,51 @@ test('bond register supports workbook security references, dates, types and rele
   row=await read();assert.equal(row.fd_reference,payload.fdReference);assert.equal(row.status,'Released');
   assert.equal((await call(owner,'GET','/receivables/bonds?companyId=1')).body.some(row=>row.id===id),false);
   assert.equal((await call(owner,'DELETE',`/receivables/bonds/${id}`)).status,204);
+});
+
+test('both-company payroll builds separate drafts atomically and protects locked runs',async()=>{
+  const owner=await login(),site=await login('supervisor@gkuc.lk');
+  const period={periodStart:'2042-02-01',periodEnd:'2042-02-01',payFrequency:'Daily'};
+  for(const companyId of [1,2]){
+    const person=await call(owner,'POST','/employees',{code:`BATCH-${companyId}`,name:`Batch Payroll ${companyId}`,
+      joinDate:'2042-01-01',compensationEffectiveFrom:'2042-01-01',payrollCompanyId:companyId,
+      payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1600,epfEligible:false,etfEligible:false});
+    assert.equal(person.status,201,JSON.stringify(person.body));
+    await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out)
+      VALUES (?,?,'Worker','2042-02-01','Checked out','07:30','16:30')`,[person.body.id,person.body.name]);
+  }
+  const payload={...period,companyIds:[2,1]};
+  assert.equal((await call(site,'POST','/payroll/batch',payload)).status,403);
+  assert.equal((await call(owner,'POST','/payroll/batch',{...payload,companyIds:[1,1]})).status,400);
+  const created=await call(owner,'POST','/payroll/batch',payload);
+  assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(created.body.runs.length,2);
+  const runs=created.body.runs;
+  const excel=await fetch(`${base}/payroll/${runs[0].id}/export.xlsx`,{headers:{Authorization:`Bearer ${owner}`}});
+  assert.equal(excel.status,200);assert.match(excel.headers.get('content-type'),/spreadsheetml/);
+  assert.equal(Buffer.from(await excel.arrayBuffer()).subarray(0,2).toString(),'PK');
+  assert.equal((await call(site,'GET',`/payroll/${runs[0].id}/export.xlsx`)).status,403);
+  for(const run of runs){
+    const detail=await call(owner,'GET',`/payroll/${run.id}`);
+    assert.equal(detail.body.payslips.length,1);assert.equal(Number(detail.body.payslips[0].basic),1600);
+    const path=`/payroll/${run.id}/payslips/${detail.body.payslips[0].id}/document`;
+    const html=await fetch(`${base}${path}`,{headers:{Authorization:`Bearer ${owner}`}});
+    assert.equal(html.status,200);assert.match(await html.text(),/1,600\.00/);
+    assert.equal((await call(site,'GET',path)).status,403);
+    const ticket=await call(owner,'POST','/document-download-tickets',{path:`${path}?preview=pdf`});
+    assert.equal(ticket.status,200,JSON.stringify(ticket.body));
+    const pdf=await fetch(new URL(ticket.body.url,base));
+    assert.equal(pdf.status,200);assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
+    const other=runs.find(row=>row.id!==run.id);
+    assert.equal((await call(owner,'GET',`/payroll/${other.id}/payslips/${detail.body.payslips[0].id}/document`)).status,404);
+  }
+  const repeated=await call(owner,'POST','/payroll/batch',payload);
+  assert.equal(repeated.status,201,JSON.stringify(repeated.body));
+  assert.deepEqual(repeated.body.runs.map(r=>r.id),runs.map(r=>r.id));
+  assert.equal((await call(owner,'PATCH',`/payroll/${runs[1].id}`,{status:'Approved'})).status,200);
+  const [before]=await admin.query(`SELECT id FROM ${testDatabase}.payslips WHERE run_id=?`,[runs[0].id]);
+  assert.equal((await call(owner,'POST','/payroll/batch',payload)).status,409);
+  const [after]=await admin.query(`SELECT id FROM ${testDatabase}.payslips WHERE run_id=?`,[runs[0].id]);
+  assert.deepEqual(after,before,'First-company recalculation must roll back when second company is locked');
 });
 
 test('one-time salary deductions require approval and reduce payroll once, including draft recalculation',async()=>{

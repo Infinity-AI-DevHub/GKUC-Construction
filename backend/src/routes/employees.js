@@ -821,7 +821,7 @@ router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.obje
   const eligibleFrom = employee.join_date ? addCalendarMonths(employee.join_date,policy.waiting_months) : null;
   const paymentType = body.paymentType || (body.leaveType==='Unpaid'?'Unpaid':'Paid');
   if(!eligibleFrom) return res.status(409).json({error:'Record the employee’s actual employment start date before requesting leave.'});
-  if(body.fromDate<eligibleFrom && (paymentType==='Paid'||!policy.allow_unpaid_during_wait)) return res.status(409).json({error:`This employee is in the ${policy.waiting_months}-month leave waiting period until ${eligibleFrom}. ${policy.allow_unpaid_during_wait?'Only unpaid leave is allowed now.':'Neither paid nor unpaid leave is allowed under the active HR policy.'}`});
+  if(body.fromDate<eligibleFrom && paymentType==='Paid') return res.status(409).json({error:`This employee is in their probation period and is not entitled to paid leave until ${eligibleFrom}. Record this leave as Unpaid.`});
   const days = Math.max(1, Math.round((new Date(body.toDate) - new Date(body.fromDate)) / 86400000) + 1);
   if (body.fromDate.slice(0,4) !== body.toDate.slice(0,4)) return res.status(400).json({error:'Please record leave crossing New Year as two requests, one for each year.'});
   if (body.fromDate.slice(0,7) !== body.toDate.slice(0,7)) return res.status(400).json({error:'Record leave crossing a month boundary as two requests so each month’s limit can be checked.'});
@@ -851,7 +851,7 @@ router.patch('/leave/:id', auth, permit('hr.manage', 'hr.leave'), validate(z.obj
     const policy=await leavePolicyFor(fromDate);
     const eligibility=await getOne('SELECT join_date FROM visible_employees WHERE id=?',[before.employee_id]);
     const eligibleFrom=eligibility?.join_date&&policy ? addCalendarMonths(eligibility.join_date,policy.waiting_months) : null;
-    if(!eligibleFrom || (fromDate<eligibleFrom && (before.payment_type==='Paid'||!policy.allow_unpaid_during_wait))) return res.status(409).json({error:'This request does not meet the active leave waiting-period rule. Review the employee start date and HR policy before approving.'});
+    if(!eligibleFrom || (fromDate<eligibleFrom && before.payment_type==='Paid')) return res.status(409).json({error:'This employee is not entitled to paid leave during probation. Review the leave payment type and employment start date before approving.'});
   }
   await query('UPDATE leave_requests SET status=?,decided_by=?,decided_at=NOW() WHERE id=?', [req.body.status, req.user.id, req.params.id]);
   if (req.body.status === 'Approved') await query("UPDATE employees SET status='On leave' WHERE id=?", [before.employee_id]);

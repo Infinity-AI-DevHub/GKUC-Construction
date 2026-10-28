@@ -8,6 +8,9 @@ import {calculatePayrollLeave} from '../lib/payroll-leave.js';
 import { PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES, calculatePayslip, payProfileError } from '../lib/payroll-policy.js';
 import {rulesFor,calculateTransport,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
 import { contributionEligibility, DEFAULT_STATUTORY_RULES } from '../lib/statutory-eligibility.js';
+import {writeWorkbook} from '../lib/xlsx-write.js';
+import {sendDocument} from '../lib/document-pdf.js';
+import {payrollSheets,payslipDocument} from '../lib/payroll-export.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -202,8 +205,25 @@ router.patch('/settings/employees/:id', auth, permit("hr.settings"), validate(pa
 }));
 
 router.get('/:id', auth, permit('hr.payroll'), wrap(async (req, res) => {
-  const run = await getOne(`${select} WHERE r.id=?`, [req.params.id]);
-  if (!run) return res.status(404).json({ error: 'Payroll run not found' });
+  res.json(await payrollSnapshot(req.params.id));
+}));
+
+router.get('/:id/export.xlsx',auth,permit('hr.payroll'),wrap(async(req,res)=>{
+  const run=await payrollSnapshot(req.params.id);
+  res.setHeader('Cache-Control','no-store');
+  res.attachment(`${run.reference.replace(/[^\w.-]/g,'-')}-salary-details.xlsx`);
+  res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(writeWorkbook(payrollSheets(run)));
+}));
+router.get('/:id/payslips/:slipId/document',auth,permit('hr.payroll'),wrap(async(req,res)=>{
+  const run=await payrollSnapshot(req.params.id),slip=run.payslips.find(row=>String(row.id)===req.params.slipId);
+  if(!slip)throw fail(404,'Payslip not found in this payroll run');
+  res.setHeader('Cache-Control','no-store');
+  await sendDocument(req,res,payslipDocument(run,slip),`${run.reference}-${slip.employeeCode}.pdf`);
+}));
+
+async function payrollSnapshot(id){
+  const run = await getOne(`${select} WHERE r.id=?`, [id]);
+  if (!run) throw fail(404,'Payroll run not found');
   const payslips = await query(`SELECT s.id,s.days_present daysPresent,s.days_absent daysAbsent,s.paid_leave_days paidLeaveDays,
     s.unpaid_leave_days unpaidLeaveDays,s.paid_leave_pay paidLeavePay,COALESCE(s.payable_days,s.days_present+s.paid_leave_days) payableDays,s.overtime_hours overtimeHours,
     s.basic,s.contribution_base contributionBase,s.overtime_pay overtimePay,s.late_minutes lateMinutes,s.late_deduction lateDeduction,s.unpaid_leave_deduction unpaidLeaveDeduction,
@@ -223,10 +243,10 @@ router.get('/:id', auth, permit('hr.payroll'), wrap(async (req, res) => {
   const components = await query(`SELECT sc.id,sc.payslip_id payslipId,sc.name,sc.kind,sc.amount,sc.calculation_detail calculationDetail
     FROM payslip_components sc JOIN payslips ps ON ps.id=sc.payslip_id
     WHERE ps.run_id=? ORDER BY sc.kind,sc.name`, [run.id]);
-  res.json({ ...run, payslips: payslips.map(slip => ({ ...slip,
+  return { ...run, payslips: payslips.map(slip => ({ ...slip,
     advanceRecoveries: advanceRecoveries.filter(row => row.payslipId === slip.id),
-    components: components.filter(row => row.payslipId === slip.id) })) });
-}));
+    components: components.filter(row => row.payslipId === slip.id) })) };
+}
 
 /**
  * Builds a draft from attendance and dated policies. Reviewed OT replaces automatic
@@ -243,7 +263,32 @@ export async function generatePayroll(req, res) {
   const { companyId, periodStart, periodEnd, payFrequency } = req.body;
   if (periodEnd < periodStart) return res.status(400).json({ error: 'The period end must fall after its start' });
   try {
-    const runId = await transaction(async connection => {
+    const runId = await transaction(connection => buildPayroll(req,connection));
+    res.status(201).json(await getOne(`${select} WHERE r.id=?`, [runId]));
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: `A ${payFrequency.toLowerCase()} payroll run already exists for that period` });
+    throw error;
+  }
+}
+
+router.post('/batch',auth,permit('hr.payroll'),validate(z.object({
+  companyIds:z.array(z.number().int().positive()).min(2).max(2).refine(ids=>new Set(ids).size===ids.length,'Select two different companies'),
+  periodStart:isoDate,periodEnd:isoDate,payFrequency:z.enum(PAY_FREQUENCIES).default('Monthly')
+})),wrap(async(req,res)=>{
+  if(req.body.periodEnd<req.body.periodStart)throw fail(400,'The period end must fall after its start');
+  const ids=await transaction(async connection=>{
+    const runs=[];
+    for(const companyId of [...req.body.companyIds].sort((a,b)=>a-b)){
+      try{runs.push(await buildPayroll({...req,body:{...req.body,companyId}},connection));}
+      catch(error){error.message=`Company ${companyId}: ${error.message}. Neither company payroll was changed.`;throw error;}
+    }
+    return runs;
+  });
+  res.status(201).json({runs:await query(`${select} WHERE r.id IN (?,?) ORDER BY r.company_id`,ids)});
+}));
+
+async function buildPayroll(req,connection){
+      const {companyId,periodStart,periodEnd,payFrequency}=req.body;
       const query=async(sql,params=[])=>(await connection.execute(sql,params))[0];
       const getOne=async(sql,params=[])=>(await query(sql,params))[0];
       if(!await getOne('SELECT id FROM companies WHERE id=? FOR UPDATE',[companyId]))throw fail(404,'Payroll company not found.');
@@ -378,12 +423,6 @@ export async function generatePayroll(req, res) {
       await connection.execute('UPDATE payroll_runs SET total=?,policy_id=?,created_by=?,approved_by=NULL,created_at=CURRENT_TIMESTAMP WHERE id=?', [total,policy.id,req.user.id, run.insertId]);
       await audit(connection, req.user.id, existing?'REGENERATED':'CREATE', 'payroll_run', run.insertId, null, { reference, total }, req.ip);
       return run.insertId;
-    });
-    res.status(201).json(await getOne(`${select} WHERE r.id=?`, [runId]));
-  } catch (error) {
-    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: `A ${payFrequency.toLowerCase()} payroll run already exists for that period` });
-    throw error;
-  }
 }
 
 /** Approving locks the run; marking it paid posts the wage bill as a labour cost. */

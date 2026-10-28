@@ -1,5 +1,6 @@
-/** Only generated commercial documents may use a temporary browser download ticket. */
+/** Only approved generated-document routes may use a temporary browser download ticket. */
 const documentPaths = [
+  /^\/payroll\/\d+\/payslips\/\d+\/document$/,
   /^\/qs\/quotations\/\d+\/document$/,
   /^\/boq\/\d+\/document$/,
   /^\/progress-claims\/\d+\/document$/,

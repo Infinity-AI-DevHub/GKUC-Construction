@@ -15,6 +15,7 @@ import { startOcrWorker } from './lib/ocr-queue.js';
 import { startPresence } from './lib/presence.js';
 import { startIntegrityWatch } from './lib/integrity.js';
 import { rateLimit } from './lib/throttle.js';
+import { captureRequestAddress } from './lib/request-address.js';
 import { publishChange } from './lib/realtime.js';
 import { getServiceAccessState, serviceAccessMiddleware } from './lib/service-access.js';
 
@@ -151,9 +152,6 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use((req, res, next) => (
-  req.headers['content-type']?.startsWith('multipart/form-data') ? next() : express.json({ limit: '2mb' })(req, res, next)
-));
 /*
  * Only trust forwarding headers from a proxy we actually run.
  *
@@ -164,6 +162,10 @@ app.use((req, res, next) => (
 app.set('trust proxy', process.env.TRUST_PROXY
   ? (/^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY)
   : false);
+app.use(captureRequestAddress);
+app.use((req, res, next) => (
+  req.headers['content-type']?.startsWith('multipart/form-data') ? next() : express.json({ limit: '2mb' })(req, res, next)
+));
 
 /*
  * Applied to the whole API. It sits before the routers but after the body parser, so a

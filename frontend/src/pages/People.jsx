@@ -6,7 +6,7 @@ import Insurance from './Insurance.jsx';
 import PayrollInputs from './PayrollInputs.jsx';
 import {filterEmployeeRegister} from '../employee-register-filter.js';
 import { ArrowDownToLine, Check, Clock3, FileSpreadsheet, PencilLine, RotateCcw, Search, ShieldCheck, Trash2, Upload, UserRoundCheck, UserRoundMinus, XCircle } from 'lucide-react';
-import { api, del, fetchDownload, inputDate, localDate, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { api, del, fetchDownload, inputDate, localDate, openDocument, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { allowedTabs, Avatar, Badge, Field, FormModal, WorkflowForm, Modal, Page, Required, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import BiometricImport from './BiometricImport.jsx';
@@ -538,6 +538,13 @@ function PayComponentForm({ employee, close, reload }) {
 }
 
 function PayrollDetail({ run, close }) {
+  const [exportError,setExportError]=useState('');
+  const [exporting,setExporting]=useState(false);
+  const download=async()=>{
+    setExporting(true);setExportError('');
+    try{const url=await fetchDownload(`/payroll/${run.id}/export.xlsx`);const link=document.createElement('a');link.href=url;link.download=`${run.reference}-salary-details.xlsx`;link.click();setTimeout(()=>URL.revokeObjectURL(url),30000);}
+    catch(error){setExportError(error.message);}finally{setExporting(false);}
+  };
   const template = 'minmax(160px,1.3fr) 75px 85px 85px 110px 110px 110px 110px 110px 110px 170px 115px 110px 110px 115px 115px 120px 125px';
   const advances = run.payslips.flatMap(slip => slip.advanceRecoveries || []);
   const components = run.payslips.flatMap(slip => (slip.components || []).map(component => ({ ...component, employee: slip.employee, employeeCode: slip.employeeCode })));
@@ -548,6 +555,8 @@ function PayrollDetail({ run, close }) {
     detail:typeof slip.calculationDetail==='string'?JSON.parse(slip.calculationDetail):slip.calculationDetail})).filter(row=>row.detail);
   return <Modal title={`${run.reference} · ${run.payFrequency} · ${shortDate(run.periodStart)} to ${shortDate(run.periodEnd)}`} close={close} wide>
     <div className="report-form">
+      <div className="wide"><button type="button" className="secondary" disabled={exporting} onClick={download}><FileSpreadsheet size={16}/>{exporting?'Preparing Excel...':'Download salary details Excel'}</button></div>
+      {exportError&&<p className="form-error wide" role="alert">{exportError}</p>}
       <WorkflowChecklist title="Monthly payroll path" steps={payrollSteps(run)} />
       <div className="project-stats wide">
         <div><span>Employees</span><strong>{run.payslips.length}</strong></div>
@@ -580,7 +589,7 @@ function PayrollDetail({ run, close }) {
       <div className="payroll-payslip-list wide">
         <div className="payroll-policy-heading"><span>01</span><div><strong>What each employee receives</strong><p>Earned salary is daily rate × (worked days + approved paid-leave days). Unpaid leave adds no salary and is not deducted twice.</p></div></div>
         {run.payslips.map(slip => <div className="payroll-payslip-card" key={slip.id}>
-          <div className="payroll-payslip-person"><strong>{slip.employee}</strong><small>{slip.employeeCode} · {slip.daysPresent} worked · {slip.paidLeaveDays||0} paid leave · {slip.unpaidLeaveDays||0} unpaid leave</small></div>
+          <div className="payroll-payslip-person"><strong>{slip.employee}</strong><small>{slip.employeeCode} · {slip.daysPresent} worked · {slip.paidLeaveDays||0} paid leave · {slip.unpaidLeaveDays||0} unpaid leave</small><button type="button" className="status-button" onClick={()=>openDocument(`/payroll/${run.id}/payslips/${slip.id}/document`)}>Payslip PDF / print</button></div>
           <div><span>Earned salary</span><strong>{rupees(slip.basic)}</strong>{Number(slip.paidLeavePay)>0&&<small>Includes {rupees(slip.paidLeavePay)} paid leave</small>}</div>
           <div><span>OT + allowances</span><strong>{rupees(Number(slip.overtimePay || 0) + Number(slip.allowanceTotal || 0))}</strong></div>
           <div><span>Reimbursements</span><strong>{rupees(slip.reimbursementTotal)}</strong></div>
@@ -657,14 +666,15 @@ function Performance() {
 }
 
 function PayrollForm({ companyId, company, close, reload }) {
+  const [scope,setScope]=useState('selected');
   const first = new Date();
   first.setDate(1);
-  return <WorkflowForm title="Prepare payroll run" close={close} label="Build draft run" summary={[["Company", company?.name || 'Selected company'], ['Run stage', 'Draft only — review before approval']]} onSubmit={async values => {
-    await post('/payroll', { companyId, periodStart: values.periodStart, periodEnd: values.periodEnd, payFrequency: values.payFrequency });
+  return <WorkflowForm title="Prepare payroll run" close={close} label={scope==='both'?'Build both draft runs':'Build draft run'} summary={[["Company", scope==='both'?'GKUC Construction + GKUC Readymix':company?.name || 'Selected company'], ['Run stage', 'Draft only — review before approval']]} onSubmit={async values => {
+    await post(scope==='both'?'/payroll/batch':'/payroll', { ...(scope==='both'?{companyIds:[1,2]}:{companyId}), periodStart: values.periodStart, periodEnd: values.periodEnd, payFrequency: values.payFrequency });
     await reload();
   }}>
     <div className="qs-form-section wide"><span>01</span><div><h3>Pay period</h3><p>Choose the date range and employees to include.</p></div></div>
-    <p className="form-note wide">This salary run belongs to <strong>{company?.name}</strong>.</p>
+    <label>Companies<select name="companyScope" value={scope} onChange={event=>setScope(event.target.value)}><option value="selected">{company?.name||'Selected company'}</option><option value="both">GKUC Construction + GKUC Readymix</option></select></label>
     <Field name="periodStart" label="Period from" type="date" defaultValue={localDate(first)} />
     <Field name="periodEnd" label="Period to" type="date" defaultValue={todayInput()} />
     <SelectField name="payFrequency" label="Employees to pay" options={[["Daily", "Daily-paid employees"], ["Weekly", "Weekly-paid employees"], ["Monthly", "Monthly-paid employees"]]} defaultValue="Monthly" />
@@ -958,9 +968,9 @@ function LeaveSettings(){
     {error&&<p className="form-error" role="alert">{error}</p>}
     <p className="form-note">The active policy applies by leave start date. Employee-specific annual and casual entitlements can be edited in each employee profile.</p>
     {p&&<div className="attendance-summary"><div className="summary"><div><strong>{p.annual_default}</strong><span>Annual default for new employees</span></div></div><div className="summary"><div><strong>{p.casual_default}</strong><span>Casual default for new employees</span></div></div><div className="summary"><div><strong>{p.monthly_limit}</strong><span>Maximum days in one month</span></div></div><div className="summary"><div><strong>{p.waiting_months} months</strong><span>Leave waiting period</span></div></div></div>}
-    {p&&<p className="form-note">Unpaid leave during waiting period: {p.allow_unpaid_during_wait?'Allowed':'Blocked'} · Effective from {shortDate(p.effective_from)}</p>}
+    {p&&<p className="form-note">Leave can be recorded during probation as unpaid leave. Paid leave remains unavailable during the waiting period. Effective from {shortDate(p.effective_from)}</p>}
     {editing&&<FormModal title="Create leave policy" close={()=>setEditing(false)} label="Save dated policy" onSubmit={async v=>{await post('/employees/leave/settings',{effectiveFrom:v.effectiveFrom,annualDefault:Number(v.annualDefault),casualDefault:Number(v.casualDefault),monthlyLimit:Number(v.monthlyLimit),waitingMonths:Number(v.waitingMonths),allowUnpaidDuringWait:v.allowUnpaidDuringWait==='true'});await load();}}>
-      <Field name="effectiveFrom" label="Effective from" type="date" defaultValue={todayInput()}/><Field name="annualDefault" label="Annual default (days)" type="number" min="0" max="365" step="0.5" defaultValue={p?.annual_default??14}/><Field name="casualDefault" label="Casual default (days)" type="number" min="0" max="365" step="0.5" defaultValue={p?.casual_default??7}/><Field name="monthlyLimit" label="Maximum leave days per month" type="number" min="1" max="31" step="0.5" defaultValue={p?.monthly_limit??5}/><Field name="waitingMonths" label="Waiting period after start (months)" type="number" min="0" max="60" defaultValue={p?.waiting_months??6}/><SelectField name="allowUnpaidDuringWait" label="Allow unpaid leave during waiting period" options={[[false,'No'],[true,'Yes']]} defaultValue={String(Boolean(p?.allow_unpaid_during_wait))}/>
+      <Field name="effectiveFrom" label="Effective from" type="date" defaultValue={todayInput()}/><Field name="annualDefault" label="Annual default (days)" type="number" min="0" max="365" step="0.5" defaultValue={p?.annual_default??14}/><Field name="casualDefault" label="Casual default (days)" type="number" min="0" max="365" step="0.5" defaultValue={p?.casual_default??7}/><Field name="monthlyLimit" label="Maximum leave days per month" type="number" min="1" max="31" step="0.5" defaultValue={p?.monthly_limit??5}/><Field name="waitingMonths" label="Paid-leave waiting period after start (months)" type="number" min="0" max="60" defaultValue={p?.waiting_months??6}/><input type="hidden" name="allowUnpaidDuringWait" value="true"/>
       <p className="form-note wide">The monthly cap counts paid and unpaid leave. Annual/other and casual leave have separate annual entitlements. Save a future effective date to change policy later.</p>
     </FormModal>}
   </section>;
@@ -990,7 +1000,7 @@ function LeaveForm({ data, close, reload }) {
   }}>
     <label>Employee<select name="employeeId" required value={employeeId} onChange={event=>setEmployeeId(event.target.value)}>{data.employees.map(employee=><option key={employee.id} value={employee.id}>{employee.name}</option>)}</select></label>
     <SelectField name="leaveType" label="Leave type" options={leaveTypes} />
-    {!eligible && <p className="form-note wide" role="alert">{!policy?'No leave policy is available for the selected start date.':start ? `This employee is still in the leave waiting period. Paid leave is available from ${shortDate(eligibleFrom)}. ${policy.allow_unpaid_during_wait?'Unpaid leave may be requested.':'Unpaid leave is also blocked by the active policy.'}` : 'Employment start date is not recorded. Update the employee profile before requesting leave.'}</p>}
+    {!eligible && <p className="form-note wide" role="alert">{!policy?'No leave policy is available for the selected start date.':start ? `Warning: this employee is in their probation period and is not entitled to paid leave until ${shortDate(eligibleFrom)}. You can record this leave as Unpaid.` : 'Employment start date is not recorded. Update the employee profile before requesting leave.'}</p>}
     <label>Leave payment<Required /><select name="paymentType" required value={paymentType} disabled={!paymentOptions.length} onChange={event=>setPaymentType(event.target.value)}>{!paymentOptions.length&&<option value="">Leave unavailable for these dates</option>}{paymentOptions.map(option=><option key={option} value={option}>{option}</option>)}</select></label>
     <p className="form-note wide">Annual/other entitlement: {employee?.annualLeaveEntitlement??policy?.annual_default??14} days · Casual entitlement: {employee?.casualLeaveEntitlement??policy?.casual_default??7} days · Monthly maximum: {policy?.monthly_limit??5} days. Paid and unpaid requests count toward limits. Only approved paid leave adds salary; unpaid leave adds no salary.</p>
     <label>From<input name="fromDate" type="date" required value={fromDate} onChange={event=>setFromDate(event.target.value)} /></label>

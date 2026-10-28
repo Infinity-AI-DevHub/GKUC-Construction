@@ -14,8 +14,8 @@ test('date-specific waiting months replace the former hard-coded six months',()=
   assert.deepEqual(leavePaymentEligibility('2026-10-01',[policy,later],'2026-10-23').options,['Paid','Unpaid']);
   assert.equal(leavePaymentEligibility('2026-09-01',[policy,later],'2026-09-30').paidAllowed,false);
 });
-test('blocked waiting period, missing policy and missing employment date offer no invalid choice',()=>{
-  assert.deepEqual(leavePaymentEligibility('2026-10-01',[{...policy,allow_unpaid_during_wait:0}],'2026-10-23').options,[]);
+test('legacy blocked policies allow probation unpaid leave; missing policy and start date remain protected',()=>{
+  assert.deepEqual(leavePaymentEligibility('2026-10-01',[{...policy,allow_unpaid_during_wait:0}],'2026-10-23').options,['Unpaid']);
   assert.deepEqual(leavePaymentEligibility('2026-10-01',[],'2026-10-23').options,[]);
   assert.deepEqual(leavePaymentEligibility('',[policy],'2026-10-23').options,[]);
 });
