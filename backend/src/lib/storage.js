@@ -13,7 +13,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 /**
  * Object storage behind one small interface so the application never knows where a file
  * physically lives. `local` writes into the uploads folder and is the default; `r2`
- * targets Cloudflare R2 over its S3-compatible API. Switching is an environment change,
+ * targets Cloudflare R2, while `s3` supports Contabo and other S3-compatible stores. Switching is an environment change,
  * not a code change — nothing above this module deals in file paths.
  */
 
@@ -177,6 +177,14 @@ const localDriver = {
   }
 };
 
+const selectedDriver = process.env.STORAGE_DRIVER || 'local';
+if (!['local', 'r2', 's3'].includes(selectedDriver)) {
+  throw new Error('STORAGE_DRIVER must be local, r2 or s3');
+}
+const genericS3 = selectedDriver === 's3';
+export const objectStoreBucket = () => genericS3 ? process.env.S3_BUCKET : process.env.R2_BUCKET;
+const storageLabel = genericS3 ? 'S3' : 'R2';
+
 const configuredR2Endpoint = () => process.env.R2_S3_ENDPOINT
   || (process.env.R2_ACCOUNT_ID ? `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : '');
 
@@ -187,16 +195,16 @@ const configuredR2Endpoint = () => process.env.R2_S3_ENDPOINT
  * exactly the configured bucket and normalise it back to the account endpoint.
  */
 function r2Endpoint() {
-  const configured = configuredR2Endpoint();
+  const configured = genericS3 ? process.env.S3_ENDPOINT : configuredR2Endpoint();
   if (!configured) return '';
   let parsed;
   try { parsed = new URL(configured); }
-  catch { throw Object.assign(new Error('The R2 S3 API endpoint is not a valid URL'), { status: 500 }); }
+  catch { throw Object.assign(new Error('The object storage S3 API endpoint is not a valid URL'), { status: 500 }); }
   const endpointPath = decodeURIComponent(parsed.pathname).replace(/^\/+|\/+$/g, '');
   if (endpointPath) {
-    if (endpointPath !== process.env.R2_BUCKET) {
+    if (endpointPath !== objectStoreBucket()) {
       throw Object.assign(new Error(
-        `The R2 S3 API endpoint path must be empty or match the configured bucket "${process.env.R2_BUCKET}"`
+        `The object storage S3 API endpoint path must be empty or match the configured bucket "${objectStoreBucket()}"`
       ), { status: 500 });
     }
     parsed.pathname = '/';
@@ -209,25 +217,31 @@ function r2Endpoint() {
 let r2Client;
 export function objectStoreClient() {
   if (r2Client) return r2Client;
-  const configuredEndpoint = configuredR2Endpoint();
-  const { R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
-  if (!configuredEndpoint || !process.env.R2_BUCKET || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
+  const configuredEndpoint = genericS3 ? process.env.S3_ENDPOINT : configuredR2Endpoint();
+  const accessKeyId = genericS3 ? process.env.S3_ACCESS_KEY_ID : process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = genericS3 ? process.env.S3_SECRET_ACCESS_KEY : process.env.R2_SECRET_ACCESS_KEY;
+  if (!configuredEndpoint || !objectStoreBucket() || !accessKeyId || !secretAccessKey) {
     throw Object.assign(new Error('Object storage is selected but its endpoint, bucket or credentials are not set'), { status: 500 });
   }
   const endpoint = r2Endpoint();
   const parsedEndpoint = new URL(endpoint);
   if (!['http:', 'https:'].includes(parsedEndpoint.protocol)) {
-    throw Object.assign(new Error('The R2 S3 API endpoint must use HTTPS'), { status: 500 });
+    throw Object.assign(new Error('The object storage S3 API endpoint must use HTTPS'), { status: 500 });
   }
   if (process.env.NODE_ENV === 'production' && parsedEndpoint.protocol !== 'https:') {
-    throw Object.assign(new Error('The R2 S3 API endpoint must use HTTPS in production'), { status: 500 });
+    throw Object.assign(new Error('The object storage S3 API endpoint must use HTTPS in production'), { status: 500 });
   }
   r2Client = new S3Client({
     /* Keep the SDK's default virtual-host addressing. Cloudflare's documented v3 setup
        signs requests as <bucket>.<account>.r2.cloudflarestorage.com; forcing path style
        can be rejected as AccessDenied even when the bucket token itself is correct. */
-    region: 'auto', endpoint,
-    credentials: { accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY }
+    region: genericS3 ? (process.env.S3_REGION || 'default') : 'auto', endpoint,
+    ...(genericS3 ? {
+      forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== 'false',
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED'
+    } : {}),
+    credentials: { accessKeyId, secretAccessKey }
   });
   return r2Client;
 }
@@ -240,25 +254,25 @@ export function objectStoreClient() {
 const storedUrl = key => `/uploads/${key}`;
 
 function r2Failure(action, error) {
-  console.error(`R2 ${action} failed`, {
+  console.error(`${storageLabel} ${action} failed`, {
     name: error?.name, code: error?.Code || error?.code,
     status: error?.$metadata?.httpStatusCode, message: error?.message
   });
   const detail = ['AccessDenied','InvalidAccessKeyId','SignatureDoesNotMatch'].includes(error?.name)
-    ? 'Check the R2 access key, secret and bucket permissions.'
+    ? 'Check the object storage access key, secret and bucket permissions.'
     : ['NoSuchBucket','NotFound'].includes(error?.name)
-      ? 'Check the R2 bucket name and S3 API endpoint.'
-      : 'Check the R2 endpoint, bucket and server network connection.';
+      ? 'Check the object storage bucket name and S3 API endpoint.'
+      : 'Check the object storage endpoint, bucket and server network connection.';
   return Object.assign(new Error(`Cloud file storage is unavailable. ${detail}`), { status: 503, cause: error });
 }
 
 /** Cloudflare R2 through its supported S3-compatible API. */
 const r2Driver = {
-  name: 'r2',
+  name: selectedDriver,
   async put(key, buffer, mime) {
     try {
       await objectStoreClient().send(new PutObjectCommand({
-        Bucket: process.env.R2_BUCKET, Key: key, Body: buffer, ContentType: mime
+        Bucket: objectStoreBucket(), Key: key, Body: buffer, ContentType: mime
       }));
       return storedUrl(key);
     } catch (error) { throw r2Failure('upload', error); }
@@ -266,7 +280,7 @@ const r2Driver = {
   async putFile(key, sourcePath, mime) {
     try {
       const upload = new Upload({ client: objectStoreClient(), params: {
-        Bucket: process.env.R2_BUCKET, Key: key, Body: createReadStream(sourcePath), ContentType: mime
+        Bucket: objectStoreBucket(), Key: key, Body: createReadStream(sourcePath), ContentType: mime
       }});
       await upload.done();
       return storedUrl(key);
@@ -278,7 +292,7 @@ const r2Driver = {
   },
   async remove(key) {
     try {
-      await objectStoreClient().send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+      await objectStoreClient().send(new DeleteObjectCommand({ Bucket: objectStoreBucket(), Key: key }));
     } catch (error) { throw r2Failure('delete', error); }
   }
 };
@@ -298,7 +312,7 @@ export async function signedDownloadUrl(key, seconds = 300, options = {}) {
     return await getSignedUrl(
       objectStoreClient(),
       new GetObjectCommand({
-        Bucket: process.env.R2_BUCKET,
+        Bucket: objectStoreBucket(),
         Key: key,
         ...(filename ? { ResponseContentDisposition:
           `${disposition}; filename*=UTF-8''${encodeURIComponent(filename)}` } : {}),
@@ -313,7 +327,7 @@ export async function signedDownloadUrl(key, seconds = 300, options = {}) {
 export async function downloadToFile(key, destination) {
   await fs.mkdir(path.dirname(destination), { recursive: true });
   try {
-    const response = await objectStoreClient().send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    const response = await objectStoreClient().send(new GetObjectCommand({ Bucket: objectStoreBucket(), Key: key }));
     if (!response.Body) throw Object.assign(new Error('The stored object has no content'), { status: 404 });
     await pipeline(response.Body, createWriteStream(destination, { flags: 'wx' }));
     return destination;
@@ -336,7 +350,7 @@ export async function downloadToFile(key, destination) {
 export async function pipeStoredObject(key, response) {
   try {
     const stored = await objectStoreClient().send(new GetObjectCommand({
-      Bucket: process.env.R2_BUCKET, Key: key
+      Bucket: objectStoreBucket(), Key: key
     }));
     if (!stored.Body) throw Object.assign(new Error('The stored object has no content'), { status: 404 });
     if (stored.ContentLength !== undefined && !response.headersSent) {
@@ -355,12 +369,12 @@ export async function pipeStoredObject(key, response) {
 export async function checkObjectStore() {
   if (driver !== r2Driver) return { driver: 'local' };
   try {
-    await objectStoreClient().send(new HeadBucketCommand({ Bucket: process.env.R2_BUCKET }));
+    await objectStoreClient().send(new HeadBucketCommand({ Bucket: objectStoreBucket() }));
   } catch (error) { throw r2Failure('health check', error); }
-  return { driver: 'r2', bucket: process.env.R2_BUCKET, endpoint: r2Endpoint() };
+  return { driver: selectedDriver, bucket: objectStoreBucket(), endpoint: r2Endpoint() };
 }
 
-const driver = process.env.STORAGE_DRIVER === 'r2' ? r2Driver : localDriver;
+const driver = selectedDriver === 'local' ? localDriver : r2Driver;
 export const storageDriver = driver.name;
 
 /**

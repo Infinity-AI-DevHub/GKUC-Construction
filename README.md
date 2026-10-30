@@ -149,6 +149,31 @@ rather than a code change.
   memory. Private downloads remain behind the application's permission checks and use
   short-lived signed links.
 
+For Contabo Singapore, create a **private** bucket and set these backend environment values:
+
+```env
+STORAGE_DRIVER=s3
+S3_ENDPOINT=https://sin1.contabostorage.com
+S3_REGION=default
+S3_BUCKET=YOUR_BUCKET_NAME
+S3_ACCESS_KEY_ID=YOUR_CONTABO_ACCESS_KEY
+S3_SECRET_ACCESS_KEY=YOUR_CONTABO_SECRET_KEY
+S3_FORCE_PATH_STYLE=true
+```
+
+The S3 option preserves application permission checks and streams protected downloads
+through SiteOps; public bucket access and browser CORS configuration are unnecessary.
+Local scratch space is still required for uploads and OCR. R2 settings remain supported
+when `STORAGE_DRIVER=r2`; S3 uses only the `S3_*` connection settings.
+
+From `backend/`, run `npm run storage:diagnose:s3` to write, read, verify and delete a
+small temporary object. To copy existing local uploads, first run
+`npm run storage:migrate:s3` (dry run), then `npm run storage:migrate:s3:apply`.
+The migration preserves keys and local originals; matching sizes are skipped, so verify
+important file contents separately. Pause uploads during the final migration and switch
+the live backend only after copying and verifying the existing files. There is no automatic
+fallback to local files after switching. Restart the backend after changing its environment.
+
 Storage keys are random UUIDs, matching how a public R2 bucket behaves: a URL cannot be
 guessed or walked. Accepted types are images, PDF, Word, Excel and CSV, capped by
 `MAX_UPLOAD_MB`; anything executable is refused. Multipart bodies are parsed by Node
@@ -180,7 +205,7 @@ Optional environment variables:
 | `ALERT_INTERVAL_MINUTES` | `60` | How often the deadline scanner runs |
 | `ALERT_WINDOW_DAYS` | `30` | How far ahead expiries are alerted |
 | `ATTENDANCE_LATE_AFTER` | `08:00:00` | Check-in time after which a worker is marked late |
-| `STORAGE_DRIVER` | `local` | `local` or `r2` |
+| `STORAGE_DRIVER` | `local` | `local`, `r2` or `s3` |
 | `R2_S3_ENDPOINT` | *(empty)* | Complete Cloudflare R2 S3 API endpoint |
 | `R2_BUCKET` | *(empty)* | R2 bucket name |
 | `R2_ACCESS_KEY_ID` | *(empty)* | R2 API token access key |

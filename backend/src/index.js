@@ -80,6 +80,15 @@ function checkConfiguration() {
   if (!process.env.DB_PASSWORD) (production ? missing : warnings).push('DB_PASSWORD');
   if (!process.env.DB_NAME) warnings.push('DB_NAME (defaulting to gkuc_siteops)');
 
+  if (!['local', 'r2', 's3'].includes(process.env.STORAGE_DRIVER || 'local')) {
+    missing.push('STORAGE_DRIVER (must be local, r2 or s3)');
+  }
+  if (process.env.STORAGE_DRIVER === 's3') {
+    for (const key of ['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) {
+      if (!process.env[key]) missing.push(key);
+    }
+  }
+
   if (process.env.STORAGE_DRIVER === 'r2') {
     if (!process.env.R2_S3_ENDPOINT && !process.env.R2_ACCOUNT_ID) missing.push('R2_S3_ENDPOINT (or R2_ACCOUNT_ID)');
     for (const key of ['R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']) {
