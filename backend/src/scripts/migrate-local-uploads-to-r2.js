@@ -1,10 +1,8 @@
 import 'dotenv/config';
 import fs from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { HeadObjectCommand } from '@aws-sdk/client-s3';
-import { Upload } from '@aws-sdk/lib-storage';
-import { checkObjectStore, objectStoreClient, objectStoreBucket, UPLOAD_ROOT } from '../lib/storage.js';
+import { checkObjectStore, objectStoreClient, objectStoreBucket, uploadStoredFile, UPLOAD_ROOT } from '../lib/storage.js';
 
 const apply = process.argv.includes('--apply');
 const bucket = objectStoreBucket();
@@ -62,11 +60,8 @@ for (const file of files) {
       copied += 1;
       continue;
     }
-    const upload = new Upload({ client: objectStoreClient(), params: {
-      Bucket: bucket, Key: key, Body: createReadStream(file),
-      ContentType: types.get(path.extname(file).toLowerCase()) || 'application/octet-stream'
-    }});
-    await upload.done();
+    await uploadStoredFile(key, file,
+      types.get(path.extname(file).toLowerCase()) || 'application/octet-stream');
     copied += 1;
     console.log(`DONE  ${key}${remoteSize === null ? '' : ' (replaced size-mismatched object)'}`);
   } catch (error) {

@@ -6,8 +6,9 @@
  * 3400 is a development tool and must never run on the server.
  *
  * Secrets live in backend/.env, not here, so this file is safe to commit. Anything set
- * below wins over backend/.env, because dotenv fills gaps rather than overriding an
- * environment that is already set.
+ * below wins over backend/.env for general settings. Storage is special: when
+ * backend/.env explicitly sets STORAGE_DRIVER, that file owns all S3_* and R2_*
+ * connection settings so old PM2 credentials cannot override a provider change.
  *
  *   pm2 start ecosystem.config.cjs --env production
  */

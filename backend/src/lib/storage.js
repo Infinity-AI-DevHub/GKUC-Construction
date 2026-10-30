@@ -1,3 +1,4 @@
+import { storageConfigurationSource } from './storage-env.js';
 import crypto from 'node:crypto';
 import { readMultipart } from './multipart.js';
 import fs from 'node:fs/promises';
@@ -200,6 +201,7 @@ function r2Endpoint() {
   let parsed;
   try { parsed = new URL(configured); }
   catch { throw Object.assign(new Error('The object storage S3 API endpoint is not a valid URL'), { status: 500 }); }
+  if (parsed.username || parsed.password) throw new Error('Use storage credential settings, not credentials in the endpoint URL');
   const endpointPath = decodeURIComponent(parsed.pathname).replace(/^\/+|\/+$/g, '');
   if (endpointPath) {
     if (endpointPath !== objectStoreBucket()) {
@@ -212,6 +214,17 @@ function r2Endpoint() {
   parsed.search = '';
   parsed.hash = '';
   return parsed.toString().replace(/\/$/, '');
+}
+
+export function storageConfigurationSummary() {
+  return {
+    driver: selectedDriver, source: storageConfigurationSource,
+    ...(selectedDriver === 'local' ? {} : {
+      endpoint: r2Endpoint(), bucket: objectStoreBucket(),
+      region: genericS3 ? (process.env.S3_REGION || 'default') : 'auto',
+      pathStyle: genericS3 && process.env.S3_FORCE_PATH_STYLE !== 'false'
+    })
+  };
 }
 
 let r2Client;
@@ -232,9 +245,11 @@ export function objectStoreClient() {
     throw Object.assign(new Error('The object storage S3 API endpoint must use HTTPS in production'), { status: 500 });
   }
   r2Client = new S3Client({
-    /* Keep the SDK's default virtual-host addressing. Cloudflare's documented v3 setup
+    /* For R2, keep the SDK's default virtual-host addressing. Cloudflare's documented v3 setup
        signs requests as <bucket>.<account>.r2.cloudflarestorage.com; forcing path style
        can be rejected as AccessDenied even when the bucket token itself is correct. */
+    maxAttempts: 2,
+    requestHandler: { connectionTimeout: 10000, socketTimeout: 60000, requestTimeout: 90000 },
     region: genericS3 ? (process.env.S3_REGION || 'default') : 'auto', endpoint,
     ...(genericS3 ? {
       forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== 'false',
@@ -263,10 +278,10 @@ function r2Failure(action, error) {
     : ['NoSuchBucket','NotFound'].includes(error?.name)
       ? 'Check the object storage bucket name and S3 API endpoint.'
       : 'Check the object storage endpoint, bucket and server network connection.';
-  return Object.assign(new Error(`Cloud file storage is unavailable. ${detail}`), { status: 503, cause: error });
+  return Object.assign(new Error(`Cloud file storage is unavailable. ${detail}`), { status: 503, publicCode: 'STORAGE_UNAVAILABLE', cause: error });
 }
 
-/** Cloudflare R2 through its supported S3-compatible API. */
+/** Private S3-compatible storage, including Contabo and Cloudflare R2. */
 const r2Driver = {
   name: selectedDriver,
   async put(key, buffer, mime) {
@@ -279,10 +294,7 @@ const r2Driver = {
   },
   async putFile(key, sourcePath, mime) {
     try {
-      const upload = new Upload({ client: objectStoreClient(), params: {
-        Bucket: objectStoreBucket(), Key: key, Body: createReadStream(sourcePath), ContentType: mime
-      }});
-      await upload.done();
+      await uploadStoredFile(key, sourcePath, mime);
       return storedUrl(key);
     } catch (error) {
       throw r2Failure('upload', error);
@@ -296,6 +308,20 @@ const r2Driver = {
     } catch (error) { throw r2Failure('delete', error); }
   }
 };
+
+/** Use the same streamed upload implementation for UI uploads and migration. */
+export async function uploadStoredFile(key, sourcePath, mime) {
+  const { size } = await fs.stat(sourcePath);
+  const body = createReadStream(sourcePath);
+  try {
+    const upload = new Upload({ client: objectStoreClient(), params: {
+      Bucket: objectStoreBucket(), Key: key, Body: body, ContentLength: size, ContentType: mime
+    }});
+    await upload.done();
+  } finally {
+    body.destroy();
+  }
+}
 
 /**
  * A short-lived URL for one object, signed with the same credentials as the writes.

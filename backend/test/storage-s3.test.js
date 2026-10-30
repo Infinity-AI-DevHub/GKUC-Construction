@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 
 let server, origin, storage, temporary;
 const objects = new Map();
+const multipart = new Map();
 
 before(async () => {
   temporary = await mkdtemp(path.join(os.tmpdir(), 'gkuc-s3-test-'));
@@ -16,6 +17,26 @@ before(async () => {
     assert.match(req.headers.authorization || '', /test-access\/\d{8}\/default\/s3\/aws4_request/);
     assert.ok(url.pathname.startsWith('/test-bucket'));
     const key = decodeURIComponent(url.pathname.replace(/^\/test-bucket\/?/, ''));
+    if (req.method === 'POST' && url.searchParams.has('uploads')) {
+      multipart.set(key, new Map());
+      return res.writeHead(200, { 'content-type': 'application/xml' }).end(
+        '<InitiateMultipartUploadResult><Bucket>test-bucket</Bucket><Key>' + key + '</Key><UploadId>test-upload</UploadId></InitiateMultipartUploadResult>');
+    }
+    if (req.method === 'POST' && url.searchParams.has('uploadId')) {
+      const parts = [...multipart.get(key).entries()].sort((a, b) => a[0] - b[0]);
+      objects.set(key, Buffer.concat(parts.map(([, body]) => body)));
+      multipart.delete(key);
+      return res.writeHead(200, { 'content-type': 'application/xml' }).end('<CompleteMultipartUploadResult><ETag>"complete"</ETag></CompleteMultipartUploadResult>');
+    }
+    if (req.method === 'PUT' && url.searchParams.has('partNumber')) {
+      assert.ok(Number(req.headers['content-length']) > 0);
+      const chunks = [];
+      req.on('data', chunk => chunks.push(chunk));
+      return req.on('end', () => {
+        multipart.get(key).set(Number(url.searchParams.get('partNumber')), Buffer.concat(chunks));
+        res.writeHead(200, { etag: '"part"' }).end();
+      });
+    }
     if (req.method === 'HEAD') return res.writeHead(key && !objects.has(key) ? 404 : 200).end();
     if (req.method === 'PUT') {
       const chunks = [];
@@ -98,4 +119,25 @@ test('S3 refuses missing credentials and insecure production endpoints', async (
     if (previousMode === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousMode;
   }
+});
+
+
+test('S3 streams multipart uploads with known lengths and preserves all bytes', async () => {
+  const source = path.join(temporary, 'large.txt');
+  const body = Buffer.alloc(6 * 1024 * 1024, 0x61);
+  await writeFile(source, body);
+  const saved = await storage.store({ folder: 'project', filename: 'large.txt', mime: 'text/plain',
+    path: source, size: body.length, head: body.subarray(0, 12) });
+  assert.deepEqual(objects.get(saved.key), body);
+  await storage.remove(saved.key);
+});
+
+test('storage permission failures carry a safe actionable public code', async () => {
+  const client = storage.objectStoreClient();
+  const send = client.send;
+  client.send = async () => { throw Object.assign(new Error('Access Denied'), { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } }); };
+  try {
+    await assert.rejects(storage.store({ folder: 'project', filename: 'denied.txt', mime: 'text/plain', buffer: Buffer.from('a valid text file') }),
+      error => error.status === 503 && error.publicCode === 'STORAGE_UNAVAILABLE' && /permissions/.test(error.message));
+  } finally { client.send = send; }
 });
