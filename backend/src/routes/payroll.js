@@ -296,10 +296,12 @@ async function buildPayroll(req,connection){
       const {companyId,periodStart,periodEnd,payFrequency}=req.body;
       const query=async(sql,params=[])=>(await connection.execute(sql,params))[0];
       const getOne=async(sql,params=[])=>(await query(sql,params))[0];
-      if(!await getOne('SELECT id FROM companies WHERE id=? FOR UPDATE',[companyId]))throw fail(404,'Payroll company not found.');
+      const payrollCompany=await getOne('SELECT id,name FROM companies WHERE id=? FOR UPDATE',[companyId]);
+      if(!payrollCompany)throw fail(404,'Payroll company not found.');
       const overlaps=await query('SELECT * FROM payroll_runs WHERE company_id=? AND pay_frequency=? AND period_start<=? AND period_end>=? FOR UPDATE',[companyId,payFrequency,periodEnd,periodStart]);
       const existing=overlaps.find(row=>row.period_start===periodStart&&row.period_end===periodEnd);
-      if(overlaps.some(row=>row.id!==existing?.id))throw fail(409,'Another payroll overlaps these dates. Use the exact existing draft period or delete that draft first.');
+      const conflicting=overlaps.filter(row=>row.id!==existing?.id);
+      if(conflicting.length)throw fail(409,`Overlapping payroll: ${conflicting.map(row=>`${row.reference} (${payrollCompany.name}, ${row.pay_frequency}, ${row.period_start} to ${row.period_end}, ${row.status})`).join('; ')}. Delete the named Draft payroll or use its exact dates to recalculate it. Approved/paid payroll cannot be deleted.`);
       if(existing)await clearDraftPayroll(connection,existing,req.user.id,'REGENERATE',req.ip);
 
       const policy = await getOne('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1', [companyId, periodEnd]);
@@ -339,8 +341,8 @@ async function buildPayroll(req,connection){
           row.calculation_detail.contributions=contributionDetail;
         } catch(error) {throw fail(409,`${row.name}: ${error.message}`);}
       }
-      const covered=await getOne(`SELECT ps.employee_id FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1 FOR UPDATE`,[...employees.map(e=>e.id),periodEnd,periodStart]);
-      if(covered)throw fail(409,'An employee is already included in another payroll run for these dates. Changing payment frequency must not pay the same period twice.');
+      const covered=await getOne(`SELECT ps.employee_id,e.name employee,c.name company,pr.reference,pr.company_id,pr.pay_frequency,pr.period_start,pr.period_end,pr.status FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id JOIN employees e ON e.id=ps.employee_id JOIN companies c ON c.id=pr.company_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1 FOR UPDATE`,[...employees.map(e=>e.id),periodEnd,periodStart]);
+      if(covered)throw fail(409,`${covered.employee} is already included in ${covered.reference} (${covered.company}, ${covered.pay_frequency}, ${covered.period_start} to ${covered.period_end}, ${covered.status}). Delete that Draft payroll first or review the locked payroll. Changing company or frequency must not pay the same dates twice.`);
 
       const components = await query(`SELECT * FROM visible_employee_pay_components
         WHERE active=1 AND pay_frequency=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)
@@ -444,7 +446,8 @@ router.delete('/:id', auth, permit('hr.payroll'), wrap(async(req,res)=>{
   await transaction(async connection=>{
     const run=await lockPayrollRun(connection,req.params.id);
     await clearDraftPayroll(connection,run,req.user.id,'DELETE',req.ip);
-    await connection.execute('DELETE FROM payroll_runs WHERE id=?',[run.id]);
+    const [deleted]=await connection.execute("DELETE FROM payroll_runs WHERE id=? AND status='Draft'",[run.id]);
+    if(deleted.affectedRows!==1)throw fail(409,'The draft was not deleted. Refresh payroll and retry; no deletion changes were saved.');
   });
   res.status(204).end();
 }));
