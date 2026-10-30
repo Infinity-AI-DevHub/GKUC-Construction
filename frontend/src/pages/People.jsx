@@ -68,6 +68,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     if (employeeId) closeEmployee();
   }, [employeeSearchRequest]);
 
+  const [attendanceDate,setAttendanceDate]=useState(todayInput());
   const actions = {
     Employees: can.hr && 'Add employee',
     'Workforce map': null,
@@ -96,7 +97,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     {tab === 'Insurance' && <Insurance />}
     {tab === 'Payroll Inputs' && <PayrollInputs data={data}/>}
     {tab === 'Workforce map' && <WorkforceMap canManage={can.hr} canPlan={can.hr || can.hrImport} projects={allProjects} />}
-    {tab === 'Attendance' && <Attendance data={data} projects={allProjects} reload={reload} can={can} />}
+    {tab === 'Attendance' && <Attendance data={data} projects={allProjects} reload={reload} can={can} initialDate={attendanceDate} onDateChange={setAttendanceDate} />}
     {tab === 'Attendance register' && <AttendanceRegister projects={allProjects} canCorrect={can.attendance || can.hrImport || can.hr} />}
     {tab === 'Leave register' && <LeaveRegister />}
     {tab === 'Biometric import' && <BiometricImport data={data} projects={allProjects} reload={reload} can={can} />}
@@ -110,7 +111,7 @@ export default function People({ data, allData, reload, can, companies, companyI
 
     {open === 'Employees' && <EmployeeForm data={data} companies={companies} companyId={companyId} close={() => setOpen('')} reload={reload} />}
     {open === 'Employee import' && <EmployeeImport close={() => setOpen('')} reload={reload} />}
-    {open === 'Attendance' && <AttendanceForm data={data} close={() => setOpen('')} reload={reload} />}
+    {open === 'Attendance' && <AttendanceForm data={{...data,projects:allProjects}} initialDate={attendanceDate} close={() => setOpen('')} reload={reload} />}
     {open === 'Leave' && <LeaveForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Overtime' && <OvertimeForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Payroll' && <PayrollForm companyId={companyId} company={company} close={() => setOpen('')} reload={reload} />}
@@ -302,8 +303,14 @@ function Payroll({ can, companyId }) {
   const [rows, setRows] = useState([]);
   const [detail, setDetail] = useState(null);
   const [action,setAction]=useState(null);
-  const load = () => api(`/payroll?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
+  const loadVersion=useRef(0);
+  const load = () => {
+    const version=++loadVersion.current;
+    return api(`/payroll?companyId=${companyId}`).then(value=>{if(version===loadVersion.current)setRows(value);})
+      .catch(()=>{if(version===loadVersion.current)setRows([]);});
+  };
   useLiveList(load);
+  useEffect(()=>{setRows([]);setDetail(null);setAction(null);load();return ()=>{loadVersion.current++;};},[companyId]);
   const setStatus = async (id, status) => { await patch(`/payroll/${id}`, { status }); await load(); };
 
   return <>
@@ -336,7 +343,7 @@ function Payroll({ can, companyId }) {
       setDetail(null);await load();setAction(null);
     }}>
       <p className="wide">{shortDate(action.run.periodStart)} to {shortDate(action.run.periodEnd)} · {action.run.payFrequency} · {rupees(action.run.total)}</p>
-      <p className="wide">{action.kind==='delete'?'Remove this draft and its generated salary calculations? Attendance, OT, claims and salary advances will remain.':'Replace this draft with a fresh calculation using the current approved inputs? The previous calculation will remain in the audit trail.'}</p>
+      <p className="wide">{action.kind==='delete'?'Permanently delete this draft and its generated payslips, allocations and advance recoveries? Attendance, OT, leave, claims and original advances remain. The audit history is retained. You can prepare a new payroll for the same dates after deletion. If another company/frequency run overlaps, that separate run must be reviewed too.':'Replace this draft with a fresh calculation using the current approved inputs? The previous calculation will remain in the audit trail.'}</p>
     </FormModal>}
   </>;
 }
@@ -735,9 +742,10 @@ function ReviewForm({ data, close, reload }) {
 const ATTENDANCE_COLUMNS = ['Employee', 'Site', 'Check in', 'Check out', 'Status', ''];
 const ATTENDANCE_TEMPLATE = 'minmax(170px,1.3fr) minmax(160px,1fr) 90px 90px 110px 90px';
 
-function Attendance({ data, projects, reload, can }) {
+function Attendance({ data, projects, reload, can, initialDate, onDateChange }) {
   const [correcting, setCorrecting] = useState(null);
-  const [date, setDate] = useState(todayInput());
+  const [recording,setRecording]=useState(false);
+  const [date, setDate] = useState(initialDate || todayInput());
   const [rows, setRows] = useState(data.attendance);
   const [analytics, setAnalytics] = useState(null);
   const [siteSubmissions,setSiteSubmissions]=useState([]);
@@ -747,6 +755,7 @@ function Attendance({ data, projects, reload, can }) {
   const loadAnalytics = () => api('/attendance/analytics').then(setAnalytics).catch(() => setAnalytics(null));
   useEffect(() => { loadRows(); loadSubmissions(); }, [date]);
   useLiveList(loadAnalytics);
+  useLiveList(loadRows);
   const present = rows.filter(row => ['On site', 'Late', 'Checked out', 'Business trip'].includes(row.state)).length;
   const refresh = async () => { await Promise.all([loadRows(), loadAnalytics(), reload()]); };
   const toggle = async id => { await post(`/attendance/${id}/toggle`); await refresh(); };
@@ -758,7 +767,7 @@ function Attendance({ data, projects, reload, can }) {
     {analytics && <AttendanceVisuals analytics={analytics} />}
     <div className="attendance-day-toolbar">
       <div><span>Daily record</span><h2>{date === todayInput() ? 'Today’s attendance' : shortDate(date)}</h2></div>
-      <label>View date<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label>
+      <label>View date<input type="date" value={date} onChange={event => {setDate(event.target.value);onDateChange?.(event.target.value);}} /></label>
     </div>
     <div className="attendance-summary compact-attendance-summary">
       <Summary label="Present" value={present} icon={UserRoundCheck} />
@@ -766,7 +775,9 @@ function Attendance({ data, projects, reload, can }) {
       <Summary label="Absent" value={rows.filter(row => row.state === 'Absent').length} icon={XCircle} />
       <Summary label="Records" value={rows.length} icon={ShieldCheck} />
     </div>
-    <Table columns={ATTENDANCE_COLUMNS} template={ATTENDANCE_TEMPLATE} title="Today’s attendance"
+    {can.attendance && <div className="form-actions"><button type="button" onClick={()=>setRecording(true)}>Record attendance for {shortDate(date)}</button></div>}
+    <p className="form-note">Attendance can be recorded on any date, including Sundays and holidays. For an employee already listed on this date, use Correct this record.</p>
+    <Table columns={ATTENDANCE_COLUMNS} template={ATTENDANCE_TEMPLATE} title={date===todayInput() ? 'Today’s attendance' : `Attendance — ${shortDate(date)}`}
       empty="No attendance recorded for this date yet.">
       {rows.map(row => <Row template={ATTENDANCE_TEMPLATE} key={row.id}>
         <div className="person"><Avatar name={row.name} /><div><strong>{row.name}</strong><small>{row.role}</small></div></div>
@@ -784,6 +795,7 @@ function Attendance({ data, projects, reload, can }) {
           : <span />}
       </Row>)}
     </Table>
+    {recording && <AttendanceForm data={{...data,projects}} initialDate={date} close={()=>setRecording(false)} reload={refresh}/>}
     {correcting && <AttendanceCorrection record={correcting} projects={projects} close={() => setCorrecting(null)} reload={refresh} />}
   </>;
 }
@@ -938,9 +950,9 @@ function EmployeeForm({ data, companies, companyId, close, reload }) {
   </FormModal>;
 }
 
-function AttendanceForm({ data, close, reload }) {
+function AttendanceForm({ data, close, reload, initialDate }) {
   const [workLocation, setWorkLocation] = useState('Site');
-  const [projectId,setProjectId]=useState(''),[date,setDate]=useState(todayInput()),[source,setSource]=useState('Attendance sheet'),[notes,setNotes]=useState('');
+  const [projectId,setProjectId]=useState(''),[date,setDate]=useState(initialDate || todayInput()),[source,setSource]=useState('Attendance sheet'),[notes,setNotes]=useState('');
   const [search,setSearch]=useState(''),[selected,setSelected]=useState({}),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const employees=data.employees.filter(row=>row.status!=='Archived');
   const visible=employees.filter(row=>`${row.name} ${row.code||''} ${row.designation||''}`.toLowerCase().includes(search.toLowerCase()));
@@ -960,6 +972,7 @@ function AttendanceForm({ data, close, reload }) {
   return <Modal title="Record attendance for the team" close={close} wide>
     <form className="attendance-batch" onSubmit={submit}>
       <p className="form-note">Set the date and source once, then select everyone to record. You can adjust each person’s status and times before saving.</p>
+      <p className="form-note">Sundays and holidays are allowed when employees actually worked. Record their actual check-in and check-out times.</p>
       <div className="attendance-batch-common">
         <label>Work location<select value={workLocation} onChange={event=>setWorkLocation(event.target.value)}><option value="Site">Project site</option><option value="Office">Head office</option></select></label>
         {workLocation==='Site'&&<label>Project / site *<select required value={projectId} onChange={event=>setProjectId(event.target.value)}><option value="">Choose a project…</option>{data.projects.map(project=><option value={project.id} key={project.id}>{project.name}</option>)}</select></label>}

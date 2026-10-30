@@ -5278,3 +5278,64 @@ test('both-company payroll links unambiguous legacy attendance and blocks missin
     assert.equal((await call(owner,'DELETE',`/payroll/${run.id}`)).status,204);
   }
 });
+
+test('Sunday individual and bulk manual attendance saves and pays the recorded worked day',async()=>{
+  const owner=await login(),date='2030-01-06',people=[];
+  assert.equal(new Date(`${date}T00:00:00Z`).getUTCDay(),0);
+  for(let index=0;index<2;index++) {
+    const person=await call(owner,'POST','/employees',{code:`SUNDAY-${index}-${Date.now()}`,name:`Sunday Worker ${index}`,joinDate:'2029-01-01',
+      compensationEffectiveFrom:'2029-01-01',payrollCompanyId:2,payFrequency:'Daily',payBasis:'Daily rate',dailyRate:1600,epfEligible:false,etfEligible:false});
+    assert.equal(person.status,201,JSON.stringify(person.body));people.push(person.body);
+  }
+  const entry={date,workLocation:'Office',projectId:null,state:'Checked out',checkIn:'07:30',checkOut:'16:30',informationSource:'Attendance sheet'};
+  const first=await call(owner,'POST','/attendance',{...entry,employeeId:people[0].id});
+  assert.equal(first.status,201,JSON.stringify(first.body));assert.equal(first.body.workDate,date);
+  const second=await call(owner,'POST','/attendance/bulk',{date,workLocation:'Office',projectId:null,informationSource:'Management instruction',
+    entries:[{employeeId:people[1].id,state:'Checked out',checkIn:'07:30',checkOut:'16:30'}]});
+  assert.equal(second.status,201,JSON.stringify(second.body));
+  assert.equal((await call(owner,'POST','/attendance',{...entry,employeeId:people[0].id})).status,409,'same Sunday cannot be double-entered');
+  const rows=(await call(owner,'GET',`/attendance?date=${date}`)).body;
+  assert.ok(people.every(person=>rows.some(row=>row.employeeId===person.id)));
+  const run=await call(owner,'POST','/payroll',{companyId:2,payFrequency:'Daily',periodStart:date,periodEnd:date});
+  assert.equal(run.status,201,JSON.stringify(run.body));
+  const detail=(await call(owner,'GET',`/payroll/${run.body.id}`)).body;
+  for(const person of people) {
+    const slip=detail.payslips.find(row=>row.employeeCode===person.code);
+    assert.equal(Number(slip.daysPresent),1);assert.equal(Number(slip.basic),1600);
+  }
+  assert.equal((await call(owner,'DELETE',`/payroll/${run.body.id}`)).status,204);
+});
+
+test('hard-deleted company drafts release the same payroll dates and remaining overlaps identify the actual run',async()=>{
+  const owner=await login(),people=[];
+  const body={companyIds:[1,2],periodStart:'2047-03-01',periodEnd:'2047-03-01',payFrequency:'Daily'};
+  for(const companyId of [1,2]) {
+    const person=await call(owner,'POST','/employees',{code:`DELETE-BATCH-${companyId}-${Date.now()}`,name:`Delete Batch Worker ${companyId}`,
+      joinDate:'2047-01-01',compensationEffectiveFrom:'2047-01-01',payrollCompanyId:companyId,payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1600,epfEligible:false,etfEligible:false});
+    assert.equal(person.status,201);people.push(person.body);
+    await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out)
+      VALUES (?,?,'Worker','2047-03-01','Checked out','07:30','16:30')`,[person.body.id,person.body.name]);
+  }
+  const first=await call(owner,'POST','/payroll/batch',body);assert.equal(first.status,201,JSON.stringify(first.body));
+  const one=first.body.runs.find(row=>Number(row.companyId)===1),two=first.body.runs.find(row=>Number(row.companyId)===2);
+  const overlap=await call(owner,'POST','/payroll',{companyId:1,periodStart:body.periodStart,periodEnd:'2047-03-02',payFrequency:'Daily'});
+  assert.equal(overlap.status,409);assert.ok(overlap.body.error.includes(one.reference));assert.ok(overlap.body.error.includes('2047-03-01'));
+  // A different pay frequency still cannot pay the same employee twice.
+  assert.equal((await call(owner,'PATCH',`/employees/${people[0].id}`,{payFrequency:'Weekly'})).status,200);
+  const frequencyConflict=await call(owner,'POST','/payroll',{companyId:1,periodStart:body.periodStart,periodEnd:body.periodEnd,payFrequency:'Weekly'});
+  assert.equal(frequencyConflict.status,409);assert.ok(frequencyConflict.body.error.includes(one.reference));assert.ok(frequencyConflict.body.error.includes(people[0].name));
+  assert.equal((await call(owner,'PATCH',`/employees/${people[0].id}`,{payFrequency:'Daily'})).status,200);
+  assert.equal((await call(owner,'DELETE',`/payroll/${one.id}`)).status,204);
+  const [[gone]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.payroll_runs WHERE id=?`,[one.id]);assert.equal(gone.total,0);
+  assert.equal((await call(owner,'GET',`/payroll/${one.id}`)).status,404);
+  assert.equal((await call(owner,'GET',`/payroll/${two.id}`)).status,200,'deleting one company never deletes the other');
+  const rebuilt=await call(owner,'POST','/payroll/batch',body);assert.equal(rebuilt.status,201,JSON.stringify(rebuilt.body));
+  assert.notEqual(rebuilt.body.runs.find(row=>Number(row.companyId)===1).id,one.id);
+  assert.equal(rebuilt.body.runs.find(row=>Number(row.companyId)===2).id,two.id);
+  for(const run of rebuilt.body.runs) assert.equal((await call(owner,'DELETE',`/payroll/${run.id}`)).status,204);
+  const repeat=await call(owner,'POST','/payroll/batch',body);assert.equal(repeat.status,201,JSON.stringify(repeat.body));
+  for(const run of repeat.body.runs) assert.equal((await call(owner,'DELETE',`/payroll/${run.id}`)).status,204);
+  for(const person of people) {
+    const [[source]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.attendance WHERE employee_id=? AND work_date=?`,[person.id,body.periodStart]);assert.equal(source.total,1);
+  }
+});
