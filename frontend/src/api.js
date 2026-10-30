@@ -54,6 +54,7 @@ function responseError(response, body) {
   if (response.status === 413) return 'This file is too large. Try a smaller export or ask an administrator about the upload limit.';
   if (response.status === 429) return 'Too many attempts were made. Wait a moment, then try again.';
   if (response.status === 404 && !body?.error) return 'The requested record was not found. It may have been removed; refresh the page and try again.';
+  if (response.status === 503 && body?.code === 'STORAGE_UNAVAILABLE') return readableError(body);
   if (response.status >= 500) return body?.reference
     ? readableError(body)
     : 'The system could not complete this action right now. Please try again. If it continues, tell your administrator what you were doing.';

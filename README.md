@@ -288,3 +288,32 @@ companies can have runs for the same period. The migration keeps payroll records
 and installs `uq_payroll_company_period_frequency` after adding `company_id`. If startup
 fails naming the obsolete index, deploy the updated `backend/src/schema.js` and restart;
 do not delete payroll runs or payslips to work around the error.
+
+### Diagnosing uploads after changing storage provider
+
+When `backend/.env` explicitly contains `STORAGE_DRIVER`, that file is authoritative
+for all `S3_*` and `R2_*` connection values. Retained PM2 storage variables are removed
+before loading those values; missing keys do not fall back to old credentials. Without
+an explicit file driver, process environment configuration remains supported. The file
+is resolved relative to the backend code, independent of the shell working directory.
+This precedence applies only to the storage connection, not database or other settings.
+
+Startup prints `File storage configuration` with driver, source, endpoint, bucket,
+region and addressing style, excluding access keys and secrets. For Contabo the driver
+must be `s3` and the endpoint must be `https://sin1.contabostorage.com`.
+
+`npm run storage:diagnose:s3` now uses the application's actual streamed upload path
+and scratch directory. It checks small and 6 MiB multipart uploads, downloads both,
+compares SHA-256 hashes, and deletes the test objects. **Only `RESULT: PASS` means the
+complete check succeeded**; bucket access alone does not verify write permissions.
+The diagnostic creates temporary project objects without database attachment records;
+cleanup failures identify the exact object keys to remove manually. Allow at least 6 MiB
+in `MAX_UPLOAD_MB` when running the full multipart diagnostic. S3 network operations
+have connection/socket/request timeouts and at most two attempts rather than unbounded
+waits. A prolonged failure may therefore take several minutes across multipart requests.
+
+After deploying backend and frontend changes, rebuild the frontend, restart PM2 with
+`--update-env`, and refresh the browser. Storage failures now show the safe storage
+message instead of the generic server error. A `403 AccessDenied` after the complete
+configuration is verified still requires correcting storage credentials or bucket
+permissions; making the bucket public is not required.

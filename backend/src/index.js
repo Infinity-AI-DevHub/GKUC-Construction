@@ -1,3 +1,4 @@
+import { storageConfigurationSummary } from './lib/storage.js';
 import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -112,6 +113,7 @@ function checkConfiguration() {
 }
 
 checkConfiguration();
+console.log('File storage configuration', storageConfigurationSummary());
 
 const app = express();
 const workspaceRoot = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
@@ -309,7 +311,7 @@ app.use(express.static(frontendDist));
 app.get('*', (_req, res) => res.sendFile(path.join(frontendDist, 'index.html')));
 
 app.use((error, req, res, _next) => {
-  if (error.status) return res.status(error.status).json({ error: error.message });
+  if (error.status) return res.status(error.status).json({ error: error.message, ...(error.publicCode ? { code: error.publicCode } : {}) });
   if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This record already exists' });
   if (error.code === 'ER_NO_REFERENCED_ROW_2') return res.status(400).json({ error: 'A referenced record does not exist' });
   const reference = randomUUID().slice(0, 8).toUpperCase();

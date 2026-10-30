@@ -121,3 +121,17 @@ test('biometric form data is sent without a JSON content type', async () => {
     globalThis.sessionStorage = originalSession;
   }
 });
+
+
+test('storage outages show the actionable storage message instead of a generic server error', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSession = globalThis.sessionStorage;
+  globalThis.sessionStorage = { getItem: () => null };
+  globalThis.fetch = async () => Response.json({ code: 'STORAGE_UNAVAILABLE', error: 'Cloud file storage is unavailable. Check the object storage access key, secret and bucket permissions.' }, { status: 503 });
+  try {
+    await assert.rejects(api('/uploads/project/1'), /bucket permissions/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.sessionStorage = originalSession;
+  }
+});
