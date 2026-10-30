@@ -279,3 +279,12 @@ and email adapters ship ready to use but need GKUC's own provider accounts — s
 credentials in `.env` and list the channels in `NOTIFY_CHANNELS`. Object storage runs
 locally until the Cloudflare R2 bucket exists, at which point only environment variables
 change.
+
+### Payroll migration on restart
+
+Payroll periods are unique per company, date range and pay frequency. Startup must not
+recreate the obsolete cross-company `uq_payroll_period_frequency` index: different
+companies can have runs for the same period. The migration keeps payroll records intact
+and installs `uq_payroll_company_period_frequency` after adding `company_id`. If startup
+fails naming the obsolete index, deploy the updated `backend/src/schema.js` and restart;
+do not delete payroll runs or payslips to work around the error.

@@ -935,8 +935,7 @@ async function createLifecycleTables() {
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_payroll_user FOREIGN KEY(created_by) REFERENCES users(id),
     CONSTRAINT fk_payroll_approver FOREIGN KEY(approved_by) REFERENCES users(id),
-    CONSTRAINT fk_payroll_policy FOREIGN KEY(policy_id) REFERENCES payroll_policies(id),
-    UNIQUE KEY uq_payroll_period_frequency(period_start,period_end,pay_frequency)
+    CONSTRAINT fk_payroll_policy FOREIGN KEY(policy_id) REFERENCES payroll_policies(id)
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS payslips (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, run_id BIGINT UNSIGNED NOT NULL, employee_id BIGINT UNSIGNED NOT NULL,
@@ -971,7 +970,10 @@ async function createLifecycleTables() {
   await addColumn('payroll_runs', 'policy_id', 'BIGINT UNSIGNED NULL');
   await addForeignKey('payroll_runs', 'fk_payroll_policy', 'CONSTRAINT fk_payroll_policy FOREIGN KEY(policy_id) REFERENCES payroll_policies(id)');
   await dropIndex('payroll_runs', 'uq_payroll_period');
-  await addIndex('payroll_runs', 'uq_payroll_period_frequency', 'UNIQUE KEY uq_payroll_period_frequency(period_start,period_end,pay_frequency)');
+  /* Do not recreate the legacy cross-company unique index on restart. Existing
+     companies may legitimately have runs for identical dates and frequencies.
+     The company migration below installs uq_payroll_company_period_frequency
+     after company_id exists, for both fresh databases and upgrades. */
   await addColumn('payslips', 'office_ot_hours', 'DECIMAL(7,2) NOT NULL DEFAULT 0');
   await addColumn('payslips', 'office_ot_pay', 'DECIMAL(12,2) NOT NULL DEFAULT 0');
   await addColumn('payslips', 'site_ot_hours', 'DECIMAL(7,2) NOT NULL DEFAULT 0');
