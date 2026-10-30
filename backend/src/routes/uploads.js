@@ -9,6 +9,7 @@ const router = Router();
 
 /** Uploading against a record needs the same permission as editing that record. */
 const WRITERS = {
+  progress_certificate:'finance.invoice',
   attendance:'hr.attendance',claim:'hr.payroll',
   handover:'hr.assets',
   candidate:'hr.hiring',
@@ -29,6 +30,7 @@ const WRITERS = {
  * revealing as opening the employee page itself.
  */
 const READERS = {
+  progress_certificate:['qs.view','qs.boq','qs.approve','finance.view','finance.invoice'],
   attendance:['hr.attendance','hr.manage'],claim:['hr.payroll'],
   handover:['hr.assets','hr.manage'],
   candidate:['hr.hiring'],
@@ -55,6 +57,7 @@ if (missingStorageFolders.length) {
 
 /** Each owner type points at the table its id must exist in. */
 const OWNER_TABLES = {
+  progress_certificate:'progress_claims',
   attendance:'visible_attendance',claim:'visible_hr_payroll_claims',
   handover:'visible_employee_asset_handovers',
   candidate:'hiring_candidates',
@@ -215,6 +218,7 @@ router.post('/:ownerType/:ownerId', auth, wrap(async (req, res, next) => {
   }
   const owner = await getOne(`SELECT id FROM ${OWNER_TABLES[ownerType]} WHERE id=?`, [ownerId]);
   if (!owner) return res.status(404).json({ error: 'Record not found' });
+  if(ownerType==='progress_certificate'){const claim=await getOne('SELECT status FROM progress_claims WHERE id=?',[ownerId]);if(claim.status!=='Certified')return res.status(409).json({error:'Record the client certificate before attaching its final approved proof.'});}
 
   const { file, fields, discard } = await readUpload(req);
   const meta = metaSchema.safeParse(fields);
