@@ -675,13 +675,19 @@ function BondExtensionForm({bond,close,reload}){return <FormModal title={`Extend
 
 /* ---- petty cash ----------------------------------------------------------- */
 
-export function PettyCash({ data, can, companyId }) {
+export function PettyCash(props) {
+  return <PettyCashAccounts key={props.companyId} {...props}/>;
+}
+
+function PettyCashAccounts({ data, can, companyId }) {
   const [floats, setFloats] = useState([]);
   const [opening, setOpening] = useState(false);
   const [open, setOpen] = useState(null);
-  const load = () => api(`/receivables/petty-cash?companyId=${companyId}`).then(setFloats).catch(() => setFloats([]));
+  const [error,setError]=useState('');
+  const loadVersion=useRef(0);
+  const load = () => {const version=++loadVersion.current;return api(`/receivables/petty-cash?companyId=${companyId}`).then(rows=>{if(version===loadVersion.current){setFloats(rows);setError('');}}).catch(failure=>{if(version===loadVersion.current)setError(failure.message);});};
   useLiveList(load);
-  useEffect(() => { setOpen(null); load(); }, [companyId]);
+  useEffect(() => {load();return ()=>{loadVersion.current++;};}, [companyId]);
 
   /* The card the holder is looking at must follow the data, not the click that opened it. */
   const current = open ? floats.find(float => float.id === open) : null;
@@ -689,10 +695,11 @@ export function PettyCash({ data, can, companyId }) {
 
   return <div className="petty-cash-management">
     <div className="toolbar">
-      <div className="segments"><span className="segment-label">Three separate petty-cash accounts</span></div>
-      {can.finance && <button className="secondary" onClick={() => setOpening(true)}>Open a float</button>}
+      <div className="segments"><span className="segment-label">Petty cash accounts by category</span></div>
+      {can.finance && <button className="secondary" onClick={() => setOpening(true)}>Add petty cash account</button>}
     </div>
 
+    {error&&<p className="form-error" role="alert">{error}</p>}
     <div className="petty-account-summary">
       {accountTypes.map(type => {
         const accounts = floats.filter(float => float.accountType === type);
@@ -712,7 +719,7 @@ export function PettyCash({ data, can, companyId }) {
           <strong>{float.name}</strong>
           <small>{float.holderName}{float.project ? ` · ${float.project}` : ''}</small>
           <b className={low ? 'overdue' : ''}>{rupees(float.balance)}</b>
-          <small>{low ? 'Running low — needs topping up' : `of a ${rupees(float.ceiling)} float`}</small>
+          <small>{low ? 'Running low — needs topping up' : `Planned amount ${rupees(float.ceiling)}`}</small>
         </button>;
       })}
       {!floats.length && <EmptyState>No petty cash floats have been opened.</EmptyState>}
@@ -723,27 +730,24 @@ export function PettyCash({ data, can, companyId }) {
   </div>;
 }
 
-function FloatForm({ data, companyId, close, reload }) {
-  return <FormModal title="Open a petty cash float" close={close} label="Open float" onSubmit={async values => {
-    await post('/receivables/petty-cash', {
-      companyId,
-      name: values.name,
-      accountType: values.accountType,
-      holderName: values.holderName,
-      projectId: values.projectId ? Number(values.projectId) : null,
-      ceiling: Number(values.ceiling) || 0,
-      lowAt: Number(values.lowAt) || 0
-    });
+function FloatForm({ data, companyId, close, reload, float=null }) {
+  const hasHistory=Number(float?.transactionCount)>0;
+  return <FormModal title={float?'Edit petty cash account':'Add petty cash account'} close={close} label={float?'Save changes':'Create account'} onSubmit={async values => {
+    const payload={name:values.name,accountType:values.accountType||float?.accountType,holderName:values.holderName,
+      projectId:values.projectId?Number(values.projectId):null,ceiling:Number(values.ceiling||0),lowAt:Number(values.lowAt||0)};
+    if(float)await api(`/receivables/petty-cash/${float.id}`,{method:'PUT',body:JSON.stringify(payload)});
+    else await post('/receivables/petty-cash',{...payload,companyId,openingBalance:Number(values.openingBalance||0),openingDate:values.openingDate});
     await reload();
   }}>
-    <SelectField name="accountType" label="Petty cash account"
-      options={['Office expenses', 'Salary advance', 'Fuel']} />
-    <Field name="name" label="Float name" placeholder="Kandy site office" />
-    <Field name="holderName" label="Held by" />
-    <SelectField name="projectId" label="Project" required={false}
-      options={[['', 'Not project specific'], ...data.projects.map(project => [project.id, project.name])]} />
-    <Field name="ceiling" label="Float ceiling (LKR)" type="number" step="any" min="0" />
-    <Field name="lowAt" label="Warn when it falls below" type="number" step="any" min="0" />
+    {hasHistory?<label>Account category<input readOnly value={float.accountType}/><small>Category is fixed because this account has transactions.</small></label>:<SelectField name="accountType" label="Account category" options={['Office expenses','Salary advance','Fuel']} defaultValue={float?.accountType}/>}
+    <Field name="name" label="Account name" placeholder="Kandy site office" defaultValue={float?.name} maxLength={120}/>
+    <Field name="holderName" label="Held by" defaultValue={float?.holderName} maxLength={120}/>
+    <SelectField name="projectId" label="Project (optional)" required={false} defaultValue={float?.projectId||''}
+      options={[["",'Not project specific'],...data.projects.filter(project=>Number(project.companyId)===Number(companyId)).map(project=>[project.id,project.name])]}/>
+    <Field name="ceiling" label="Planned float amount (LKR)" type="number" step="0.01" min="0" defaultValue={float?.ceiling||0}/>
+    <Field name="lowAt" label="Low-balance warning at (LKR)" type="number" step="0.01" min="0" defaultValue={float?.lowAt||0}/>
+    {!float&&<><Field name="openingBalance" label="Opening cash balance (LKR)" type="number" step="0.01" min="0" defaultValue="0"/><Field name="openingDate" label="Opening balance date" type="date" defaultValue={todayInput()}/></>}
+    <p className="form-note wide">{float?`Current cash balance is ${rupees(float.balance)}. Editing the planned amount does not change cash in hand. Use Record a movement to top up, return cash or record an adjustment.`:'Opening cash is recorded as an opening top-up in this account’s ledger. The planned amount is a target, not the cash balance. You can create multiple accounts in each category.'}</p>
   </FormModal>;
 }
 
@@ -752,6 +756,7 @@ const ENTRY_TEMPLATE = '110px minmax(180px,1.6fr) 110px minmax(130px,1fr) 130px'
 function FloatLedger({ float, data, can, close, reload }) {
   const [entries, setEntries] = useState([]);
   const [adding, setAdding] = useState(false);
+  const [editing,setEditing]=useState(false);
   const load = () => api(`/receivables/petty-cash/${float.id}/entries`).then(setEntries).catch(() => setEntries([]));
   useLiveList(load);
 
@@ -762,7 +767,7 @@ function FloatLedger({ float, data, can, close, reload }) {
         : 'This balance is maintained independently from the other petty-cash accounts.'}</span></div>
     <Table columns={['Date', 'Description', 'Kind', 'Recorded by', 'Amount']} template={ENTRY_TEMPLATE}
       empty="Nothing has moved through this float yet."
-      tools={can.finance ? <button className="secondary" onClick={() => setAdding(true)}>Record a movement</button> : null}>
+      tools={can.finance ? <div className="row-actions"><button className="secondary" onClick={()=>setEditing(true)}>Edit account</button><button className="secondary" onClick={() => setAdding(true)}>Record a movement</button></div> : null}>
       {entries.map(entry => <Row template={ENTRY_TEMPLATE} key={entry.id}>
         <span>{shortDate(entry.entryDate)}</span>
         <div><strong>{entry.description}</strong><small>{entry.vehicle
@@ -775,6 +780,7 @@ function FloatLedger({ float, data, can, close, reload }) {
         <strong className={Number(entry.amount) < 0 ? 'overdue' : ''}>{rupees(entry.amount)}</strong>
       </Row>)}
     </Table>
+    {editing&&<FloatForm float={float} data={data} companyId={float.companyId} close={()=>setEditing(false)} reload={reload}/>}
     {adding && <EntryForm float={float} employees={data.employees} close={() => setAdding(false)}
       reload={async () => { await load(); await reload(); }} />}
   </Modal>;

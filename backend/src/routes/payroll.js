@@ -234,7 +234,8 @@ async function payrollSnapshot(id){
     s.epf_employee_deduction epfEmployeeDeduction,s.epf_employer_contribution epfEmployerContribution,
     s.etf_employer_contribution etfEmployerContribution,s.other_deduction otherDeduction,
     s.salary_advance_deduction salaryAdvanceDeduction,s.deductions,s.net_pay netPay,s.employer_cost employerCost,s.calculation_detail calculationDetail,
-    e.name employee,e.code employeeCode,e.designation
+    e.name employee,e.code employeeCode,e.designation,e.join_date joinDate,e.employment_type employmentType,
+    (SELECT name FROM departments WHERE id=e.department_id) department
     FROM payslips s JOIN visible_employees e ON e.id=s.employee_id WHERE s.run_id=? ORDER BY e.code`, [run.id]);
   const advanceRecoveries = await query(`SELECT sar.id,sar.payslip_id payslipId,sar.amount,
     pe.entry_date advanceDate,pe.description,e.id employeeId,e.name employee,e.code employeeCode
@@ -307,7 +308,7 @@ async function buildPayroll(req,connection){
       const policy = await getOne('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1', [companyId, periodEnd]);
       if (!policy) throw fail(409,'Configure a payroll policy for this period first');
 
-      const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,e.payroll_category,e.payroll_company_id,e.worker_type,
+      const employees = await query(`SELECT e.id,e.code,e.name,e.designation,e.department_id,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,e.payroll_category,e.payroll_company_id,e.worker_type,
           e.epf_eligible,e.etf_eligible,e.contribution_start_date,e.join_date,e.employment_type,e.allowance_eligibility,
           (SELECT COALESCE(SUM(GREATEST(0,ABS(pe.amount)-COALESCE(
               (SELECT SUM(sar.amount) FROM salary_advance_recoveries sar WHERE sar.entry_id=pe.id),0))),0)
@@ -320,6 +321,7 @@ async function buildPayroll(req,connection){
 
       if (!employees.length) throw fail(409,`No active ${payFrequency.toLowerCase()}-paid employees fall inside this period`);
       const employeeNames=await query('SELECT id,name FROM employees');
+      const departments=await query('SELECT id,name FROM departments');
       const attendanceRows=await query(`SELECT * FROM visible_attendance WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id`,[periodStart,periodEnd]);
       const otRows=await query('SELECT * FROM visible_overtime_records WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id',[periodStart,periodEnd]);
       const travelClaims=await query("SELECT * FROM visible_hr_payroll_claims WHERE kind='Travel' AND work_date BETWEEN ? AND ?",[periodStart,periodEnd]);
@@ -339,6 +341,12 @@ async function buildPayroll(req,connection){
             datedPolicies,travelClaims.filter(c=>Number(c.employee_id)===Number(row.id))));
           row.calculation_detail.leave=detail;
           row.calculation_detail.contributions=contributionDetail;
+          row.calculation_detail.employee={name:row.name,code:row.code,designation:row.designation,
+            department:departments.find(department=>Number(department.id)===Number(row.department_id))?.name||null,
+            employmentType:row.employment_type,joinDate:row.join_date};
+          row.calculation_detail.sourceAttendance=days.map(day=>({id:day.id,workDate:day.work_date,state:day.state,
+            checkIn:day.check_in,checkOut:day.check_out,workLocation:day.work_location,projectId:day.project_id,
+            needsReview:Boolean(day.needs_review)}));
         } catch(error) {throw fail(409,`${row.name}: ${error.message}`);}
       }
       const covered=await getOne(`SELECT ps.employee_id,e.name employee,c.name company,pr.reference,pr.company_id,pr.pay_frequency,pr.period_start,pr.period_end,pr.status FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id JOIN employees e ON e.id=ps.employee_id JOIN companies c ON c.id=pr.company_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1 FOR UPDATE`,[...employees.map(e=>e.id),periodEnd,periodStart]);

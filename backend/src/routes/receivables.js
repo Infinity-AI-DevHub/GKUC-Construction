@@ -811,7 +811,8 @@ router.get('/receivables/petty-cash', auth, permit('finance.view', 'finance.mana
       const companyId = companyParam(req);
       /* The balance is the sum of what happened, never a stored figure that can drift. */
       res.json(await query(`
-        SELECT f.id,f.name,f.account_type accountType,f.holder_name holderName,f.project_id projectId,p.name project,
+        SELECT f.id,f.company_id companyId,f.name,f.account_type accountType,f.holder_name holderName,f.project_id projectId,p.name project,
+               (SELECT COUNT(*) FROM petty_cash_entries e WHERE e.float_id=f.id) transactionCount,
                f.ceiling,f.low_at lowAt,f.active,
                COALESCE((SELECT SUM(e.amount) FROM petty_cash_entries e WHERE e.float_id=f.id),0) balance,
                (SELECT MAX(e.entry_date) FROM petty_cash_entries e WHERE e.float_id=f.id) lastMovement
@@ -820,32 +821,57 @@ router.get('/receivables/petty-cash', auth, permit('finance.view', 'finance.mana
     } catch (error) { next(error); }
   });
 
-router.post('/receivables/petty-cash', auth, permit('finance.manage'),
-  validate(z.object({
-    companyId: z.coerce.number().int().positive().default(1),
-    name: z.string().trim().min(2).max(120),
-    accountType: z.enum(['Office expenses', 'Salary advance', 'Fuel']),
-    holderName: z.string().trim().min(2).max(120),
-    holderId: z.coerce.number().int().positive().nullable().optional(),
-    projectId: z.coerce.number().int().positive().nullable().optional(),
-    ceiling: z.coerce.number().min(0).default(0),
-    lowAt: z.coerce.number().min(0).default(0)
-  })),
-  async (req, res, next) => {
-    try {
-      if (req.body.projectId) {
-        const project = await getOne('SELECT id FROM projects WHERE id=? AND company_id=?',
-          [req.body.projectId, req.body.companyId]);
-        if (!project) throw fail(400, 'That project belongs to the other company');
+const floatDetails=z.object({
+  name:z.string().trim().min(2).max(120),accountType:z.enum(['Office expenses','Salary advance','Fuel']),
+  holderName:z.string().trim().min(2).max(120),holderId:z.coerce.number().int().positive().nullable().optional(),
+  projectId:z.coerce.number().int().positive().nullable().optional(),
+  ceiling:z.coerce.number().finite().min(0).max(9999999999999).default(0),
+  lowAt:z.coerce.number().finite().min(0).max(9999999999999).default(0)
+});
+router.post('/receivables/petty-cash',auth,permit('finance.manage'),validate(floatDetails.extend({
+  companyId:z.coerce.number().int().positive().default(1),
+  openingBalance:z.coerce.number().finite().min(0).max(9999999999999).multipleOf(.01).default(0),
+  openingDate:bondDate.optional()
+}).refine(value=>!value.openingBalance||Boolean(value.openingDate),{message:'Choose the date of the opening balance',path:['openingDate']})),async(req,res,next)=>{
+  try {
+    const body=req.body;
+    const id=await transaction(async connection=>{
+      const [[company]]=await connection.execute('SELECT id FROM companies WHERE id=? AND active=1',[body.companyId]);
+      if(!company)throw fail(400,'Choose an active operating company.');
+      if(body.projectId){const [[project]]=await connection.execute('SELECT id FROM projects WHERE id=? AND company_id=?',[body.projectId,body.companyId]);
+        if(!project)throw fail(400,'That project belongs to the other company');}
+      const [result]=await connection.execute(`INSERT INTO petty_cash_floats (company_id,name,account_type,holder_name,holder_id,project_id,ceiling,low_at,created_by)
+        VALUES (?,?,?,?,?,?,?,?,?)`,[body.companyId,body.name,body.accountType,body.holderName,body.holderId||null,body.projectId||null,body.ceiling,body.lowAt,req.user.id]);
+      if(body.openingBalance>0){
+        const [entry]=await connection.execute(`INSERT INTO petty_cash_entries (float_id,kind,amount,entry_date,description,category,project_id,recorded_by)
+          VALUES (?,'Top up',?,?,'Opening balance',?,?,?)`,[result.insertId,body.openingBalance,body.openingDate,body.accountType,body.projectId||null,req.user.id]);
+        await audit(connection,req.user.id,'CREATE','petty_cash_entry',entry.insertId,null,{floatId:result.insertId,kind:'Top up',amount:body.openingBalance,description:'Opening balance',entryDate:body.openingDate},req.ip);
       }
-      const result = await query(
-        `INSERT INTO petty_cash_floats (company_id,name,account_type,holder_name,holder_id,project_id,ceiling,low_at,created_by)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
-        [req.body.companyId, req.body.name, req.body.accountType, req.body.holderName, req.body.holderId || null, req.body.projectId || null,
-          req.body.ceiling, req.body.lowAt, req.user.id]);
-      res.status(201).json({ id: result.insertId });
-    } catch (error) { next(error); }
-  });
+      await audit(connection,req.user.id,'CREATE','petty_cash_float',result.insertId,null,body,req.ip);
+      return result.insertId;
+    });
+    publishChange('receivables',{});res.status(201).json({id});
+  }catch(error){next(error);}
+});
+router.put('/receivables/petty-cash/:id',auth,permit('finance.manage'),validate(floatDetails.strict()),async(req,res,next)=>{
+  try {
+    const body=req.body;
+    await transaction(async connection=>{
+      const [[before]]=await connection.execute('SELECT * FROM petty_cash_floats WHERE id=? AND active=1 FOR UPDATE',[req.params.id]);
+      if(!before)throw fail(404,'Petty cash account not found.');
+      if(body.projectId){const [[project]]=await connection.execute('SELECT id FROM projects WHERE id=? AND company_id=?',[body.projectId,before.company_id]);
+        if(!project)throw fail(400,'That project belongs to the other company');}
+      if(body.accountType!==before.account_type){
+        const [[entry]]=await connection.execute('SELECT id FROM petty_cash_entries WHERE float_id=? LIMIT 1',[before.id]);
+        if(entry)throw fail(409,'An account with transactions cannot change category. Create a new account for the other category; transaction history must retain its original meaning.');
+      }
+      await connection.execute(`UPDATE petty_cash_floats SET name=?,account_type=?,holder_name=?,holder_id=?,project_id=?,ceiling=?,low_at=? WHERE id=?`,
+        [body.name,body.accountType,body.holderName,body.holderId===undefined?(body.holderName===before.holder_name?before.holder_id:null):body.holderId,body.projectId||null,body.ceiling,body.lowAt,before.id]);
+      await audit(connection,req.user.id,'UPDATE','petty_cash_float',before.id,before,body,req.ip);
+    });
+    publishChange('receivables',{});res.status(204).end();
+  }catch(error){next(error);}
+});
 
 router.get('/receivables/petty-cash/:id/entries', auth, permit('finance.view', 'finance.manage'),
   async (req, res, next) => {
@@ -902,8 +928,9 @@ router.post('/receivables/petty-cash/:id/entries', auth, permit('finance.manage'
         ? -Math.abs(req.body.amount) : Math.abs(req.body.amount);
 
       await transaction(async connection => {
-        const [[lockedFloat]]=await connection.execute('SELECT id FROM petty_cash_floats WHERE id=? AND active=1 FOR UPDATE',[req.params.id]);
+        const [[lockedFloat]]=await connection.execute('SELECT * FROM petty_cash_floats WHERE id=? AND active=1 FOR UPDATE',[req.params.id]);
         if(!lockedFloat)throw fail(404,'That float is no longer active');
+        if(lockedFloat.account_type!==float.account_type || Number(lockedFloat.project_id||0)!==Number(float.project_id||0))throw fail(409,'The account settings changed. Refresh the account and record the movement again.');
         if(float.account_type==='Salary advance'&&req.body.kind==='Spend'){
           const [[worker]]=await connection.execute("SELECT id,pay_basis,payroll_category,daily_rate FROM visible_employees WHERE id=? AND status<>'Left' FOR UPDATE",[req.body.employeeId]);
           if(!worker)throw fail(400,'Choose an active employee receiving this advance.');

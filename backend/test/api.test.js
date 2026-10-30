@@ -5226,8 +5226,18 @@ test('short-day attendance reduces saved earned salary and draft regeneration ap
   let slip=await snapshot();assert.equal(Number(slip.basic),400);assert.equal(Number(slip.netPay),400);
   let detail=typeof slip.calculationDetail==='string'?JSON.parse(slip.calculationDetail):slip.calculationDetail;
   assert.equal(detail.attendance[0].shortDay.amount,1200);
+  assert.equal(detail.employee.name,person.body.name);
+  assert.ok(detail.sourceAttendance[0].checkOut.startsWith('09:30'));
+
   await admin.query(`UPDATE ${testDatabase}.attendance SET check_out='11:30' WHERE id=?`,[record.insertId]);
   assert.equal(Number((await snapshot()).basic),400,'saved payroll remains unchanged until explicit rebuild');
+  const unchanged=await snapshot();
+  const unchangedDetail=typeof unchanged.calculationDetail==='string'?JSON.parse(unchanged.calculationDetail):unchanged.calculationDetail;
+  assert.ok(unchangedDetail.sourceAttendance[0].checkOut.startsWith('09:30'),'printed punches use the saved payroll snapshot');
+  const document=await fetch(`${base}/payroll/${run.body.id}/payslips/${unchanged.id}/document`,{headers:{Authorization:`Bearer ${owner}`}});
+  assert.equal(document.status,200);
+  const html=await document.text();assert.match(html,/Daily salary breakdown/);assert.match(html,/09:30/);assert.match(html,/Rates used in this run/);
+
   assert.equal((await call(owner,'POST','/payroll',body)).status,201);
   slip=await snapshot();assert.equal(Number(slip.basic),800);assert.equal(Number(slip.netPay),800);
   assert.equal((await call(owner,'DELETE',`/payroll/${run.body.id}`)).status,204);
@@ -5338,4 +5348,34 @@ test('hard-deleted company drafts release the same payroll dates and remaining o
   for(const person of people) {
     const [[source]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.attendance WHERE employee_id=? AND work_date=?`,[person.id,body.periodStart]);assert.equal(source.total,1);
   }
+});
+
+test('petty cash accounts open with audited funding and edit details without rewriting cash history',async()=>{
+  const owner=await login(),store=await login('store@gkuc.lk');
+  const body={companyId:2,name:`New petty account ${Date.now()}`,accountType:'Office expenses',holderName:'Finance cashier',projectId:null,
+    ceiling:2000,lowAt:500,openingBalance:5000,openingDate:'2026-10-01'};
+  assert.equal((await call(store,'POST','/receivables/petty-cash',body)).status,403);
+  assert.equal((await call(owner,'POST','/receivables/petty-cash',{...body,openingDate:'2026-02-30'})).status,400);
+  assert.equal((await call(owner,'POST','/receivables/petty-cash',{...body,companyId:999999})).status,400);
+  assert.equal((await call(owner,'POST','/receivables/petty-cash',{...body,projectId:1})).status,400);
+  const saved=await call(owner,'POST','/receivables/petty-cash',body);assert.equal(saved.status,201,JSON.stringify(saved.body));const id=saved.body.id;
+  const list=async()=> (await call(owner,'GET','/receivables/petty-cash?companyId=2')).body.find(row=>row.id===id);
+  assert.equal(Number((await list()).balance),5000);assert.equal(Number((await list()).transactionCount),1);
+  const entries=(await call(owner,'GET',`/receivables/petty-cash/${id}/entries`)).body;
+  assert.equal(entries.length,1);assert.equal(entries[0].kind,'Top up');assert.equal(entries[0].description,'Opening balance');
+  const details={name:'Renamed petty account',accountType:'Office expenses',holderName:'New cashier',projectId:null,ceiling:21000,lowAt:1000};
+  assert.equal((await call(store,'PUT',`/receivables/petty-cash/${id}`,details)).status,403);
+  assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${id}`,details)).status,204);
+  let row=await list();assert.equal(row.name,details.name);assert.equal(Number(row.ceiling),21000);assert.equal(Number(row.balance),5000);
+  assert.deepEqual((await call(owner,'GET',`/receivables/petty-cash/${id}/entries`)).body,entries);
+  assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${id}`,{...details,accountType:'Fuel'})).status,409);
+  assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${id}`,{...details,balance:1})).status,400);
+  assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${id}`,{...details,companyId:1})).status,400);
+  assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${id}`,{...details,projectId:1})).status,400);
+  assert.equal((await call(owner,'POST',`/receivables/petty-cash/${id}/entries`,{kind:'Spend',amount:1000,entryDate:'2026-10-02',description:'Office stationery'})).status,201);
+  assert.equal(Number((await list()).balance),4000);
+  const empty=await call(owner,'POST','/receivables/petty-cash',{...body,name:'Second office account',openingBalance:0});assert.equal(empty.status,201);
+  assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${empty.body.id}`,{...details,name:'Fuel reserve',accountType:'Fuel'})).status,204);
+  const [[audit]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.audit_logs WHERE entity='petty_cash_float' AND entity_id=?`,[String(id)]);
+  assert.equal(audit.total,2);
 });
