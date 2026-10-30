@@ -1,0 +1,9 @@
+# Petty cash account creation and editing
+
+Finance → Petty cash → Add petty cash account creates any number of accounts in the existing Office expenses, Salary advance or Fuel categories. Account name, holder, optional same-company project, planned float amount and low-balance warning are editable. Optional opening cash creates a dated Opening balance top-up in the ledger. Account and opening entry creation are atomic and audited; opening funding is not an expense.
+
+Open an account card → Edit account updates its details, planned amount and warning threshold without changing previous movements or cash balance. The balance remains the sum of recorded entries. Use Record a movement to top up, return cash or record an adjustment. The operating company cannot be changed by editing. Category changes are allowed only before the first transaction, protecting fuel-linked records and salary-advance recovery semantics. Project changes affect the account default for future movements, not historical entry attribution. Changing a manually named holder clears an outdated linked holder ID unless a replacement ID was supplied.
+
+Company switches remount the account workspace so open forms, account selections and responses cannot leak into the other company view. Failed account loading is displayed rather than silently represented as an empty register. A movement rechecks category/project settings after obtaining the float lock; concurrent settings changes require refreshing before retrying.
+
+Both creation and editing require finance.manage. No database migration is needed. Tests cover opening funding, ledger preservation, independent planned amount, multiple accounts, permissions, invalid company/project/date rejection, category history protection and prevention of direct balance/company rewriting. Browser verification exercises creation, opening funding, project filtering and ledger-based editing.
