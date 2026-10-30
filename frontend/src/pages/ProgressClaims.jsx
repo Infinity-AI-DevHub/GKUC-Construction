@@ -17,7 +17,7 @@ export default function ProgressClaims({companyId,can}){
   const claims=data.claims.filter(row=>Number(row.project_id)===Number(projectId));
   const previous=claims.find(row=>row.status==='Certified')?.certified_items||[];
   const project=data.projects.find(row=>Number(row.id)===Number(projectId));
-  return <>
+  return <div className="workspace-stack progress-claims">
     {error&&<p className="form-error" role="alert">{error}</p>}
     <div className="progress-claim-toolbar">
       <label>Project<select aria-label="Progress claim project" value={projectId} onChange={event=>setProjectId(event.target.value)}><option value="">Choose project</option>{data.projects.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
@@ -57,7 +57,7 @@ export default function ProgressClaims({companyId,can}){
     }}><TextArea name="reference" label="Approval / client agreement reference" minLength={3} maxLength={500}/></FormModal>}
     {form?.type==='application'&&latest&&<ApplicationForm schedule={latest} previous={previous} close={()=>setForm(null)} reload={load}/>}
     {form?.type==='detail'&&data.claims.find(row=>row.id===form.id)&&<ClaimDetail claim={data.claims.find(row=>row.id===form.id)} can={can} close={()=>setForm(null)} reload={load}/>}
-  </>;
+  </div>;
 }
 
 function ScheduleForm({projectId,base,editing,companyId,close,reload}){

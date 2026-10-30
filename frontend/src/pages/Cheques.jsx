@@ -40,7 +40,8 @@ export default function Cheques({ can, data, companyId }) {
         {can.invoice&&['On hand','Deposited','Re-deposited','Returned'].includes(row.status)?<button className="status-button" onClick={()=>setConfirmingReceived(row)}>{row.status==='On hand'?'Deposit':row.status==='Returned'?'Follow up':'Confirm'}</button>:<span>{row.confirmedBy||'—'}</span>}
       </Row>)}
     </Table>
-    <div className="cheque-section-heading outgoing"><div><span>Money going out</span><h2>Cheques issued by Finance</h2></div></div>
+    <div className="cheque-section-heading outgoing"><div><span>Money going out</span><h2>Cheques issued by Finance</h2></div>
+      {can.finance && <button type="button" className="secondary" onClick={() => setAdding(true)}>Issue cheque</button>}</div>
     <div className="attendance-summary cheque-summary">
       <Summary label="Awaiting confirmation" value={pending.length} icon={CalendarClock} />
       <Summary label="Due in seven days" value={pending.filter(row => row.daysUntil >= 0 && row.daysUntil <= 7).length} icon={Banknote} />
@@ -48,8 +49,7 @@ export default function Cheques({ can, data, companyId }) {
       <Summary label="Pending value" value={rupees(pending.reduce((sum, row) => sum + Number(row.amount), 0))} icon={CircleCheck} />
     </div>
     <Table columns={['Cheque', 'Payee / purpose', 'Bank', 'Cheque date', 'Amount', 'Status', 'Follow-up']}
-      template={TEMPLATE} title="Issued cheque register" empty="No issued cheques recorded."
-      tools={can.finance ? <button className="secondary" onClick={() => setAdding(true)}>Issue cheque</button> : null}>
+      template={TEMPLATE} title="Issued cheque register" empty="No issued cheques recorded.">
       {rows.map(row => <Row template={TEMPLATE} key={row.id}>
         <div><strong>{row.chequeNumber}</strong><small>{row.supplier || 'General payment'}</small>{row.invoices?.length ? row.invoices.map(invoice=><small key={invoice.invoiceId}>{invoice.invoiceNo} · {rupeesExact(invoice.amount)}</small>) : <small>{row.invoiceNo || 'Not invoice-linked'}</small>}</div>
         <div><strong>{row.payee}</strong><small>{row.purpose}</small></div>
