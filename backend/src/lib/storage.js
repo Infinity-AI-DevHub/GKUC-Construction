@@ -69,7 +69,7 @@ const ALLOWED = new Map([
 export const FOLDERS = [
   /* Generic record attachments. Keep this group aligned with routes/uploads.js. */
   'attendance', 'claim', 'handover', 'candidate', 'task', 'project', 'employee', 'report',
-  'vehicle', 'equipment', 'incoming_letter', 'risk_finding', 'company_compliance',
+  'vehicle', 'equipment', 'incoming_letter', 'risk_finding', 'company_compliance', 'progress_certificate',
   /* Files managed by their own modules. */
   'gallery', 'boq', 'subcontract-quotation', 'tender', 'drive'
 ];

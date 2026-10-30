@@ -42,11 +42,11 @@ router.get('/',read,wrap(async(req,res)=>{
   const companyId=Number(req.query.companyId);if(!Number.isSafeInteger(companyId)||companyId<1)throw fail(400,'Choose a company.');
   const projects=await query('SELECT id,name,client,client_id clientId,billing_route billingRoute FROM projects WHERE company_id=? AND active=1 ORDER BY name',[companyId]);
   const schedules=await query('SELECT s.* FROM progress_schedules s JOIN projects p ON p.id=s.project_id WHERE p.company_id=? ORDER BY s.id DESC',[companyId]);
-  const claims=await query(`SELECT c.*,p.name project,i.net_payable netPayable,i.paid_amount paidAmount,i.reference receivableReference
+  const claims=await query(`SELECT c.*,(SELECT COUNT(*) FROM visible_attachments a WHERE a.owner_type='progress_certificate' AND a.owner_id=c.id) approvedProofs,p.name project,i.net_payable netPayable,i.paid_amount paidAmount,i.reference receivableReference
     FROM progress_claims c JOIN projects p ON p.id=c.project_id LEFT JOIN client_invoices i ON i.id=c.invoice_id
     WHERE p.company_id=? ORDER BY c.id DESC`,[companyId]);
   res.json({projects,schedules:schedules.map(row=>({...row,items:json(row.items)})),claims:claims.map(row=>({...row,
-    document_details:json(row.document_details),
+    document_details:json(row.document_details),payment_request_details:json(row.payment_request_details),
     schedule_snapshot:snapshot(row.schedule_snapshot),submitted_items:json(row.submitted_items),certified_items:json(row.certified_items),certification:json(row.certification)}))});
 }));
 router.post('/schedules',permit('qs.boq'),validate(z.object({projectId:z.number().int().positive(),
@@ -118,6 +118,15 @@ const documentDetails=z.object({billNumber:z.string().trim().max(60).default('')
   recipientAddress:z.string().trim().max(1000).default(''),salutation:z.string().trim().max(100).default('Dear Sir / Madam,'),
   subject:z.string().trim().max(200).default('Request for Payment'),letterBody:z.string().trim().max(4000).default(''),
   signatoryName:z.string().trim().max(180).default(''),signatoryDesignation:z.string().trim().max(180).default('')});
+router.put('/:id/payment-request',permit('qs.boq','finance.invoice'),validate(documentDetails.omit({signatoryName:true,signatoryDesignation:true}).extend({letterDate:day})),wrap(async(req,res)=>{
+  await transaction(async connection=>{
+    const [[claim]]=await connection.execute('SELECT * FROM progress_claims WHERE id=? FOR UPDATE',[req.params.id]);
+    if(!claim)throw fail(404,'Application not found.');
+    if(claim.status!=='Certified')throw fail(409,'A client-certified claim is required for a payment request letter.');
+    await connection.execute('UPDATE progress_claims SET payment_request_details=? WHERE id=?',[JSON.stringify(req.body),claim.id]);
+    await audit(connection,req.user.id,'UPDATE','progress_payment_letter',claim.id,json(claim.payment_request_details),req.body,req.ip);
+  });publishChange('progress-claims',{});res.status(204).end();
+}));
 const applicationSchema=z.object({scheduleId:z.number().int().positive(),applicationDate:day,periodFrom:day,periodTo:day,
   documentDetails:documentDetails.optional(),
   quantities,notes:z.string().trim().max(1000).default('')});
@@ -222,8 +231,22 @@ router.get('/:id/document',read,wrap(async(req,res)=>{
   const claim=await getOne(`SELECT c.*,s.source,s.status approvalStatus,s.contract_reference contractReference,s.agreement_reference agreementReference,
     s.version_no versionNo,p.name project,p.client,p.company_id companyId FROM progress_claims c JOIN progress_schedules s ON s.id=c.schedule_id JOIN projects p ON p.id=c.project_id WHERE c.id=?`,[req.params.id]);
   if(!claim)throw fail(404,'Application not found.');
-  const type=req.query.type||'application';if(!['application','letter','certificate','invoice'].includes(type))throw fail(400,'Unknown document type.');
+  const type=req.query.type||'application';if(!['application','letter','payment-request','certificate','invoice'].includes(type))throw fail(400,'Unknown document type.');
   const context=await documentContext(getOne,claim.companyId);
+  if(type==='payment-request'){
+    if(claim.status!=='Certified')throw fail(409,'Record the client certificate before preparing a payment request.');
+    const invoice=await getOne('SELECT net_payable,paid_amount,due_date FROM client_invoices WHERE id=?',[claim.invoice_id]);
+    if(!invoice)throw fail(409,'The certified receivable was not found.');
+    const details=json(claim.payment_request_details)||{};
+    const source=json(claim.document_details)||{};
+    const snapshot=json(claim.schedule_snapshot);
+    const signatory=await getOne(`SELECT u.name,COALESCE(r.name,u.role) roleName FROM users u LEFT JOIN roles r ON r.id=u.role_id WHERE u.id=? AND u.active=1`,[req.user.id]);
+    if(!signatory)throw fail(403,'The printing user is no longer active.');
+    return sendDocument(req,res,progressDocument({...context,type:'letter',claim:{...claim,contractReference:snapshot.contract_reference,
+      application_date:details.letterDate||claim.certified_date,
+      document_details:{...source,...details,letterBody:details.letterBody||'',signatoryName:signatory.name,signatoryDesignation:signatory.roleName},paymentRequest:{certified:money(invoice.net_payable),paid:money(invoice.paid_amount),outstanding:money(Math.max(0,Number(invoice.net_payable)-Number(invoice.paid_amount))),dueDate:invoice.due_date}}}),`${claim.reference}-payment-request.pdf`);
+  }
+
   if(type==='invoice'){
     if(!claim.invoice_reference)throw fail(409,'Issue the optional invoice first.');
     const invoice=await getOne(`SELECT reference,client,title,invoice_date invoiceDate,due_date dueDate,gross,tax_treatment taxTreatment,vat_rate vatRate,

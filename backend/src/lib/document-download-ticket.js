@@ -19,7 +19,7 @@ export function canonicalDocumentDownloadPath(value) {
     return null;
   const entries = [...parsed.searchParams.entries()];
   const progress=/^\/progress-claims\/\d+\/document$/.test(parsed.pathname);
-  if(parsed.searchParams.has('type')&&(!progress||parsed.searchParams.getAll('type').length!==1||!['application','letter','certificate','invoice'].includes(parsed.searchParams.get('type'))))return null;
+  if(parsed.searchParams.has('type')&&(!progress||parsed.searchParams.getAll('type').length!==1||!['application','letter','payment-request','certificate','invoice'].includes(parsed.searchParams.get('type'))))return null;
   if (entries.some(([key]) => !['download', 'preview', 'companyId',...(progress?['type']:[])].includes(key)) ||
       Number(parsed.searchParams.getAll('download').length === 1 && parsed.searchParams.get('download') === 'pdf') +
         Number(parsed.searchParams.getAll('preview').length === 1 && parsed.searchParams.get('preview') === 'pdf') !== 1 ||

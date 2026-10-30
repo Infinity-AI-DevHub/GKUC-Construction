@@ -1,3 +1,4 @@
+import Attachments from '../Attachments.jsx';
 import React,{useEffect,useRef,useState} from 'react';
 import {Plus,Trash2,Download,PencilLine,Printer} from 'lucide-react';
 import {api,post,patch,openDocument,openPrintDocument,rupees,todayInput} from '../api.js';
@@ -38,10 +39,10 @@ export default function ProgressClaims({companyId,can}){
       <Table title="Interim applications and certificates" columns={['Application / period','Claimed','Certified payable','Received','Outstanding','Status','Documents']} template="minmax(210px,1fr) 135px 145px 135px 135px 110px 190px">
         {claims.map(row=><Row key={row.id} template="minmax(210px,1fr) 135px 145px 135px 135px 110px 190px">
           <span><strong>{row.reference}</strong><small>{row.period_from} to {row.period_to}</small></span><span>{rupees(row.submitted_amount)}</span>
-          <span>{row.status==='Certified'?rupees(row.netPayable):'Not certified'}</span><span>{rupees(row.paidAmount||0)}</span><span>{rupees(Number(row.netPayable||0)-Number(row.paidAmount||0))}</span><Badge>{row.status}</Badge>
+          <span>{row.status==='Certified'?rupees(row.netPayable):'Not certified'}</span><span>{rupees(row.paidAmount||0)}</span><span>{rupees(Number(row.netPayable||0)-Number(row.paidAmount||0))}</span><span><Badge>{row.status}</Badge>{row.status==='Certified'&&<small>{row.approvedProofs||0} approved proof file(s)</small>}</span>
           <div className="row-actions"><button className="secondary" onClick={()=>setForm({type:'detail',id:row.id})}>Open</button>
             <button className="icon-button" title="Print interim payment application" aria-label={`Print application ${row.reference}`} onClick={()=>openPrintDocument(`/progress-claims/${row.id}/document?type=application`)}><Printer size={16}/></button>
-            <button className="icon-button" title="Print payment request letter" aria-label={`Print letter ${row.reference}`} onClick={()=>openPrintDocument(`/progress-claims/${row.id}/document?type=letter`)}><Printer size={16}/></button></div>
+            <button className="icon-button" title="Print application covering letter" aria-label={`Print letter ${row.reference}`} onClick={()=>openPrintDocument(`/progress-claims/${row.id}/document?type=letter`)}><Printer size={16}/></button>{row.status==='Certified'&&<button className="secondary" onClick={()=>openPrintDocument(`/progress-claims/${row.id}/document?type=payment-request`)}>Print payment request</button>}</div>
         </Row>)}
       </Table>
     </>}
@@ -110,12 +111,12 @@ function ApplicationForm({schedule,previous=[],claim=null,close,reload}){
     <Field name="projectReference" label="Project / contract number on document" required={false} defaultValue={claim?.document_details?.projectReference}/>
     <Quantities items={schedule.items} defaults={Object.fromEntries((claim?.submitted_items||previous).map(row=>[row.code,row.quantity]))}/>
     <TextArea name="notes" label="Application notes" required={false} maxLength={1000} defaultValue={claim?.notes||''}/>
-    <h3 className="wide">Payment request letter</h3>
+    <h3 className="wide">Application covering letter</h3>
     {['recipientTitle','recipientOrganisation','signatoryName','signatoryDesignation'].map((name,index)=><Field key={name} name={name} label={['Recipient title','Recipient organisation','Signatory name','Signatory designation'][index]} required={false} defaultValue={claim?.document_details?.[name]}/>)}
     <TextArea name="recipientAddress" label="Recipient postal address" required={false} defaultValue={claim?.document_details?.recipientAddress}/>
     <Field name="salutation" label="Salutation" required={false} defaultValue={claim?.document_details?.salutation||'Dear Sir / Madam,'}/>
     <Field name="subject" label="Letter subject" required={false} defaultValue={claim?.document_details?.subject||'Request for Payment'}/>
-    <TextArea name="letterBody" label="Letter wording (optional; blank uses standard payment request)" required={false} rows={5} defaultValue={claim?.document_details?.letterBody}/>
+    <TextArea name="letterBody" label="Letter wording (optional; blank uses the standard application covering letter)" required={false} rows={5} defaultValue={claim?.document_details?.letterBody}/>
   </FormModal>;
 }
 
@@ -136,6 +137,8 @@ function ClaimDetail({claim,can,close,reload}){
       {['Draft','Submitted'].includes(claim.status)&&permitted('qs.boq')&&<button className="secondary" onClick={()=>setForm('Withdrawn')}>Withdraw</button>}
       {claim.status==='Submitted'&&permitted('finance.invoice')&&<button className="primary" onClick={()=>setForm('certify')}>Record client certificate</button>}
       {claim.status==='Certified'&&<button className="secondary" onClick={()=>doc('certificate')}>Certificate PDF</button>}
+      {claim.status==='Certified'&&<><button className="secondary" onClick={()=>doc('payment-request')}>Payment request PDF</button><button className="secondary" onClick={()=>openPrintDocument(`/progress-claims/${claim.id}/document?type=payment-request`)}><Printer size={16}/>Print payment request</button>{(permitted('qs.boq')||permitted('finance.invoice'))&&<button className="secondary" onClick={()=>setForm('payment-letter')}>Edit payment letter</button>}</>}
+
       {claim.status==='Certified'&&!claim.invoice_reference&&permitted('finance.invoice')&&<button disabled={busy} className="secondary" onClick={()=>action(()=>post(`/progress-claims/${claim.id}/invoice`,{}))}>Issue optional invoice</button>}
       {claim.invoice_reference&&<button className="secondary" onClick={()=>doc('invoice')}>Invoice PDF · {claim.invoice_reference}</button>}
       {claim.status==='Certified'&&Number(claim.netPayable)>Number(claim.paidAmount)&&permitted('finance.invoice')&&<button className="primary" onClick={()=>setForm('receipt')}>Record payment</button>}
@@ -144,6 +147,8 @@ function ClaimDetail({claim,can,close,reload}){
     <Table title="Submitted and certified values" columns={['Item','Previous certified','This claimed','Cumulative claimed','This certified']} template="minmax(220px,1fr) 145px 145px 145px 145px">
       {claim.submitted_items.map(row=><Row key={row.code} template="minmax(220px,1fr) 145px 145px 145px 145px"><span>{row.code} · {row.description}</span><span>{rupees(row.previousAmount)}</span><span>{rupees(row.current)}</span><span>{rupees(row.cumulative)}</span><span>{claim.certified_items?rupees(claim.certified_items.find(item=>item.code===row.code)?.current):'Pending'}</span></Row>)}
     </Table>
+    {claim.status==='Certified'&&<section><p className="form-note">Upload the final document approved by the client as evidence for certificate {claim.certificate_reference}. Files do not change the certified amounts. Keep revised or supporting documents here as additional files.</p><Attachments ownerType="progress_certificate" ownerId={claim.id} title="Client-approved certificate / final approval proof" withCategory canUpload={permitted('finance.invoice')} canDelete={false} onChange={reload}/></section>}
+    {form==='payment-letter'&&<PaymentRequestForm claim={claim} close={()=>setForm('')} reload={reload}/>}
     {['Submitted','Withdrawn'].includes(form)&&<FormModal title={form==='Submitted'?'Submit application':'Withdraw application'} label="Confirm" close={()=>setForm('')} onSubmit={async values=>{
       await patch(`/progress-claims/${claim.id}/status`,{status:form,reason:values.reason});setForm('');await reload();
     }}><TextArea name="reason" label="Submission / withdrawal reason" minLength={3}/></FormModal>}
@@ -159,6 +164,7 @@ function CertificationForm({claim,close,reload}){
       quantities:entered(claim.submitted_items,values),retention:Number(values.retention),retentionReleaseDate:values.retentionReleaseDate||undefined,
       advance:Number(values.advance),other:Number(values.other),stampDuty:Number(values.stampDuty),vatRate:Number(values.vatRate),taxBasis:values.taxBasis,reason:values.reason});await reload();
   }}>
+    <p className="form-note wide">After saving these certified values, upload the final client-approved document in the claim’s approval proof section.</p>
     <Field name="certificateReference" label="Client certificate reference" maxLength={180}/><Field name="certifiedDate" label="Certified on" type="date" defaultValue={todayInput()}/>
     <Field name="dueDate" label="Payment due" type="date"/>
     <Quantities items={claim.submitted_items} defaults={Object.fromEntries(claim.submitted_items.map(row=>[row.code,row.quantity]))}/>
@@ -170,5 +176,21 @@ function CertificationForm({claim,close,reload}){
     <Field name="vatRate" label="Applicable VAT rate (%)" type="number" min="0" max="100" step="0.01" defaultValue="0"/>
     <SelectField name="taxBasis" label="VAT calculation basis" options={['Gross','After recoveries']}/>
     <TextArea name="reason" label="Certification and deduction basis / supporting reference" minLength={3} maxLength={1000}/>
+  </FormModal>;
+}
+
+function PaymentRequestForm({claim,close,reload}){
+  const details=claim.payment_request_details||{...claim.document_details,letterBody:''};
+  return <FormModal title="Certified payment request letter" close={close} label="Save letter details" onSubmit={async values=>{
+    await api(`/progress-claims/${claim.id}/payment-request`,{method:'PUT',body:JSON.stringify(values)});await reload();
+  }}>
+    <p className="form-note wide">The letter includes certificate {claim.certificate_reference}, certified payable, payments received and the outstanding balance. The name and role of the logged-in user printing/downloading the letter are inserted automatically as signatory. Changing this wording does not change amounts or record a payment.</p>
+    <Field name="letterDate" label="Letter date" type="date" defaultValue={details.letterDate||todayInput()}/>
+    <Field name="projectReference" label="Project / contract reference" required={false} maxLength={180} defaultValue={details.projectReference||''}/>
+    {['recipientTitle','recipientOrganisation'].map((name,index)=><Field key={name} name={name} label={['Recipient title','Recipient organisation'][index]} required={false} maxLength={180} defaultValue={details[name]||''}/>)}
+    <TextArea name="recipientAddress" label="Recipient postal address" required={false} defaultValue={details.recipientAddress||''}/>
+    <Field name="salutation" label="Salutation" required={false} maxLength={100} defaultValue={details.salutation||'Dear Sir / Madam,'}/>
+    <Field name="subject" label="Letter subject" required={false} maxLength={200} defaultValue={details.subject||'Request for Payment'}/>
+    <TextArea name="letterBody" label="Additional letter wording (optional)" required={false} rows={5} defaultValue={details.letterBody||''}/>
   </FormModal>;
 }

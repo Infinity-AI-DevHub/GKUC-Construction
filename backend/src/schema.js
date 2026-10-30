@@ -915,7 +915,7 @@ async function createAttachmentTables() {
     CONSTRAINT fk_upload_user FOREIGN KEY(uploaded_by) REFERENCES users(id),
     INDEX idx_attachment_owner(owner_type,owner_id), INDEX idx_attachment_expiry(expiry_date)
   ) ENGINE=InnoDB`);
-  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter','risk_finding','company_compliance') NOT NULL");
+  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter','risk_finding','company_compliance','progress_certificate') NOT NULL");
 }
 
 /** 2.2 payroll and performance, and PID section 3 step 1 (customer inquiry). */
@@ -3562,6 +3562,7 @@ export async function migrate() {
   ) ENGINE=InnoDB`);
   await migrateAttendanceIdentity(query);
   await addColumn('progress_claims','document_details','JSON NULL');
+  await addColumn('progress_claims','payment_request_details','JSON NULL');
   await query(`CREATE TABLE IF NOT EXISTS document_numbering (
     company_id TINYINT UNSIGNED NOT NULL,document_type VARCHAR(8) NOT NULL,format VARCHAR(40) NOT NULL,
     padding INT NOT NULL,next_value BIGINT UNSIGNED NOT NULL,PRIMARY KEY(company_id,document_type),
