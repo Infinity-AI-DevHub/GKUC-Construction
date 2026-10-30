@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, query, today, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
+import { loadWorkforcePicture } from '../lib/workforce-picture.js';
 import { notify } from '../alerts.js';
 
 const router = Router();
@@ -108,7 +109,7 @@ router.post('/projects/:id/reschedule', auth, permit('projects.schedule'), valid
   if (!project) return res.status(404).json({ error: 'Site not found' });
 
   const destination = req.body.moveToProjectId
-    ? await getOne('SELECT id,name FROM projects WHERE id=?', [req.body.moveToProjectId])
+    ? await getOne("SELECT id,name FROM projects WHERE id=? AND active=1 AND stage<>'Completed' AND site_status<>'Completed'", [req.body.moveToProjectId])
     : null;
   if (req.body.moveToProjectId && !destination) return res.status(404).json({ error: 'The destination site does not exist' });
   if (destination && destination.id === project.id) {
@@ -122,6 +123,12 @@ router.post('/projects/:id/reschedule', auth, permit('projects.schedule'), valid
     await connection.execute(
       'UPDATE projects SET site_status=?, status_reason=?, status_changed_at=NOW() WHERE id=?',
       [req.body.status, req.body.reason, project.id]);
+    if (req.body.status === 'Completed') {
+      await connection.execute("UPDATE projects SET stage='Completed',health='Completed',progress=100 WHERE id=?",[project.id]);
+      await connection.execute('UPDATE project_start_reminders SET active=0 WHERE project_id=?',[project.id]);
+    } else if (project.stage === 'Completed') {
+      await connection.execute("UPDATE projects SET stage='Mid-way',health='On track' WHERE id=?",[project.id]);
+    }
     /* The site being moved to becomes the one that is running. */
     if (destination) await connection.execute("UPDATE projects SET site_status='Active' WHERE id=?", [destination.id]);
 
@@ -375,6 +382,7 @@ router.get('/coordination', auth, permit('projects.view'), wrap(async (_req, res
     stage,progress,manager,end_date endDate FROM projects
     WHERE active=1 AND site_status <> 'Completed' ORDER BY FIELD(site_status,'Active','On hold','Rescheduled'), id`);
 
+  const workforce = await loadWorkforcePicture(today());
   const detailed = await Promise.all(sites.map(async site => {
     const [resources, report, openTasks, milestone] = await Promise.all([
       assignedTo(site.id),
@@ -384,12 +392,16 @@ router.get('/coordination', auth, permit('projects.view'), wrap(async (_req, res
       getOne(`SELECT title,due_date dueDate FROM project_milestones
         WHERE project_id=? AND status <> 'Completed' ORDER BY due_date LIMIT 1`, [site.id])
     ]);
+    const team = workforce.people.filter(person => person.group === 'site' && Number(person.projectId) === Number(site.id))
+      .map(({id,name,code,designation,projectRole,status,source,attendanceRecorded,attendanceState}) =>
+        ({id,name,code,designation,projectRole,status,source,attendanceRecorded,attendanceState}));
     return {
       ...site,
-      team: resources.labour,
+      team,
       vehicles: resources.vehicles,
       equipment: resources.equipment,
-      headcount: resources.labour.length,
+      headcount: team.length,
+      attendanceCount: team.filter(person => person.attendanceRecorded).length,
       latestReport: report || null,
       openTasks: Number(openTasks.count),
       nextMilestone: milestone || null,
@@ -397,7 +409,7 @@ router.get('/coordination', auth, permit('projects.view'), wrap(async (_req, res
     };
   }));
 
-  res.json({ sites: detailed, activeCount: detailed.filter(site => site.siteStatus === 'Active').length });
+  res.json({ date: workforce.date, sites: detailed, activeCount: detailed.filter(site => site.siteStatus === 'Active').length });
 }));
 
 export default router;

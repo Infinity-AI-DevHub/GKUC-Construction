@@ -97,3 +97,37 @@ test('rounded OT lines reconcile with the payslip and project allocation amounts
     [{...policy,site_labour_site_ot_rate:225.01}]);
   assert.equal(result.overtime_pay,Number(result.calculation_detail.overtime.reduce((sum,row)=>sum+row.amount,0).toFixed(2)));
 });
+
+test('two normal hours earn two eighths of the daily rate with no duplicate late deduction',()=>{
+  const result=calculate({...employee,daily_rate:1600},[{...day,check_in:'07:30',check_out:'09:30'}]);
+  assert.equal(result.short_day_reduction,1200);
+  const slip=calculatePayslip({...employee,daily_rate:1600,days_present:1,paid_leave_days:0,salary_advance:0,...result},policy,[],'Daily');
+  assert.equal(slip.basic,400);assert.equal(slip.netPay,400);assert.equal(slip.lateDeduction,0);
+});
+
+test('short-day reduction and late deduction cover missing time once, without using OT as basic hours',()=>{
+  const result=calculate({...employee,daily_rate:1600},[{...day,check_in:'09:30',check_out:'11:30'}]);
+  assert.equal(result.late_deduction,300);assert.equal(result.short_day_reduction,900);
+  const slip=calculatePayslip({...employee,daily_rate:1600,days_present:1,salary_advance:0,...result},policy,[],'Daily');
+  assert.equal(slip.netPay,400);
+  const withOt=calculate({...employee,daily_rate:1600},[{...day,check_in:'05:30',check_out:'09:30'}]);
+  assert.equal(withOt.short_day_reduction,1200);assert.equal(withOt.site_ot_hours,2);
+});
+
+test('full day, paid leave and incomplete or reviewed punches do not invent short-day reductions',()=>{
+  assert.equal(calculate(employee,[{...day,check_in:'07:30',check_out:'16:30'}]).short_day_reduction,0);
+  for(const extra of [{check_out:null},{needs_review:1},{state:'On leave'},{state:'Absent'}]) {
+    const result=calculate(employee,[{...day,...extra}]);assert.equal(result.short_day_reduction,0);
+  }
+  const missing=calculate(employee,[{...day,check_out:null}]);
+  assert.ok(missing.calculation_detail.warnings.some(row=>row.message.includes('short-day')));
+});
+
+test('short-day rate follows effective paid hours and leaves the EPF basis unchanged',()=>{
+  const p={...policy,hr_rules:{...policy.hr_rules,paidHoursPerDay:4}};
+  const result=calculate({...employee,daily_rate:1600},[{...day,check_in:'07:30',check_out:'09:30'}],[],[p]);
+  assert.equal(result.short_day_reduction,800);
+  const slip=calculatePayslip({...employee,daily_rate:1600,basic_salary:30000,epf_eligible:true,etf_eligible:true,days_present:1,salary_advance:0,...result},
+    {...p,epf_employee_rate:8,epf_employer_rate:12,etf_employer_rate:3},[],'Monthly');
+  assert.equal(slip.basic,800);assert.equal(slip.epfEmployeeDeduction,2400);assert.equal(slip.contributionBase,30000);
+});

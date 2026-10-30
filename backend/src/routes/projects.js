@@ -1,3 +1,4 @@
+import { projectCompletion } from '../lib/project-completion.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, spendSql, today, transaction } from '../db.js';
@@ -21,7 +22,7 @@ const projectShape = z.object({
   stage: z.string().min(2).max(150),
   budget: z.number().nonnegative().default(0),
   progress: z.number().int().min(0).max(100).default(0),
-  health: z.enum(['On track', 'Watch', 'At risk']).default('On track'),
+  health: z.enum(['On track', 'Watch', 'At risk', 'Completed']).default('On track'),
   startDate: isoDate.optional(),
   endDate: isoDate.optional(),
   reminderDate: isoDate.optional(),
@@ -271,7 +272,7 @@ router.post('/', auth, permit('projects.manage'), validate(projectSchema), wrap(
     const users = await query(`SELECT id FROM users WHERE active=1 AND id IN (${uniqueIds.map(() => '?').join(',')})`, uniqueIds);
     if (users.length !== uniqueIds.length) return res.status(400).json({ error: 'One of the selected reminder users is no longer active.' });
   }
-  const { fields, values } = toRow({ ...projectBody, clientId: client.id, client: client.name, ...manager });
+  const { fields, values } = toRow({ ...projectCompletion(projectBody), clientId: client.id, client: client.name, ...manager });
   const result = await transaction(async connection => {
     const [created] = await connection.execute(`INSERT INTO projects (${fields.join(',')}) VALUES (${fields.map(() => '?').join(',')})`, values);
     if (manager.managerEmployeeId) await connection.execute(
@@ -317,7 +318,7 @@ router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wr
     return res.status(400).json({ error: 'Invalid data', issues: { formErrors: [], fieldErrors: { endDate: [backwards.message] } } });
   }
 
-  const body = { ...req.body };
+  const body = projectCompletion({ ...req.body }, before);
   delete body.reminderDate; delete body.reminderFrequency; delete body.reminderUserIds;
   if (body.companyId && !await getOne('SELECT id FROM companies WHERE id=? AND active=1', [body.companyId]))
     return res.status(400).json({ error: 'Choose an active operating company for this project.' });
@@ -330,8 +331,14 @@ router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wr
   if (!fields.length) return res.json(before);
   await transaction(async connection => {
     await connection.execute(`UPDATE projects SET ${fields.map(key => `${key}=?`).join(',')} WHERE id=?`, [...values, req.params.id]);
-    if (body.stage === 'Mid-way') await connection.execute(
+    if (body.stage === 'Mid-way' || body.stage === 'Completed') await connection.execute(
       'UPDATE project_start_reminders SET active=0 WHERE project_id=?', [before.id]);
+    if (body.site_status && body.site_status !== before.site_status) {
+      await connection.execute('UPDATE projects SET status_reason=NULL,status_changed_at=NOW() WHERE id=?',[before.id]);
+      await connection.execute(`INSERT INTO site_status_log
+        (project_id,from_status,to_status,reason,effective_date,notified,changed_by) VALUES (?,?,?,?,?,0,?)`,
+        [before.id,before.site_status,body.site_status,body.stage === 'Completed' ? 'Project marked completed' : 'Project reopened',today(),req.user.id]);
+    }
     if ((body.managerEmployeeId || body.manager)
       && Number(body.managerEmployeeId || 0) !== Number(before.manager_employee_id || 0)) {
       await connection.execute('UPDATE project_manager_assignments SET released_at=NOW() WHERE project_id=? AND released_at IS NULL', [before.id]);

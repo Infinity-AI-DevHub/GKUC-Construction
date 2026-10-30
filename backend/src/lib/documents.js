@@ -1,3 +1,4 @@
+import { invoiceOptions } from './invoice-options.js';
 import { amountInWords } from './amount-in-words.js';
 import { DEFAULT_DESIGN, fontStack, normaliseDesign, orderedBlocks, shows } from './document-design.js';
 import { calculateQuotation } from './quotation-calculations.js';
@@ -454,6 +455,10 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
 }
 
 export function invoiceDocument({ company, invoice, items, settings: given, design: givenDesign }) {
+  const options = invoiceOptions(invoice.invoiceOptions);
+  const columns = options.columns;
+  const span = 2 + Number(columns.unit) + Number(columns.quantity) + Number(columns.rate);
+  invoice = { ...invoice, ...(options.cumulativeTotals || {}), netPayable: invoice.netPayable };
   const settings = settingsFor(given);
   const design = normaliseDesign(givenDesign);
   const vat = Number(invoice.vatAmount || 0);
@@ -461,17 +466,18 @@ export function invoiceDocument({ company, invoice, items, settings: given, desi
   const net = Number(invoice.netPayable || 0);
   const rows = items.map((item, index) => `<tr>
     <td class="ref">${index + 1}</td><td>${escape(item.description)}</td>
-    <td class="unit">${escape(item.unit || '')}</td><td class="qty num">${quantity(item.quantity)}</td>
-    <td class="rate num">${money(item.rate)}</td><td class="amount num">${money(item.amount)}</td>
+    ${columns.unit ? `<td class="unit">${escape(item.unit || '')}</td>` : ''}${columns.quantity ? `<td class="qty num">${quantity(item.quantity)}</td>` : ''}
+    ${columns.rate ? `<td class="rate num">${money(item.rate)}</td>` : ''}<td class="amount num">${money(item.amount)}</td>
   </tr>`).join('');
   const totals = `<tfoot>
-    <tr><td colspan="5" class="num">Total value of supply excluding VAT</td><td class="num">${money(gross)}</td></tr>
-    ${invoice.taxTreatment !== 'Exempt' ? `<tr><td colspan="5" class="num">VAT @ ${money(invoice.vatRate)}%${invoice.taxTreatment === 'SVAT' ? ' (suspended)' : ''}</td><td class="num">${money(vat)}</td></tr>` : ''}
-    <tr><td colspan="5" class="num">Total amount including VAT</td><td class="num">${money(gross + vat)}</td></tr>
-    ${Number(invoice.retentionAmount) ? `<tr><td colspan="5" class="num">Retention withheld</td><td class="num">-${money(invoice.retentionAmount)}</td></tr>` : ''}
-    ${Number(invoice.advanceRecovery) ? `<tr><td colspan="5" class="num">Advance recovered</td><td class="num">-${money(invoice.advanceRecovery)}</td></tr>` : ''}
-    ${Number(invoice.otherDeductions) ? `<tr><td colspan="5" class="num">Other deductions</td><td class="num">-${money(invoice.otherDeductions)}</td></tr>` : ''}
-    <tr class="grand"><td colspan="5" class="num">Net payable${invoice.taxTreatment === 'SVAT' ? ' (VAT suspended)' : ''}</td><td class="num">${money(net)}</td></tr>
+    <tr><td colspan="${span}" class="num">Total value of supply excluding VAT</td><td class="num">${money(gross)}</td></tr>
+    ${invoice.taxTreatment !== 'Exempt' ? `<tr><td colspan="${span}" class="num">VAT @ ${money(invoice.vatRate)}%${invoice.taxTreatment === 'SVAT' ? ' (suspended)' : ''}</td><td class="num">${money(vat)}</td></tr>` : ''}
+    <tr><td colspan="${span}" class="num">Total amount including VAT</td><td class="num">${money(gross + vat)}</td></tr>
+    ${Number(invoice.retentionAmount) ? `<tr><td colspan="${span}" class="num">Retention withheld</td><td class="num">-${money(invoice.retentionAmount)}</td></tr>` : ''}
+    ${Number(invoice.advanceRecovery) ? `<tr><td colspan="${span}" class="num">Advance recovered</td><td class="num">-${money(invoice.advanceRecovery)}</td></tr>` : ''}
+    ${Number(invoice.otherDeductions) ? `<tr><td colspan="${span}" class="num">Other deductions</td><td class="num">-${money(invoice.otherDeductions)}</td></tr>` : ''}
+    ${options.previousInvoices.map(previous => `<tr><td colspan="${span}" class="num">Less paid invoice ${escape(previous.reference)}</td><td class="num">-${money(previous.amount)}</td></tr>`).join('')}
+    <tr class="grand"><td colspan="${span}" class="num">Net payable${invoice.taxTreatment === 'SVAT' ? ' (VAT suspended)' : ''}</td><td class="num">${money(net)}</td></tr>
   </tfoot>`;
   const terms = lines(settings.invoiceTerms || '');
   const blocks = {
@@ -495,7 +501,7 @@ export function invoiceDocument({ company, invoice, items, settings: given, desi
       ${invoice.paymentMode ? `<p>Mode of payment: ${escape(invoice.paymentMode)}</p>` : ''}
       ${invoice.notes ? `<p>Additional information: ${escape(invoice.notes)}</p>` : ''}</div>`,
     table: `<table data-block="table"><thead><tr><th class="ref">Item</th><th>Description of goods or services</th>
-      <th class="unit">Unit</th><th class="qty num">Quantity</th><th class="rate num">Rate (Rs.)</th>
+      ${columns.unit ? '<th class="unit">Unit</th>' : ''}${columns.quantity ? '<th class="qty num">Quantity</th>' : ''}${columns.rate ? '<th class="rate num">Rate (Rs.)</th>' : ''}
       <th class="amount num">Amount excluding VAT (Rs.)</th></tr></thead><tbody>${rows}</tbody>
       ${shows(design, 'totals') ? totals : ''}</table>`,
     words: `<p class="words" data-block="words"><strong>Total amount in words:</strong> ${escape(amountInWords(net))}</p>`,

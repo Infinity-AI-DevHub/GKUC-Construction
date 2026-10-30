@@ -16,7 +16,8 @@
     "test": "node --test",
     "storage:migrate:s3": "node src/scripts/migrate-local-uploads-to-r2.js",
     "storage:migrate:s3:apply": "node src/scripts/migrate-local-uploads-to-r2.js --apply",
-    "storage:diagnose:s3": "node src/scripts/diagnose-s3.js"
+    "storage:diagnose:s3": "node src/scripts/diagnose-s3.js",
+    "payroll:diagnose": "node src/scripts/diagnose-payroll.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

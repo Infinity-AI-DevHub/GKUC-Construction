@@ -12,6 +12,7 @@ import { vehicleRenewalSteps } from '../workflow-paths.js';
    tools. Each tab names what the server will accept for it — see allowedTabs. */
 const TABS = [
   ['Vehicles', ['transport.view', 'transport.manage']],
+  ['Maintenance', ['transport.view', 'transport.manage']],
   ['Compliance', ['transport.view', 'transport.manage']],
   ['Fuel & service', ['transport.view', 'transport.manage']],
   ['Equipment', ['store.view', 'store.manage', 'store.lending']]
@@ -41,6 +42,7 @@ export default function Fleet({ data, reload, can, companyId, company }) {
 
   const actions = {
     Vehicles: can.transport && 'Add asset',
+    Maintenance: false,
     Compliance: can.transport && 'Record renewal',
     'Fuel & service': can.transport && 'Record fuel',
     Equipment: can.lending && 'Add equipment'
@@ -52,6 +54,7 @@ export default function Fleet({ data, reload, can, companyId, company }) {
     <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
     {tab === 'Vehicles' && <Vehicles data={fleetData} can={can} reload={reload} />}
+    {tab === 'Maintenance' && <MaintenanceReminders data={fleetData} can={can} />}
     {tab === 'Compliance' && <Compliance />}
     {tab === 'Fuel & service' && <FuelAndService data={fleetData} />}
     {tab === 'Equipment' && <Equipment data={data} reload={reload} can={can} />}
@@ -65,10 +68,10 @@ export default function Fleet({ data, reload, can, companyId, company }) {
 
 function FleetPulse({vehicles}){
   const active=vehicles.filter(vehicle=>vehicle.status!=='Inactive');
-  const needsService=active.filter(vehicle=>vehicle.service?.overdue).length;
+  const needsService=active.filter(vehicle=>vehicle.service?.overdue || vehicle.maintenanceSchedules?.some(row=>row.active && row.overdue)).length;
   const renewal=active.filter(vehicle=>vehicle.due?.includes('Overdue')||vehicle.due?.includes('days')).length;
   const assigned=active.filter(vehicle=>vehicle.driverEmployeeId||vehicle.driver).length;
-  const stats=[[Truck,'Active vehicles',active.length],[Users,'Drivers assigned',assigned],[Wrench,'Services overdue',needsService],[CalendarDays,'Renewals to review',renewal]];
+  const stats=[[Truck,'Active vehicles',active.length],[Users,'Drivers assigned',assigned],[Wrench,'Maintenance overdue',needsService],[CalendarDays,'Renewals to review',renewal]];
   return <div className="inventory-top">{stats.map(([Icon,label,value])=><div key={label}><span><Icon size={16}/> {label}</span><strong>{value}</strong><small>{label==='Drivers assigned'?'Current assignments; history in each vehicle':'Open the vehicle record for details'}</small></div>)}</div>;
 }
 
@@ -127,6 +130,18 @@ function VehicleDetail({ vehicle, data, close, can, refresh }) {
         </strong></div>
         <div><span>Last serviced</span><strong>{shortDate(vehicle.lastServiceDate)}</strong></div>
       </div>}
+      <section className="wide workspace-surface"><h3>Machine details</h3>
+        <p>{[vehicle.make,vehicle.model,vehicle.modelYear].filter(Boolean).join(' · ') || 'Make, model and year can be entered later.'}</p>
+        <p>Engine code: {vehicle.engineCode || 'Not recorded'}</p>
+        {vehicle.manufacturerNotes && <p style={{whiteSpace:'pre-wrap'}}>{vehicle.manufacturerNotes}</p>}
+        {can?.transport && <button className="secondary" onClick={()=>setAction('details')}>Edit machine details</button>}
+      </section>
+      <section className="wide workspace-surface"><h3>Maintenance reminders</h3>
+        {(vehicle.maintenanceSchedules || []).length ? vehicle.maintenanceSchedules.map(schedule => <div className="fleet-maintenance-reminder" key={schedule.id}>
+          <strong>{schedule.name}</strong><span>Every {Number(schedule.intervalKm).toLocaleString('en-LK')} km · next at {Number(schedule.nextOdometer).toLocaleString('en-LK')} km</span>
+          <Badge tone={!schedule.active ? 'inactive' : schedule.overdue ? 'at-risk' : schedule.dueSoon ? 'watch' : 'on-track'}>{!schedule.active ? 'Paused' : schedule.kmRemaining < 0 ? `${Math.abs(schedule.kmRemaining)} km overdue` : schedule.kmRemaining === 0 ? 'Due now' : `${schedule.kmRemaining} km remaining`}</Badge>
+        </div>) : <p className="form-note">No individual maintenance reminders. Add engine oil, brake oil or another item from the Maintenance tab.</p>}
+      </section>
       {can?.transport&&<div className="wide row-actions"><button className="secondary" onClick={()=>setAction('driver')}><Users size={15}/> Change driver</button><button className="secondary" onClick={()=>setAction('odometer')}><Gauge size={15}/> Odometer</button><button className="secondary" onClick={()=>setAction('fuel')}><Fuel size={15}/> Fuel</button><button className="secondary" onClick={()=>setAction('work')}><Wrench size={15}/> Service or repair</button><button className="secondary" onClick={()=>setAction('schedule')}><CalendarDays size={15}/> Service schedule</button><button className="secondary" onClick={()=>setAction('document')}><CalendarDays size={15}/> Renewal</button></div>}
       {vehicle.fuel.length>1&&<section className="workspace-surface wide"><div className="workspace-section-heading"><div><span className="section-kicker">Operating trend</span><h2>Recent fuel spend</h2></div></div><div className="cost-bars">{vehicle.fuel.slice(0,8).reverse().map(row=><div key={row.id}><span>{shortDate(row.fuelDate)}</span><i><b style={{width:`${Number(row.cost)/fuelMax*100}%`}}/></i><strong>{rupees(row.cost)}</strong></div>)}</div></section>}
       <div className="wide">
@@ -156,7 +171,7 @@ function VehicleDetail({ vehicle, data, close, can, refresh }) {
           tools={can?.transport ? <button className="secondary" onClick={() => setAction('work')}><Wrench size={14} /> Log work</button> : null}
           empty="No maintenance recorded.">
           {vehicle.maintenance.map(row => <Row template="110px 100px minmax(200px,2fr) minmax(140px,1fr) 140px 100px 120px" key={row.id}>
-            <span>{shortDate(row.serviceDate)}</span><Badge tone={slug(row.kind)}>{row.kind}</Badge><span>{row.description}</span>
+            <span>{shortDate(row.serviceDate)}</span><Badge tone={slug(row.kind)}>{row.kind}</Badge><span>{row.description}{Array.isArray(row.completedSchedules) && row.completedSchedules.length > 0 && <small>Completed: {row.completedSchedules.map(item => item.name).join(', ')}</small>}</span>
             <span>{row.garage || '—'}</span><span>{row.project||'Company fleet'}</span><span>{row.odometer} km</span><span>{rupees(row.cost)}</span>
           </Row>)}
         </Table>
@@ -165,6 +180,7 @@ function VehicleDetail({ vehicle, data, close, can, refresh }) {
       <div className="wide"><Table columns={['Document','Renewed','Expiry','Reference','Cost']} template="150px 120px 120px minmax(160px,1fr) 120px" title="Renewal history" empty="No dated renewals yet; current dates appear above.">{vehicle.renewals.map(row=><Row template="150px 120px 120px minmax(160px,1fr) 120px" key={row.id}><strong>{row.docType}</strong><span>{shortDate(row.renewedOn)}</span><span>{shortDate(row.expiryDate)}</span><span>{row.reference||'—'}</span><span>{rupees(row.cost)}</span></Row>)}</Table></div>
       <div className="form-actions"><button type="button" className="secondary" onClick={close}>Close</button></div>
     </div>
+    {action==='details'&&<MachineDetailsForm vehicle={vehicle} close={()=>setAction('')} reload={refresh}/>}
     {action==='work'&&<MaintenanceForm vehicle={vehicle} data={data} close={()=>setAction('')} reload={refresh}/>}
     {action==='driver'&&<DriverForm vehicle={vehicle} data={data} close={()=>setAction('')} reload={refresh}/>}
     {action==='odometer'&&<OdometerForm vehicle={vehicle} close={()=>setAction('')} reload={refresh}/>}
@@ -174,10 +190,43 @@ function VehicleDetail({ vehicle, data, close, can, refresh }) {
   </Modal>;
 }
 
+/** Use the same maintenance entry from Finance and the vehicle register. */
+export function VehicleMaintenanceEntry({ data, close, reload }) {
+  const [vehicles, setVehicles] = useState([]);
+  const [vehicle, setVehicle] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let active = true;
+    api('/fleet').then(rows => { if (active) setVehicles(rows); })
+      .catch(failure => { if (active) setError(failure.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+  if (vehicle) return <MaintenanceForm vehicle={vehicle} data={data} close={close} reload={reload} />;
+  return <Modal title="Record vehicle maintenance" close={close}>
+    <form className="report-form" onSubmit={async event => {
+      if (loading) { event.preventDefault(); return; }
+      event.preventDefault();
+      const vehicleId = new FormData(event.currentTarget).get('vehicleId');
+      setLoading(true); setError('');
+      try { setVehicle(await api(`/fleet/${Number(vehicleId)}`)); }
+      catch (failure) { setError(failure.message); }
+      finally { setLoading(false); }
+    }}>
+      {error && <p className="form-error wide" role="alert">{error}</p>}
+      <SelectField name="vehicleId" label="Vehicle" options={[["", loading ? 'Loading vehicles…' : 'Choose a vehicle'], ...vehicles.map(row => [row.id, `${row.vehicle} — ${row.reg}`])]} />
+      {!loading && !vehicles.length && !error && <p className="form-note wide">Add a vehicle in Fleet & equipment before recording maintenance.</p>}
+      <div className="form-actions"><button type="button" className="secondary" onClick={close}>Cancel</button><button disabled={loading || !vehicles.length}>Continue</button></div>
+    </form>
+  </Modal>;
+}
+
 /** Only scheduled service resets the service interval; repairs remain a distinct record. */
 function MaintenanceForm({ vehicle, data, close, reload }) {
-  return <FormModal title={`Log service or repair — ${vehicle.reg}`} close={close} label="Save work" onSubmit={async values => {
+  return <FormModal title={`Log service or repair — ${vehicle.reg}`} close={close} label="Save work" onSubmit={async (values, form) => {
     await post(`/fleet/${vehicle.id}/maintenance`, {
+      completedScheduleIds: form.getAll('completedScheduleId').map(Number),
       kind:values.kind,
       companyId:data.companyId,
       serviceDate: values.serviceDate,
@@ -191,15 +240,38 @@ function MaintenanceForm({ vehicle, data, close, reload }) {
     await reload();
   }}>
     <SelectField name="kind" label="Work type" options={['Service','Repair','Inspection']}/>
+    {(vehicle.maintenanceSchedules || []).some(schedule => schedule.active) && <fieldset className="wide"><legend>Maintenance completed in this visit</legend>
+      <p className="form-note">Only selected reminders restart from this work's odometer reading.</p>
+      {vehicle.maintenanceSchedules.filter(schedule => schedule.active).map(schedule => <label className="invoice-check" key={schedule.id}><input type="checkbox" name="completedScheduleId" value={schedule.id} /><span>{schedule.name}</span></label>)}
+    </fieldset>}
     <Field name="serviceDate" label="Work date" type="date" defaultValue={todayInput()} />
     <Field name="odometer" label="Odometer reading" type="number" min="0" defaultValue={vehicle.odometer} />
     <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" defaultValue="0" required={false} />
     <Field name="garage" label="Garage" required={false} />
     <p className="form-note wide">This cost will be posted to the currently selected operating company, even though the vehicle is shared.</p>
-    <SelectField name="projectId" label="Charge to project" options={[["",'Company fleet / not project-specific'],...data.projects.filter(project=>Number(project.companyId)===Number(data.companyId)).map(project=>[project.id,project.name])]} defaultValue={vehicle.projectId||''}/>
-    <SelectField name="setStatus" label="Vehicle status" options={[["",'Leave unchanged'],'Repair','Available']}/>
+    <SelectField name="projectId" label="Charge to project" required={false} options={[["",'Company fleet / not project-specific'],...data.projects.filter(project=>Number(project.companyId)===Number(data.companyId)).map(project=>[project.id,project.name])]} defaultValue={data.projects.some(project=>Number(project.id)===Number(vehicle.projectId) && Number(project.companyId)===Number(data.companyId)) ? vehicle.projectId : ''}/>
+    <SelectField name="setStatus" label="Vehicle status" required={false} options={[["",'Leave unchanged'],'Repair','Available']}/>
     <TextArea name="description" label="Work carried out" />
   </FormModal>;
+}
+
+function MachineDetailFields({vehicle={}}) {
+  return <>
+    <Field name="make" label="Make (optional)" required={false} defaultValue={vehicle.make||''}/>
+    <Field name="model" label="Model (optional)" required={false} defaultValue={vehicle.model||''}/>
+    <Field name="modelYear" label="Model year (optional)" type="number" min="1900" max="2100" required={false} defaultValue={vehicle.modelYear||''}/>
+    <Field name="engineCode" label="Engine code (optional)" required={false} defaultValue={vehicle.engineCode||''}/>
+    <TextArea name="manufacturerNotes" label="Manufacturer manual / service instructions (optional)" required={false} defaultValue={vehicle.manufacturerNotes||''}/>
+    <p className="form-note wide">Leave unknown details blank and update them later. Record the manual reference and verified intervals here; notes alone do not enable reminders.</p>
+  </>;
+}
+const machineDetailsPayload = values => ({make:values.make?.trim()||null,model:values.model?.trim()||null,
+  modelYear:values.modelYear ? Number(values.modelYear) : null,engineCode:values.engineCode?.trim()||null,
+  manufacturerNotes:values.manufacturerNotes?.trim()||null});
+function MachineDetailsForm({vehicle,close,reload}) {
+  return <FormModal title={`Machine details — ${vehicle.reg}`} close={close} label="Save details" onSubmit={async values=>{
+    await patch(`/fleet/${vehicle.id}`,machineDetailsPayload(values)); await reload();
+  }}><MachineDetailFields vehicle={vehicle}/></FormModal>;
 }
 
 function DriverForm({vehicle,data,close,reload}){
@@ -209,7 +281,7 @@ function DriverForm({vehicle,data,close,reload}){
       driverName:values.driverChoice==='__manual'?values.driverName||undefined:undefined,
       projectId:values.projectId?Number(values.projectId):null,assignedOn:values.assignedOn,notes:values.notes||undefined});
     await reload();
-  }}><SelectField name="driverChoice" label="Driver" options={[["__manual",'Named driver (not in employee list)'],["__none",'Unassign current driver'],...data.employees.map(employee=>[employee.id,employee.name])]} defaultValue={vehicle.driverEmployeeId||'__manual'}/><Field name="driverName" label="Name, if not registered" defaultValue={vehicle.driverName||vehicle.driver||''} required={false}/><SelectField name="projectId" label="Assigned site" options={[["",'Yard / office'],...data.projects.map(project=>[project.id,project.name])]} defaultValue={vehicle.projectId||''}/><Field name="assignedOn" label="Effective date" type="date" defaultValue={todayInput()}/><TextArea name="notes" label="Assignment note" required={false}/></FormModal>;
+  }}><SelectField name="driverChoice" label="Driver" options={[["__manual",'Named driver (not in employee list)'],["__none",'Unassign current driver'],...data.employees.map(employee=>[employee.id,employee.name])]} defaultValue={vehicle.driverEmployeeId||'__manual'}/><Field name="driverName" label="Name, if not registered" defaultValue={vehicle.driverName||vehicle.driver||''} required={false}/><SelectField name="projectId" label="Assigned site" required={false} options={[["",'Yard / office'],...data.projects.map(project=>[project.id,project.name])]} defaultValue={data.projects.some(project=>Number(project.id)===Number(vehicle.projectId) && Number(project.companyId)===Number(data.companyId)) ? vehicle.projectId : ''}/><Field name="assignedOn" label="Effective date" type="date" defaultValue={todayInput()}/><TextArea name="notes" label="Assignment note" required={false}/></FormModal>;
 }
 
 function OdometerForm({vehicle,close,reload}){
@@ -224,6 +296,54 @@ function ScheduleForm({vehicle,close,reload}){
     await patch(`/fleet/${vehicle.id}`,{serviceIntervalKm:Number(values.serviceIntervalKm),serviceIntervalMonths:Number(values.serviceIntervalMonths)});
     await reload();
   }}><Field name="serviceIntervalKm" label="Every (km)" type="number" min="0" defaultValue={vehicle.serviceIntervalKm||0}/><Field name="serviceIntervalMonths" label="Every (months)" type="number" min="0" max="60" defaultValue={vehicle.serviceIntervalMonths||0}/><p className="invoice-note">The next service is due on whichever configured limit is reached first.</p></FormModal>;
+}
+
+function MaintenanceReminders({ data, can }) {
+  const [rows, setRows] = useState([]), [editing, setEditing] = useState(null), [working, setWorking] = useState(null), [error, setError] = useState('');
+  const load = () => api('/fleet/maintenance-schedules').then(setRows).catch(failure => setError(failure.message));
+  useLiveList(load);
+  const template = 'minmax(150px,1fr) minmax(160px,1.4fr) 110px 120px 140px 110px';
+  return <>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <p className="invoice-note">Track engine oil, brake oil and other maintenance separately. Reminders use the latest recorded odometer; record fuel or update the reading to keep them current.</p>
+    <Table title="Vehicle maintenance reminders" columns={['Vehicle','Maintenance','Interval','Next at','Status','']} template={template} empty="No maintenance reminders yet."
+      tools={can.transport && <button className="secondary" onClick={() => setEditing({})}>Add reminder</button>}>
+      {rows.map(row => <Row key={row.id} template={template}>
+        <div><strong>{row.registration}</strong><small>{row.vehicle}</small></div><strong>{row.name}</strong>
+        <span>{Number(row.intervalKm).toLocaleString('en-LK')} km</span><span>{Number(row.nextOdometer).toLocaleString('en-LK')} km</span>
+        <Badge tone={!row.active || row.vehicleStatus === 'Inactive' ? 'inactive' : row.overdue ? 'at-risk' : row.dueSoon ? 'watch' : 'on-track'}>{!row.active ? 'Paused' : row.vehicleStatus === 'Inactive' ? 'Vehicle inactive' : row.kmRemaining < 0 ? `${Math.abs(row.kmRemaining)} km overdue` : row.kmRemaining === 0 ? 'Due now' : `${row.kmRemaining} km left`}</Badge>
+        {can.transport ? <div className="row-actions"><button className="status-button" onClick={() => setEditing(row)}>Edit reminder</button><button className="status-button" onClick={() => api(`/fleet/${row.vehicleId}`).then(setWorking).catch(failure => setError(failure.message))}>Log work</button></div> : <span>—</span>}
+      </Row>)}
+    </Table>
+    {working && <MaintenanceForm vehicle={working} data={data} close={() => setWorking(null)} reload={load} />}
+    {editing && <MaintenanceReminderForm data={data} schedule={editing.id ? editing : null} close={() => setEditing(null)} reload={load} />}
+  </>;
+}
+
+function MaintenanceReminderForm({ data, schedule, close, reload }) {
+  const [name, setName] = useState(schedule?.name || 'Engine oil change');
+  const [intervalKm, setIntervalKm] = useState(String(schedule?.intervalKm || 5000));
+  const [vehicleId, setVehicleId] = useState(String(schedule?.vehicleId || ''));
+  const vehicle = data.fleet.find(row => String(row.id) === vehicleId);
+  return <FormModal title={schedule ? 'Edit maintenance reminder' : 'Add maintenance reminder'} close={close} label="Save reminder" onSubmit={async (values, form) => {
+    const payload = { name, intervalKm: Number(intervalKm), lastOdometer: Number(values.lastOdometer),
+      lastCompletedDate: values.lastCompletedDate || null, remindBeforeKm: Number(values.remindBeforeKm), active: form.has('active') };
+    await api(`/fleet/${vehicleId}/maintenance-schedules${schedule ? `/${schedule.id}` : ''}`, { method: schedule ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+    await reload();
+  }}>
+    <label>Vehicle *<select required value={vehicleId} disabled={Boolean(schedule)} onChange={event => setVehicleId(event.target.value)}><option value="">Choose vehicle…</option>{data.fleet.map(row => <option key={row.id} value={row.id}>{row.reg} — {row.vehicle}</option>)}</select></label>
+    <label>Suggested interval<select defaultValue="custom" onChange={event => {
+      const preset = { japanese: ['Engine oil change',5000], european: ['Engine oil change',15000], brake: ['Brake oil replacement',20000] }[event.target.value];
+      if (preset) { setName(preset[0]); setIntervalKm(String(preset[1])); }
+    }}><option value="custom">Custom / current settings</option><option value="japanese">Japanese engine oil — 5,000 km</option><option value="european">European engine oil — 15,000 km</option><option value="brake">Brake oil — 20,000 km</option></select></label>
+    <label>Maintenance item *<input required maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
+    <label>Repeat every (km) *<input required type="number" min="1" value={intervalKm} onChange={event => setIntervalKm(event.target.value)} /></label>
+    <Field name="lastOdometer" label="Last completed at (km)" type="number" min="0" max={vehicle?.odometer} defaultValue={schedule?.lastOdometer || 0} />
+    <Field name="lastCompletedDate" label="Last completed date (if known)" type="date" max={todayInput()} required={false} defaultValue={schedule?.lastCompletedDate?.slice(0,10) || ''} />
+    <Field name="remindBeforeKm" label="Remind before due (km)" type="number" min="0" max={Number(intervalKm)-1} defaultValue={schedule?.remindBeforeKm ?? 500} />
+    <label className="invoice-check"><input name="active" type="checkbox" defaultChecked={schedule ? Boolean(schedule.active) : false} /><span>Enable reminder (after verifying the interval)</span></label>
+    {vehicle && <p className="form-note wide">Current odometer: {Number(vehicle.odometer).toLocaleString('en-LK')} km. Completing this item under Service or repair starts its next interval.</p>}
+  </FormModal>;
 }
 
 const COMPLIANCE_COLUMNS = ['Vehicle', 'Document', 'Reference', 'Expiry date', 'Status'];
@@ -404,8 +524,12 @@ function EquipmentServiceForm({ item, close, reload }) {
 
 function VehicleForm({ data, close, reload }) {
   const docTypes = useOptions('vehicle.document');
+  const [maintenanceProfile, setMaintenanceProfile] = useState('');
   return <FormModal title="Add fleet asset" close={close} label="Add asset" repeat onSubmit={async values => {
     await post('/fleet', {
+      ...machineDetailsPayload(values),
+      maintenanceProfile: maintenanceProfile || undefined,
+      ...(maintenanceProfile ? { engineOilBaselineKm: Number(values.engineOilBaselineKm), brakeOilBaselineKm: Number(values.brakeOilBaselineKm) } : {}),
       vehicle: values.vehicle,
       registration: values.registration,
       driverEmployeeId: values.driverEmployeeId ? Number(values.driverEmployeeId) : undefined,
@@ -424,14 +548,21 @@ function VehicleForm({ data, close, reload }) {
   }}>
     <Field name="vehicle" label="Vehicle / equipment" />
     <Field name="registration" label="Registration / asset ID" />
-    <SelectField name="driverEmployeeId" label="Assigned driver"
+    <MachineDetailFields/>
+    <SelectField name="driverEmployeeId" label="Assigned driver (optional)" required={false}
       options={[['', 'Unassigned'], ...data.employees.map(employee => [employee.id, employee.name])]} />
     <SelectField name="status" label="Status" options={['Available', 'Assigned', 'Repair', 'Inactive']} />
     <SelectField name="renewal" label="Next renewal type" options={docTypes} />
     <Field name="dueDate" label="Renewal due date" type="date" defaultValue={todayInput()} />
-    <SelectField name="projectId" label="Assigned site" options={[['', 'Yard'], ...data.projects.map(project => [project.id, project.name])]} />
+    <SelectField name="projectId" label="Assigned site" required={false} options={[['', 'Yard'], ...data.projects.map(project => [project.id, project.name])]} />
     <Field name="odometer" label="Odometer" type="number" min="0" defaultValue="0" required={false} />
-    <Field name="serviceIntervalKm" label="Service every (km)" type="number" min="0" defaultValue="0" required={false}/>
+    <label>Oil maintenance defaults<select value={maintenanceProfile} onChange={event => setMaintenanceProfile(event.target.value)}><option value="">Set reminders later</option><option value="Japanese">Japanese — engine oil every 5,000 km</option><option value="European">European — engine oil every 15,000 km</option></select></label>
+    {maintenanceProfile && <>
+      <p className="form-note wide">Adds separate engine-oil and 20,000 km brake-oil reminders. Enter the actual last-change readings; each reminder starts from its own reading. The intervals can be adjusted later.</p>
+      <Field name="engineOilBaselineKm" label="Last engine oil change (km)" type="number" min="0" defaultValue="0" />
+      <Field name="brakeOilBaselineKm" label="Last brake oil change (km)" type="number" min="0" defaultValue="0" />
+    </>}
+    <Field name="serviceIntervalKm" label="General service every (km, optional)" type="number" min="0" defaultValue="0" required={false}/>
     <Field name="serviceIntervalMonths" label="Service every (months)" type="number" min="0" max="60" defaultValue="0" required={false}/>
   </FormModal>;
 }

@@ -1,3 +1,4 @@
+import {attendanceForEmployee,salaryCalculationIssues} from '../lib/payroll-attendance-match.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
@@ -7,7 +8,7 @@ import {calculateAttendancePayroll} from '../lib/attendance-payroll.js';
 import {calculatePayrollLeave} from '../lib/payroll-leave.js';
 import { PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES, calculatePayslip, payProfileError } from '../lib/payroll-policy.js';
 import {rulesFor,calculateTransport,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
-import { contributionEligibility, DEFAULT_STATUTORY_RULES } from '../lib/statutory-eligibility.js';
+import { contributionEligibility, contributionExplanation, DEFAULT_STATUTORY_RULES } from '../lib/statutory-eligibility.js';
 import {writeWorkbook} from '../lib/xlsx-write.js';
 import {sendDocument} from '../lib/document-pdf.js';
 import {payrollSheets,payslipDocument} from '../lib/payroll-export.js';
@@ -284,7 +285,11 @@ router.post('/batch',auth,permit('hr.payroll'),validate(z.object({
     }
     return runs;
   });
-  res.status(201).json({runs:await query(`${select} WHERE r.id IN (?,?) ORDER BY r.company_id`,ids)});
+  const issues=await query(`SELECT e.name employee,e.code employeeCode,r.company_id companyId,s.basic earnedSalary,s.net_pay netPay,s.calculation_detail calculationDetail
+    FROM payslips s JOIN payroll_runs r ON r.id=s.run_id JOIN visible_employees e ON e.id=s.employee_id
+    WHERE r.id IN (?,?) AND (s.basic=0 OR s.net_pay=0) ORDER BY r.company_id,e.code`,ids);
+  res.status(201).json({runs:await query(`${select} WHERE r.id IN (?,?) ORDER BY r.company_id`,ids),
+    review:issues.map(({calculationDetail,...row})=>({...row,reasons:(typeof calculationDetail==='string'?JSON.parse(calculationDetail):calculationDetail)?.salary?.issues||[]}))});
 }));
 
 async function buildPayroll(req,connection){
@@ -302,7 +307,6 @@ async function buildPayroll(req,connection){
 
       const employees = await query(`SELECT e.id,e.name,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,e.payroll_category,e.payroll_company_id,e.worker_type,
           e.epf_eligible,e.etf_eligible,e.contribution_start_date,e.join_date,e.employment_type,e.allowance_eligibility,
-          ((SELECT COUNT(*) FROM employees namesake WHERE namesake.name=e.name)=1) legacy_name_unique,
           (SELECT COALESCE(SUM(GREATEST(0,ABS(pe.amount)-COALESCE(
               (SELECT SUM(sar.amount) FROM salary_advance_recoveries sar WHERE sar.entry_id=pe.id),0))),0)
             FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
@@ -313,16 +317,18 @@ async function buildPayroll(req,connection){
       [periodEnd, companyId, payFrequency, periodEnd]);
 
       if (!employees.length) throw fail(409,`No active ${payFrequency.toLowerCase()}-paid employees fall inside this period`);
+      const employeeNames=await query('SELECT id,name FROM employees');
       const attendanceRows=await query(`SELECT * FROM visible_attendance WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id`,[periodStart,periodEnd]);
       const otRows=await query('SELECT * FROM visible_overtime_records WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id',[periodStart,periodEnd]);
       const travelClaims=await query("SELECT * FROM visible_hr_payroll_claims WHERE kind='Travel' AND work_date BETWEEN ? AND ?",[periodStart,periodEnd]);
       const datedPolicies=await query('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC',[companyId,periodEnd]);
       const approvedLeave=await query("SELECT * FROM visible_leave_requests WHERE status='Approved' AND from_date<=? AND to_date>=? ORDER BY from_date,id",[periodEnd,periodStart]);
       for (const row of employees) {
+        const contributionDetail = contributionExplanation(row, policy, periodEnd, payFrequency);
         const eligibility = contributionEligibility(row, policy, periodEnd);
         row.epf_eligible = eligibility.epf;
         row.etf_eligible = eligibility.etf;
-        const days=attendanceRows.filter(a=>Number(a.employee_id)===Number(row.id)||!a.employee_id&&a.employee_name===row.name&&row.legacy_name_unique);
+        const days=attendanceForEmployee(row,attendanceRows,employeeNames);
         try {
           const leave=calculatePayrollLeave(row,days,approvedLeave,periodStart,periodEnd);
           const {attendance,detail,...leaveCounts}=leave;
@@ -330,6 +336,7 @@ async function buildPayroll(req,connection){
           Object.assign(row,calculateAttendancePayroll(row,attendance,otRows.filter(o=>Number(o.employee_id)===Number(row.id)),
             datedPolicies,travelClaims.filter(c=>Number(c.employee_id)===Number(row.id))));
           row.calculation_detail.leave=detail;
+          row.calculation_detail.contributions=contributionDetail;
         } catch(error) {throw fail(409,`${row.name}: ${error.message}`);}
       }
       const covered=await getOne(`SELECT ps.employee_id FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1 FOR UPDATE`,[...employees.map(e=>e.id),periodEnd,periodStart]);
@@ -367,7 +374,14 @@ async function buildPayroll(req,connection){
           }
           employeeComponents.push({id:null,claimId:claim.id,name:claim.kind==='Travel'?(c.method==='Manual'?'Manual travel allowance':'Long-distance site allowance'):claim.kind==='Mileage'?'Motorcycle mileage reimbursement':claim.kind==='Supervisor site charge'?'Supervisor site charge':`${claim.kind} allowance`,kind:claim.kind==='Mileage'?'Reimbursement':'Allowance',amount:claim.kind==='Travel'?c.allowance:claim.kind==='Mileage'?c.total:c.amount,formula:JSON.stringify({claimId:claim.id,date:claim.work_date,projectId:claim.project_id,calculation:c})});
         }
+        if (Number(employee.days_present)+Number(employee.paid_leave_days)>0 && Number(employee.daily_rate)<=0)
+          throw fail(409,`${employee.name}: worked/paid-leave days exist, but the daily salary rate is zero. Set the employee daily rate in Payroll settings and rebuild this draft. The EPF/ETF basis cannot replace the daily rate.`);
         const calculation = calculatePayslip(employee, policy, employeeComponents, payFrequency);
+        employee.calculation_detail.salary={dailyRate:Number(employee.daily_rate),workedDays:Number(employee.days_present),
+          paidLeaveDays:Number(employee.paid_leave_days),shortDayReduction:calculation.shortDayReduction,
+          issues:salaryCalculationIssues(employee,calculation)};
+        for(const message of employee.calculation_detail.salary.issues)
+          employee.calculation_detail.warnings.push({workDate:periodEnd,message});
         if(claims.some(claim=>claim.kind==='Salary deduction')&&calculation.deductions>calculation.grossEarnings+calculation.reimbursementTotal)
           throw fail(409,`Deductions exceed available pay for ${employee.name}. Review the one-time deduction before generating payroll.`);
         total += calculation.netPay;

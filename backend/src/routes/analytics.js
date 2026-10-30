@@ -40,8 +40,8 @@ const builders = {
   }),
   tasks: async () => ({
     columns: ['Project', 'Task', 'Assignee', 'Priority', 'Status', 'Due'],
-    rows: (await query(`SELECT p.name project,t.title,t.assignee,t.priority,t.status,t.due FROM tasks t
-      JOIN projects p ON p.id=t.project_id ORDER BY FIELD(t.status,'Blocked','Not started','In progress','Completed','Approved'),t.id`))
+    rows: (await query(`SELECT COALESCE(p.name,'Office / general') project,t.title,t.assignee,t.priority,t.status,t.due FROM tasks t
+      LEFT JOIN projects p ON p.id=t.project_id ORDER BY FIELD(t.status,'Blocked','Not started','In progress','Completed','Approved'),t.id`))
       .map(row => [row.project, row.title, row.assignee, row.priority, row.status, row.due])
   }),
   materials: async () => ({

@@ -29,6 +29,7 @@ export function ClientInvoices({ data, can, companyId }) {
   const [raising, setRaising] = useState(false);
   const [receipting, setReceipting] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [columnInvoice, setColumnInvoice] = useState(null);
   const [numberEdit,setNumberEdit]=useState(null);
   const openedFromLink = useRef(false);
   const [error, setError] = useState('');
@@ -110,6 +111,7 @@ export function ClientInvoices({ data, can, companyId }) {
         <div className="row-actions">
           <button className="status-button" onClick={() => setSelected(invoice)}>Payments</button>
           {can.invoice&&<button className="status-button" onClick={()=>setNumberEdit(invoice)}>Edit number</button>}
+          {can.invoice && <button className="status-button" onClick={() => setColumnInvoice(invoice)}>Invoice columns</button>}
           <button className="status-button" onClick={() => openDocument(`/receivables/invoices/${invoice.id}/document`)}>View / PDF</button>
           {can.invoice && invoice.status === 'Draft'
             ? <button className="status-button" onClick={() => issue(invoice)}>Issue</button>
@@ -125,6 +127,7 @@ export function ClientInvoices({ data, can, companyId }) {
       <AgeingTable rows={ageing.rows} />
     </> : null}
 
+    {columnInvoice && <InvoiceColumnForm invoice={columnInvoice} close={() => setColumnInvoice(null)} reload={load} />}
     {raising && <CertificateForm data={data} companyId={companyId} close={() => setRaising(false)} reload={load} />}
     {planning && <BillingPlanForm quotations={acceptedQuotes.filter(quote => !quote.billingPlanId)} close={() => setPlanning(false)} reload={load} />}
     {termInvoice && <FormModal title={`Invoice ${termInvoice.label}`} close={() => setTermInvoice(null)} label="Save invoice as draft"
@@ -278,12 +281,52 @@ function BillingPlanForm({ quotations, close, reload }) {
  * signing it should see all four rather than one total to take on trust. The server does the
  * same arithmetic again on submit and keeps its own answer; this preview is for the person.
  */
+function InvoiceColumnControls({ columns, setColumns }) {
+  return <fieldset className="invoice-column-options"><legend>Columns on this invoice</legend>
+    {Object.entries({ unit: 'Unit', quantity: 'Quantity', rate: 'Rate' }).map(([key, label]) => <label className="invoice-check" key={key}>
+      <input type="checkbox" checked={columns[key]} onChange={event => setColumns(current => ({ ...current, [key]: event.target.checked }))} /><span>{label}</span>
+    </label>)}
+  </fieldset>;
+}
+
+function InvoiceColumnForm({ invoice, close, reload }) {
+  const [columns, setColumns] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => { api(`/receivables/invoices/${invoice.id}`).then(detail => {
+    const options = typeof detail.invoice_options === 'string' ? JSON.parse(detail.invoice_options) : detail.invoice_options;
+    setColumns({ unit: true, quantity: true, rate: true, ...options?.columns });
+  }).catch(failure => setError(failure.message)); }, [invoice.id]);
+  return <FormModal title={`${invoice.reference} — invoice columns`} close={close} label="Save invoice columns" onSubmit={async () => {
+    if (!columns) throw new Error('Wait for invoice settings to load.');
+    await api(`/receivables/invoices/${invoice.id}/columns`, { method: 'PUT', body: JSON.stringify(columns) });
+    await reload();
+  }}>
+    {error && <p className="form-error wide">{error}</p>}
+    {columns && <div className="wide"><InvoiceColumnControls columns={columns} setColumns={setColumns} /></div>}
+    <p className="invoice-note wide">Changes apply to this invoice's preview and PDF. Saved amounts and recorded payments stay the same.</p>
+  </FormModal>;
+}
+
 const BLANK_LINE = { description: '', unit: '', quantity: '', rate: '', quotationItemId: '', boqItemId: '' };
 
 function CertificateForm({ data, companyId, close, reload }) {
+  const [columns, setColumns] = useState({ unit: true, quantity: true, rate: true });
+  const [previousInvoiceIds, setPreviousInvoiceIds] = useState([]);
+  const [previewError, setPreviewError] = useState('');
   const [lines, setLines] = useState([{ ...BLANK_LINE }]);
   const [projectId,setProjectId]=useState('');
   const [clientId,setClientId]=useState('');
+  const [paidInvoices, setPaidInvoices] = useState([]);
+  const [paidInvoiceError, setPaidInvoiceError] = useState('');
+  useEffect(() => {
+    setPreviousInvoiceIds([]); setPaidInvoices([]); setPaidInvoiceError('');
+    if (!clientId) return;
+    let live = true;
+    api(`/receivables/paid-invoices?companyId=${companyId}&clientId=${clientId}${projectId ? `&projectId=${projectId}` : ''}`)
+      .then(rows => { if (live) setPaidInvoices(rows); })
+      .catch(failure => { if (live) setPaidInvoiceError(failure.message); });
+    return () => { live = false; };
+  }, [clientId, projectId, companyId]);
   const [clients,setClients]=useState([]);
   useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
   const clientProjects = data.projects.filter(project => Number(project.companyId || project.company_id) === Number(companyId)
@@ -306,6 +349,7 @@ function CertificateForm({ data, companyId, close, reload }) {
   const setLine = (index, key, value) => setLines(current =>
     current.map((line, position) => (position === index ? { ...line, [key]: value } : line)));
 
+  const amountOnly = !columns.quantity && !columns.rate;
   const items = lines
     .filter(line => line.description.trim() && Number(line.quantity) > 0)
     .map(line => ({
@@ -318,7 +362,7 @@ function CertificateForm({ data, companyId, close, reload }) {
     }));
 
   const shape = {
-    companyId,
+    companyId, clientId: Number(clientId) || undefined, projectId: Number(projectId) || undefined, invoiceDate, columns, previousInvoiceIds,
     documentType,
     items,
     taxTreatment: terms.taxTreatment,
@@ -331,12 +375,13 @@ function CertificateForm({ data, companyId, close, reload }) {
 
   /* Debounced, because it fires on every keystroke in a rate field. */
   useEffect(() => {
-    if (!items.length) { setPreview(null); return undefined; }
+    setPreview(null); setPreviewError('');
+    if (!items.length) return undefined;
     let live = true;
     const timer = setTimeout(() => {
       post('/receivables/preview', shape)
-        .then(result => { if (live) setPreview(result); })
-        .catch(() => { if (live) setPreview(null); });
+        .then(result => { if (live) { setPreview(result); setPreviewError(''); } })
+        .catch(failure => { if (live) { setPreview(null); setPreviewError(failure.message); } });
     }, 250);
     return () => { live = false; clearTimeout(timer); };
   }, [signature]);
@@ -345,10 +390,11 @@ function CertificateForm({ data, companyId, close, reload }) {
     ['Client', clients.find(client => String(client.id) === String(clientId))?.name || 'Choose a client'],
     ['Project', clientProjects.find(project => String(project.id) === String(projectId))?.name || 'Company-level invoice'],
     ['Format', documentType], ['Line items', String(items.length)],
+    ['PDF columns', ['Description', ...Object.entries({ unit: 'Unit', quantity: 'Quantity', rate: 'Rate' }).filter(([key]) => columns[key]).map(([, label]) => label), 'Amount'].join(', ')],
     ['Net payable', preview ? rupees(preview.netPayable) : 'Add invoice items to calculate']
-  ]} reviewContent={<><h3>Invoice items</h3>{items.map((item, index) => <div key={index}><span>{item.description}<small>{item.quantity} {item.unit || 'units'} × {rupees(item.rate)}</small></span><strong>{rupees(item.quantity * item.rate)}</strong></div>)}{preview?.workings.map(step => <div key={step.label}><span>{step.label}</span><strong>{rupees(step.amount)}</strong></div>)}</>}
+  ]} reviewContent={<><h3>Invoice items</h3>{items.map((item, index) => <div key={index}><span>{item.description}{!amountOnly && <small>{item.quantity} {item.unit || 'units'} × {rupees(item.rate)}</small>}</span><strong>{rupees(item.quantity * item.rate)}</strong></div>)}{preview?.workings.map(step => <div key={step.label}><span>{step.label}</span><strong>{rupees(step.amount)}</strong></div>)}</>}
     onSubmit={async values => {
-      if (!items.length) throw new Error('Add at least one line with a description and a quantity');
+      if (!items.length) throw new Error('Add at least one line with a description and a quantity or lump-sum amount');
       await post('/receivables/invoices', {
         projectId: values.projectId ? Number(values.projectId) : null,
         clientId: Number(values.clientId),
@@ -368,10 +414,10 @@ function CertificateForm({ data, companyId, close, reload }) {
     }}>
     <div className="qs-form-section wide"><span>01</span><div><h3>Invoice recipient</h3><p>Select the client, project and billing type.</p></div></div>
     <Field name="reference" label="Invoice number (optional; blank uses sequence)" required={false} />
-    <label>Client *<select name="clientId" value={clientId} required onChange={event=>{const chosen=event.target.value;setClientId(chosen);setProjectId('');setLines([{...BLANK_LINE}]);}}>
+    <label>Client *<select name="clientId" value={clientId} required onChange={event=>{const chosen=event.target.value;setClientId(chosen);setProjectId('');setPreviousInvoiceIds([]);setLines([{...BLANK_LINE}]);}}>
       <option value="">Choose saved client…</option>{clients.map(client=><option key={client.id} value={client.id}>{client.name}</option>)}
     </select></label>
-    <label>Project (optional)<select name="projectId" value={projectId} onChange={event=>{setProjectId(event.target.value);setLines([{...BLANK_LINE}]);}}>
+    <label>Project (optional)<select name="projectId" value={projectId} onChange={event=>{setProjectId(event.target.value);setPreviousInvoiceIds([]);setLines([{...BLANK_LINE}]);}}>
       <option value="">No project — company-level invoice</option>{clientProjects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}
     </select></label>
     <label>Invoice format *<select value={documentType} onChange={event => {
@@ -390,9 +436,11 @@ function CertificateForm({ data, companyId, close, reload }) {
     <Field name="dueDate" label="Payment due" type="date" required={false} />
 
     <div className="qs-form-section wide"><span>02</span><div><h3>What is being invoiced</h3><p>Use accepted quotation or BOQ items, or add a manual line.</p></div></div>
+    <div className="wide"><InvoiceColumnControls columns={columns} setColumns={setColumns} />
+      <p className="invoice-note">Choose which columns appear on this invoice's PDF. Description and amount always appear. Hide both Quantity and Rate to enter a manual lump-sum amount.</p></div>
     <div className="invoice-lines wide">
       <h3>What is being invoiced</h3>
-      {lines.map((line, index) => <div className="invoice-line" key={index}>
+      {lines.map((line, index) => <div className={`invoice-line${amountOnly ? ' invoice-line-amount-only' : ''}`} key={index}>
         <select value={line.boqItemId ? `boq:${line.boqItemId}` : line.quotationItemId ? `quote:${line.quotationItemId}` : ''}
           aria-label="Invoice line source" onChange={event=>{
             const [type,id]=event.target.value.split(':');
@@ -400,7 +448,7 @@ function CertificateForm({ data, companyId, close, reload }) {
             setLines(current=>current.map((row,pos)=>pos===index ? {
               ...row,boqItemId:type==='boq'?id:'',quotationItemId:type==='quote'?id:'',
               description:source?.description||row.description,unit:source?.unit||row.unit,
-              quantity:type==='boq' ? String(Math.max(0,Number(source?.remainingQuantity||0))) : row.quantity,
+              quantity:type==='boq' ? String(Math.max(0,Number(source?.remainingQuantity||0))) : (row.quantity || (source ? String(source.quantity || 1) : '')),
               rate:source?.rate??row.rate
             } : row));
           }}><option value="">Manual line</option>
@@ -411,10 +459,12 @@ function CertificateForm({ data, companyId, close, reload }) {
           onChange={event => setLine(index, 'description', event.target.value)} />
         <input value={line.unit} aria-label={`Line ${index + 1} unit`} placeholder="Unit"
           onChange={event => setLine(index, 'unit', event.target.value)} />
+        {amountOnly ? <input value={line.quantity === '' && line.rate === '' ? '' : (Number(line.quantity) || 0) * (Number(line.rate) || 0)} aria-label={`Line ${index + 1} amount`} type="number" step="0.01" min="0" placeholder="Amount (LKR)" readOnly={Boolean(line.quotationItemId || line.boqItemId)} onChange={event => setLines(current => current.map((row, position) => position === index ? { ...row, quantity: '1', rate: event.target.value } : row))} /> : <>
         <input value={line.quantity} aria-label={`Line ${index + 1} quantity`} type="number" step="any" min="0" max={line.boqItemId ? boqLines.find(row=>String(row.id)===String(line.boqItemId))?.remainingQuantity : undefined} placeholder="Qty"
           onChange={event => setLine(index, 'quantity', event.target.value)} />
         <input value={line.rate} aria-label={`Line ${index + 1} rate`} type="number" step="any" min="0" placeholder="Rate" readOnly={Boolean(line.quotationItemId || line.boqItemId)}
           onChange={event => setLine(index, 'rate', event.target.value)} />
+        </>}
         <span>{rupees((Number(line.quantity) || 0) * (Number(line.rate) || 0))}</span>
         <button type="button" className="icon-btn" aria-label="Remove line"
           disabled={lines.length === 1}
@@ -450,6 +500,18 @@ function CertificateForm({ data, companyId, close, reload }) {
       <input type="number" step="any" min="0" value={terms.otherDeductions}
         onChange={event => setTerm('otherDeductions', event.target.value)} />
     </label>
+    <fieldset className="wide invoice-previous-payments">
+      <legend>Deduct previously paid invoices (optional)</legend>
+      <p className="invoice-note">Use this only when the items above show the total work to date. Select fully paid invoices for this client and project. Their references and amounts appear below the total; no new receipt is created. Enter cumulative retention and other deductions too. Use manual work lines for cumulative bills.</p>
+      {paidInvoices.map(row => <label className="invoice-check" key={row.id}>
+        <input type="checkbox" checked={previousInvoiceIds.includes(Number(row.id))} onChange={event => setPreviousInvoiceIds(current => event.target.checked ? [...current, Number(row.id)] : current.filter(id => id !== Number(row.id)))} />
+        <span>{row.reference} · {row.title} · paid {rupees(row.paidAmount)}</span>
+      </label>)}
+      {paidInvoiceError && <p className="form-error" role="alert">{paidInvoiceError}</p>}
+      {!paidInvoices.length && <p className="invoice-note">No fully paid invoices for the selected client and project.</p>}
+      {previousInvoiceIds.length > 0 && <p className="invoice-note">Any earlier paid invoices already deducted by your selection are included once automatically.</p>}
+    </fieldset>
+    {previewError && <p className="form-error wide" role="alert">{previewError}</p>}
     <TextArea name="notes" label="Additional information on the invoice" required={false} rows={2} />
 
     {preview && <div className="invoice-working wide">

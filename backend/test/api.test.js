@@ -1043,11 +1043,12 @@ test('employee needs only name and code and personal details remain editable', a
   assert.equal(eligible.status,201);
   await call(owner,'PATCH',`/employees/leave/${eligible.body.id}`,{status:'Rejected'});
   const earlyUnpaid = await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Unpaid',fromDate:'2027-01-01',toDate:'2027-01-01',reason:'Waiting period test'});
-  assert.equal(earlyUnpaid.status,409);
+  assert.equal(earlyUnpaid.status,201);
   const leave = await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Unpaid',fromDate:'2027-03-01',toDate:'2027-03-05',reason:'Monthly leave test'});
   assert.equal(leave.status,201);
   const excess=await call(owner,'POST',`/employees/${id}/leave`,{leaveType:'Annual',paymentType:'Paid',fromDate:'2027-03-06',toDate:'2027-03-06',reason:'Over monthly allowance test'});
-  assert.equal(excess.status,409);
+  assert.equal(excess.status,201);
+  assert.ok(excess.body.limitWarnings.some(warning=>warning.includes('monthly')));
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
 });
 
@@ -3484,6 +3485,9 @@ test('statutory contributions use the full basis only in monthly payroll drafts'
       assert.equal(Number(slip.epfEmployeeDeduction),monthly?2400:0);
       assert.equal(Number(slip.epfEmployerContribution),monthly?3600:0);
       assert.equal(Number(slip.etfEmployerContribution),monthly?900:0);
+      const contributionDetail=typeof slip.calculationDetail==='string'?JSON.parse(slip.calculationDetail):slip.calculationDetail;
+      assert.equal(contributionDetail.contributions.basis,30000);
+      assert.equal(contributionDetail.contributions.epfReasons.length,monthly?0:1);
       if(attempt===0) {
         const rebuilt=await call(owner,'POST','/payroll',body);
         assert.equal(rebuilt.status,201,JSON.stringify(rebuilt.body));
@@ -3602,7 +3606,8 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
     assert.equal(Number(slip.overtimePay),person.expectedOt,person.payrollCategory);
     assert.equal(Number(slip.lateMinutes),90);
     assert.equal(Number(slip.lateDeduction),200);
-    assert.equal(Number(slip.netPay),6200+person.expectedOt);
+    assert.equal(Number(slip.basic),6200);
+    assert.equal(Number(slip.netPay),6000+person.expectedOt);
     const calculation=typeof slip.calculationDetail==='string'?JSON.parse(slip.calculationDetail):slip.calculationDetail;
     assert.deepEqual(calculation.attendance.map(row=>row.policyId),[oldPolicy.body.id,newPolicy.body.id]);
     assert.ok(calculation.overtime.every(row=>row.source==='Attendance'));
@@ -4503,7 +4508,7 @@ test('applicant CV screening scores and shortlisting gate interviews', async () 
   await admin.query(`DELETE FROM ${testDatabase}.hiring_candidates WHERE id=?`,[id]);
 });
 
-test('HR leave policy and individual entitlements enforce yearly, monthly and waiting-period rules',async()=>{
+test('HR leave allowances warn above yearly/monthly balances while paid waiting-period rules remain enforced',async()=>{
   const owner=await login(),site=await login('supervisor@gkuc.lk');
   const policy={effectiveFrom:'2035-01-01',annualDefault:10,casualDefault:3,monthlyLimit:2,waitingMonths:3,allowUnpaidDuringWait:false};
   assert.equal((await call(site,'POST','/employees/leave/settings',policy)).status,403);
@@ -4521,11 +4526,14 @@ test('HR leave policy and individual entitlements enforce yearly, monthly and wa
   assert.equal((await call(owner,'PATCH',`/employees/leave/${probation.body.id}`,{status:'Approved'})).status,200);
   assert.equal((await call(owner,'PATCH',`/employees/leave/${probation.body.id}`,{status:'Rejected'})).status,200);
   assert.equal((await request('2035-04-01','2035-04-02')).status,201);
-  assert.equal((await request('2035-04-03','2035-04-03')).status,409);
+  const monthlyOver=await request('2035-04-03','2035-04-03');
+  assert.equal(monthlyOver.status,201);assert.ok(monthlyOver.body.limitWarnings.some(w=>w.includes('monthly')));
   assert.equal((await request('2035-05-01','2035-05-02')).status,201);
-  assert.equal((await request('2035-06-01','2035-06-01')).status,409);
-  assert.equal((await request('2035-06-01','2035-06-01','Paid','Casual')).status,201);
-  assert.equal((await request('2035-06-02','2035-06-02','Paid','Casual')).status,409);
+  const annualOver=await request('2035-06-01','2035-06-01');
+  assert.equal(annualOver.status,201);assert.ok(annualOver.body.limitWarnings.some(w=>w.includes('annual/other')));
+  assert.equal((await request('2035-06-03','2035-06-03','Paid','Casual')).status,201);
+  const casualOver=await request('2035-06-04','2035-06-04','Paid','Casual');
+  assert.equal(casualOver.status,201);assert.ok(casualOver.body.limitWarnings.some(w=>w.includes('casual')));
   await admin.query(`DELETE FROM ${testDatabase}.employees WHERE id=?`,[id]);
 });
 
@@ -4627,8 +4635,9 @@ test('both-company payroll builds separate drafts atomically and protects locked
   assert.equal((await call(site,'GET',`/payroll/${runs[0].id}/export.xlsx`)).status,403);
   for(const run of runs){
     const detail=await call(owner,'GET',`/payroll/${run.id}`);
-    assert.equal(detail.body.payslips.length,1);assert.equal(Number(detail.body.payslips[0].basic),1600);
-    const path=`/payroll/${run.id}/payslips/${detail.body.payslips[0].id}/document`;
+    const fixture=detail.body.payslips.find(row=>row.employeeCode===`BATCH-${run.companyId}`);
+    assert.ok(fixture);assert.equal(Number(fixture.basic),1600);
+    const path=`/payroll/${run.id}/payslips/${fixture.id}/document`;
     const html=await fetch(`${base}${path}`,{headers:{Authorization:`Bearer ${owner}`}});
     assert.equal(html.status,200);assert.match(await html.text(),/1,600\.00/);
     assert.equal((await call(site,'GET',path)).status,403);
@@ -4637,7 +4646,7 @@ test('both-company payroll builds separate drafts atomically and protects locked
     const pdf=await fetch(new URL(ticket.body.url,base));
     assert.equal(pdf.status,200);assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
     const other=runs.find(row=>row.id!==run.id);
-    assert.equal((await call(owner,'GET',`/payroll/${other.id}/payslips/${detail.body.payslips[0].id}/document`)).status,404);
+    assert.equal((await call(owner,'GET',`/payroll/${other.id}/payslips/${fixture.id}/document`)).status,404);
   }
   const repeated=await call(owner,'POST','/payroll/batch',payload);
   assert.equal(repeated.status,201,JSON.stringify(repeated.body));
@@ -4845,5 +4854,427 @@ test('payment suspension blocks business data while status and session hygiene r
     await admin.query(`UPDATE ${testDatabase}.system_access_state
       SET status='active',message=NULL WHERE id=1`);
     await fetch(`${base}/service-status`);
+  }
+});
+
+test('invoice columns and cumulative paid-invoice deductions persist without duplicate receipts or VAT', async () => {
+  const owner = await login();
+  const client = await call(owner, 'POST', '/clients', { type: 'Private', name: `Cumulative Billing ${Date.now()}` });
+  assert.equal(client.status, 201);
+  const body = { companyId: 1, clientId: client.body.id, title: 'Cumulative work to date', invoiceDate: today(),
+    taxTreatment: 'Standard', documentType: 'Tax Invoice', vatRate: 18,
+    items: [{ description: 'Work', quantity: 1, rate: 1000 }] };
+  const first = await call(owner, 'POST', '/receivables/invoices', body);
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  const unpaid = await call(owner, 'POST', '/receivables/invoices', { ...body, previousInvoiceIds: [first.body.id], items: [{ description: 'All work', quantity: 1, rate: 2500 }] });
+  assert.equal(unpaid.status, 400);
+  assert.equal((await call(owner, 'POST', `/receivables/invoices/${first.body.id}/issue`)).status, 204);
+  assert.equal((await call(owner, 'POST', `/receivables/invoices/${first.body.id}/receipts`, { amount: 1180, receivedDate: today(), method: 'Cash' })).status, 201);
+  const nextBody = { ...body, previousInvoiceIds: [first.body.id], columns: { unit: false, quantity: false, rate: false }, items: [{ description: 'All work', quantity: 1, rate: 2500 }] };
+  const preview = await call(owner, 'POST', '/receivables/preview', nextBody);
+  assert.equal(preview.status, 200, JSON.stringify(preview.body));
+  assert.equal(preview.body.netPayable, 1770);
+  const next = await call(owner, 'POST', '/receivables/invoices', nextBody);
+  assert.equal(next.status, 201, JSON.stringify(next.body));
+  assert.equal(next.body.gross, 1500);
+  assert.equal(next.body.vatAmount, 270);
+  const detail = (await call(owner, 'GET', `/receivables/invoices/${next.body.id}`)).body;
+  assert.equal(Number(detail.net_payable), 1770);
+  assert.equal(Number(detail.gross), 1500);
+  assert.equal(detail.receipts.length, 0);
+  const url = `${base}/receivables/invoices/${next.body.id}/document`;
+  let html = await (await fetch(url, { headers: { authorization: `Bearer ${owner}` } })).text();
+  assert.match(html, new RegExp(`Less paid invoice ${first.body.reference}`));
+  assert.doesNotMatch(html, />Quantity<\/th>/);
+  assert.doesNotMatch(html, />Rate \(Rs\.\)<\/th>/);
+  assert.equal((await call(owner, 'PUT', `/receivables/invoices/${next.body.id}/columns`, { unit: true, quantity: true, rate: false })).status, 204);
+  html = await (await fetch(url, { headers: { authorization: `Bearer ${owner}` } })).text();
+  assert.match(html, />Quantity<\/th>/);
+  assert.match(html, /Less paid invoice/);
+  const unchanged = (await call(owner, 'GET', `/receivables/invoices/${next.body.id}`)).body;
+  assert.equal(Number(unchanged.net_payable), 1770);
+  assert.equal(unchanged.receipts.length, 0);
+  const eligible = await call(owner, 'GET', `/receivables/paid-invoices?companyId=1&clientId=${client.body.id}`);
+  assert.equal(eligible.status, 200);
+  assert.deepEqual(eligible.body.map(row => row.id), [first.body.id]);
+  assert.equal((await call(owner, 'POST', `/receivables/invoices/${next.body.id}/issue`)).status, 204);
+  assert.equal((await call(owner, 'POST', `/receivables/invoices/${next.body.id}/receipts`, { amount: 1770, receivedDate: today(), method: 'Cash' })).status, 201);
+  const third = await call(owner, 'POST', '/receivables/invoices', { ...body, previousInvoiceIds: [next.body.id, first.body.id], items: [{ description: 'Third cumulative bill', quantity: 1, rate: 3000 }] });
+  assert.equal(third.status, 201, JSON.stringify(third.body));
+  assert.equal(third.body.netPayable, 590);
+  assert.equal(third.body.gross, 500);
+  assert.equal(third.body.vatAmount, 90);
+  assert.equal(third.body.previousInvoices.length, 2);
+});
+
+test('office tasks support company scoping, assignees, comments, reminders and approval without a project', async () => {
+  const owner = await login();
+  const [[employee]] = await admin.query(`SELECT id FROM ${testDatabase}.employees WHERE status='Active' ORDER BY id LIMIT 1`);
+  const recipients = (await call(owner,'GET','/tasks/reminder-users')).body;
+  const created = await call(owner,'POST','/tasks',{ title:'Office filing and follow-up', companyId:2, projectId:null,
+    assigneeEmployeeIds:[employee.id], due:'Today at 16:00',dueDate:today(),dueTime:'16:00',priority:'Medium',
+    reminderAt:'2020-01-01T09:00',reminderFrequency:'Daily',reminderUserIds:[recipients[0].id] });
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.id;
+  assert.equal(created.body.projectId,null);
+  assert.equal(Number(created.body.companyId),2);
+  assert.equal(created.body.project,'Office / general');
+  assert.deepEqual(created.body.assigneeEmployeeIds,[employee.id]);
+  const listing = (await call(owner,'GET','/tasks?office=1&companyId=2')).body;
+  assert.ok(listing.some(row=>row.id===id));
+  assert.ok(!(await call(owner,'GET','/tasks?companyId=1')).body.some(row=>row.id===id));
+  assert.ok((await call(owner,'GET','/bootstrap')).body.data.tasks.some(row=>row.id===id&&Number(row.companyId)===2));
+  assert.equal((await call(owner,'POST',`/tasks/${id}/comments`,{comment:'Office task update'})).status,201);
+  await call(owner,'POST','/notifications/scan',{});
+  const [[notification]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.notifications WHERE dedupe_key LIKE ? AND user_id=?`,[`task-reminder:${id}:%`,recipients[0].id]);
+  assert.equal(Number(notification.total),1);
+  assert.equal((await call(owner,'PATCH',`/tasks/${id}`,{status:'In progress'})).status,200);
+  assert.equal((await call(owner,'PATCH',`/tasks/${id}`,{status:'Completed'})).status,200);
+  assert.equal((await call(owner,'PATCH',`/tasks/${id}`,{status:'Approved'})).status,200);
+  const final = (await call(owner,'GET',`/tasks/${id}`)).body;
+  assert.equal(final.status,'Approved');
+  assert.ok(final.comments.some(row=>row.comment==='Office task update'));
+});
+
+test('driverless fleet assets get independent oil reminders that reset only after selected completed work',async()=>{
+  const owner=await login();
+  const vehicle=await call(owner,'POST','/fleet',{vehicle:'Unassigned Japanese vehicle',registration:`OIL-${Date.now()}`,
+    status:'Available',renewal:'Insurance',dueDate:today(),odometer:14500,
+    maintenanceProfile:'Japanese',engineOilBaselineKm:10000,brakeOilBaselineKm:0});
+  assert.equal(vehicle.status,201,JSON.stringify(vehicle.body));
+  const id=vehicle.body.id;
+  let detail=(await call(owner,'GET',`/fleet/${id}`)).body;
+  assert.equal(detail.driver,null);
+  assert.equal(detail.drivers.length,0);
+  const engine=detail.maintenanceSchedules.find(row=>row.name==='Engine oil change');
+  const brake=detail.maintenanceSchedules.find(row=>row.name==='Brake oil replacement');
+  assert.equal(engine.kmRemaining,500);
+  assert.equal(brake.nextOdometer,20000);
+  await call(owner,'POST','/notifications/scan',{});
+  const [[notification]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.notifications WHERE dedupe_key LIKE ?`,[`maintenance:${engine.id}:%`]);
+  assert.ok(Number(notification.total)>0);
+  const work=await call(owner,'POST',`/fleet/${id}/maintenance`,{companyId:1,kind:'Service',serviceDate:today(),description:'Engine oil replaced',odometer:14500,completedScheduleIds:[engine.id]});
+  assert.equal(work.status,201,JSON.stringify(work.body));
+  detail=(await call(owner,'GET',`/fleet/${id}`)).body;
+  assert.equal(detail.maintenanceSchedules.find(row=>row.id===engine.id).nextOdometer,19500);
+  assert.equal(detail.maintenanceSchedules.find(row=>row.id===brake.id).nextOdometer,20000);
+  assert.equal((await call(owner,'POST',`/fleet/${id}/maintenance`,{companyId:1,kind:'Repair',serviceDate:today(),description:'Unrelated repair',odometer:14500})).status,201);
+  detail=(await call(owner,'GET',`/fleet/${id}`)).body;
+  assert.equal(detail.maintenanceSchedules.find(row=>row.id===engine.id).nextOdometer,19500);
+  const changed=await call(owner,'PUT',`/fleet/${id}/maintenance-schedules/${engine.id}`,{name:engine.name,intervalKm:15000,lastOdometer:14500,remindBeforeKm:500,active:true});
+  assert.equal(changed.status,200,JSON.stringify(changed.body));
+  assert.equal((await call(owner,'GET','/fleet/maintenance-schedules')).body.find(row=>row.id===engine.id).nextOdometer,29500);
+  const invalid=await call(owner,'POST',`/fleet/${id}/maintenance-schedules`,{name:'Invalid reminder',intervalKm:5000,lastOdometer:999999,remindBeforeKm:500});
+  assert.equal(invalid.status,400);
+});
+
+test('Live Sites uses dated work plans and attendance instead of requiring permanent team membership',async()=>{
+  const owner=await login();
+  const project=await call(owner,'POST','/projects',{companyId:1,name:`Live crew ${Date.now()}`,client:'Test client',manager:'Project Manager',site:'Live crew site',stage:'Planning',budget:10000});
+  assert.equal(project.status,201,JSON.stringify(project.body));
+  const projectId=project.body.id;
+  const workers=[];
+  for(let index=0;index<4;index++){
+    const employee=await call(owner,'POST','/employees',{code:`CREW-${Date.now()}-${index}`,name:`Live crew worker ${index}`,
+      workerType:'Site',joinDate:today(),designation:'Site labourer'});
+    assert.equal(employee.status,201,JSON.stringify(employee.body));
+    workers.push(employee.body);
+  }
+  const [planned,present,absent,future]=workers;
+  for(const employee of [planned,absent])assert.equal((await call(owner,'POST','/employees/work-locations',{
+    employeeId:employee.id,from:today(),to:today(),workLocation:'Site',projectId,reason:'Daily site deployment'})).status,200);
+  assert.equal((await call(owner,'POST','/employees/work-locations',{employeeId:future.id,from:shift(1),to:shift(1),workLocation:'Site',projectId,reason:'Tomorrow deployment'})).status,200);
+  for(const [employee,state] of [[present,'On site'],[absent,'Absent']]){
+    const recorded=await call(owner,'POST','/attendance',{employeeId:employee.id,date:today(),projectId,workLocation:'Site',state});
+    assert.equal(recorded.status,201,JSON.stringify(recorded.body));
+  }
+  // Membership must neither be necessary nor duplicate a daily plan.
+  assert.equal((await call(owner,'POST',`/projects/${projectId}/team`,{employeeId:planned.id,projectRole:'Crew member'})).status,201);
+  const board=await call(owner,'GET','/coordination');
+  assert.equal(board.status,200,JSON.stringify(board.body));
+  const site=board.body.sites.find(row=>row.id===projectId);
+  assert.equal(site.headcount,2);
+  assert.equal(site.attendanceCount,1);
+  assert.deepEqual(site.team.map(row=>row.id).sort((a,b)=>a-b),[planned.id,present.id].sort((a,b)=>a-b));
+  assert.equal(site.team.find(row=>row.id===planned.id).source,'Dated work plan');
+  assert.equal(site.team.find(row=>row.id===present.id).source,'Attendance');
+  const map=(await call(owner,'GET',`/employees/availability?date=${today()}`)).body;
+  assert.deepEqual(map.people.filter(row=>row.group==='site'&&row.projectId===projectId).map(row=>row.id).sort((a,b)=>a-b),site.team.map(row=>row.id).sort((a,b)=>a-b));
+});
+
+test('project budgets can be updated independently with exact totals and an audit trail',async()=>{
+  const owner=await login();
+  const created=await call(owner,'POST','/projects',{companyId:2,name:`Budget correction ${Date.now()}`,client:'Budget client',manager:'Project Manager',site:'Budget site',stage:'Planning',budget:0});
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.id;
+  const changed=await call(owner,'PATCH',`/projects/${id}`,{budget:14579.75});
+  assert.equal(changed.status,200,JSON.stringify(changed.body));
+  assert.equal(Number(changed.body.budget),14579.75);
+  assert.equal(changed.body.name,created.body.name);
+  assert.equal(Number(changed.body.company_id),2);
+  const detail=await call(owner,'GET',`/projects/${id}`);
+  assert.equal(detail.status,200);
+  assert.equal(Number(detail.body.finance.budget),14579.75);
+  assert.equal((await call(owner,'PATCH',`/projects/${id}`,{budget:-1})).status,400);
+  assert.equal(Number((await call(owner,'GET',`/projects/${id}`)).body.finance.budget),14579.75);
+  const [[audit]]=await admin.query(`SELECT before_json,after_json FROM ${testDatabase}.audit_logs WHERE entity='project' AND entity_id=? AND action='UPDATE' ORDER BY id DESC LIMIT 1`,[String(id)]);
+  const parse=value=>typeof value==='string'?JSON.parse(value):value;
+  assert.equal(Number(parse(audit.before_json).budget),0);
+  assert.equal(Number(parse(audit.after_json).budget),14579.75);
+  const supervisor=await login('supervisor@gkuc.lk');
+  assert.equal((await call(supervisor,'PATCH',`/projects/${id}`,{budget:5})).status,403);
+});
+
+test('Edit Project completion synchronizes health, progress and Live Sites without deleting the project',async()=>{
+  const owner=await login();
+  const users=(await call(owner,'GET','/projects/reminder-users')).body;
+  const created=await call(owner,'POST','/projects',{companyId:1,name:`Completion test ${Date.now()}`,client:'Completion client',manager:'Project Manager',site:'Completion site',stage:'Not started',budget:5000,
+    reminderDate:today(),reminderFrequency:'Daily',reminderUserIds:[users[0].id]});
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.id;
+  const complete=await call(owner,'PATCH',`/projects/${id}`,{stage:'Completed',health:'Watch',progress:45});
+  assert.equal(complete.status,200,JSON.stringify(complete.body));
+  assert.equal(complete.body.stage,'Completed');
+  assert.equal(complete.body.health,'Completed');
+  assert.equal(Number(complete.body.progress),100);
+  assert.equal(complete.body.site_status,'Completed');
+  assert.equal(Number(complete.body.budget),5000);
+  assert.equal(Number(complete.body.active),1);
+  assert.ok(!(await call(owner,'GET','/coordination')).body.sites.some(row=>row.id===id));
+  assert.equal((await call(owner,'GET',`/projects/${id}`)).status,200);
+  const [[reminder]]=await admin.query(`SELECT active FROM ${testDatabase}.project_start_reminders WHERE project_id=?`,[id]);
+  assert.equal(Number(reminder.active),0);
+  const reopen=await call(owner,'PATCH',`/projects/${id}`,{stage:'Mid-way',health:'On track',progress:80});
+  assert.equal(reopen.status,200,JSON.stringify(reopen.body));
+  assert.equal(reopen.body.site_status,'Active');
+  assert.ok((await call(owner,'GET','/coordination')).body.sites.some(row=>row.id===id));
+  assert.equal((await call(owner,'PATCH',`/projects/${id}`,{health:'Completed'})).status,400);
+  assert.equal((await call(owner,'POST',`/projects/${id}/reschedule`,{status:'Completed',reason:'All site work completed'})).status,200);
+  const final=(await call(owner,'GET',`/projects/${id}`)).body;
+  assert.equal(final.stage,'Completed');assert.equal(final.health,'Completed');
+});
+
+test('material and manual movement corrections preserve stock, original issue rates and audit history',async()=>{
+  const owner=await login();
+  const material=await call(owner,'POST','/materials',{name:'Editable stock',unit:'bags',stock:100,minimum:5,site:'Main store',unitCost:10});
+  assert.equal(material.status,201);const id=material.body.id;
+  assert.equal((await call(owner,'POST',`/materials/${id}/movements`,{type:'Issue',quantity:20,projectId:1,reference:'EDIT-ISSUE'})).status,201);
+  let movement=(await call(owner,'GET',`/materials/movements?materialId=${id}`)).body.find(row=>row.type==='Issue');
+  const edited=await call(owner,'PATCH',`/materials/${id}`,{name:'Corrected stock name',unit:'bag',stock:85,expectedStock:80,minimum:7,unitCost:99,reason:'Corrected stock count'});
+  assert.equal(edited.status,200,JSON.stringify(edited.body));
+  assert.equal(Number(edited.body.stock),85);assert.equal(edited.body.name,'Corrected stock name');
+  const updated=await call(owner,'PATCH',`/materials/movements/${movement.id}`,{type:'Issue',quantity:15,projectId:1,reference:'EDIT-ISSUE-CORRECT',notes:'Wrong quantity corrected',reason:'Delivery quantity checked',expectedQuantity:20});
+  assert.equal(updated.status,200,JSON.stringify(updated.body));
+  const [[stock]]=await admin.query(`SELECT stock FROM ${testDatabase}.materials WHERE id=?`,[id]);
+  assert.equal(Number(stock.stock),90);
+  const [expenses]=await admin.query(`SELECT amount FROM ${testDatabase}.expenses WHERE origin_type='stock_movement' AND origin_id=?`,[String(movement.id)]);
+  assert.equal(expenses.length,1);assert.equal(Number(expenses[0].amount),150);
+  assert.equal((await call(owner,'PATCH',`/materials/${id}`,{stock:80,expectedStock:85,reason:'Stale count'})).status,409);
+  assert.equal((await call(owner,'PATCH',`/materials/${id}`,{stockKind:'Returnable'})).status,409);
+  const [[audit]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.audit_logs WHERE entity='stock_movement' AND entity_id=? AND action='CORRECT'`,[String(movement.id)]);
+  assert.equal(Number(audit.total),1);
+});
+
+test('movement corrections reject negative historical stock and already-consumed site quantities',async()=>{
+  const owner=await login();
+  const made=await call(owner,'POST','/materials',{name:'Historical correction guard',unit:'bags',stock:0,minimum:0,site:'Store',unitCost:10});
+  const id=made.body.id;
+  for(const entry of [{type:'Receipt',quantity:10},{type:'Issue',quantity:10,projectId:1},{type:'Receipt',quantity:10}])assert.equal((await call(owner,'POST',`/materials/${id}/movements`,entry)).status,201);
+  const rows=(await call(owner,'GET',`/materials/movements?materialId=${id}`)).body;
+  const first=rows.filter(row=>row.type==='Receipt').sort((a,b)=>a.id-b.id)[0];
+  assert.equal((await call(owner,'PATCH',`/materials/movements/${first.id}`,{type:'Receipt',quantity:5,reason:'Correct first delivery'})).status,409);
+  assert.equal((await call(owner,'POST','/materials/site-consumption',{materialId:id,projectId:1,quantity:8,consumedOn:today()})).status,201);
+  const issue=rows.find(row=>row.type==='Issue');
+  assert.equal((await call(owner,'PATCH',`/materials/movements/${issue.id}`,{type:'Issue',quantity:5,projectId:1,reason:'Would reverse used stock'})).status,409);
+  const [[stock]]=await admin.query(`SELECT stock FROM ${testDatabase}.materials WHERE id=?`,[id]);
+  assert.equal(Number(stock.stock),10);
+});
+
+test('linked tool movements allow note corrections but protect quantities and loan balances',async()=>{
+  const owner=await login();
+  const material=await call(owner,'POST','/materials',{name:'Loan correction guard',unit:'tools',stock:5,minimum:0,site:'Store',stockKind:'Returnable'});
+  const loan=await call(owner,'POST','/materials/loans',{materialId:material.body.id,projectId:1,quantity:2,takenBy:'Site team',handedOverBy:'Store team'});
+  assert.equal(loan.status,201);
+  const movement=(await call(owner,'GET',`/materials/movements?materialId=${material.body.id}`)).body[0];
+  assert.equal(movement.originType,'Stock loan');
+  const body={type:movement.type,quantity:Number(movement.quantity),projectId:movement.projectId,destination:movement.destination,reference:movement.reference||'',notes:'Corrected handover note',reason:'Correct spelling'};
+  assert.equal((await call(owner,'PATCH',`/materials/movements/${movement.id}`,body)).status,200);
+  assert.equal((await call(owner,'PATCH',`/materials/movements/${movement.id}`,{...body,quantity:3})).status,409);
+  const [[stock]]=await admin.query(`SELECT stock FROM ${testDatabase}.materials WHERE id=?`,[material.body.id]);
+  assert.equal(Number(stock.stock),3);
+});
+
+test('notes-only movement corrections do not invent historical costs after a price change',async()=>{
+  const owner=await login();
+  const created=await call(owner,'POST','/materials',{name:'Legacy unpriced issue',unit:'bags',stock:10,minimum:0,site:'Store',unitCost:0});
+  const id=created.body.id;
+  await call(owner,'POST',`/materials/${id}/movements`,{type:'Issue',quantity:2,projectId:1});
+  const movement=(await call(owner,'GET',`/materials/movements?materialId=${id}`)).body[0];
+  await admin.query(`UPDATE ${testDatabase}.stock_movements SET unit_cost_snapshot=NULL WHERE id=?`,[movement.id]);
+  await call(owner,'PATCH',`/materials/${id}`,{unitCost:99});
+  const correction=await call(owner,'PATCH',`/materials/movements/${movement.id}`,{notes:'Corrected spelling only',reason:'Spelling correction'});
+  assert.equal(correction.status,200,JSON.stringify(correction.body));
+  assert.equal(Number(correction.body.project_id),1);
+  assert.equal(Number(correction.body.quantity),2);
+  const [[expense]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.expenses WHERE origin_type='stock_movement' AND origin_id=?`,[String(movement.id)]);
+  assert.equal(Number(expense.total),0);
+});
+
+test('one supplier cheque selects multiple invoices, requires override reasons and settles allocations once',async()=>{
+  const owner=await login();
+  const supplier=(await call(owner,'POST','/purchasing/suppliers',{name:`Multi cheque supplier ${Date.now()}`})).body;
+  const invoices=[];
+  for(const [index,amount] of [100.25,200.5,300.75].entries()){
+    const invoice=await call(owner,'POST','/purchasing/invoices',{companyId:1,supplierId:supplier.id,invoiceNo:`MULTI-${Date.now()}-${index}`,amount,invoiceDate:shift(index-3),dueDate:shift(7)});
+    assert.equal(invoice.status,201,JSON.stringify(invoice.body));invoices.push(invoice.body);
+  }
+  const body={companyId:1,supplierId:supplier.id,invoiceIds:invoices.map(row=>row.id).reverse(),chequeNumber:`MULTI-CHQ-${Date.now()}`,bank:'QA operating account',payee:supplier.name,purpose:'Combined invoice settlement',amount:250.5,expectedInvoiceTotal:601.5,issueDate:today(),chequeDate:shift(3)};
+  const missing=await call(owner,'POST','/purchasing/cheques',body);
+  assert.equal(missing.status,400,JSON.stringify(missing.body));
+  const cheque=await call(owner,'POST','/purchasing/cheques',{...body,amountOverrideReason:'Part settlement agreed with supplier'});
+  assert.equal(cheque.status,201,JSON.stringify(cheque.body));
+  assert.equal(cheque.body.invoice_id,null);
+  assert.equal(Number(cheque.body.invoice_total),601.5);
+  const listing=(await call(owner,'GET','/purchasing/cheques?companyId=1')).body.find(row=>row.id===cheque.body.id);
+  assert.equal(listing.invoices.length,3);
+  assert.deepEqual(listing.invoices.map(row=>Number(row.amount)),[100.25,150.25,0]);
+  let fresh=(await call(owner,'GET','/purchasing/invoices?companyId=1')).body.filter(row=>invoices.some(invoice=>invoice.id===row.id));
+  assert.ok(fresh.every(row=>Number(row.paidAmount)===0));
+  assert.equal(Number(fresh.find(row=>row.id===invoices[0].id).availableForCheque),0);
+  assert.equal((await call(owner,'POST','/purchasing/cheques',{...body,chequeNumber:`DUP-${Date.now()}`,amountOverrideReason:'Duplicate coverage attempt'})).status,409);
+  const outflows=(await call(owner,'GET','/finance/expected-outflows?companyId=1')).body.entries;
+  const relevant=outflows.filter(row=>row.sourceType==='Issued cheque'&&row.sourceId===cheque.body.id||row.sourceType==='Supplier invoice'&&invoices.some(invoice=>invoice.id===row.sourceId));
+  assert.equal(Math.round(relevant.reduce((sum,row)=>sum+Number(row.amount),0)*100),60150);
+  const pendingStatement=(await call(owner,'GET',`/purchasing/suppliers/${supplier.id}/statement?companyId=1`)).body;
+  assert.equal(pendingStatement.summary.pendingCheques,250.5);
+  assert.ok(pendingStatement.rows.find(row=>row.type==='Cheque pending').invoiceNo.includes(invoices[0].invoice_no));
+  const cleared=await Promise.all([1,2].map(()=>call(owner,'PATCH',`/purchasing/cheques/${cheque.body.id}`,{status:'Cleared'})));
+  for(const response of cleared)assert.equal(response.status,200,JSON.stringify(response.body));
+  fresh=(await call(owner,'GET','/purchasing/invoices?companyId=1')).body;
+  assert.equal(Number(fresh.find(row=>row.id===invoices[0].id).paidAmount),100.25);
+  assert.equal(Number(fresh.find(row=>row.id===invoices[1].id).paidAmount),150.25);
+  assert.equal(Number(fresh.find(row=>row.id===invoices[2].id).paidAmount),0);
+  const [[payments]]=await admin.query(`SELECT COUNT(*) count,SUM(amount) amount FROM ${testDatabase}.supplier_payments WHERE reference=?`,[body.chequeNumber]);
+  assert.equal(Number(payments.count),2);assert.equal(Number(payments.amount),250.5);
+  const statement=(await call(owner,'GET',`/purchasing/suppliers/${supplier.id}/statement?companyId=1`)).body;
+  assert.equal(statement.summary.paid,250.5);assert.equal(statement.summary.outstanding,351);
+});
+
+test('supplier cheque selections enforce company/supplier scope and clearance rolls back all invoices on conflict',async()=>{
+  const owner=await login();
+  const supplierId=(await call(owner,'POST','/purchasing/suppliers',{name:`Cheque scope supplier ${Date.now()}`})).body.id;
+  const otherSupplierId=(await call(owner,'POST','/purchasing/suppliers',{name:`Other cheque supplier ${Date.now()}`})).body.id;
+  const invoices=[];
+  for(const [index,companyId,currentSupplierId] of [[0,1,supplierId],[1,1,supplierId],[2,2,supplierId],[3,1,otherSupplierId]]){
+    const created=await call(owner,'POST','/purchasing/invoices',{companyId,supplierId:currentSupplierId,invoiceNo:`CHQ-SCOPE-${Date.now()}-${index}`,amount:100*(index+1),invoiceDate:today()});
+    assert.equal(created.status,201,JSON.stringify(created.body));invoices.push(created.body);
+  }
+  const base={companyId:1,supplierId,bank:'QA scoped account',payee:'QA supplier',purpose:'Cheque scope test',amount:300,issueDate:today(),chequeDate:today()};
+  for(const ids of [[invoices[0].id,invoices[2].id],[invoices[0].id,invoices[3].id],[invoices[0].id,invoices[0].id]]){
+    assert.equal((await call(owner,'POST','/purchasing/cheques',{...base,invoiceIds:ids,chequeNumber:`INVALID-${Date.now()}`})).status,400);
+  }
+  const created=await call(owner,'POST','/purchasing/cheques',{...base,invoiceIds:[invoices[0].id,invoices[1].id],chequeNumber:`CONFLICT-${Date.now()}`});
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  await admin.query(`UPDATE ${testDatabase}.supplier_invoices SET paid_amount=50,status='Partially paid' WHERE id=?`,[invoices[1].id]);
+  const failed=await call(owner,'PATCH',`/purchasing/cheques/${created.body.id}`,{status:'Cleared'});
+  assert.equal(failed.status,409,JSON.stringify(failed.body));
+  const [[first]]=await admin.query(`SELECT paid_amount FROM ${testDatabase}.supplier_invoices WHERE id=?`,[invoices[0].id]);
+  assert.equal(Number(first.paid_amount),0,'the first invoice update rolls back when the second conflicts');
+  const [[payments]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.supplier_payments WHERE reference=?`,[created.body.cheque_number]);
+  assert.equal(Number(payments.count),0);
+  assert.equal((await call(owner,'PATCH',`/purchasing/cheques/${created.body.id}`,{status:'Returned'})).status,200);
+  assert.equal((await call(owner,'PATCH',`/purchasing/cheques/${created.body.id}`,{status:'Issued'})).status,409);
+});
+
+test('fleet machine specifications may be entered later, edited and cleared without changing readings',async()=>{
+  const owner=await login();
+  const created=await call(owner,'POST','/fleet',{vehicle:'Machine awaiting specifications',registration:`SPEC-${Date.now()}`,
+    status:'Available',renewal:'Insurance',dueDate:today(),odometer:1234});
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.id;
+  assert.equal(created.body.modelYear,null);
+  const saved=await call(owner,'PATCH',`/fleet/${id}`,{make:'Isuzu',model:'Elf',modelYear:2005,engineCode:'Recorded by operator',manufacturerNotes:'Manual reference to be supplied; intervals not verified.'});
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  const detail=(await call(owner,'GET',`/fleet/${id}`)).body;
+  assert.equal(detail.make,'Isuzu');assert.equal(detail.model,'Elf');assert.equal(detail.modelYear,2005);
+  assert.equal(detail.engineCode,'Recorded by operator');assert.equal(detail.odometer,1234);
+  assert.equal(detail.maintenanceSchedules.length,0);
+  assert.equal((await call(owner,'PATCH',`/fleet/${id}`,{modelYear:1800})).status,400);
+  const cleared=await call(owner,'PATCH',`/fleet/${id}`,{modelYear:null,engineCode:null,manufacturerNotes:null});
+  assert.equal(cleared.status,200);assert.equal(cleared.body.engineCode,null);assert.equal(cleared.body.modelYear,null);
+  const atCreate=await call(owner,'POST','/fleet',{vehicle:'Mini excavator',registration:`SPEC-Y-${Date.now()}`,status:'Available',renewal:'Insurance',dueDate:today(),make:'Yanmar',model:'B27'});
+  assert.equal(atCreate.status,201);assert.equal(atCreate.body.model,'B27');assert.equal(atCreate.body.make,'Yanmar');
+});
+
+test('short-day attendance reduces saved earned salary and draft regeneration applies corrected hours',async()=>{
+  const owner=await login();
+  const policy=await call(owner,'POST','/payroll/settings/policies',{companyId:2,effectiveFrom:'2038-01-01',officeOtRate:225,
+    siteLabourSiteOtRate:200,siteLabourTravelOtRate:100,driverOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,
+    epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3});
+  assert.equal(policy.status,201,JSON.stringify(policy.body));
+  const person=await call(owner,'POST','/employees',{code:`SHORT-${Date.now()}`,name:'Short day payroll QA',joinDate:'2038-01-01',
+    compensationEffectiveFrom:'2038-01-01',payrollCompanyId:2,payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1600,basicSalary:30000});
+  assert.equal(person.status,201,JSON.stringify(person.body));
+  const [record]=await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out,work_location)
+    VALUES (?,?,'Worker','2038-01-10','Checked out','07:30','09:30','Office')`,[person.body.id,person.body.name]);
+  const body={companyId:2,periodStart:'2038-01-10',periodEnd:'2038-01-10',payFrequency:'Daily'};
+  const run=await call(owner,'POST','/payroll',body);assert.equal(run.status,201,JSON.stringify(run.body));
+  const snapshot=async()=>{
+    const detail=await call(owner,'GET',`/payroll/${run.body.id}`);
+    return detail.body.payslips.find(row=>row.employeeCode===person.body.code);
+  };
+  let slip=await snapshot();assert.equal(Number(slip.basic),400);assert.equal(Number(slip.netPay),400);
+  let detail=typeof slip.calculationDetail==='string'?JSON.parse(slip.calculationDetail):slip.calculationDetail;
+  assert.equal(detail.attendance[0].shortDay.amount,1200);
+  await admin.query(`UPDATE ${testDatabase}.attendance SET check_out='11:30' WHERE id=?`,[record.insertId]);
+  assert.equal(Number((await snapshot()).basic),400,'saved payroll remains unchanged until explicit rebuild');
+  assert.equal((await call(owner,'POST','/payroll',body)).status,201);
+  slip=await snapshot();assert.equal(Number(slip.basic),800);assert.equal(Number(slip.netPay),800);
+  assert.equal((await call(owner,'DELETE',`/payroll/${run.body.id}`)).status,204);
+});
+
+test('leave above annual and monthly allowances saves with persistent warnings and can be approved',async()=>{
+  const owner=await login();
+  assert.equal((await call(owner,'POST','/employees/leave/settings',{effectiveFrom:'2039-01-01',annualDefault:14,casualDefault:7,monthlyLimit:5,waitingMonths:0,allowUnpaidDuringWait:true})).status,201);
+  const person=await call(owner,'POST','/employees',{code:`UNLIMITED-${Date.now()}`,name:'Leave warning QA',joinDate:'2039-01-01'});
+  assert.equal(person.status,201);
+  const id=person.body.id,body={leaveType:'Annual',paymentType:'Paid',fromDate:'2039-01-15',toDate:'2039-02-03',reason:'Extended leave with management review'};
+  const saved=await call(owner,'POST',`/employees/${id}/leave`,body);
+  assert.equal(saved.status,201,JSON.stringify(saved.body));assert.equal(saved.body.days,20);
+  assert.ok(saved.body.limitWarnings.some(warning=>warning.includes('exceeded by 6')));
+  assert.ok(saved.body.limitWarnings.some(warning=>warning.includes('2039-01 advisory')));
+  assert.equal((await call(owner,'PATCH',`/employees/leave/${saved.body.id}`,{status:'Approved'})).status,200);
+  const rows=(await call(owner,'GET','/employees/leave/all')).body;
+  const row=rows.find(row=>row.id===saved.body.id);
+  const warnings=typeof row.limitWarnings==='string'?JSON.parse(row.limitWarnings):row.limitWarnings;
+  assert.ok(warnings.some(warning=>warning.includes('remaining balance -6')));
+  assert.equal((await call(owner,'POST',`/employees/${id}/leave`,body)).status,409,'duplicate dates still blocked');
+  const unpaid=await call(owner,'POST',`/employees/${id}/leave`,{...body,paymentType:'Unpaid',fromDate:'2039-12-25',toDate:'2040-01-05'});
+  assert.equal(unpaid.status,201,JSON.stringify(unpaid.body));assert.equal(unpaid.body.days,12);
+});
+
+test('both-company payroll links unambiguous legacy attendance and blocks missing daily rates atomically',async()=>{
+  const owner=await login(),people=[];
+  for(const companyId of [1,2]) {
+    const name=`Legacy Batch Person ${companyId} ${Date.now()}`;
+    const person=await call(owner,'POST','/employees',{code:`LEGACY-BATCH-${companyId}-${Date.now()}`,name,joinDate:'2045-01-01',
+      compensationEffectiveFrom:'2045-01-01',payrollCompanyId:companyId,payBasis:'Daily rate',payFrequency:'Daily',dailyRate:companyId===1?1600:0,epfEligible:false,etfEligible:false});
+    assert.equal(person.status,201,JSON.stringify(person.body));people.push(person.body);
+    await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_name,role,work_date,state,check_in,check_out)
+      VALUES (?,'Worker','2045-02-01','Checked out','07:30','16:30')`,[` ${name.toUpperCase().replaceAll(' ','  ')} `]);
+  }
+  const body={companyIds:[1,2],periodStart:'2045-02-01',periodEnd:'2045-02-01',payFrequency:'Daily'};
+  const blocked=await call(owner,'POST','/payroll/batch',body);
+  assert.equal(blocked.status,409);assert.match(blocked.body.error,/daily salary rate is zero/);assert.ok(blocked.body.error.includes(people[1].name));
+  const [[count]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.payroll_runs WHERE period_start='2045-02-01'`);
+  assert.equal(count.total,0,'no half-completed batch');
+  assert.equal((await call(owner,'PATCH',`/employees/${people[1].id}`,{dailyRate:2000})).status,200);
+  const saved=await call(owner,'POST','/payroll/batch',body);assert.equal(saved.status,201,JSON.stringify(saved.body));
+  for(const run of saved.body.runs) {
+    const detail=(await call(owner,'GET',`/payroll/${run.id}`)).body;
+    const person=people.find(row=>Number(row.payrollCompanyId)===Number(run.companyId));
+    const slip=detail.payslips.find(row=>row.employeeCode===person.code);
+    assert.equal(Number(slip.daysPresent),1);assert.equal(Number(slip.basic),Number(run.companyId)===1?1600:2000);
+    assert.equal((await call(owner,'DELETE',`/payroll/${run.id}`)).status,204);
   }
 });

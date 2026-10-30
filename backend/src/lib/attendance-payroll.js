@@ -1,4 +1,4 @@
-import {cents,rulesFor,suggestOvertime,calculateLateDeduction} from './hr-payroll-rules.js';
+import {cents,rulesFor,suggestOvertime,calculateLateDeduction,minutes} from './hr-payroll-rules.js';
 import {resolveOvertimeRate} from './payroll-policy.js';
 
 const parse=value=>typeof value==='string'?JSON.parse(value):(value||{});
@@ -15,6 +15,26 @@ export function subtractIntervals(intervals,excluded) {
     end<=a||start>=b?[[a,b]]:[[a,Math.min(start,b)],[Math.max(end,a),b]].filter(([x,y])=>y>x)),intervals);
 }
 
+/** Normal shift time only: OT cannot replace missing basic-pay hours. */
+export function shortAttendancePay(day,rules,dailyRate,lateAmount=0) {
+  if (['Absent','On leave'].includes(day.state) || day.needs_review) return {amount:0};
+  if (!day.check_in || !day.check_out) return {amount:0,warning:'Record both check-in and check-out to calculate short-day salary.'};
+  const start=minutes(day.check_in),end=minutes(day.check_out);
+  const normalStart=minutes(rules.normalStart),normalEnd=minutes(rules.normalEnd);
+  const paidMinutes=Number(rules.paidHoursPerDay)*60;
+  if (![start,end,normalStart,normalEnd,paidMinutes].every(Number.isFinite) || end<=start || normalEnd<=normalStart || paidMinutes<=0)
+    return {amount:0,warning:'Review the attendance times and paid-hours setting before calculating short-day salary.'};
+  // Break times are not recorded: use elapsed time inside the normal shift, capped
+  // at configured paid hours. Never invent an unpaid break for a short visit.
+  const workedMinutes=Math.min(paidMinutes,Math.max(0,Math.min(end,normalEnd)-Math.max(start,normalStart)));
+  const missingMinutes=paidMinutes-workedMinutes;
+  const hourlyRate=Number(dailyRate)/Number(rules.paidHoursPerDay);
+  // Existing lateness is already a deduction; only remove the uncovered shortfall
+  // from basic earnings. This preserves the configured late grace and avoids double charging.
+  const amount=cents(Math.max(0,Math.min(Number(dailyRate)-lateAmount,missingMinutes/60*hourlyRate-lateAmount)));
+  return {amount,workedMinutes,missingMinutes,hourlyRate,paidHoursPerDay:Number(rules.paidHoursPerDay)};
+}
+
 export function calculateAttendancePayroll(employee,attendance,overtime,policies,travelClaims=[]) {
   const dated=[...policies].sort((a,b)=>String(b.effective_from).localeCompare(String(a.effective_from))||Number(b.id)-Number(a.id));
   const policyFor=date=>{
@@ -23,7 +43,7 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     return policy;
   };
   const totals={overtime_hours:0,overtime_pay:0,office_ot_hours:0,office_ot_pay:0,site_ot_hours:0,site_ot_pay:0,
-    travel_ot_hours:0,travel_ot_pay:0,late_minutes:0,late_deduction:0};
+    travel_ot_hours:0,travel_ot_pay:0,late_minutes:0,late_deduction:0,short_day_reduction:0};
   const detail={version:1,payrollCategory:employee.payroll_category,workerType:employee.worker_type,attendance:[],overtime:[],warnings:[]};
   const addOt=(type,hours,rate,row)=>{
     if(!Number.isFinite(rate)||rate<0)throw new Error(`Configure a valid ${type} OT rate for ${row.workDate}.`);
@@ -59,13 +79,18 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     const late=calculateLateDeduction(day,rules,employee.daily_rate);
     if(late.deductibleMinutes>0&&Number(employee.daily_rate)<=0)
       throw new Error(`Set a daily salary rate before calculating late deductions for ${day.work_date}.`);
+    const shortDay=shortAttendancePay(day,rules,employee.daily_rate,late.amount);
+    if (shortDay.warning) detail.warnings.push({workDate:day.work_date,message:shortDay.warning});
+    if (shortDay.missingMinutes>0 && Number(employee.daily_rate)<=0)
+      throw new Error(`Set a daily salary rate before calculating short-day salary for ${day.work_date}.`);
+    totals.short_day_reduction+=shortDay.amount;
     totals.late_minutes+=late.lateMinutes;
     totals.late_deduction+=late.amount;
     detail.attendance.push({attendanceId:day.id,workDate:day.work_date,policyId:policy.id,
       checkIn:day.check_in,checkOut:day.check_out,normalStart:rules.normalStart,normalEnd:rules.normalEnd,
       dailyRate:Number(employee.daily_rate),paidHoursPerDay:rules.paidHoursPerDay,
       graceMinutes:rules.lateGraceMinutes,lateMinutes:late.lateMinutes,deductibleMinutes:late.deductibleMinutes||0,
-      lateDeduction:late.amount});
+      lateDeduction:late.amount,shortDay});
     if(reviewedDays.has(day.work_date))continue;
     const suggestion=suggestOvertime(day,rules);
     if(suggestion.warnings.length)detail.warnings.push(...suggestion.warnings.map(message=>({workDate:day.work_date,message})));
@@ -93,5 +118,6 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
   totals.overtime_hours=cents(totals.overtime_hours);
   totals.overtime_pay=cents(totals.overtime_pay);
   totals.late_deduction=cents(totals.late_deduction);
+  totals.short_day_reduction=cents(totals.short_day_reduction);
   return {...totals,calculation_detail:detail};
 }

@@ -1,3 +1,4 @@
+import { allocateCheque } from '../lib/cheque-allocations.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
@@ -66,7 +67,8 @@ router.get('/suppliers/:id/statement', auth, permit('finance.supplierStatements'
     LEFT JOIN purchase_orders o ON o.id=i.order_id LEFT JOIN projects p ON p.id=o.project_id
     WHERE i.supplier_id=? AND i.company_id=? ORDER BY sp.paid_date,sp.id`, [supplier.id, companyId]);
   const pendingCheques = await query(`SELECT c.id,c.issue_date date,c.amount,c.cheque_number reference,c.status,
-    i.invoice_no invoiceNo,p.name project,p.site destination
+    COALESCE((SELECT GROUP_CONCAT(a.invoice_no_snapshot ORDER BY a.invoice_id SEPARATOR ', ')
+      FROM issued_cheque_invoices a WHERE a.cheque_id=c.id),i.invoice_no) invoiceNo,p.name project,p.site destination
     FROM issued_cheques c LEFT JOIN supplier_invoices i ON i.id=c.invoice_id
     LEFT JOIN purchase_orders o ON o.id=i.order_id LEFT JOIN projects p ON p.id=o.project_id
     WHERE c.supplier_id=? AND c.company_id=? AND c.status<>'Cleared'
@@ -383,8 +385,8 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
         if (!item.material_id) receivedValue += line.quantity * Number(item.rate);
         if (item.material_id) {
           await connection.execute('UPDATE materials SET stock=stock+?, unit_cost=? WHERE id=?', [line.quantity, item.rate, item.material_id]);
-          await connection.execute(`INSERT INTO stock_movements (material_id,movement_type,quantity,reference,notes,project_id,user_id)
-            VALUES (?,'Receipt',?,?,?,?,?)`, [item.material_id, line.quantity, current.reference, req.body.notes || 'Goods received', current.project_id, req.user.id]);
+          await connection.execute(`INSERT INTO stock_movements (material_id,movement_type,quantity,reference,notes,project_id,user_id,origin_type)
+            VALUES (?,'Receipt',?,?,?,?,?,'Purchase order')`, [item.material_id, line.quantity, current.reference, req.body.notes || 'Goods received', current.project_id, req.user.id]);
         }
       }
 
@@ -417,6 +419,10 @@ router.get('/credit-reminder-users',auth,permit('finance.pay'),wrap(async(_req,r
 router.get('/invoices', auth, permit('finance.view','finance.pay'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 0);
   res.json(await query(`SELECT i.id,i.company_id companyId,i.supplier_id supplierId,i.invoice_no invoiceNo,i.amount,i.paid_amount paidAmount,
+    COALESCE((SELECT SUM(a.allocated_amount) FROM issued_cheque_invoices a JOIN issued_cheques c ON c.id=a.cheque_id
+      WHERE a.invoice_id=i.id AND c.status IN ('Prepared','Issued')),0) pendingChequeAmount,
+    GREATEST(0,i.amount-i.paid_amount-COALESCE((SELECT SUM(a.allocated_amount) FROM issued_cheque_invoices a JOIN issued_cheques c ON c.id=a.cheque_id
+      WHERE a.invoice_id=i.id AND c.status IN ('Prepared','Issued')),0)) availableForCheque,
     i.net_amount netAmount,i.tax_treatment taxTreatment,i.vat_rate vatRate,i.vat_amount vatAmount,
     i.invoice_date invoiceDate,i.due_date dueDate,i.status,s.name supplier,o.reference orderReference,
     i.payment_exception_approved_by paymentExceptionApprovedBy,i.recorded_by recordedById,i.verified_at verifiedAt,
@@ -575,48 +581,80 @@ router.post('/invoices/:id/payments', auth, permit('finance.pay'), validate(z.ob
 /* Future-dated cheques remain pending until Finance confirms what actually happened. */
 router.get('/cheques', auth, permit('finance.view','finance.pay'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 0);
-  res.json(await query(`
-  SELECT c.id,c.cheque_number chequeNumber,c.bank,c.payee,c.purpose,c.amount,c.issue_date issueDate,
+  const rows=await query(`
+  SELECT c.id,c.company_id companyId,c.supplier_id supplierId,c.invoice_total invoiceTotal,c.amount_override_reason amountOverrideReason,c.cheque_number chequeNumber,c.bank,c.payee,c.purpose,c.amount,c.issue_date issueDate,
     c.cheque_date chequeDate,c.reminder_days reminderDays,c.status,c.notes,c.confirmed_at confirmedAt,
     s.name supplier,i.invoice_no invoiceNo,DATEDIFF(c.cheque_date,CURDATE()) daysUntil,
     u.name createdBy,cu.name confirmedBy
   FROM issued_cheques c LEFT JOIN suppliers s ON s.id=c.supplier_id
   LEFT JOIN supplier_invoices i ON i.id=c.invoice_id JOIN users u ON u.id=c.created_by
   LEFT JOIN users cu ON cu.id=c.confirmed_by ${companyId ? 'WHERE c.company_id=?' : ''}
-  ORDER BY c.cheque_date,c.id`, companyId ? [companyId] : []));
+  ORDER BY c.cheque_date,c.id`, companyId ? [companyId] : []);
+  const allocations=rows.length?await query(`SELECT a.cheque_id chequeId,a.invoice_id invoiceId,a.invoice_no_snapshot invoiceNo,
+    a.allocated_amount amount,a.balance_snapshot balance FROM issued_cheque_invoices a
+    WHERE a.cheque_id IN (${rows.map(()=>'?').join(',')}) ORDER BY a.cheque_id,a.invoice_id`,rows.map(row=>row.id)):[];
+  res.json(rows.map(row=>{const invoices=allocations.filter(item=>Number(item.chequeId)===Number(row.id));
+    return {...row,invoices,invoiceNo:invoices.length?invoices.map(item=>item.invoiceNo).join(', '):row.invoiceNo};}));
 }));
 
 router.post('/cheques', auth, permit('finance.pay'), validate(z.object({
   companyId: z.number().int().positive().default(1),
   supplierId: z.number().int().positive().nullable().optional(),
   invoiceId: z.number().int().positive().nullable().optional(),
+  invoiceIds: z.array(z.number().int().positive()).max(100).optional(),
+  expectedInvoiceTotal: z.number().nonnegative().optional(), amountOverrideReason:z.string().trim().max(600).optional(),
   chequeNumber: z.string().trim().min(1).max(80), bank: z.string().trim().min(2).max(180),
   payee: z.string().trim().min(2).max(180), purpose: z.string().trim().min(2).max(400),
-  amount: z.number().positive(), issueDate: isoDate, chequeDate: isoDate,
+  amount: z.number().positive().multipleOf(.01), issueDate: isoDate, chequeDate: isoDate,
   reminderDays: z.number().int().min(0).max(30).default(3), notes: z.string().max(600).optional()
 })), wrap(async (req, res) => {
   const body = req.body;
   if (body.chequeDate < body.issueDate) return res.status(400).json({ error: 'Cheque date cannot be before its issue date' });
-  if (body.invoiceId) {
-    const invoice = await getOne('SELECT id,company_id,supplier_id,amount,paid_amount FROM supplier_invoices WHERE id=?', [body.invoiceId]);
-    if (!invoice) return res.status(404).json({ error: 'Supplier invoice not found' });
-    if (body.supplierId && Number(invoice.supplier_id) !== body.supplierId)
-      return res.status(400).json({ error: 'That invoice belongs to a different supplier' });
-    if (Number(invoice.company_id) !== body.companyId)
-      return res.status(400).json({ error: 'That invoice belongs to a different company' });
-    if (body.amount > Number(invoice.amount) - Number(invoice.paid_amount) + 0.001)
-      return res.status(409).json({ error: 'Cheque amount exceeds the invoice balance' });
-  }
+  const ids=body.invoiceIds ?? (body.invoiceId?[body.invoiceId]:[]);
+  if(new Set(ids).size!==ids.length) return res.status(400).json({error:'Select each invoice only once.'});
+  if(body.invoiceIds && body.invoiceId && (ids.length!==1||ids[0]!==body.invoiceId))
+    return res.status(400).json({error:'Use one consistent invoice selection.'});
+  if(!await getOne('SELECT id FROM companies WHERE id=? AND active=1',[body.companyId]))
+    return res.status(400).json({error:'Choose an active operating company.'});
   try {
-    const result = await query(`INSERT INTO issued_cheques
-      (company_id,supplier_id,invoice_id,cheque_number,bank,payee,purpose,amount,issue_date,cheque_date,reminder_days,notes,created_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [body.companyId,body.supplierId || null,body.invoiceId || null,body.chequeNumber,body.bank,
-      body.payee,body.purpose,body.amount,body.issueDate,body.chequeDate,body.reminderDays,body.notes || null,req.user.id]);
-    const row = await getOne('SELECT * FROM issued_cheques WHERE id=?', [result.insertId]);
-    await audit(pool, req.user.id, 'ISSUE', 'cheque', row.id, null, row, req.ip);
-    res.status(201).json(row);
-  } catch (error) {
-    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'That cheque number is already recorded for this bank' });
+    const id=await transaction(async connection=>{
+      let supplierId=body.supplierId||null, plan={invoiceTotal:null,allocations:[],overridden:false};
+      if(ids.length){
+        // Lock invoices in a stable order; the first consistent read of reservations happens after these locks.
+        const [invoices]=await connection.execute(`SELECT id,company_id companyId,supplier_id supplierId,invoice_no invoiceNo,
+          invoice_date invoiceDate,amount,paid_amount paidAmount FROM supplier_invoices WHERE id IN (${ids.map(()=>'?').join(',')}) ORDER BY id FOR UPDATE`,ids);
+        if(invoices.length!==ids.length)throw Object.assign(new Error('One of the selected supplier invoices was not found.'),{status:404});
+        supplierId=supplierId||Number(invoices[0].supplierId);
+        if(invoices.some(row=>Number(row.companyId)!==Number(body.companyId)||Number(row.supplierId)!==Number(supplierId)))
+          throw Object.assign(new Error('All selected invoices must belong to the selected supplier and company.'),{status:400});
+        const [held]=await connection.execute(`SELECT a.invoice_id invoiceId,SUM(a.allocated_amount) amount
+          FROM issued_cheque_invoices a JOIN issued_cheques c ON c.id=a.cheque_id
+          WHERE a.invoice_id IN (${ids.map(()=>'?').join(',')}) AND c.status IN ('Prepared','Issued') GROUP BY a.invoice_id`,ids);
+        const reserved=new Map(held.map(row=>[Number(row.invoiceId),Number(row.amount)]));
+        const available=invoices.map(row=>({...row,availableAmount:Math.round((Number(row.amount)-Number(row.paidAmount)-(reserved.get(Number(row.id))||0))*100)/100}));
+        const total=available.reduce((sum,row)=>sum+Math.round(row.availableAmount*100),0)/100;
+        if(body.expectedInvoiceTotal!==undefined&&Math.abs(total-body.expectedInvoiceTotal)>.001)
+          throw Object.assign(new Error('Invoice balances changed. Refresh the selection and review the cheque amount.'),{status:409});
+        plan=allocateCheque(available,body.amount,body.amountOverrideReason);
+      }
+      if(supplierId){
+        const [[supplier]]=await connection.execute('SELECT id FROM suppliers WHERE id=? AND active=1',[supplierId]);
+        if(!supplier)throw Object.assign(new Error('Choose an active supplier.'),{status:400});
+      }
+      const [created]=await connection.execute(`INSERT INTO issued_cheques
+        (company_id,supplier_id,invoice_id,cheque_number,bank,payee,purpose,amount,issue_date,cheque_date,reminder_days,notes,created_by,invoice_total,amount_override_reason)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[body.companyId,supplierId,ids.length===1?ids[0]:null,body.chequeNumber,body.bank,
+          body.payee,body.purpose,body.amount,body.issueDate,body.chequeDate,body.reminderDays,body.notes||null,req.user.id,
+          plan.invoiceTotal,plan.overridden?body.amountOverrideReason:null]);
+      for(const item of plan.allocations)await connection.execute(`INSERT INTO issued_cheque_invoices
+        (cheque_id,invoice_id,invoice_no_snapshot,allocated_amount,balance_snapshot) VALUES (?,?,?,?,?)`,
+        [created.insertId,item.invoiceId,item.invoiceNo,item.amount,item.balance]);
+      await audit(connection,req.user.id,'ISSUE','cheque',created.insertId,null,{...body,supplierId,...plan},req.ip);
+      return created.insertId;
+    });
+    res.status(201).json(await getOne('SELECT * FROM issued_cheques WHERE id=?',[id]));
+  }catch(error){
+    if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'That cheque number is already recorded for this bank'});
     throw error;
   }
 }));
@@ -631,14 +669,36 @@ router.patch('/cheques/:id', auth, permit('finance.pay'), validate(z.object({
     if (cheque.status === 'Cleared' && req.body.status !== 'Cleared')
       throw Object.assign(new Error('A cleared cheque cannot be reversed from this screen'), { status: 409 });
     if (cheque.status === 'Cleared') return cheque;
-    if (req.body.status === 'Cleared' && cheque.invoice_id) {
-      const [rows] = await connection.execute('SELECT * FROM supplier_invoices WHERE id=? FOR UPDATE', [cheque.invoice_id]);
-      const invoice = rows[0]; const paid = Number(invoice.paid_amount) + Number(cheque.amount);
-      if (paid > Number(invoice.amount) + 0.001) throw Object.assign(new Error('Cheque exceeds the remaining invoice balance'), { status: 409 });
-      await connection.execute('UPDATE supplier_invoices SET paid_amount=?,status=? WHERE id=?',
-        [paid, paid >= Number(invoice.amount) - 0.001 ? 'Paid' : 'Partially paid', invoice.id]);
-      await connection.execute(`INSERT INTO supplier_payments (invoice_id,amount,paid_date,method,reference,created_by)
-        VALUES (?,?,CURDATE(),'Cheque',?,?)`, [invoice.id,cheque.amount,cheque.cheque_number,req.user.id]);
+    const [links]=await connection.execute('SELECT invoice_id invoiceId,allocated_amount amount FROM issued_cheque_invoices WHERE cheque_id=? ORDER BY invoice_id',[cheque.id]);
+    const allocations=links.length?links:(cheque.invoice_id?[{invoiceId:cheque.invoice_id,amount:cheque.amount}]:[]);
+    if(req.body.status==='Cleared' && allocations.length){
+      const ids=allocations.map(row=>row.invoiceId);
+      const [invoices]=await connection.execute(`SELECT * FROM supplier_invoices WHERE id IN (${ids.map(()=>'?').join(',')}) ORDER BY id FOR UPDATE`,ids);
+      const byId=new Map(invoices.map(row=>[Number(row.id),row]));
+      const sum=allocations.reduce((total,row)=>total+Math.round(Number(row.amount)*100),0);
+      if(sum!==Math.round(Number(cheque.amount)*100))throw Object.assign(new Error('Cheque allocations do not match its amount. Review this cheque before clearing.'),{status:409});
+      for(const item of allocations){
+        const invoice=byId.get(Number(item.invoiceId));
+        if(!invoice||Number(invoice.company_id)!==Number(cheque.company_id)||(cheque.supplier_id&&Number(invoice.supplier_id)!==Number(cheque.supplier_id)))
+          throw Object.assign(new Error('A cheque invoice no longer belongs to this supplier and company.'),{status:409});
+        if(Number(item.amount)<=0)continue;
+        const paid=Math.round((Number(invoice.paid_amount)+Number(item.amount))*100)/100;
+        if(paid>Number(invoice.amount)+.001)throw Object.assign(new Error(`Cheque allocation exceeds the remaining balance on invoice ${invoice.invoice_no}. Review other payments before clearing.`),{status:409});
+        await connection.execute('UPDATE supplier_invoices SET paid_amount=?,status=? WHERE id=?',[paid,paid>=Number(invoice.amount)-.001?'Paid':'Partially paid',invoice.id]);
+        await connection.execute(`INSERT INTO supplier_payments(invoice_id,amount,paid_date,method,reference,created_by)
+          VALUES (?,?,CURDATE(),'Cheque',?,?)`,[invoice.id,item.amount,cheque.cheque_number,req.user.id]);
+      }
+    }
+    if(['Prepared','Issued'].includes(req.body.status)&&!['Prepared','Issued'].includes(cheque.status)&&allocations.length){
+      const ids=allocations.map(row=>row.invoiceId);
+      const [invoices]=await connection.execute(`SELECT id,amount,paid_amount FROM supplier_invoices WHERE id IN (${ids.map(()=>'?').join(',')}) ORDER BY id FOR UPDATE`,ids);
+      for(const item of allocations){
+        const invoice=invoices.find(row=>Number(row.id)===Number(item.invoiceId));
+        const [[held]]=await connection.execute(`SELECT COALESCE(SUM(a.allocated_amount),0) amount FROM issued_cheque_invoices a
+          JOIN issued_cheques c ON c.id=a.cheque_id WHERE a.invoice_id=? AND c.id<>? AND c.status IN ('Prepared','Issued')`,[item.invoiceId,cheque.id]);
+        if(!invoice||Number(item.amount)>Number(invoice.amount)-Number(invoice.paid_amount)-Number(held.amount)+.001)
+          throw Object.assign(new Error('These invoices are now paid or covered by another cheque. Record a new cheque with the current balances.'),{status:409});
+      }
     }
     await connection.execute(`UPDATE issued_cheques SET status=?,notes=COALESCE(?,notes),
       confirmed_at=CASE WHEN ? IN ('Cleared','Returned','Cancelled','Replaced') THEN NOW() ELSE confirmed_at END,

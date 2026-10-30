@@ -174,7 +174,7 @@ async function createCoreTables() {
   await query(`CREATE TABLE IF NOT EXISTS projects (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(180) NOT NULL, client VARCHAR(180) NOT NULL, manager VARCHAR(120) NOT NULL,
     progress TINYINT UNSIGNED NOT NULL DEFAULT 0, budget DECIMAL(15,2) NOT NULL DEFAULT 0, actual DECIMAL(15,2) NOT NULL DEFAULT 0,
-    health ENUM('On track','Watch','At risk') NOT NULL DEFAULT 'On track', stage VARCHAR(150) NOT NULL, site VARCHAR(180) NOT NULL,
+    health ENUM('On track','Watch','At risk','Completed') NOT NULL DEFAULT 'On track', stage VARCHAR(150) NOT NULL, site VARCHAR(180) NOT NULL,
     start_date DATE NULL, end_date DATE NULL, active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_project_progress CHECK(progress BETWEEN 0 AND 100)
   ) ENGINE=InnoDB`);
@@ -197,7 +197,7 @@ async function createCoreTables() {
     CONSTRAINT fk_work_auth_user FOREIGN KEY(authorised_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS tasks (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, title VARCHAR(220) NOT NULL, project_id BIGINT UNSIGNED NOT NULL, assignee VARCHAR(120) NOT NULL,
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, title VARCHAR(220) NOT NULL, project_id BIGINT UNSIGNED NULL, assignee VARCHAR(120) NOT NULL,
     due VARCHAR(100) NOT NULL, priority ENUM('Low','Medium','High') NOT NULL, status ENUM('Not started','In progress','Blocked','Completed','Approved') NOT NULL,
     notes TEXT NOT NULL, due_date DATE NULL, approved_by BIGINT UNSIGNED NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -446,6 +446,7 @@ async function createHrTables() {
     CONSTRAINT fk_leave_decider FOREIGN KEY(decided_by) REFERENCES users(id), INDEX idx_leave_status(status)
   ) ENGINE=InnoDB`);
   const hadLeavePaymentType = await columnExists('leave_requests','payment_type');
+  await addColumn('leave_requests','limit_warnings','JSON NULL');
   await addColumn('leave_requests', 'payment_type', "ENUM('Paid','Unpaid') NOT NULL DEFAULT 'Paid'");
   await query(`CREATE TABLE IF NOT EXISTS payroll_schedules (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,company_id TINYINT UNSIGNED NOT NULL,
@@ -481,6 +482,9 @@ async function createHrTables() {
 
 /** 2.3 / 2.4 Task and project detail. */
 async function createProjectReminderTables() {
+  if (!(await columnIsNullable('tasks', 'project_id'))) await query('ALTER TABLE tasks MODIFY project_id BIGINT UNSIGNED NULL');
+  await addColumn('tasks', 'company_id', 'TINYINT UNSIGNED NULL');
+  await addForeignKey('tasks', 'fk_task_company', 'CONSTRAINT fk_task_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   const [taskStatusColumn] = await query("SHOW COLUMNS FROM tasks LIKE 'status'");
   if (!taskStatusColumn.Type.includes("'Rejected'")) await query("ALTER TABLE tasks MODIFY status ENUM('Not started','In progress','Blocked','Completed','Approved','Rejected') NOT NULL");
   await addColumn('tasks','due_time','TIME NULL');
@@ -1723,6 +1727,7 @@ async function createReceivableTables() {
     CONSTRAINT fk_cinvoice_item FOREIGN KEY(invoice_id) REFERENCES client_invoices(id) ON DELETE CASCADE,
     INDEX idx_cinvoice_item (invoice_id)
   ) ENGINE=InnoDB`);
+  await addColumn('client_invoices', 'invoice_options', 'JSON NULL');
   await addColumn('client_invoices', 'delivery_date', 'DATE NULL');
   await addColumn('client_invoices', 'place_of_supply', 'VARCHAR(300) NULL');
   await addColumn('client_invoices', 'payment_mode', 'VARCHAR(80) NULL');
@@ -2667,6 +2672,24 @@ async function createConstructionOperationsTables() {
 }
 
 async function createFleetHistoryTables() {
+  await addColumn('fleet','make','VARCHAR(100) NULL');
+  await addColumn('fleet','model','VARCHAR(100) NULL');
+  await addColumn('fleet','model_year','SMALLINT UNSIGNED NULL');
+  await addColumn('fleet','engine_code','VARCHAR(100) NULL');
+  await addColumn('fleet','manufacturer_notes','VARCHAR(1500) NULL');
+
+  if (!(await columnIsNullable('fleet', 'driver'))) await query('ALTER TABLE fleet MODIFY driver VARCHAR(120) NULL');
+  await query(`CREATE TABLE IF NOT EXISTS vehicle_maintenance_schedules (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,vehicle_id BIGINT UNSIGNED NOT NULL,
+    name VARCHAR(120) NOT NULL,interval_km INT UNSIGNED NOT NULL,last_odometer INT UNSIGNED NOT NULL DEFAULT 0,
+    last_completed_date DATE NULL,remind_before_km INT UNSIGNED NOT NULL DEFAULT 500,
+    active TINYINT(1) NOT NULL DEFAULT 1,last_maintenance_id BIGINT UNSIGNED NULL,
+    created_by BIGINT UNSIGNED NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_vehicle_maintenance_name(vehicle_id,name),
+    FOREIGN KEY(vehicle_id) REFERENCES fleet(id),FOREIGN KEY(last_maintenance_id) REFERENCES vehicle_maintenance(id),
+    FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('vehicle_maintenance', 'completed_schedules', 'JSON NULL');
   await addColumn('fuel_records','company_id','TINYINT UNSIGNED NULL');
   await addForeignKey('fuel_records','fk_fuel_company','CONSTRAINT fk_fuel_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await addColumn('vehicle_maintenance','maintenance_kind',"ENUM('Service','Repair','Inspection') NOT NULL DEFAULT 'Service'");
@@ -2744,6 +2767,7 @@ async function createFleetHistoryTables() {
 
 /** Non-destructive upgrades for databases created by an earlier version. */
 async function migrateExistingInstalls() {
+  await modifyColumn('projects','health',"ENUM('On track','Watch','At risk','Completed') NOT NULL DEFAULT 'On track'");
   /* The role column was an ENUM, which cannot hold roles the MD invents. It becomes a plain
      name mirroring roles.name, with role_id as the real relationship. */
   await modifyColumn('users', 'role', 'VARCHAR(120) NOT NULL');
@@ -2790,6 +2814,20 @@ async function migrateExistingInstalls() {
   await addForeignKey('supplier_invoices', 'fk_supplier_invoice_company', 'CONSTRAINT fk_supplier_invoice_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await addColumn('issued_cheques', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
   await addForeignKey('issued_cheques', 'fk_issued_cheque_company', 'CONSTRAINT fk_issued_cheque_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addColumn('issued_cheques','invoice_total','DECIMAL(15,2) NULL');
+  await addColumn('issued_cheques','amount_override_reason','VARCHAR(600) NULL');
+  await query(`CREATE TABLE IF NOT EXISTS issued_cheque_invoices (
+    cheque_id BIGINT UNSIGNED NOT NULL,invoice_id BIGINT UNSIGNED NOT NULL,
+    invoice_no_snapshot VARCHAR(120) NOT NULL,allocated_amount DECIMAL(15,2) NOT NULL,
+    balance_snapshot DECIMAL(15,2) NULL,
+    PRIMARY KEY(cheque_id,invoice_id),INDEX idx_cheque_invoice(invoice_id,cheque_id),
+    FOREIGN KEY(cheque_id) REFERENCES issued_cheques(id) ON DELETE CASCADE,
+    FOREIGN KEY(invoice_id) REFERENCES supplier_invoices(id)
+  ) ENGINE=InnoDB`);
+  await query(`INSERT IGNORE INTO issued_cheque_invoices(cheque_id,invoice_id,invoice_no_snapshot,allocated_amount)
+    SELECT c.id,c.invoice_id,i.invoice_no,c.amount FROM issued_cheques c JOIN supplier_invoices i ON i.id=c.invoice_id`);
+  await query(`UPDATE issued_cheques c JOIN supplier_invoices i ON i.id=c.invoice_id
+    SET c.supplier_id=i.supplier_id WHERE c.supplier_id IS NULL`);
   await addColumn('received_cheques', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
   await addForeignKey('received_cheques', 'fk_received_cheque_company', 'CONSTRAINT fk_received_cheque_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await addColumn('bank_bonds', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
@@ -2824,6 +2862,15 @@ async function migrateExistingInstalls() {
   await query('UPDATE subcontractor_quotations q JOIN projects p ON p.id=q.project_id SET q.company_id=p.company_id');
   await addColumn('stock_movements', 'project_id', 'BIGINT UNSIGNED NULL');
   await addColumn('stock_movements', 'destination', 'VARCHAR(180) NULL');
+  await addColumn('stock_movements','origin_type','VARCHAR(40) NULL');
+  await addColumn('stock_movements','unit_cost_snapshot','DECIMAL(14,2) NULL');
+  await query(`UPDATE stock_movements sm LEFT JOIN purchase_orders po ON po.reference=sm.reference
+    SET sm.origin_type=CASE
+      WHEN sm.notes REGEXP '^Loan #[0-9]+:' THEN 'Stock loan'
+      WHEN sm.reference REGEXP '^Daily cost #[0-9]+$' THEN 'Daily cost'
+      WHEN sm.movement_type='Receipt' AND po.id IS NOT NULL THEN 'Purchase order'
+      WHEN sm.movement_type='Transfer' THEN 'Transfer'
+      ELSE 'Manual' END WHERE sm.origin_type IS NULL`);
   await addColumn('fleet', 'project_id', 'BIGINT UNSIGNED NULL');
   await addColumn('fleet', 'odometer', 'INT UNSIGNED NOT NULL DEFAULT 0');
   await addColumn('daily_reports', 'delay_hours', 'DECIMAL(5,2) NOT NULL DEFAULT 0');
@@ -2834,6 +2881,8 @@ async function migrateExistingInstalls() {
   await addColumn('tasks', 'due_date', 'DATE NULL');
   /* A site is Active or Rescheduled; the reason for the last change travels with it. */
   await addColumn('projects', 'site_status', "ENUM('Active','Rescheduled','On hold','Completed') NOT NULL DEFAULT 'Active'");
+  await query(`UPDATE projects SET health='Completed',progress=100,site_status='Completed'
+    WHERE stage='Completed' AND (health<>'Completed' OR progress<>100 OR site_status<>'Completed')`);
   await addColumn('projects', 'status_reason', 'VARCHAR(500) NULL');
   await addColumn('projects', 'status_changed_at', 'DATETIME NULL');
   await addColumn('employees', 'current_project_id', 'BIGINT UNSIGNED NULL');

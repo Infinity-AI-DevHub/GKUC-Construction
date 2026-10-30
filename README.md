@@ -317,3 +317,81 @@ After deploying backend and frontend changes, rebuild the frontend, restart PM2 
 message instead of the generic server error. A `403 AccessDenied` after the complete
 configuration is verified still requires correcting storage credentials or bucket
 permissions; making the bucket public is not required.
+
+### Invoice columns and previously paid invoices
+
+Finance invoices now save Unit, Quantity and Rate visibility separately for each invoice.
+Use **Invoice columns** to adjust an existing invoice's PDF without changing its amounts.
+Cumulative invoices can optionally deduct fully paid earlier invoices, showing each
+reference and amount before the new balance. See [client invoice options](CLIENT_INVOICE_OPTIONS.md)
+for the workflow, safeguards and deployment details.
+
+### Fleet maintenance and office tasks
+
+Fleet assets can be registered without a driver. The **Maintenance** tab tracks separate,
+editable engine-oil, brake-oil and custom kilometre reminders; completing a work item resets
+only its selected reminders. Tasks can be assigned as **Office / general** without a
+project and remain scoped to the selected company. See [fleet and office tasks](FLEET_AND_OFFICE_TASKS.md)
+for the defaults, reminder workflow and deployment details.
+
+### Coordination workforce on Live Sites
+
+Live Sites and Workforce assignments now share the same daily workforce calculation:
+attendance overrides dated work-location plans, which override permanent project-team
+assignments. Approved leave, absence, suspension, office attendance and business trips
+are excluded from site crews. Live Sites shows names, roles and statuses rather than
+only avatar initials, distinguishes scheduled workers from attendance records, and labels
+checked-out workers as having worked today. The count is today's workforce, not a live
+physical-presence guarantee. Yesterday's attendance and future-only plans are not used.
+The default date uses the application's configured timezone. No attendance or assignment
+records are changed by this display fix; pending site submissions still require HR review.
+
+### Updating project budgets
+
+Project managers can use **Update budget** beside the project's Approved budget card,
+or change **Approved budget (LKR)** under Edit project. The separate budget action sends
+only the budget value, so updating it does not depend on changing the client, manager or
+operating company. Saving refreshes the project summary and project list; changes use
+the existing project audit trail and projects.manage permission. Project financial cards
+now show exact LKR figures with cents instead of rounding small amounts to 0.0M.
+BOQ and variation approvals retain their existing budget-recalculation behavior, which
+is explained beside the budget input.
+
+### Completed projects
+
+Edit project offers **Completed** under Current stage. Saving it sets project health to
+Completed, progress to 100%, and site status to Completed, stops project-start reminders,
+and removes the site from Coordination → Live Sites. The project stays in the project
+register with its financial, task and document history. A project at 100% progress is not
+automatically completed. Changing an explicitly completed project back to a working stage
+reopens its site and restores a working health label. Coordination's site-completion action
+uses the same completion values. Startup extends the health enum and aligns older records
+whose stage is already explicitly Completed; it does not infer completion from progress.
+
+### Material and stock movement corrections
+
+Materials → Stock now offers **Edit material**, including an audited current-stock
+correction. Materials → Movements offers **Edit movement** for manual entries and
+**Edit notes** for source-linked entries. Manual quantity corrections recalculate store
+and site balances and their automatic project issue expense. See
+[material corrections](MATERIAL_CORRECTIONS.md) for protected linked records, verified
+counts, rate snapshots and deployment details.
+
+### Incoming Letters layout
+
+Coordination → Incoming Letters uses a dedicated wrapping header, filter layout and
+fixed-column table with natural row heights. Long sender names, unbroken references,
+subjects and assignees wrap inside their own columns. Narrow screens scroll the table
+inside the register rather than widening the page; the header and filters stack. Letter
+record text and edit fields also wrap within the dialog. Layout checks used long sample
+correspondence at 390, 768 and 1440 px widths.
+
+### Cheques covering multiple supplier invoices
+
+Issue cheque now offers multiple invoice selection for one supplier/company. The available
+balances fill the cheque amount automatically; editing it requires a reason, and a reduced
+amount is allocated oldest-invoice first with a visible preview. Clearance settles all
+allocations atomically, while pending cheques and forecasts avoid duplicate coverage.
+See [multi-invoice cheques](MULTI_INVOICE_CHEQUES.md) for the workflow and migration details.
+
+Payroll zero-salary review and safe legacy attendance matching are documented in [PAYROLL_ZERO_SALARY.md](PAYROLL_ZERO_SALARY.md).

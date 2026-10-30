@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Archive, BriefcaseBusiness, Building2, Check, FileText, RotateCcw } from 'lucide-react';
-import { api, del, money, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { api, del, money, openDocument, patch, post, rupees, rupeesExact, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Field, FormModal, WorkflowForm, Page, Progress, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import ProjectDetail from './ProjectDetail.jsx';
 import ClientDirectory from './ClientDirectory.jsx';
@@ -8,8 +8,8 @@ import { refreshOptions, useOptions } from '../options.js';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS = ['Projects', 'Clients', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquiries'];
-const PROJECT_STAGES = ['Not started', 'Mid-way'];
-const healthTone = health => (health === 'On track' ? 'on-track' : health === 'At risk' ? 'at-risk' : 'watch');
+const PROJECT_STAGES = ['Not started', 'Mid-way', 'Completed'];
+const healthTone = health => (health === 'Completed' ? 'completed' : health === 'On track' ? 'on-track' : health === 'At risk' ? 'at-risk' : 'watch');
 
 /** PID 2.4 / 2.5 — projects, their milestones, and the estimates the budget comes from. */
 export default function Projects({ data, reload, can, companyId, company, companies, setCompanyId, navigate }) {
@@ -119,8 +119,8 @@ function ProjectCards({ data, onOpen, onOpenClient }) {
           <Progress value={project.progress} />
         </div>
         <div className="project-stats">
-          <div><span>Approved budget</span><strong>{money(project.budget)}</strong></div>
-          <div><span>Recorded cost</span><strong>{money(spend)}</strong></div>
+          <div><span>Approved budget</span><strong>{rupeesExact(project.budget)}</strong></div>
+          <div><span>Recorded cost</span><strong>{rupeesExact(spend)}</strong></div>
         </div>
         <div className="card-footer">
           <span><BriefcaseBusiness size={15} />{project.stage}</span>

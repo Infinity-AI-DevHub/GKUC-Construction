@@ -477,3 +477,5 @@ main .notification-case{margin-top:20px;overflow:hidden}
 .progress-claim-toolbar button{white-space:normal;max-width:100%}
 .progress-schedule-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}
 .progress-schedule-actions button{max-width:100%;white-space:normal}
+
+.payroll-payslip-card .payroll-contribution-detail{grid-column:1/-1;border-top:1px solid #dce6ee;padding-top:10px}

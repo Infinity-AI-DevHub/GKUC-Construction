@@ -14,7 +14,7 @@ const nextAction = (status, can) => ({ 'Not started': 'Start work', 'In progress
 const day = value => String(value || '').slice(0, 10);
 
 /** PID 2.3 — assigned work with deadlines, so no instruction depends on being remembered. */
-export default function Tasks({ data, reload, can, user }) {
+export default function Tasks({ data, reload, can, user, companyId }) {
   const [filter, setFilter] = useState('All');
   const [mine, setMine] = useState(false);
   const [projectFilter, setProjectFilter] = useState('all');
@@ -41,24 +41,24 @@ export default function Tasks({ data, reload, can, user }) {
       || task.assignees?.some(employee => employee.name?.toLowerCase() === user?.name?.toLowerCase())
       || task.assignee?.split(',').some(name => name.trim().toLowerCase() === user?.name?.toLowerCase());
     return (filter === 'All' || task.status === filter) && (!mine || mineMatch)
-      && (projectFilter === 'all' || String(task.projectId) === projectFilter)
+      && (projectFilter === 'all' || (projectFilter === 'office' ? !task.projectId : String(task.projectId) === projectFilter))
       && (dueFilter === 'all' || dueDate === dueFilter) && (!overdueOnly || overdue);
   });
 
   const groups = [...new Map(shown.map(task => [task.projectId ?? task.project, {id:task.projectId ?? task.project,name:task.project}])).values()];
-  return <Page title="Tasks" subtitle="Assign, follow up, and approve work across every site."
+  return <Page title="Tasks" subtitle="Assign, follow up, and approve work across the office and every site."
     action={can.site ? 'Create task' : null} onAction={() => setCreating(true)}>
     <Tabs tabs={FILTERS} active={filter} onChange={setFilter} />
     <div className="task-practical-filters">
       <label><input type="checkbox" checked={mine} onChange={event => setMine(event.target.checked)} /> Assigned to me</label>
-      <label>Project <select value={projectFilter} onChange={event => setProjectFilter(event.target.value)}><option value="all">All projects</option>{filterProjects.map(project => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label>
+      <label>Project <select value={projectFilter} onChange={event => setProjectFilter(event.target.value)}><option value="all">Office and all projects</option><option value="office">Office / general</option>{filterProjects.map(project => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label>
       <label>Due date <input type="date" value={dueFilter === 'all' ? '' : dueFilter} onChange={event => setDueFilter(event.target.value || 'all')} /></label>
       <label><input type="checkbox" checked={overdueOnly} onChange={event => setOverdueOnly(event.target.checked)} /> Overdue only</label>
     </div>
     {error && <p className="form-error" role="alert">{error}</p>}
-    {!shown.length && <p className="empty-state">No tasks match these filters. Change a filter to see more work{can.site ? ', or create a task for a project.' : '.'}</p>}
+    {!shown.length && <p className="empty-state">No tasks match these filters. Change a filter to see more work{can.site ? ', or create an office or project task.' : '.'}</p>}
     <div className="task-project-groups">{groups.map(group => <section className="task-project-group" key={group.id}>
-      <header className="task-project-heading"><span className="task-project-icon"><FolderKanban size={21}/></span><div><small>Project tasks</small><h2>{group.name}</h2></div><span className="task-project-count">{shown.filter(task => (task.projectId ?? task.project) === group.id).length} {shown.filter(task => (task.projectId ?? task.project) === group.id).length === 1 ? 'task' : 'tasks'}</span></header>
+      <header className="task-project-heading"><span className="task-project-icon"><FolderKanban size={21}/></span><div><small>{group.id === 'Office / general' ? 'Office tasks' : 'Project tasks'}</small><h2>{group.name}</h2></div><span className="task-project-count">{shown.filter(task => (task.projectId ?? task.project) === group.id).length} {shown.filter(task => (task.projectId ?? task.project) === group.id).length === 1 ? 'task' : 'tasks'}</span></header>
       <Table columns={COLUMNS} template={TEMPLATE} empty="No tasks in this view.">
       {shown.filter(task => (task.projectId ?? task.project) === group.id).map(task => <Row template={TEMPLATE} key={task.id}>
         <div><button type="button" className="task-record-link" onClick={() => openRecord(`/tasks/${task.id}`, setDetail)}>{task.title}</button><small>{task.priority} priority</small></div>
@@ -69,13 +69,13 @@ export default function Tasks({ data, reload, can, user }) {
       </Row>)}
     </Table></section>)}</div>
 
-    {creating && <TaskForm data={data} close={() => setCreating(false)} reload={reload} />}
+    {creating && <TaskForm data={data} companyId={companyId} close={() => setCreating(false)} reload={reload} />}
     {detail && <TaskDetail task={detail} close={() => setDetail(null)} reload={reload} can={can}
       refresh={async () => setDetail(await api(`/tasks/${detail.id}`))} />}
   </Page>;
 }
 
-function TaskForm({ data, close, reload }) {
+function TaskForm({ data, companyId, close, reload }) {
   const [selected, setSelected] = useState([]);
   const [reminders,setReminders]=useState(false),[users,setUsers]=useState([]),[recipients,setRecipients]=useState([]),[userError,setUserError]=useState('');
   useEffect(()=>{api('/tasks/reminder-users').then(setUsers).catch(e=>setUserError(e.message));},[]);
@@ -84,7 +84,8 @@ function TaskForm({ data, close, reload }) {
     if (reminders && !recipients.length) throw new Error('Choose at least one user to receive reminders.');
     await post('/tasks', {
       title: values.title,
-      projectId: Number(values.projectId),
+      projectId: values.projectId ? Number(values.projectId) : null,
+      companyId,
       assigneeEmployeeIds: selected,
       due: `${values.dueDate} at ${values.dueTime}`,
       dueDate: values.dueDate,
@@ -95,9 +96,9 @@ function TaskForm({ data, close, reload }) {
     });
     await reload();
   }}>
-    <div className="qs-form-section wide"><span>01</span><div><h3>Task and team</h3><p>Choose the project and people responsible.</p></div></div>
+    <div className="qs-form-section wide"><span>01</span><div><h3>Task and team</h3><p>Choose office work or a project, then the people responsible.</p></div></div>
     <Field name="title" label="Task title" wide />
-    <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
+    <SelectField name="projectId" label="Project (optional)" required={false} options={[['', 'Office / general — no project'], ...data.projects.map(project => [project.id, project.name])]} />
     <EmployeeMultiSelect employees={data.employees} selected={selected} onChange={setSelected} />
     <div className="qs-form-section wide"><span>02</span><div><h3>Deadline and priority</h3><p>Set the date and time the team should see.</p></div></div>
     <Field name="dueDate" label="Deadline date" type="date" defaultValue={todayInput()} />
@@ -156,7 +157,7 @@ function TaskDetail({ task, close, reload, refresh, can }) {
         <div><span>Due</span><strong>{task.due}</strong></div>
       </div>
       <p className="form-note wide"><strong>Next step:</strong> {nextAction(task.status, can)}. {task.status === 'Completed' ? 'Project management must approve it or return it with a reason.' : ''}</p>
-      <p className="form-note wide">Also visible in <a href={`/projects/${task.projectId}`}>{task.project} · project activity</a>. Update this task here or there; both open the same task record.</p>
+      {task.projectId ? <p className="form-note wide">Also visible in <a href={`/projects/${task.projectId}`}>{task.project} · project activity</a>. Update this task here or there; both open the same task record.</p> : <p className="form-note wide">Office / general task — no project assignment required.</p>}
       {task.notes && <p className="wide" style={{ fontSize: '11px', color: 'var(--muted)', margin: 0 }}>{task.notes}</p>}
 
       <div className="wide task-status-history"><h3>Status history</h3>{task.statusHistory?.length ? <ol>{task.statusHistory.map((change, index) => <li key={`${change.changedAt}-${index}`}><strong>{change.after}</strong><span>{change.changedBy} · {new Date(change.changedAt).toLocaleString('en-GB')}</span>{change.reason && <p>{change.reason}</p>}</li>)}</ol> : <p>No status changes recorded yet.</p>}</div>

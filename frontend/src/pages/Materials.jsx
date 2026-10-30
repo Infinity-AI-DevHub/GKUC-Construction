@@ -26,7 +26,7 @@ export default function Materials({ data, reload, can, companyId, company }) {
     <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
     {tab === 'Stock' && <Stock data={data} reload={reload} can={can} />}
-    {tab === 'Movements' && <Movements />}
+    {tab === 'Movements' && <Movements data={data} reload={reload} can={can} />}
     {tab === 'Purchase requests' && <Requests reload={reload} can={can} companyId={companyId} />}
     {tab === 'Orders' && <Orders reload={reload} can={can} companyId={companyId} />}
     {tab === 'Suppliers' && <Suppliers can={can} />}
@@ -39,10 +39,11 @@ export default function Materials({ data, reload, can, companyId, company }) {
   </Page></RecordScopeProvider>;
 }
 
-const STOCK_COLUMNS = ['Material', 'Category / route', 'Kind', 'Store', 'In stock', 'Minimum', 'Stock value', 'Status'];
-const STOCK_TEMPLATE = 'minmax(190px,1.4fr) minmax(150px,1fr) 115px minmax(140px,1fr) 110px 110px 130px 100px';
+const STOCK_COLUMNS = ['Material', 'Category / route', 'Kind', 'Store', 'In stock', 'Minimum', 'Stock value', 'Status', ''];
+const STOCK_TEMPLATE = 'minmax(190px,1.4fr) minmax(150px,1fr) 115px minmax(140px,1fr) 110px 110px 130px 100px 90px';
 
 function Stock({ data, reload, can }) {
+  const [editing,setEditing]=useState(null);
   const low = data.materials.filter(material => material.state !== 'Available').length;
   useEffect(() => { const id = Number(new URLSearchParams(window.location.search).get('record')); if (id) document.getElementById(`material-${id}`)?.scrollIntoView({ block: 'center' }); }, [data.materials]);
 
@@ -63,27 +64,33 @@ function Stock({ data, reload, can }) {
         <span>{material.minimum} {material.unit}</span>
         <span>{rupees(Number(material.stock) * Number(material.unit_cost || 0))}</span>
         <Badge tone={slug(material.state)}>{material.state}</Badge>
+        {can.stock ? <button className="status-button" onClick={()=>setEditing(material)}>Edit material</button> : <span>—</span>}
       </Row>)}
     </Table>
+    {editing && <MaterialForm material={editing} close={()=>setEditing(null)} reload={reload} />}
   </>;
 }
 
-const MOVEMENT_COLUMNS = ['Date', 'Material', 'Type', 'Quantity', 'Project / destination', 'Recorded by'];
-const MOVEMENT_TEMPLATE = '150px minmax(180px,1.3fr) 110px 110px minmax(140px,1fr) minmax(130px,1fr)';
+const MOVEMENT_COLUMNS = ['Date', 'Material', 'Type', 'Quantity', 'Project / destination', 'Recorded by', ''];
+const MOVEMENT_TEMPLATE = '150px minmax(180px,1.3fr) 110px 110px minmax(140px,1fr) minmax(130px,1fr) 100px';
 
-function Movements() {
-  const [rows, setRows] = useState([]);
-  useLiveList(() => api('/materials/movements').then(setRows).catch(() => setRows([])));
-  return <Table columns={MOVEMENT_COLUMNS} template={MOVEMENT_TEMPLATE} title="Stock movement history" empty="No movements recorded.">
-    {rows.map(row => <Row template={MOVEMENT_TEMPLATE} key={row.id}>
-      <span>{new Date(row.createdAt).toLocaleString('en-GB')}</span>
-      <div><strong>{row.material}</strong><small>{row.reference || '—'}</small></div>
-      <Badge tone={slug(row.type)}>{row.type}</Badge>
-      <span>{row.quantity} {row.unit}</span>
-      <span>{row.destination || row.project || '—'}</span>
-      <span>{row.recordedBy}</span>
-    </Row>)}
-  </Table>;
+function Movements({data,reload,can}) {
+  const [rows,setRows]=useState([]),[editing,setEditing]=useState(null),[error,setError]=useState('');
+  const load=()=>api('/materials/movements').then(setRows).catch(failure=>setError(failure.message));
+  useLiveList(load);
+  return <>
+    {error&&<p className="form-error" role="alert">{error}</p>}
+    <Table columns={MOVEMENT_COLUMNS} template={MOVEMENT_TEMPLATE} title="Stock movement history" empty="No movements recorded.">
+      {rows.map(row=><Row template={MOVEMENT_TEMPLATE} key={row.id}>
+        <span>{new Date(row.createdAt).toLocaleString('en-GB')}</span>
+        <div><strong>{row.material}</strong><small>{row.reference||'—'}</small>{row.notes&&<small>{row.notes}</small>}</div>
+        <div><Badge tone={slug(row.type)}>{row.type}</Badge><small>{row.originType||'Manual'}</small></div>
+        <span>{row.quantity} {row.unit}</span><span>{row.destination||row.project||'—'}</span><span>{row.recordedBy}</span>
+        {can.stock?<button className="status-button" onClick={()=>setEditing(row)}>{row.originType&&row.originType!=='Manual'?'Edit notes':'Edit movement'}</button>:<span>—</span>}
+      </Row>)}
+    </Table>
+    {editing&&<MovementForm movement={editing} data={data} close={()=>setEditing(null)} reload={async()=>{await load();await reload();}}/>}
+  </>;
 }
 
 const REQUEST_COLUMNS = ['Reference', 'Project', 'Needed by', 'Lines', 'Estimate', 'Status', ''];
@@ -317,49 +324,51 @@ function Suppliers({ can }) {
   </>;
 }
 
-function MaterialForm({ close, reload }) {
-  return <FormModal title="Add material" close={close} label="Add material" repeat onSubmit={async values => {
-    await post('/materials', {
-      name: values.name,
-      unit: values.unit,
-      stock: Number(values.stock || 0),
-      minimum: Number(values.minimum),
-      site: values.site,
-      unitCost: Number(values.unitCost || 0),stockKind:values.stockKind,
-      category:values.category,procurementRoute:values.procurementRoute
-    });
+function MaterialForm({ material=null, close, reload }) {
+  return <FormModal title={material?'Edit material':'Add material'} close={close} label={material?'Save material':'Add material'} repeat={!material} onSubmit={async values=>{
+    const payload={name:values.name,unit:values.unit,stock:Number(values.stock||0),minimum:Number(values.minimum),site:values.site,
+      unitCost:Number(values.unitCost||0),stockKind:values.stockKind,category:values.category,procurementRoute:values.procurementRoute,
+      ...(material?{reason:values.reason,expectedStock:Number(material.stock)}:{})};
+    if(material)await patch(`/materials/${material.id}`,payload);else await post('/materials',payload);
     await reload();
   }}>
-    <Field name="name" label="Material name" wide />
-    <Field name="unit" label="Unit" placeholder="bags, m³, sheets" />
-    <SelectField name="stockKind" label="Stock type" options={['Consumable','Returnable']}/>
-    <SelectField name="category" label="Material category" options={['General','Concrete','Aggregate','Cement','Steel','Timber','Fuel','Other']}/>
-    <SelectField name="procurementRoute" label="Purchasing route" options={['Purchase order','Direct delivery']} defaultValue="Purchase order"/>
-    <p className="form-note wide">Use <strong>Direct delivery</strong> for concrete supplied straight to a project site. Other materials should normally remain on <strong>Purchase order</strong>.</p>
-    <Field name="site" label="Store" />
-    <Field name="stock" label="Opening stock" type="number" step="any" min="0" defaultValue="0" />
-    <Field name="minimum" label="Minimum level" type="number" step="any" min="0" />
-    <Field name="unitCost" label="Unit cost (LKR)" type="number" step="any" min="0" defaultValue="0" />
+    <Field name="name" label="Material name" wide defaultValue={material?.name}/>
+    <Field name="unit" label="Unit label" placeholder="bags, m³, sheets" defaultValue={material?.unit}/>
+    <SelectField name="stockKind" label="Stock type" options={['Consumable','Returnable']} defaultValue={material?.stock_kind||'Consumable'}/>
+    <SelectField name="category" label="Material category" options={['General','Concrete','Aggregate','Cement','Steel','Timber','Fuel','Other',...(material?.category?[material.category]:[])].filter((value,index,all)=>all.indexOf(value)===index)} defaultValue={material?.category||'General'}/>
+    <SelectField name="procurementRoute" label="Purchasing route" options={['Purchase order','Direct delivery']} defaultValue={material?.procurement_route||'Purchase order'}/>
+    <Field name="site" label="Store" defaultValue={material?.site}/>
+    <Field name="stock" label={material?'Current store stock':'Opening stock'} type="number" step="0.001" min="0" defaultValue={material?.stock??0}/>
+    <Field name="minimum" label="Minimum level" type="number" step="any" min="0" defaultValue={material?.minimum}/>
+    <Field name="unitCost" label="Unit cost (LKR)" type="number" step="0.01" min="0" defaultValue={material?.unit_cost??0}/>
+    {material&&<><TextArea name="reason" label="Reason for correction" rows={2}/>
+      <p className="form-note wide">Changing stock creates a separate receipt or downward adjustment in the history. Unit edits change the label, not the quantities. Consumable/Returnable type stays fixed after stock activity.</p></>}
+    <p className="form-note wide">Direct delivery is for supplies sent straight to a project. Unit-cost changes apply to future issues; existing issue costs keep their recorded rate.</p>
   </FormModal>;
 }
 
-function MovementForm({ data, close, reload }) {
-  return <FormModal title="Record stock movement" close={close} label="Save movement" onSubmit={async values => {
-    await post(`/materials/${values.materialId}/movements`, {
-      type: values.type,
-      quantity: Number(values.quantity),
-      reference: values.reference || undefined,
-      projectId: values.projectId ? Number(values.projectId) : undefined,
-      notes: values.notes || undefined
-    });
+function MovementForm({data,close,reload,movement=null}) {
+  const linked=Boolean(movement?.originType&&movement.originType!=='Manual');
+  return <FormModal title={movement?(linked?'Edit movement notes':'Correct stock movement'):'Record stock movement'} close={close} label={movement?'Save correction':'Save movement'} onSubmit={async values=>{
+    const payload=linked?{type:movement.type,quantity:Number(movement.quantity),projectId:movement.projectId||null,destination:movement.destination||null,reference:movement.reference||'',notes:values.notes||'',reason:values.reason,expectedQuantity:Number(movement.quantity)}:
+      {type:values.type,quantity:Number(values.quantity),reference:values.reference||'',projectId:values.projectId?Number(values.projectId):null,destination:values.destination||null,notes:values.notes||'',...(movement?{reason:values.reason,expectedQuantity:Number(movement.quantity)}:{})};
+    if(movement)await patch(`/materials/movements/${movement.id}`,payload);
+    else { const {projectId,destination,...rest}=payload;await post(`/materials/${values.materialId}/movements`,{...rest,projectId:projectId||undefined,destination:destination||undefined}); }
     await reload();
   }}>
-    <SelectField name="materialId" label="Material" options={data.materials.map(material => [material.id, `${material.name} (${material.stock} ${material.unit})`])} />
-    <SelectField name="type" label="Movement type" options={['Receipt', 'Issue', 'Return', 'Adjustment']} />
-    <Field name="quantity" label="Quantity" type="number" step="any" min="0" />
-    <SelectField name="projectId" label="Project / site" options={[['', 'Not project-specific'], ...data.projects.map(project => [project.id, project.name])]} />
-    <Field name="reference" label="Reference" required={false} />
-    <TextArea name="notes" label="Notes" required={false} placeholder="Optional" />
+    {movement?<p className="form-note wide"><strong>{movement.material}</strong> · {movement.type} · {movement.quantity} {movement.unit}</p>:
+      <SelectField name="materialId" label="Material" options={data.materials.map(material=>[material.id,`${material.name} (${material.stock} ${material.unit})`])}/>}
+    {!linked&&<>
+      <SelectField name="type" label="Movement type" options={['Receipt','Issue','Return','Adjustment']} defaultValue={movement?.type}/>
+      <Field name="quantity" label="Quantity" type="number" step="0.001" min="0.001" defaultValue={movement?.quantity}/>
+      <SelectField name="projectId" label="Project / site" required={false} defaultValue={movement?.projectId||''} options={[["",'Not project-specific'],...data.projects.map(project=>[project.id,project.name]),...(movement?.projectId&&!data.projects.some(row=>Number(row.id)===Number(movement.projectId))?[[movement.projectId,movement.project||'Original project']]:[])]}/>
+      <Field name="destination" label="Destination / store (optional)" required={false} defaultValue={movement?.destination||''}/>
+      <Field name="reference" label="Reference" required={false} defaultValue={movement?.reference||''}/>
+    </>}
+    {linked&&<p className="form-note wide">This entry is linked to {movement.originType}. Its quantities and project cannot be changed independently from that record. You can correct the notes here.</p>}
+    <TextArea name="notes" label="Notes" required={false} defaultValue={movement?.notes||''}/>
+    {movement&&<TextArea name="reason" label="Reason for correction" rows={2}/>}
+    {!linked&&<p className="form-note wide">Receipts and returns increase store stock. Issues and adjustments decrease it. Movement corrections also update the linked site issue cost.</p>}
   </FormModal>;
 }
 
