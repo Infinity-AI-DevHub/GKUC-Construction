@@ -4,13 +4,13 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { HeadObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
-import { checkObjectStore, objectStoreClient, UPLOAD_ROOT } from '../lib/storage.js';
+import { checkObjectStore, objectStoreClient, objectStoreBucket, UPLOAD_ROOT } from '../lib/storage.js';
 
 const apply = process.argv.includes('--apply');
-const bucket = process.env.R2_BUCKET;
+const bucket = objectStoreBucket();
 
-if (process.env.STORAGE_DRIVER !== 'r2') {
-  throw new Error('Set STORAGE_DRIVER=r2 before running the migration.');
+if (!['r2', 's3'].includes(process.env.STORAGE_DRIVER)) {
+  throw new Error('Set STORAGE_DRIVER=r2 or s3 before running the migration.');
 }
 
 const types = new Map([
@@ -58,7 +58,7 @@ for (const file of files) {
     }
     const action = remoteSize === null ? 'COPY' : 'REPLACE';
     if (!apply) {
-      console.log(`${action.padEnd(7)}${key}${remoteSize === null ? '' : ` (R2 ${remoteSize} bytes; local ${local.size} bytes)`}`);
+      console.log(`${action.padEnd(7)}${key}${remoteSize === null ? '' : ` (remote ${remoteSize} bytes; local ${local.size} bytes)`}`);
       copied += 1;
       continue;
     }

@@ -13,7 +13,10 @@
     "access:suspend": "node src/scripts/set-service-access.js suspend",
     "access:restore": "node src/scripts/set-service-access.js restore",
     "payroll:migrate-ot": "node src/scripts/migrate-employee-ot-rates.js",
-    "test": "node --test"
+    "test": "node --test",
+    "storage:migrate:s3": "node src/scripts/migrate-local-uploads-to-r2.js",
+    "storage:migrate:s3:apply": "node src/scripts/migrate-local-uploads-to-r2.js --apply",
+    "storage:diagnose:s3": "node src/scripts/diagnose-s3.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",
