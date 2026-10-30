@@ -35,7 +35,7 @@ export default function ExpectedOutflows({companyId,company,can,projects=[]}){
   };
   return <div className="expected-outflows">
     <header className="daily-expenses-header"><div><span>CASH PLANNING · {company?.name}</span><h2>Expected cash outflows</h2><p>Upcoming obligations from Finance, purchasing and approved payroll, shown once per source.</p></div>
-      {can.finance&&<button type="button" onClick={()=>setEditing({})}>Plan another payment</button>}</header>
+      {can.finance&&<button type="button" className="primary" onClick={()=>setEditing({})}>Plan another payment</button>}</header>
     {error&&<p className="form-error" role="alert">{error}</p>}
     {!data?<p className="empty-state">Loading expected payments…</p>:<>
       <div className="daily-expenses-summary"><article><span>Dated forecast</span><strong>{rupees(data.total)}</strong></article><article><span>Needs payment date</span><strong>{rupees(data.unscheduled)}</strong></article><article><span>Open obligations</span><strong>{data.entries.length}</strong></article><article><span>Company</span><strong>{data.company.name}</strong></article></div>
@@ -56,13 +56,13 @@ export default function ExpectedOutflows({companyId,company,can,projects=[]}){
       <p className="daily-expenses-note">{data.note} A planned payment marked paid is removed from the forecast; record the actual payment in its proper register.</p>
     </>}
     {editing!==null&&<div className="outflow-overlay" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setEditing(null)}}><form className="outflow-form" onSubmit={save} role="dialog" aria-modal="true" aria-label={editing.sourceType?'Schedule payment':'Plan payment'}>
-      <header><h3>{editing.sourceType?`Schedule ${editing.sourceType.toLowerCase()}`:'Plan a payment'}</h3><button type="button" onClick={()=>setEditing(null)} aria-label="Close">×</button></header>
+      <header><h3>{editing.sourceType?`Schedule ${editing.sourceType.toLowerCase()}`:'Plan a payment'}</h3><button type="button" className="icon-btn" onClick={()=>setEditing(null)} aria-label="Close">×</button></header>
       <p>{editing.sourceType&&editing.sourceType!=='Planned payment'?`${editing.payee} · ${rupees(editing.amount)}. The amount and payment state remain controlled by the original record.`:'Use this only when no bill, PO, cheque, card statement or payroll record already represents the payment.'}</p>
       {(!editing.sourceType||editing.sourceType==='Planned payment')&&<><label>Payee<input name="payee" required maxLength="180" defaultValue={editing.payee||''}/></label><label>Purpose<input name="description" required maxLength="400" defaultValue={editing.description||''}/></label><label>Amount (LKR)<input name="amount" type="number" min="0.01" step="0.01" required defaultValue={editing.amount||''}/></label><label>Project or office<select name="projectId" defaultValue={editing.projectId||''}><option value="">Company / office</option>{projects.filter(p=>Number(p.companyId)===Number(companyId)).map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select></label></>}
       <label>Expected payment date<input name="expectedDate" type="date" required defaultValue={editing.expectedDate||todayInput()}/></label>
       <label>Confidence<select name="confidence" defaultValue={editing.confidence||'Medium'}><option>High</option><option>Medium</option><option>Low</option></select></label>
       <label>Planning notes<input name="notes" maxLength="600" defaultValue={editing.scheduleNotes||''}/></label>
-      <footer><button type="button" onClick={()=>setEditing(null)}>Cancel</button><button type="submit">Save forecast date</button></footer>
+      <footer><button type="button" className="secondary" onClick={()=>setEditing(null)}>Cancel</button><button type="submit" className="primary">Save forecast date</button></footer>
     </form></div>}
   </div>;
 }

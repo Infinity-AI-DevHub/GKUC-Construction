@@ -479,3 +479,39 @@ main .notification-case{margin-top:20px;overflow:hidden}
 .progress-schedule-actions button{max-width:100%;white-space:normal}
 
 .payroll-payslip-card .payroll-contribution-detail{grid-column:1/-1;border-top:1px solid #dce6ee;padding-top:10px}
+
+/* Shared vertical rhythm for screens, record dialogs and nested workspaces. */
+main,.modal-backdrop{--workspace-section-gap:22px;--workspace-control-gap:10px}
+.page-content-stack,.workspace-stack{display:grid;gap:var(--workspace-section-gap,22px);min-width:0;align-content:start}
+:is(.page-content-stack,.workspace-stack,.module-content)>.toolbar{margin:0}
+.progress-claims>.progress-claim-toolbar{margin:0}
+.management-pack{gap:var(--workspace-section-gap,22px)}
+.management-basis-grid{gap:20px}
+.management-close-actions{display:flex;align-items:center;flex-wrap:wrap;gap:var(--workspace-control-gap,10px)}
+.modal-content{display:grid;gap:20px;align-content:start;min-width:0}
+.modal-content>p{margin:0}
+:is(.modal-content,.workspace-stack)>.table-panel{margin:0;min-width:0}
+main :is(.table-tools,.panel-title){height:auto;min-height:68px;gap:14px;flex-wrap:wrap}
+main :is(.table-tools,.panel-title) h2{margin:0}
+:is(main,.modal-backdrop) .form-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:10px}
+:is(main,.modal-backdrop) button:is(.primary,.secondary){height:auto;min-height:40px;padding:10px 15px;line-height:1.35;text-align:center}
+:is(main,.modal-backdrop) button.primary{color:#fff}
+:is(main,.modal-backdrop) button:is(.primary,.secondary)>svg{flex-shrink:0}
+:is(main,.modal-backdrop) button:is(.primary,.secondary):disabled{opacity:.55;cursor:not-allowed}
+:is(main,.modal-backdrop) button:is(.primary,.secondary):focus-visible{outline:3px solid #447aa4;outline-offset:3px}
+/* Low-priority safety net: bespoke navigation/icon/button rules keep precedence. */
+@layer workspace-action-fallback {
+  :where(main,.modal-backdrop) button:not([class]):not([aria-label]):not([title]):not(:where(nav *,.segments *,[role=menu] *)) {
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:10px 15px;
+    border:1px solid #dfe6ed;border-radius:9px;background:#fff;color:#3e566d;font-size:12px;font-weight:700;line-height:1.35;
+  }
+  :where(main,.modal-backdrop) button:not([class]):disabled{opacity:.55;cursor:not-allowed}
+}
+@media(max-width:680px){
+  main,.modal-backdrop{--workspace-section-gap:18px}
+  .modal-content{gap:16px}
+  .management-close-actions{width:100%;align-items:stretch}
+  .management-close-actions>button{flex:1 1 150px}
+  main :is(.table-tools,.panel-title){gap:12px}
+  .workspace-stack>.table-panel{max-width:100%}
+}

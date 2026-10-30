@@ -44,7 +44,7 @@ export function Summary({ label, value, icon: Icon }) {
 }
 
 export function PanelTitle({ title, action, onClick }) {
-  return <div className="panel-title"><h2>{title}</h2>{onClick && <button onClick={onClick}>{action}<ChevronRight size={15} /></button>}</div>;
+  return <div className="panel-title"><h2>{title}</h2>{onClick && <button type="button" className="secondary" onClick={onClick}>{action}<ChevronRight size={15} /></button>}</div>;
 }
 
 export function Page({ title, subtitle, action, children, onAction, secondaryAction, onSecondaryAction, secondaryIcon: SecondaryIcon }) {
@@ -66,7 +66,7 @@ export function Page({ title, subtitle, action, children, onAction, secondaryAct
         {navigation}
       </aside>
       <div className="module-content">{sections.filter(child => child !== navigation)}</div>
-    </div> : children}
+    </div> : <div className="page-content-stack">{children}</div>}
   </>;
 }
 

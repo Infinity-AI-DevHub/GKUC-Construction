@@ -217,7 +217,7 @@ export function VehicleMaintenanceEntry({ data, close, reload }) {
       {error && <p className="form-error wide" role="alert">{error}</p>}
       <SelectField name="vehicleId" label="Vehicle" options={[["", loading ? 'Loading vehicles…' : 'Choose a vehicle'], ...vehicles.map(row => [row.id, `${row.vehicle} — ${row.reg}`])]} />
       {!loading && !vehicles.length && !error && <p className="form-note wide">Add a vehicle in Fleet & equipment before recording maintenance.</p>}
-      <div className="form-actions"><button type="button" className="secondary" onClick={close}>Cancel</button><button disabled={loading || !vehicles.length}>Continue</button></div>
+      <div className="form-actions"><button type="button" className="secondary" onClick={close}>Cancel</button><button type="submit" className="primary" disabled={loading || !vehicles.length}>Continue</button></div>
     </form>
   </Modal>;
 }

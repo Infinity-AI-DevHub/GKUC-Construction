@@ -365,7 +365,7 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
   return <>
     <PayrollSchedule companyId={companyId} />
     <section className="panel">
-      <div className="panel-title"><h2>EPF & ETF rates</h2><button type="button" onClick={()=>setPolicyOpen(true)}>Set / change rates</button></div>
+      <div className="panel-title"><h2>EPF & ETF rates</h2><button type="button" className="secondary" onClick={()=>setPolicyOpen(true)}>Set / change rates</button></div>
       <div className="report-form">
         <div><strong>Employee EPF</strong><p>{settings.activePolicy?.epfEmployeeRate ?? 'Not set'}%</p></div>
         <div><strong>Employer EPF</strong><p>{settings.activePolicy?.epfEmployerRate ?? 'Not set'}%</p></div>
@@ -763,7 +763,7 @@ function Attendance({ data, projects, reload, can, initialDate, onDateChange }) 
   const canCorrect = can.attendance || can.hrImport;
 
   return <>
-    {siteSubmissions.length>0&&<section className="site-attendance-review"><h3>Site attendance awaiting HR review</h3><p>These field submissions do not affect payroll until HR approves them.</p>{reviewError&&<p className="form-error" role="alert">{reviewError}</p>}{siteSubmissions.map(row=><div key={row.id}><strong>{row.employee}</strong><span>{row.project} · {row.workDate} · {row.state} · submitted by {row.submittedBy}</span><button type="button" onClick={()=>reviewSubmission(row.id,'Approved')}>Approve</button><button type="button" onClick={()=>reviewSubmission(row.id,'Rejected')}>Reject</button></div>)}</section>}
+    {siteSubmissions.length>0&&<section className="site-attendance-review"><h3>Site attendance awaiting HR review</h3><p>These field submissions do not affect payroll until HR approves them.</p>{reviewError&&<p className="form-error" role="alert">{reviewError}</p>}{siteSubmissions.map(row=><div key={row.id}><strong>{row.employee}</strong><span>{row.project} · {row.workDate} · {row.state} · submitted by {row.submittedBy}</span><button type="button" className="primary" onClick={()=>reviewSubmission(row.id,'Approved')}>Approve</button><button type="button" className="secondary" onClick={()=>reviewSubmission(row.id,'Rejected')}>Reject</button></div>)}</section>}
     {analytics && <AttendanceVisuals analytics={analytics} />}
     <div className="attendance-day-toolbar">
       <div><span>Daily record</span><h2>{date === todayInput() ? 'Today’s attendance' : shortDate(date)}</h2></div>
@@ -775,7 +775,7 @@ function Attendance({ data, projects, reload, can, initialDate, onDateChange }) 
       <Summary label="Absent" value={rows.filter(row => row.state === 'Absent').length} icon={XCircle} />
       <Summary label="Records" value={rows.length} icon={ShieldCheck} />
     </div>
-    {can.attendance && <div className="form-actions"><button type="button" onClick={()=>setRecording(true)}>Record attendance for {shortDate(date)}</button></div>}
+    {can.attendance && <div className="form-actions"><button type="button" className="primary" onClick={()=>setRecording(true)}>Record attendance for {shortDate(date)}</button></div>}
     <p className="form-note">Attendance can be recorded on any date, including Sundays and holidays. For an employee already listed on this date, use Correct this record.</p>
     <Table columns={ATTENDANCE_COLUMNS} template={ATTENDANCE_TEMPLATE} title={date===todayInput() ? 'Today’s attendance' : `Attendance — ${shortDate(date)}`}
       empty="No attendance recorded for this date yet.">
