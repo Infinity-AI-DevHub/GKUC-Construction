@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
+import { correctedStock } from '../lib/stock-corrections.js';
+import { publishChange } from '../lib/realtime.js';
 import { stockState } from './bootstrap.js';
 
 const router = Router();
@@ -34,7 +36,7 @@ router.get('/movements', auth, permit('store.view','store.manage'), wrap(async (
   if (req.query.materialId) { filters.push('m.material_id=?'); params.push(req.query.materialId); }
   if (req.query.projectId) { filters.push('m.project_id=?'); params.push(req.query.projectId); }
   const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-  res.json(await query(`SELECT m.id,m.movement_type type,m.quantity,m.reference,m.notes,m.destination,m.created_at createdAt,
+  res.json(await query(`SELECT m.id,m.material_id materialId,m.project_id projectId,m.origin_type originType,m.movement_type type,m.quantity,m.reference,m.notes,m.destination,m.created_at createdAt,
     mat.name material,mat.unit,u.name recordedBy,p.name project
     FROM stock_movements m JOIN materials mat ON mat.id=m.material_id JOIN users u ON u.id=m.user_id
     LEFT JOIN projects p ON p.id=m.project_id ${where} ORDER BY m.id DESC LIMIT 200`, params));
@@ -171,7 +173,7 @@ router.post('/loans',auth,permit('store.manage'),validate(z.object({materialId:z
       (material_id,project_id,quantity,taken_by,handed_over_by,condition_out,reference,created_by) VALUES (?,?,?,?,?,?,?,?)`,
       [b.materialId,b.projectId,b.quantity,b.takenBy,b.handedOverBy,b.conditionOut||null,b.reference||null,req.user.id]);
     await connection.execute(`INSERT INTO stock_movements
-      (material_id,movement_type,quantity,reference,notes,project_id,destination,user_id) VALUES (?,'Issue',?,?,?,?,?,?)`,
+      (material_id,movement_type,quantity,reference,notes,project_id,destination,user_id,origin_type) VALUES (?,'Issue',?,?,?,?,?,?,'Stock loan')`,
       [b.materialId,b.quantity,b.reference||null,`Loan #${created.insertId}: ${b.handedOverBy} to ${b.takenBy}`,b.projectId,project.name,req.user.id]);
     await audit(connection,req.user.id,'ISSUE','stock_loan',created.insertId,null,b,req.ip);
     return created.insertId;
@@ -191,7 +193,7 @@ router.post('/loans/:id/returns',auth,permit('store.manage'),validate(z.object({
       [returned,b.receivedBackBy,b.conditionIn||null,complete,loan.id]);
     await connection.execute('UPDATE materials SET stock=stock+? WHERE id=?',[b.quantity,loan.material_id]);
     await connection.execute(`INSERT INTO stock_movements
-      (material_id,movement_type,quantity,reference,notes,project_id,destination,user_id) VALUES (?,'Return',?,?,?,?,?,?)`,
+      (material_id,movement_type,quantity,reference,notes,project_id,destination,user_id,origin_type) VALUES (?,'Return',?,?,?,?,?,?,'Stock loan')`,
       [loan.material_id,b.quantity,b.reference||loan.reference||null,`Loan #${loan.id}: received by ${b.receivedBackBy}`,loan.project_id,'Store',req.user.id]);
     await audit(connection,req.user.id,'RETURN','stock_loan',loan.id,loan,{returned,complete,...b},req.ip);
   });res.status(201).json({returned:true});
@@ -218,24 +220,111 @@ router.post('/', auth, permit('store.manage'), validate(z.object({
 }));
 
 router.patch('/:id', auth, permit('store.manage'), validate(z.object({
-  minimum: z.number().nonnegative().optional(),
-  site: z.string().min(2).max(180).optional(),
-  unitCost: z.number().nonnegative().optional(),
-  supplier: z.string().max(180).optional()
-  ,stockKind:z.enum(['Consumable','Returnable']).optional(),category:z.string().trim().min(2).max(80).optional(),
-  procurementRoute:z.enum(['Purchase order','Direct delivery']).optional()
-})), wrap(async (req, res) => {
-  const before = await getOne('SELECT * FROM materials WHERE id=?', [req.params.id]);
-  if (!before) return res.status(404).json({ error: 'Material not found' });
-  const columns = { unitCost: 'unit_cost',stockKind:'stock_kind',procurementRoute:'procurement_route' };
-  const entries = Object.entries(req.body);
-  if (entries.length) {
-    await query(`UPDATE materials SET ${entries.map(([key]) => `${columns[key] || key}=?`).join(',')} WHERE id=?`,
-      [...entries.map(([, value]) => value), req.params.id]);
-  }
-  const after = await getOne('SELECT * FROM materials WHERE id=?', [req.params.id]);
-  await audit(pool, req.user.id, 'UPDATE', 'material', after.id, before, after, req.ip);
-  res.json({ ...after, state: stockState(after) });
+  name:z.string().trim().min(2).max(180).optional(), unit:z.string().trim().min(1).max(30).optional(),
+  stock:z.number().nonnegative().multipleOf(0.001).optional(), minimum:z.number().nonnegative().optional(),
+  site:z.string().trim().min(2).max(180).optional(), unitCost:z.number().nonnegative().optional(),
+  supplier:z.string().max(180).optional(),stockKind:z.enum(['Consumable','Returnable']).optional(),
+  category:z.string().trim().min(2).max(80).optional(), procurementRoute:z.enum(['Purchase order','Direct delivery']).optional(),
+  reason:z.string().trim().min(3).max(500).optional(), expectedStock:z.number().nonnegative().optional()
+})), wrap(async(req,res)=>{
+  const row = await transaction(async connection=>{
+    const [[before]]=await connection.execute('SELECT * FROM materials WHERE id=? AND active=1 FOR UPDATE',[req.params.id]);
+    if(!before)throw Object.assign(new Error('Material not found'),{status:404});
+    const {reason,expectedStock,...body}=req.body;
+    if(body.stock!==undefined && expectedStock!==undefined && Math.abs(Number(before.stock)-expectedStock)>.0001)
+      throw Object.assign(new Error('Stock changed while this material was being edited. Refresh and check the current quantity.'),{status:409});
+    if(body.stockKind && body.stockKind!==before.stock_kind){
+      const [[activity]]=await connection.execute(`SELECT (SELECT COUNT(*) FROM stock_movements WHERE material_id=?)+
+        (SELECT COUNT(*) FROM stock_loans WHERE material_id=?)+(SELECT COUNT(*) FROM site_material_consumption WHERE material_id=?) total`,[before.id,before.id,before.id]);
+      if(Number(activity.total)>0)throw Object.assign(new Error('A material with stock activity must keep its Consumable/Returnable type. Its other details can still be edited.'),{status:409});
+    }
+    const delta=body.stock===undefined?0:Math.round((body.stock-Number(before.stock))*1000)/1000;
+    if(delta && !reason)throw Object.assign(new Error('Enter a reason for correcting the stock quantity.'),{status:400});
+    const columns={unitCost:'unit_cost',stockKind:'stock_kind',procurementRoute:'procurement_route'};
+    const entries=Object.entries(body);
+    if(entries.length)await connection.execute(`UPDATE materials SET ${entries.map(([key])=>`${columns[key]||key}=?`).join(',')} WHERE id=?`,[...entries.map(([,value])=>value),before.id]);
+    if(delta)await connection.execute(`INSERT INTO stock_movements
+      (material_id,movement_type,quantity,reference,notes,user_id,origin_type) VALUES (?,?,?,?,?,?,'Manual')`,
+      [before.id,delta>0?'Receipt':'Adjustment',Math.abs(delta),'Stock correction',reason,req.user.id]);
+    const [[after]]=await connection.execute('SELECT * FROM materials WHERE id=?',[before.id]);
+    await audit(connection,req.user.id,'UPDATE','material',before.id,before,{...after,reason:reason||null},req.ip);
+    return after;
+  });
+  publishChange('materials',{});
+  res.json({...row,state:stockState(row)});
+}));
+
+router.patch('/movements/:movementId',auth,permit('store.manage'),validate(z.object({
+  type:z.enum(['Receipt','Issue','Return','Adjustment','Transfer']).optional(),quantity:z.number().positive().max(1000000).multipleOf(.001).optional(),
+  projectId:z.number().int().positive().nullable().optional(),destination:z.string().max(180).nullable().optional(),
+  reference:z.string().max(120).optional(),notes:z.string().max(500).optional(),reason:z.string().trim().min(3).max(500),
+  expectedQuantity:z.number().positive().optional()
+})),wrap(async(req,res)=>{
+  const b=req.body;
+  const row=await transaction(async connection=>{
+    // All stock writers lock the material first, then the movement, to serialize corrections.
+    const [[identity]]=await connection.execute('SELECT material_id FROM stock_movements WHERE id=?',[req.params.movementId]);
+    if(!identity)throw Object.assign(new Error('Movement not found'),{status:404});
+    const [[material]]=await connection.execute('SELECT * FROM materials WHERE id=? FOR UPDATE',[identity.material_id]);
+    const [[before]]=await connection.execute('SELECT * FROM stock_movements WHERE id=? FOR UPDATE',[req.params.movementId]);
+    for(const [key,column] of Object.entries({type:'movement_type',quantity:'quantity',projectId:'project_id',destination:'destination',reference:'reference',notes:'notes'})) {
+      if(b[key]===undefined)b[key]=before[column];
+    }
+    if(b.expectedQuantity!==undefined && Math.abs(Number(before.quantity)-b.expectedQuantity)>.0001)
+      throw Object.assign(new Error('This movement changed while you were editing it. Refresh and try again.'),{status:409});
+    const changed=before.movement_type!==b.type || Math.abs(Number(before.quantity)-b.quantity)>.0001 || Number(before.project_id||0)!==Number(b.projectId||0);
+    const linked=before.origin_type && before.origin_type!=='Manual';
+    if(linked && (changed || (b.reference??'')!==(before.reference||'') || (b.destination||null)!==(before.destination||null)))
+      throw Object.assign(new Error(`This movement comes from ${before.origin_type}. Its linked quantities cannot be changed independently; only movement notes can be changed here.`),{status:409});
+    if(changed){
+      if(b.type==='Transfer')throw Object.assign(new Error('Use a linked transfer workflow rather than changing a movement into a transfer.'),{status:400});
+      if(material.stock_kind==='Returnable'&&['Issue','Return'].includes(b.type))throw Object.assign(new Error('Use tool handovers and returns for returnable stock.'),{status:400});
+      if(['Issue','Return'].includes(b.type)&&!b.projectId)throw Object.assign(new Error('Choose the site for this issue or return.'),{status:400});
+      if(b.projectId && Number(b.projectId)!==Number(before.project_id)){
+        const [[project]]=await connection.execute('SELECT id FROM projects WHERE id=? AND active=1',[b.projectId]);
+        if(!project)throw Object.assign(new Error('Choose an active project.'),{status:400});
+      }
+      // A later verified site count supersedes the earlier ledger; preserve that checkpoint.
+      const affected=[...new Set([before.project_id,b.projectId].filter(Boolean).map(Number))];
+      for(const projectId of affected){
+        if(!['Issue','Return'].includes(before.movement_type) && !['Issue','Return'].includes(b.type))continue;
+        const [[count]]=await connection.execute('SELECT id FROM site_material_counts WHERE material_id=? AND project_id=? AND counted_at>=? LIMIT 1',[material.id,projectId,before.created_at]);
+        if(count)throw Object.assign(new Error('A later verified site count covers this movement. Keep its quantity and site, and record a new adjustment instead.'),{status:409});
+      }
+      const [history]=await connection.execute('SELECT id,movement_type,quantity FROM stock_movements WHERE material_id=? ORDER BY id',[material.id]);
+      const stock=correctedStock(material.stock,history,before.id,b);
+      await connection.execute('UPDATE materials SET stock=? WHERE id=?',[stock,material.id]);
+    }
+    await connection.execute('UPDATE stock_movements SET movement_type=?,quantity=?,project_id=?,destination=?,reference=?,notes=? WHERE id=?',
+      [b.type,b.quantity,b.projectId||null,b.destination||null,b.reference||'',b.notes||'',before.id]);
+    if(changed){
+      for(const projectId of new Set([before.project_id,b.projectId].filter(Boolean))){
+        const position=await sitePosition(connection,material.id,projectId);
+        if(position.balance<-.0001)throw Object.assign(new Error('This correction would leave the site with less material than has already been used or returned.'),{status:409});
+      }
+    }
+    const [expenses]=await connection.execute("SELECT * FROM expenses WHERE origin_type='stock_movement' AND origin_id=? FOR UPDATE",[String(before.id)]);
+    if(!linked && changed){
+      if(expenses.length>1)throw Object.assign(new Error('Multiple project costs are linked to this movement. Reconcile those costs before changing it.'),{status:409});
+      const rate=before.unit_cost_snapshot!==null?Number(before.unit_cost_snapshot):expenses.length?Number(expenses[0].amount)/Number(before.quantity):before.movement_type==='Issue'?0:Number(material.unit_cost);
+      if(b.type==='Issue' && b.projectId && rate>0){
+        if(expenses.length)await connection.execute("UPDATE expenses SET project_id=?,amount=?,reference=?,description=? WHERE origin_type='stock_movement' AND origin_id=?",
+          [b.projectId,Math.round(b.quantity*rate*100)/100,b.reference||'',`${material.name} issued to site (${b.quantity} ${material.unit})`,String(before.id)]);
+        else await connection.execute(`INSERT INTO expenses(project_id,source,description,amount,expense_date,reference,origin_type,origin_id,created_by)
+          VALUES (?,'Material',?,?,DATE(?),?,'stock_movement',?,?)`,[b.projectId,`${material.name} issued to site (${b.quantity} ${material.unit})`,Math.round(b.quantity*rate*100)/100,before.created_at,b.reference||'',String(before.id),req.user.id]);
+      }else if(expenses.length)await connection.execute("DELETE FROM expenses WHERE origin_type='stock_movement' AND origin_id=?",[String(before.id)]);
+      await connection.execute('UPDATE stock_movements SET unit_cost_snapshot=? WHERE id=?',[rate,before.id]);
+    }
+    if(!linked && !changed && (b.reference||'')!==(before.reference||'')) await connection.execute(
+      "UPDATE expenses SET reference=? WHERE origin_type='stock_movement' AND origin_id=?",[b.reference||'',String(before.id)]);
+    const [updatedExpenses]=await connection.execute("SELECT * FROM expenses WHERE origin_type='stock_movement' AND origin_id=?",[String(before.id)]);
+    const [[balance]]=await connection.execute('SELECT stock FROM materials WHERE id=?',[material.id]);
+    const [[after]]=await connection.execute('SELECT * FROM stock_movements WHERE id=?',[before.id]);
+    await audit(connection,req.user.id,'CORRECT','stock_movement',before.id,{...before,stock:material.stock,expenses},{...after,stock:balance.stock,expenses:updatedExpenses,reason:b.reason},req.ip);
+    return after;
+  });
+  publishChange('materials',{});publishChange('finance',{});
+  res.json(row);
 }));
 
 /**
@@ -271,9 +360,9 @@ router.post('/:id/movements', auth, permit('store.manage'), validate(z.object({
           throw Object.assign(new Error('The site cannot return more than its unused balance'),{status:409});
       }
       await connection.execute('UPDATE materials SET stock=? WHERE id=?', [stock, before.id]);
-      const [movement] = await connection.execute(`INSERT INTO stock_movements (material_id,movement_type,quantity,reference,notes,project_id,destination,user_id)
-        VALUES (?,?,?,?,?,?,?,?)`, [before.id, body.type, body.quantity, body.reference || '', body.notes || '',
-        body.projectId || null, body.destination || null, req.user.id]);
+      const [movement] = await connection.execute(`INSERT INTO stock_movements (material_id,movement_type,quantity,reference,notes,project_id,destination,user_id,origin_type,unit_cost_snapshot)
+        VALUES (?,?,?,?,?,?,?,?,'Manual',?)`, [before.id, body.type, body.quantity, body.reference || '', body.notes || '',
+        body.projectId || null, body.destination || null, req.user.id, Number(before.unit_cost)]);
 
       /* Issuing material to a project is a project cost, so record it against the budget straight away. */
       if (body.type === 'Issue' && body.projectId && Number(before.unit_cost) > 0) {

@@ -1,8 +1,10 @@
+import {leaveLimitWarnings} from '../lib/leave-limit-warnings.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, today, transaction } from '../db.js';
 import { auth as authenticate, can, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
+import { loadWorkforcePicture } from '../lib/workforce-picture.js';
 import {offboardingChecklist} from '../lib/offboarding.js';
 import {suggestOvertime,rulesFor,minutes,intervalsOverlap} from '../lib/hr-payroll-rules.js';
 import { OVERTIME_TYPES, PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES,
@@ -452,53 +454,8 @@ router.post('/work-locations', auth, permit('hr.manage','hr.attendance','resourc
 
 /** A date-specific deployment board: leave wins over attendance, which wins over plans. */
 router.get('/availability', auth, permit('hr.view','hr.manage','site.attendance','hr.attendance','resources.view','resources.reassign','projects.schedule'), wrap(async (req, res) => {
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : new Date().toLocaleDateString('en-CA');
-  const [employees, attendance, leave, assignments, locations] = await Promise.all([
-    query(`SELECT e.id,e.code,e.name,e.designation,e.worker_type workerType,e.photo_url photoUrl,e.status employmentStatus,
-      d.name department FROM visible_employees e LEFT JOIN departments d ON d.id=e.department_id
-      WHERE e.status <> 'Left' AND e.join_date<=? ORDER BY e.name`, [date]),
-    query(`SELECT a.employee_id employeeId,a.employee_name employeeName,a.state,a.work_location workLocation,
-      p.id projectId,p.name project FROM visible_attendance a LEFT JOIN projects p ON p.id=a.project_id WHERE a.work_date=?`, [date]),
-    query(`SELECT l.employee_id employeeId,l.leave_type leaveType FROM visible_leave_requests l
-      WHERE l.status='Approved' AND ? BETWEEN l.from_date AND l.to_date`, [date]),
-    query(`SELECT pt.employee_id employeeId,p.id projectId,p.name project,pt.project_role projectRole
-      FROM visible_project_team pt JOIN projects p ON p.id=pt.project_id
-      WHERE DATE(pt.assigned_at)<=? AND (pt.released_at IS NULL OR DATE(pt.released_at)>=?)
-      ORDER BY pt.assigned_at DESC`, [date, date]),
-    query(`SELECT w.employee_id employeeId,w.work_location workLocation,w.project_id projectId,p.name project
-      FROM visible_employee_work_locations w LEFT JOIN projects p ON p.id=w.project_id WHERE w.work_date=?`, [date])
-  ]);
-  const byAttendance = new Map(attendance.map(row => [row.employeeId || `name:${row.employeeName}`, row]));
-  const byLeave = new Map(leave.map(row => [row.employeeId, row]));
-  const byAssignment = new Map();
-  for (const row of assignments) if (!byAssignment.has(row.employeeId)) byAssignment.set(row.employeeId, row);
-  const byLocation = new Map(locations.map(row => [row.employeeId, row]));
-  const people = employees.map(person => {
-    const day = byAttendance.get(person.id) || byAttendance.get(`name:${person.name}`);
-    const away = byLeave.get(person.id);
-    const plan = byAssignment.get(person.id);
-    const datedLocation = byLocation.get(person.id);
-    let status = 'Free', group = 'free', location = 'Not assigned', projectId = null, available = true;
-    if (person.employmentStatus === 'Suspended') { status = 'Not working'; group = 'not-working'; location = 'Suspended'; available = false; }
-    else if (away) { status = 'On leave'; group = 'leave'; location = away.leaveType; available = false; }
-    else if (day?.state === 'Absent') { status = 'Not working'; group = 'not-working'; location = 'Absent'; available = false; }
-    else if (day?.state === 'On leave') { status = 'On leave'; group = 'leave'; location = 'On leave'; available = false; }
-    else if (day?.workLocation === 'Not working') { status = 'Not working'; group = 'not-working'; location = day.state || 'Not working'; available = false; }
-    else if (day?.state === 'Business trip') { status = 'Business trip'; group = 'business-trip'; location = day.project || 'Away'; projectId = day.projectId; available = false; }
-    else if (day?.workLocation === 'Office') { status = 'At office'; group = 'office'; location = 'Head office'; available = false; }
-    else if (day) { status = 'At site'; group = 'site'; location = day.project || 'Site'; projectId = day.projectId; available = false; }
-    else if (datedLocation?.workLocation === 'Office') { status = 'Scheduled at office'; group = 'office'; location = 'Head office'; available = false; }
-    else if (datedLocation) { status = 'Scheduled at site'; group = 'site'; location = datedLocation.project || 'Site'; projectId = datedLocation.projectId; available = false; }
-    else if (plan) { status = 'Scheduled at site'; group = 'site'; location = plan.project; projectId = plan.projectId; available = false; }
-    else if (person.workerType === 'Office') { status = 'Expected at office'; group = 'office'; location = 'Head office'; available = false; }
-    return { ...person, status, group, location, projectId, available };
-  });
-  const count = key => people.filter(person => person.group === key).length;
-  const sites = [...people.filter(person => person.group === 'site').reduce((map, person) => {
-    const current = map.get(person.location) || { name: person.location, people: 0 };
-    current.people += 1; map.set(person.location, current); return map;
-  }, new Map()).values()].sort((a, b) => b.people - a.people);
-  res.json({ date, summary: { total: people.length, site: count('site'), office: count('office'), free: count('free'), leave: count('leave'), notWorking: count('not-working') }, sites, people });
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : today();
+  res.json(await loadWorkforcePicture(date));
 }));
 
 router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) => {
@@ -523,8 +480,8 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
       FROM visible_project_team t JOIN projects p ON p.id=t.project_id
       WHERE t.employee_id=? AND (p.manager_employee_id IS NULL OR p.manager_employee_id<>?)
       ORDER BY assignedAt DESC`, [employee.id, employee.id, employee.id]),
-    query(`SELECT t.id,t.title,t.status,t.priority,t.due_date dueDate,t.updated_at updatedAt,p.id projectId,p.name project
-      FROM tasks t JOIN projects p ON p.id=t.project_id
+    query(`SELECT t.id,t.title,t.status,t.priority,t.due_date dueDate,t.updated_at updatedAt,p.id projectId,COALESCE(p.name,'Office / general') project
+      FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
       WHERE EXISTS (SELECT 1 FROM visible_task_assignees ta WHERE ta.task_id=t.id AND ta.employee_id=?)
         OR t.assignee_employee_id=? OR (t.assignee_employee_id IS NULL AND LOWER(t.assignee)=LOWER(?)
         AND (SELECT COUNT(*) FROM visible_employees WHERE LOWER(name)=LOWER(?))=1)
@@ -798,7 +755,7 @@ router.post('/:id/conduct',auth,permit("hr.conduct"),validate(z.object({
   res.status(201).json({id:result.insertId});
 }));
 router.get('/leave/all', auth, permit('hr.view','hr.leave'), wrap(async (_req, res) => res.json(await query(`SELECT l.id,l.leave_type leaveType,l.from_date fromDate,
-  l.to_date toDate,l.days,l.reason,l.status,l.payment_type paymentType,l.created_at createdAt,e.name employee,e.code employeeCode,e.id employeeId
+  l.to_date toDate,l.days,l.reason,l.status,l.limit_warnings limitWarnings,l.payment_type paymentType,l.created_at createdAt,e.name employee,e.code employeeCode,e.id employeeId
   FROM visible_leave_requests l JOIN visible_employees e ON e.id=l.employee_id ORDER BY l.id DESC`))));
 
 router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.object({
@@ -823,19 +780,18 @@ router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.obje
   if(!eligibleFrom) return res.status(409).json({error:'Record the employee’s actual employment start date before requesting leave.'});
   if(body.fromDate<eligibleFrom && paymentType==='Paid') return res.status(409).json({error:`This employee is in their probation period and is not entitled to paid leave until ${eligibleFrom}. Record this leave as Unpaid.`});
   const days = Math.max(1, Math.round((new Date(body.toDate) - new Date(body.fromDate)) / 86400000) + 1);
-  if (body.fromDate.slice(0,4) !== body.toDate.slice(0,4)) return res.status(400).json({error:'Please record leave crossing New Year as two requests, one for each year.'});
-  if (body.fromDate.slice(0,7) !== body.toDate.slice(0,7)) return res.status(400).json({error:'Record leave crossing a month boundary as two requests so each month’s limit can be checked.'});
-  const entitlement = body.leaveType==='Casual' ? Number(employee.casual) : Number(employee.annual);
-  const used = await getOne(`SELECT COALESCE(SUM(days),0) days FROM visible_leave_requests WHERE employee_id=? AND status!='Rejected' AND YEAR(from_date)=? AND ${body.leaveType==='Casual'?"leave_type='Casual'":"leave_type<>'Casual'"}`,[req.params.id,body.fromDate.slice(0,4)]);
-  if (Number(used.days)+days>entitlement) return res.status(409).json({error:`This employee has ${Math.max(0,entitlement-Number(used.days))} ${body.leaveType==='Casual'?'casual':'annual'} leave day(s) remaining this year. HR can edit the employee’s entitlement in their profile.`});
-  const monthly=await getOne(`SELECT COALESCE(SUM(days),0) days FROM visible_leave_requests WHERE employee_id=? AND status!='Rejected' AND DATE_FORMAT(from_date,'%Y-%m')=?`,[req.params.id,body.fromDate.slice(0,7)]);
-  if(Number(monthly.days)+days>Number(policy.monthly_limit))return res.status(409).json({error:`The monthly leave limit is ${policy.monthly_limit} day(s). This employee has ${Math.max(0,Number(policy.monthly_limit)-Number(monthly.days))} day(s) available in ${body.fromDate.slice(0,7)}. Split or shorten the request, or ask HR to update the leave policy.`});
+  const previous=await query(`SELECT leave_type,from_date,to_date,status FROM visible_leave_requests
+    WHERE employee_id=? AND status!='Rejected' AND to_date>=? AND from_date<=?`,
+    [req.params.id,`${body.fromDate.slice(0,4)}-01-01`,`${body.toDate.slice(0,4)}-12-31`]);
+  const warnings=leaveLimitWarnings(employee,policy,body,previous);
   const overlap = await getOne("SELECT id FROM visible_leave_requests WHERE employee_id=? AND status!='Rejected' AND from_date<=? AND to_date>=?",[req.params.id,body.toDate,body.fromDate]);
   if (overlap) return res.status(409).json({error:'This employee already has leave recorded for these dates. Please check the leave register.'});
   const result = await query('INSERT INTO leave_requests (employee_id,leave_type,from_date,to_date,days,reason) VALUES (?,?,?,?,?,?)',
     [req.params.id, body.leaveType, body.fromDate, body.toDate, days, body.reason]);
   const row = await getOne('SELECT * FROM visible_leave_requests WHERE id=?', [result.insertId]);
   await query('UPDATE leave_requests SET payment_type=? WHERE id=?',[body.paymentType || (body.leaveType==='Unpaid'?'Unpaid':'Paid'),result.insertId]);
+  await query('UPDATE leave_requests SET limit_warnings=? WHERE id=?',[JSON.stringify(warnings),result.insertId]);
+  row.limitWarnings=warnings;
   row.payment_type = body.paymentType || (body.leaveType==='Unpaid'?'Unpaid':'Paid');
   await audit(connection, req.user.id, 'CREATE', 'leave_request', row.id, null, row, req.ip);
   res.status(201).json(row);
@@ -845,7 +801,7 @@ router.post('/:id/leave', auth, permit('hr.manage', 'hr.leave'), validate(z.obje
 router.patch('/leave/:id', auth, permit('hr.manage', 'hr.leave'), validate(z.object({ status: z.enum(['Pending', 'Approved', 'Rejected']) })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM visible_leave_requests WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Leave request not found' });
-  if(before.status==='Rejected' && req.body.status!=='Rejected') return res.status(409).json({error:'Please create a new leave request instead of reopening a rejected request, so the annual allowance can be checked again.'});
+  if(before.status==='Rejected' && req.body.status!=='Rejected') return res.status(409).json({error:'Please create a new leave request instead of reopening a rejected request, to preserve the decision history.'});
   if(req.body.status==='Approved') {
     const fromDate=before.from_date instanceof Date?before.from_date.toISOString().slice(0,10):String(before.from_date).slice(0,10);
     const policy=await leavePolicyFor(fromDate);

@@ -577,8 +577,8 @@ router.post('/cost-control/daily-sheets/:id/review', auth, permit("finance.costR
               throw costError('The reserve fuel stock or unit cost changed. Return this sheet to QS for correction.',409);
             await connection.execute('UPDATE materials SET stock=stock-? WHERE id=?',[line.quantity,material.id]);
             await connection.execute(`INSERT INTO stock_movements
-              (material_id,movement_type,quantity,reference,notes,project_id,destination,user_id)
-              VALUES (?,'Issue',?,?,?,?,?,?)`,
+              (material_id,movement_type,quantity,reference,notes,project_id,destination,user_id,origin_type)
+              VALUES (?,'Issue',?,?,?,?,?,?,'Daily cost')`,
               [material.id,line.quantity,`Daily cost #${sheet.id}`,`${sheet.work_date}: ${line.description}`,sheet.project_id,'Project site',req.user.id]);
           }
           const [posted] = await connection.execute(`INSERT INTO expenses

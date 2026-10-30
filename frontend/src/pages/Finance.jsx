@@ -86,7 +86,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {tab === 'Financial reports' && <FinanceReports projects={data.projects} companyId={companyId} company={company} />}
     {tab === 'Management accounts' && <ManagementAccounts projects={data.projects.filter(project => Number(project.companyId) === Number(companyId))} companyId={companyId} company={company} can={featureCan('finance.managementAccountsManage')} />}
     {tab === 'Cash comparison' && <CashComparison companyId={companyId} company={company} can={featureCan('finance.cashComparison')} />}
-    {tab === 'Vehicle expenses' && <VehicleExpenseReport companyId={companyId} company={company} />}
+    {tab === 'Vehicle expenses' && <VehicleExpenseReport key={companyId} companyId={companyId} company={company} data={data} can={can} />}
     {tab === 'Expected outflows' && <ExpectedOutflows companyId={companyId} company={company} can={featureCan('finance.expectedOutflows')} projects={data.projects} />}
     {tab === 'Budget monitoring' && <BudgetMonitoring summary={summary} />}
     {tab === 'Daily cost review' && <DailyCostReview companyId={companyId} can={can} />}
@@ -279,12 +279,20 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
       setError(''); await load(); await refresh();
     } catch (failure) { setError(failure.message); }
   };
-  return <>
-    {error && <p className="form-error">{error}</p>}
-    <Table columns={INVOICE_COLUMNS} template={INVOICE_TEMPLATE} title={creditOnly?'Credit purchases':'Supplier invoices'} empty={creditOnly?'No credit purchases recorded.':'No invoices recorded.'}>
-      {rows.map(row => <Row template={INVOICE_TEMPLATE} key={row.id}>
+  const template = creditOnly ? 'minmax(170px,1.4fr) 130px 120px 140px 125px 130px 120px 110px' : INVOICE_TEMPLATE;
+  const columns = creditOnly ? INVOICE_COLUMNS.filter(column => column !== 'Supplier') : INVOICE_COLUMNS;
+  const supplierGroups = new Map();
+  if (creditOnly) for (const row of rows) {
+    const key = row.supplierId != null ? `supplier-${row.supplierId}` : `name-${row.supplier || ''}`;
+    if (!supplierGroups.has(key)) supplierGroups.set(key, { key, name: row.supplier || 'Unknown supplier', rows: [] });
+    supplierGroups.get(key).rows.push(row);
+  }
+  const groups = creditOnly && rows.length
+    ? [...supplierGroups.values()].sort((a,b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }))
+    : [{ key: 'all', name: creditOnly ? 'Credit purchases' : 'Supplier invoices', rows }];
+  const renderInvoice = row => <Row template={template} key={row.id}>
         <div><strong>{row.invoiceNo}</strong>{row.creditDescription&&<small>Credit · {row.creditDescription} · {row.reminderFrequency} reminders</small>}</div>
-        <span>{row.supplier}</span>
+        {!creditOnly && <span>{row.supplier}</span>}
         <span>{row.orderReference || '—'}</span>
         <span className={row.dueDate && new Date(row.dueDate) < new Date() && row.status !== 'Paid' ? 'overdue' : ''}>{shortDate(row.dueDate)}</span>
         <div><span>{rupees(row.netAmount)}</span><small>VAT {rupees(row.vatAmount)}</small></div><span>{rupees(row.amount)}</span>
@@ -297,8 +305,16 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
           : row.status !== 'Paid' && can.supplierPay && (row.orderReference || row.paymentExceptionApprovedBy)
             ? <button className="status-button" onClick={() => setPaying(row)}>Pay</button>
           : <span>—</span>}
-      </Row>)}
-    </Table>
+      </Row>;
+  return <>
+    {error && <p className="form-error">{error}</p>}
+    <div className="supplier-credit-groups">
+      {groups.map(group => <Table key={group.key} columns={columns} template={template} title={group.name}
+        tools={creditOnly && group.rows.length ? <div className="supplier-credit-summary"><span>{group.rows.length} {group.rows.length === 1 ? 'purchase' : 'purchases'}</span><strong>Outstanding {rupees(group.rows.reduce((sum,row) => sum + Number(row.amount) - Number(row.paidAmount),0))}</strong></div> : null}
+        empty={creditOnly ? 'No credit purchases recorded.' : 'No invoices recorded.'}>
+        {group.rows.map(renderInvoice)}
+      </Table>)}
+    </div>
     {paying && <PaymentForm invoice={paying} close={() => setPaying(null)}
       reload={async () => { await load(); await refresh(); }} />}
   </>;

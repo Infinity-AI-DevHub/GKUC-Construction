@@ -11,7 +11,8 @@ const STATUSES = ['Not started', 'In progress', 'Blocked', 'Completed', 'Approve
 
 const taskSchema = z.object({
   title: z.string().min(3).max(220),
-  projectId: z.number().int().positive(),
+  projectId: z.number().int().positive().nullable().optional(),
+  companyId: z.number().int().positive().optional(),
   assignee: z.string().min(2).max(120).optional(),
   assigneeEmployeeId: z.number().int().positive().optional(),
   assigneeEmployeeIds: z.array(z.number().int().positive()).min(1).max(50).optional(),
@@ -27,7 +28,7 @@ const taskSchema = z.object({
 }).refine(value => value.assignee || value.assigneeEmployeeId || value.assigneeEmployeeIds?.length,
   { message: 'Choose at least one employee for this task', path: ['assigneeEmployeeIds'] });
 const taskPatch = z.object({
-  title: z.string().min(3).max(220).optional(), projectId: z.number().int().positive().optional(),
+  title: z.string().min(3).max(220).optional(), projectId: z.number().int().positive().nullable().optional(), companyId: z.number().int().positive().optional(),
   assignee: z.string().min(2).max(120).optional(), assigneeEmployeeId: z.number().int().positive().optional(),
   assigneeEmployeeIds: z.array(z.number().int().positive()).min(1).max(50).optional(),
   due: z.string().min(2).max(100).optional(), dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -57,21 +58,36 @@ const resolveAssignees = async body => {
   return { assigneeEmployeeId: id, assignee: body.assignee, ids: id ? [id] : [], display: body.assignee };
 };
 
-/* Named columns rather than t.*, so the shape matches the camelCase every other endpoint returns. */
-const TASK_COLUMNS = `t.id,t.title,t.project_id projectId,t.assignee_employee_id assigneeEmployeeId,CASE WHEN t.assignee_employee_id IS NOT NULL THEN e.name ELSE t.assignee END assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,p.name project`;
+async function taskCompany(body) {
+  if (body.projectId) {
+    const project = await getOne('SELECT company_id companyId FROM projects WHERE id=? AND active=1', [body.projectId]);
+    if (!project) throw Object.assign(new Error('Active project not found.'), { status: 404 });
+    if (body.companyId && Number(body.companyId) !== Number(project.companyId))
+      throw Object.assign(new Error('The project belongs to a different operating company.'), { status: 400 });
+    return project.companyId;
+  }
+  if (!body.companyId || !await getOne('SELECT id FROM companies WHERE id=? AND active=1', [body.companyId]))
+    throw Object.assign(new Error('Choose an operating company for an office task.'), { status: 400 });
+  return body.companyId;
+}
 
-const withProject = async id => withTaskAssignees(await getOne(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN visible_employees e ON e.id=t.assignee_employee_id WHERE t.id=? AND p.active=1`, [id]));
+/* Named columns rather than t.*, so the shape matches the camelCase every other endpoint returns. */
+const TASK_COLUMNS = `t.id,t.title,t.project_id projectId,t.assignee_employee_id assigneeEmployeeId,CASE WHEN t.assignee_employee_id IS NOT NULL THEN e.name ELSE t.assignee END assignee,t.due,t.priority,t.status,t.notes,t.due_date dueDate,t.approved_by approvedBy,t.created_at createdAt,t.updated_at updatedAt,COALESCE(p.name,'Office / general') project,COALESCE(p.company_id,t.company_id) companyId`;
+
+const withProject = async id => withTaskAssignees(await getOne(`SELECT ${TASK_COLUMNS} FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN visible_employees e ON e.id=t.assignee_employee_id WHERE t.id=? AND (t.project_id IS NULL OR p.active=1)`, [id]));
 
 router.get('/', auth, permit('site.tasks','projects.view'), wrap(async (req, res) => {
-  const filters = ['p.active=1'];
+  const filters = ['(t.project_id IS NULL OR p.active=1)'];
   const params = [];
+  if (req.query.companyId) { filters.push('COALESCE(p.company_id,t.company_id)=?'); params.push(req.query.companyId); }
+  if (req.query.office === '1') filters.push('t.project_id IS NULL');
   if (req.query.projectId) { filters.push('t.project_id=?'); params.push(req.query.projectId); }
   if (req.query.status) { filters.push('t.status=?'); params.push(req.query.status); }
   if (req.query.assignee) { filters.push(`(t.assignee=? OR EXISTS (SELECT 1 FROM visible_task_assignees ta
     JOIN visible_employees member ON member.id=ta.employee_id WHERE ta.task_id=t.id AND member.name=?))`);
     params.push(req.query.assignee, req.query.assignee); }
   const where = `WHERE ${filters.join(' AND ')}`;
-  res.json(await withTaskAssignees(await query(`SELECT ${TASK_COLUMNS} FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN visible_employees e ON e.id=t.assignee_employee_id ${where} ORDER BY t.id`, params)));
+  res.json(await withTaskAssignees(await query(`SELECT ${TASK_COLUMNS} FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN visible_employees e ON e.id=t.assignee_employee_id ${where} ORDER BY t.id`, params)));
 }));
 
 router.get('/reminder-users', auth, permit('site.tasks'), wrap(async (_req,res) => {
@@ -98,8 +114,7 @@ router.get('/:id', auth, permit('site.tasks','projects.view'), wrap(async (req, 
 
 router.post('/', auth, permit('site.tasks'), validate(taskSchema), wrap(async (req, res) => {
   const body = req.body;
-  if (!await getOne('SELECT id FROM projects WHERE id=? AND active=1', [body.projectId]))
-    return res.status(404).json({ error: 'Active project not found.' });
+  const companyId = await taskCompany(body);
   if (body.reminderAt || body.reminderFrequency || body.reminderUserIds?.length) {
     if (!body.reminderAt || !body.reminderFrequency || !body.reminderUserIds?.length)
       return res.status(400).json({error:'Choose the reminder date and time, frequency and at least one recipient.'});
@@ -109,8 +124,8 @@ router.post('/', auth, permit('site.tasks'), validate(taskSchema), wrap(async (r
   }
   const assignee = await resolveAssignees(body);
   const taskId = await transaction(async connection => {
-    const [result] = await connection.execute('INSERT INTO tasks (title,project_id,assignee,assignee_employee_id,due,due_date,priority,status,notes) VALUES (?,?,?,?,?,?,?,?,?)',
-      [body.title, body.projectId, assignee.assignee, assignee.assigneeEmployeeId, body.due, body.dueDate || null, body.priority, body.status, body.notes]);
+    const [result] = await connection.execute('INSERT INTO tasks (title,project_id,company_id,assignee,assignee_employee_id,due,due_date,priority,status,notes) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      [body.title, body.projectId || null, companyId, assignee.assignee, assignee.assigneeEmployeeId, body.due, body.dueDate || null, body.priority, body.status, body.notes]);
     for (const employeeId of assignee.ids) await connection.execute(
       'INSERT INTO task_assignees (task_id,employee_id) VALUES (?,?)', [result.insertId, employeeId]);
     if (body.dueTime) await connection.execute('UPDATE tasks SET due_time=? WHERE id=?',[body.dueTime,result.insertId]);
@@ -135,8 +150,8 @@ router.post('/', auth, permit('site.tasks'), validate(taskSchema), wrap(async (r
 }));
 
 router.patch('/:id', auth, permit('site.tasks'), validate(taskPatch), wrap(async (req, res) => {
-  const before = await getOne(`SELECT t.* FROM tasks t JOIN projects p ON p.id=t.project_id
-    WHERE t.id=? AND p.active=1`, [req.params.id]);
+  const before = await getOne(`SELECT t.*,p.company_id projectCompanyId FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+    WHERE t.id=? AND (t.project_id IS NULL OR p.active=1)`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Task not found' });
   if (req.body.status === 'Approved' && !can(req, 'projects.manage')) {
     return res.status(403).json({ error: 'Only management can approve completed work' });
@@ -152,8 +167,12 @@ router.patch('/:id', auth, permit('site.tasks'), validate(taskPatch), wrap(async
     return res.status(400).json({ error: `Explain why this task is ${nextStatus === 'Rejected' ? 'being returned' : 'blocked'} so the assigned team knows what to correct.` });
   if (before.status === 'Approved' && nextStatus && nextStatus !== 'Approved')
     return res.status(400).json({ error: 'Approved work cannot be changed back to an earlier status. Contact a project manager to review the record.' });
-  const columns = { projectId: 'project_id', assigneeEmployeeId: 'assignee_employee_id', dueDate: 'due_date' };
+  const columns = { companyId: 'company_id', projectId: 'project_id', assigneeEmployeeId: 'assignee_employee_id', dueDate: 'due_date' };
   const body = { ...req.body };
+  if ('projectId' in body || 'companyId' in body) body.companyId = await taskCompany({
+    projectId: 'projectId' in body ? body.projectId : before.project_id,
+    companyId: body.companyId || before.projectCompanyId || before.company_id
+  });
   delete body.statusReason;
   const changingAssignees = Boolean(body.assigneeEmployeeIds || body.assigneeEmployeeId || body.assignee);
   const assignees = changingAssignees ? await resolveAssignees(body) : null;
@@ -182,8 +201,8 @@ router.patch('/:id', auth, permit('site.tasks'), validate(taskPatch), wrap(async
 }));
 
 router.post('/:id/comments', auth, permit('site.tasks','projects.view'), validate(z.object({ comment: z.string().min(1).max(2000) })), wrap(async (req, res) => {
-  const task = await getOne(`SELECT t.id FROM tasks t JOIN projects p ON p.id=t.project_id
-    WHERE t.id=? AND p.active=1`, [req.params.id]);
+  const task = await getOne(`SELECT t.id FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+    WHERE t.id=? AND (t.project_id IS NULL OR p.active=1)`, [req.params.id]);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   const result = await query('INSERT INTO task_comments (task_id,user_id,comment) VALUES (?,?,?)', [task.id, req.user.id, req.body.comment]);
   res.status(201).json(await getOne(`SELECT c.id,c.comment,c.created_at createdAt,u.name author

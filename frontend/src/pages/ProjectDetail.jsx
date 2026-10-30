@@ -3,7 +3,7 @@ import {
   AlertTriangle, ArrowLeft, Building2, CalendarDays, CheckCircle2, CircleDollarSign,
   Download, FileText, HardHat, MapPin, Trash2, TrendingUp, Users, WalletCards
 } from 'lucide-react';
-import { api, del, money, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { api, del, money, patch, post, rupees, rupeesExact as projectAmount, shortDate, slug, todayInput } from '../api.js';
 import { Avatar, Badge, Progress, Row, SelectField, Table, Tabs, Field, FormModal, TextArea } from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
 import ProjectGallery from '../ProjectGallery.jsx';
@@ -46,7 +46,7 @@ export default function ProjectDetail({ projectId, data, close, reload, can, com
     <RecordScopeBadge />
     <ProjectHero project={project} close={close} onEdit={can.projects ? () => setAdding('edit-project') : null}
       onDelete={can.projects ? removeProject : null} />
-    <ProjectMetrics project={project} />
+    <ProjectMetrics project={project} onEditBudget={can.projects ? () => setAdding('budget') : null} />
     <div className="project-workspace-tabs"><Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} /></div>
     {tab === 'Command centre' && <CommandCentre project={project} can={can} onSection={setTab} navigate={navigate} onAuthorise={() => setAuthorising(true)} />}
     {tab === 'Activity & issues' && <ProjectActivity project={project} can={can} refresh={refresh} onAdd={setAdding} onEditTask={setEditingTask} />}
@@ -59,6 +59,7 @@ export default function ProjectDetail({ projectId, data, close, reload, can, com
     {tab === 'Documents' && <Attachments ownerType="project" ownerId={project.id} title="Project document library" canUpload={can.projects} canDelete={can.projects} withCategory />}
     {tab === 'Close-out' && <CompletionReport projectId={project.id} />}
     {adding === 'milestone' && <MilestoneForm projectId={project.id} close={() => setAdding('')} reload={refresh} />}
+    {adding === 'budget' && <ProjectBudgetForm project={project} close={() => setAdding('')} reload={refresh} />}
     {adding === 'edit-project' && <EditProjectForm project={project} companies={companies} employees={data.employees} close={() => setAdding('')} reload={refresh} setCompanyId={setCompanyId} />}
     {adding === 'update' && <ProjectUpdateForm projectId={project.id} close={()=>setAdding('')} reload={refresh} />}
     {adding === 'task' && <ProjectTaskForm projectId={project.id} employees={data.employees} close={()=>setAdding('')} reload={refresh} />}
@@ -123,7 +124,7 @@ function ProjectHero({ project, close, onEdit, onDelete }) {
       {onEdit && <button className="secondary project-edit-button" onClick={onEdit}>Edit project</button>}
     </div>}
     <div className="project-hero-content">
-      <div className="project-kicker"><Badge tone={project.health === 'On track' ? 'on-track' : project.health === 'At risk' ? 'at-risk' : 'watch'}>{project.health}</Badge><span>{project.company} · {project.stage}</span></div>
+      <div className="project-kicker"><Badge tone={project.health === 'Completed' ? 'completed' : project.health === 'On track' ? 'on-track' : project.health === 'At risk' ? 'at-risk' : 'watch'}>{project.health}</Badge><span>{project.company} · {project.stage}</span></div>
       <h1>{project.name}</h1><p><MapPin size={16} />{project.site}<span /><Building2 size={16} />{project.client}</p>
     </div>
     <div className="project-hero-progress"><span>Overall delivery</span><strong>{project.progress}%</strong><Progress value={project.progress} /></div>
@@ -131,6 +132,9 @@ function ProjectHero({ project, close, onEdit, onDelete }) {
 }
 
 function EditProjectForm({ project, companies, employees, close, reload, setCompanyId }) {
+  const [stage, setStage] = useState(project.stage);
+  const [health, setHealth] = useState(project.health);
+  const [progress, setProgress] = useState(String(project.progress));
   const [clients, setClients] = useState([]);
   useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
   const dateValue = value => value ? String(value).slice(0, 10) : '';
@@ -140,7 +144,7 @@ function EditProjectForm({ project, companies, employees, close, reload, setComp
       companyId, name: values.name.trim(), clientId: Number(values.clientId),
       managerEmployeeId: Number(values.managerEmployeeId), site: values.site.trim(),
       stage: values.stage, startDate: values.startDate || undefined,
-      endDate: values.endDate || undefined, progress: Number(values.progress), health: values.health
+      endDate: values.endDate || undefined, progress: Number(values.progress), health: values.health, budget: Number(values.budget)
     });
     setCompanyId(companyId);
     await reload();
@@ -151,25 +155,45 @@ function EditProjectForm({ project, companies, employees, close, reload, setComp
     <SelectField name="clientId" label="Client" defaultValue={project.clientId} options={clients.map(client => [client.id, client.name])} />
     <SelectField name="managerEmployeeId" label="Project manager" defaultValue={project.managerEmployeeId} options={employees.map(employee => [employee.id, `${employee.name} — ${employee.designation}`])} />
     <Field name="site" label="Site location" defaultValue={project.site} />
-    <SelectField name="stage" label="Current stage" defaultValue={project.stage} options={[project.stage, 'Not started', 'Mid-way'].filter((value, index, all) => all.indexOf(value) === index)} />
+    <label>Current stage *<select name="stage" required value={stage} onChange={event => {
+      const value = event.target.value; setStage(value);
+      if (value === 'Completed') { setHealth('Completed'); setProgress('100'); }
+      else if (health === 'Completed') setHealth('On track');
+    }}>{[project.stage, 'Not started', 'Mid-way', 'Completed'].filter((value,index,all) => all.indexOf(value) === index).map(value => <option key={value}>{value}</option>)}</select></label>
     <Field name="startDate" label="Start date" type="date" required={false} defaultValue={dateValue(project.start_date)} />
     <Field name="endDate" label="Target completion" type="date" required={false} defaultValue={dateValue(project.end_date)} />
-    <Field name="progress" label="Progress (%)" type="number" min="0" max="100" defaultValue={project.progress} />
-    <SelectField name="health" label="Project health" defaultValue={project.health} options={['On track', 'Watch', 'At risk']} />
+    <Field name="budget" label="Approved budget (LKR)" type="number" min="0" step="0.01" defaultValue={project.finance?.budget ?? project.budget ?? 0} />
+    <p className="form-note wide">Future BOQ or variation approvals can recalculate the approved budget.</p>
+    <label>Progress (%) *<input name="progress" required type="number" min="0" max="100" value={stage === 'Completed' ? '100' : progress} readOnly={stage === 'Completed'} onChange={event => setProgress(event.target.value)} /></label>
+    <label>Project health *<select name="health" required value={stage === 'Completed' ? 'Completed' : health} onChange={event => setHealth(event.target.value)}>
+      {(stage === 'Completed' ? ['Completed'] : ['On track','Watch','At risk']).map(value => <option key={value}>{value}</option>)}
+    </select></label>
+    {stage === 'Completed' && <p className="form-note wide">Completing the project sets progress to 100%, marks health as Completed, stops project-start reminders and removes the site from Live Sites. Financial records remain available.</p>}
   </FormModal>;
 }
 
-function ProjectMetrics({ project }) {
+function ProjectBudgetForm({ project, close, reload }) {
+  return <FormModal title="Update project budget" close={close} label="Save budget" onSubmit={async values => {
+    await patch(`/projects/${project.id}`, { budget: Number(values.budget) });
+    await reload();
+  }}>
+    <p className="form-note wide">{project.name}</p>
+    <Field name="budget" label="Approved budget (LKR)" type="number" min="0" step="0.01" defaultValue={project.finance?.budget ?? project.budget ?? 0} />
+    <p className="form-note wide">This updates the approved budget and remaining balance. Future BOQ or variation approvals can recalculate this amount.</p>
+  </FormModal>;
+}
+
+function ProjectMetrics({ project, onEditBudget }) {
   const budget = Number(project.finance.budget || 0); const spent = Number(project.finance.expenses || 0); const income = Number(project.finance.income || 0);
   const completed = project.tasks.filter(task => ['Completed', 'Approved'].includes(task.status)).length;
   const overdue = project.tasks.filter(task => !['Completed', 'Approved'].includes(task.status) && task.due && new Date(task.due) < new Date()).length;
   const items = [
-    [CircleDollarSign, 'Approved budget', money(budget), `${budget ? Math.round((spent / budget) * 100) : 0}% utilised`, 'navy'],
-    [TrendingUp, 'Recorded cost', money(spent), `${money(Math.max(0, budget - spent))} remaining`, spent > budget ? 'red' : 'blue'],
-    [WalletCards, 'Income received', money(income), `${project.invoices.length} client invoice${project.invoices.length === 1 ? '' : 's'}`, 'cherry'],
+    [CircleDollarSign, 'Approved budget', projectAmount(budget), `${budget ? Math.round((spent / budget) * 100) : 0}% utilised`, 'navy'],
+    [TrendingUp, 'Recorded cost', projectAmount(spent), `${projectAmount(Math.max(0, budget - spent))} remaining`, spent > budget ? 'red' : 'blue'],
+    [WalletCards, 'Income received', projectAmount(income), `${project.invoices.length} client invoice${project.invoices.length === 1 ? '' : 's'}`, 'cherry'],
     [CheckCircle2, 'Delivery', `${completed}/${project.tasks.length}`, overdue ? `${overdue} overdue task${overdue === 1 ? '' : 's'}` : 'No overdue tasks', overdue ? 'red' : 'navy']
   ];
-  return <div className="project-metric-strip">{items.map(([Icon, label, value, detail, tone]) => <article key={label} className={`project-metric ${tone}`}><span><Icon size={20} /></span><div><small>{label}</small><strong>{value}</strong><p>{detail}</p></div></article>)}</div>;
+  return <div className="project-metric-strip">{items.map(([Icon, label, value, detail, tone]) => <article key={label} className={`project-metric ${tone}`}><span><Icon size={20} /></span><div><small>{label}</small><strong>{value}</strong><p>{detail}</p>{label === 'Approved budget' && onEditBudget && <button type="button" className="status-button" onClick={onEditBudget}>Update budget</button>}</div></article>)}</div>;
 }
 
 function CommandCentre({ project, can, onSection, navigate, onAuthorise }) {
@@ -183,7 +207,7 @@ function CommandCentre({ project, can, onSection, navigate, onAuthorise }) {
       <SectionHeading kicker="Today on site" title="Daily intelligence" icon={HardHat} />
       {latest ? <><div className="site-insight-lead"><div><strong>{latest.workforce}</strong><span>people on site</span></div><div><strong>{latest.delayHours || 0}h</strong><span>delay recorded</span></div><div><strong>{latest.weather || '—'}</strong><span>weather</span></div></div><blockquote>{latest.workCompleted}</blockquote><p className={latest.issue ? 'insight-alert' : 'insight-clear'}><AlertTriangle size={15} />{latest.issue || 'No site issues were recorded in the latest report.'}</p><footer>Reported by {latest.supervisor} · {shortDate(latest.reportDate)}</footer></> : <EmptyVisual icon={FileText} title="No site report yet" text="The latest report will become the project’s live operational briefing." />}
     </section>
-    <section className="workspace-surface health-visual"><SectionHeading kicker="Financial control" title="Budget position" /><div className="budget-ring" style={{ '--budget': `${burn * 3.6}deg` }}><div><strong>{burn}%</strong><span>utilised</span></div></div><div className="budget-legend"><span><i />Spent <b>{money(spent)}</b></span><span><i />Available <b>{money(Math.max(0, budget - spent))}</b></span></div></section>
+    <section className="workspace-surface health-visual"><SectionHeading kicker="Financial control" title="Budget position" /><div className="budget-ring" style={{ '--budget': `${burn * 3.6}deg` }}><div><strong>{burn}%</strong><span>utilised</span></div></div><div className="budget-legend"><span><i />Spent <b>{projectAmount(spent)}</b></span><span><i />Available <b>{projectAmount(Math.max(0, budget - spent))}</b></span></div></section>
     <section className="workspace-surface"><div className="workspace-section-heading"><div><span className="section-kicker">Action queue</span><h2>Priority work</h2></div><span className="section-count">{openTasks.length} open</span></div><div className="project-task-list">{openTasks.slice(0, 5).map(task => <div key={task.id}><i className={slug(task.priority)} /><div><strong>{task.title}</strong><span>{task.assignee} · {task.due}</span></div><Badge tone={slug(task.status)}>{task.status}</Badge></div>)}</div>{!openTasks.length && <EmptyVisual icon={CheckCircle2} title="Work queue clear" text="All project tasks have been completed or approved." />}</section>
     <section className="workspace-surface"><SectionHeading kicker="Programme pulse" title="Milestone status" icon={CalendarDays} /><div className="milestone-score"><strong>{completedMilestones}</strong><span>of {project.milestones.length} milestones complete</span></div><Progress value={project.milestones.length ? completedMilestones / project.milestones.length * 100 : 0} /><div className="next-milestones">{project.milestones.filter(item => item.status !== 'Completed').slice(0, 3).map(item => <div key={item.id}><span>{shortDate(item.dueDate)}</span><strong>{item.title}</strong><Badge tone={slug(item.status)}>{item.status}</Badge></div>)}</div></section>
     <ProjectMaterialPulse projectId={project.id} />

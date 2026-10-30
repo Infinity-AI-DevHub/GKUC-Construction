@@ -1,3 +1,4 @@
+import { maintenanceReminder } from './lib/vehicle-maintenance.js';
 import { pool, query, spendSql, today, transaction } from './db.js';
 import { dispatchQueued, dispatch } from './lib/channels.js';
 import { publish } from './lib/realtime.js';
@@ -158,8 +159,8 @@ async function budgetAlerts(stamp, alerts) {
 }
 
 async function overdueTaskAlerts(stamp, alerts) {
-  const rows = await query(`SELECT t.id,t.title,t.assignee,t.due_date,p.name project FROM tasks t JOIN projects p ON p.id=t.project_id
-    WHERE t.status NOT IN ('Completed','Approved') AND t.due_date IS NOT NULL AND t.due_date < CURDATE()`);
+  const rows = await query(`SELECT t.id,t.title,t.assignee,t.due_date,COALESCE(p.name,'Office / general') project FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+    WHERE (t.project_id IS NULL OR p.active=1) AND t.status NOT IN ('Completed','Approved') AND t.due_date IS NOT NULL AND t.due_date < CURDATE()`);
   for (const row of rows) {
     alerts.push({
       key: `task-overdue:${row.id}:${stamp}`,
@@ -246,6 +247,17 @@ async function creditCardAlerts(stamp,alerts){
     title:remaining<0?`Credit card payment overdue — ${row.card}`:`Credit card payment approaching — ${row.card}`,
     message:`${row.bank} •••• ${row.lastFour}: ${money(outstanding)} outstanding${Number(row.minimumDue)>0?`, minimum ${money(row.minimumDue)}`:''}; ${remaining<0?`${Math.abs(remaining)} day(s) overdue`:remaining===0?'due today':`due in ${remaining} day(s)`}.`,
     referenceType:'credit_card_statement',referenceId:row.id});}
+}
+
+async function maintenanceScheduleAlerts(stamp, alerts) {
+  const schedules = await query(`SELECT s.id,s.vehicle_id vehicleId,s.name,s.interval_km intervalKm,
+    s.last_odometer lastOdometer,s.remind_before_km remindBeforeKm,s.active,
+    f.vehicle,f.registration,f.odometer,f.status vehicleStatus
+    FROM vehicle_maintenance_schedules s JOIN fleet f ON f.id=s.vehicle_id WHERE s.active=1 AND f.status<>'Inactive'`);
+  for (const schedule of schedules) {
+    const alert = maintenanceReminder(schedule,stamp);
+    if (alert) alerts.push(alert);
+  }
 }
 
 async function serviceScheduleAlerts(stamp, alerts) {
@@ -525,6 +537,7 @@ export async function runAlertScan() {
     operatingBillAlerts(stamp,alerts),
     creditCardAlerts(stamp,alerts),
     serviceScheduleAlerts(stamp, alerts),
+    maintenanceScheduleAlerts(stamp, alerts),
     retentionAlerts(stamp, alerts),
     tenderAlerts(stamp, alerts),
     subcontractQuoteAlerts(stamp, alerts),
@@ -747,9 +760,9 @@ export function startAlertScheduler(intervalMinutes = Number(process.env.ALERT_I
 /** Targeted clock-based reminders, stopped as soon as the work is finished. */
 export async function runTaskReminderScan() {
   await transaction(async connection => {
-    const [reminders]=await connection.execute(`SELECT r.*,t.title,t.status,t.due,p.name project
-      FROM task_reminders r JOIN tasks t ON t.id=r.task_id JOIN projects p ON p.id=t.project_id
-      WHERE r.active=1 AND r.next_due<=NOW() FOR UPDATE`);
+    const [reminders]=await connection.execute(`SELECT r.*,t.title,t.status,t.due,COALESCE(p.name,'Office / general') project
+      FROM task_reminders r JOIN tasks t ON t.id=r.task_id LEFT JOIN projects p ON p.id=t.project_id
+      WHERE (t.project_id IS NULL OR p.active=1) AND r.active=1 AND r.next_due<=NOW() FOR UPDATE`);
     for (const reminder of reminders) {
       if (['Completed','Approved'].includes(reminder.status)) {
         await connection.execute('UPDATE task_reminders SET active=0 WHERE task_id=?',[reminder.task_id]);

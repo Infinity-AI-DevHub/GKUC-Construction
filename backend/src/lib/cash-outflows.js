@@ -12,7 +12,7 @@ export async function cashOutflows(companyId) {
       WHERE b.company_id=? AND b.status='Unpaid'`, [companyId]),
     query(`SELECT i.id,i.invoice_no reference,i.amount,i.paid_amount paidAmount,i.due_date expectedDate,
       i.order_id orderId,s.name payee,o.project_id projectId,p.name project,
-      COALESCE((SELECT SUM(c.amount) FROM issued_cheques c WHERE c.invoice_id=i.id AND c.status='Issued'),0) issuedCheques
+      COALESCE((SELECT SUM(a.allocated_amount) FROM issued_cheque_invoices a JOIN issued_cheques c ON c.id=a.cheque_id WHERE a.invoice_id=i.id AND c.status IN ('Prepared','Issued')),0) issuedCheques
       FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id
       LEFT JOIN purchase_orders o ON o.id=i.order_id LEFT JOIN projects p ON p.id=o.project_id
       WHERE i.company_id=? AND i.status<>'Paid'`, [companyId]),
@@ -20,11 +20,11 @@ export async function cashOutflows(companyId) {
       COALESCE((SELECT SUM(i.amount) FROM supplier_invoices i WHERE i.order_id=o.id),0) invoiced
       FROM purchase_orders o JOIN projects p ON p.id=o.project_id JOIN suppliers s ON s.id=o.supplier_id
       WHERE p.company_id=? AND o.status<>'Cancelled'`, [companyId]),
-    query(`SELECT c.id,c.cheque_number reference,c.payee,c.purpose description,c.amount,
+    query(`SELECT c.id,c.cheque_number reference,c.payee,c.purpose description,c.amount,c.status,
       c.cheque_date expectedDate,i.order_id orderId,o.project_id projectId,p.name project
       FROM issued_cheques c LEFT JOIN supplier_invoices i ON i.id=c.invoice_id
       LEFT JOIN purchase_orders o ON o.id=i.order_id LEFT JOIN projects p ON p.id=o.project_id
-      WHERE c.company_id=? AND c.status='Issued'`, [companyId]),
+      WHERE c.company_id=? AND c.status IN ('Prepared','Issued')`, [companyId]),
     query(`SELECT s.id,CONCAT(c.name,' ••••',c.last_four) payee,s.statement_date reference,
       s.due_date expectedDate,s.amount,s.paid_amount paidAmount
       FROM credit_card_statements s JOIN company_credit_cards c ON c.id=s.card_id
@@ -45,7 +45,7 @@ export async function cashOutflows(companyId) {
     ...bills.map(row=>source('Operating bill',row,row.amount,'High','Unpaid',row.description,'/finance/bills')),
     ...invoices.map(row=>source('Supplier invoice',row,Number(row.amount)-Number(row.paidAmount)-Number(row.issuedCheques),'High','Unpaid','Supplier invoice balance','/finance/supplier-invoices')),
     ...orders.map(row=>source('Purchase order',row,Number(row.amount)-Number(row.invoiced),'Medium',row.status,'Uninvoiced purchase order balance','/materials')),
-    ...cheques.map(row=>source('Issued cheque',row,row.amount,'High','Issued',row.description,'/finance/cheques')),
+    ...cheques.map(row=>source('Issued cheque',row,row.amount,'High',row.status,row.description,'/finance/cheques')),
     ...cards.map(row=>source('Credit card',row,Number(row.amount)-Number(row.paidAmount),'High','Unpaid','Card statement balance','/finance/credit-cards')),
     ...payroll.map(row=>source('Payroll',row,row.amount,'High','Approved',`${row.payFrequency} payroll ending ${date(row.periodEnd)}`,'/people/payroll'))
   ].filter(row=>row.amount>0);

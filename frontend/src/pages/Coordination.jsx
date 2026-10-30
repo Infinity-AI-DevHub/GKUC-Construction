@@ -55,11 +55,12 @@ function LiveSites({ board, can, onReschedule }) {
   return <>
     <div className="attendance-summary">
       <Summary label="Sites running" value={board.activeCount} icon={HardHat} />
-      <Summary label="People on site" value={board.sites.reduce((sum, site) => sum + site.headcount, 0)} icon={HardHat} />
+      <Summary label="Site workforce today" value={board.sites.reduce((sum, site) => sum + site.headcount, 0)} icon={HardHat} />
       <Summary label="Vehicles out" value={board.sites.reduce((sum, site) => sum + site.vehicles.length, 0)} icon={Truck} />
       <Summary label="Tools out" value={board.sites.reduce((sum, site) => sum + site.equipment.length, 0)} icon={Wrench} />
     </div>
 
+    <p className="coordination-workforce-note">Today’s workforce includes recorded attendance and scheduled workers. Each person’s status is shown below.</p>
     <div className="site-board">
       {board.sites.map(site => (
         <section className={`site-card ${slug(site.siteStatus)}`} key={site.id}>
@@ -83,7 +84,7 @@ function LiveSites({ board, can, onReschedule }) {
           )}
 
           <dl>
-            <div><dt>On site today</dt><dd>{site.headcount} people</dd></div>
+            <div><dt>Workforce today</dt><dd>{site.headcount} people <small>{site.attendanceCount || 0} with attendance recorded</small></dd></div>
             <div><dt>Open tasks</dt><dd>{site.openTasks}</dd></div>
             <div><dt>Next milestone</dt>
               <dd>{site.nextMilestone ? `${site.nextMilestone.title} · ${shortDate(site.nextMilestone.dueDate)}` : '—'}</dd></div>
@@ -96,12 +97,12 @@ function LiveSites({ board, can, onReschedule }) {
               {site.latestReport.issue ? ` — ${site.latestReport.issue}` : ''}</p>
           )}
 
-          <div className="site-people">
-            {site.team.slice(0, 8).map(person => (
-              <span key={person.id} title={`${person.name} — ${person.designation}`}><Avatar name={person.name} /></span>
-            ))}
-            {site.team.length > 8 && <span className="site-more">+{site.team.length - 8}</span>}
-            {!site.team.length && <small>Nobody assigned</small>}
+          <div className="site-people site-workforce-list">
+            {site.team.map(person => <div className="site-workforce-person" key={person.id}>
+              <Avatar name={person.name} /><div><strong>{person.name}</strong><small>{person.designation || person.projectRole || 'Site worker'}</small>
+                <span>{person.attendanceState === 'Checked out' ? 'Worked today · checked out' : person.status}{person.source ? ` · ${person.source}` : ''}</span></div>
+            </div>)}
+            {!site.team.length && <small>No workers recorded or scheduled at this site today.</small>}
           </div>
         </section>
       ))}

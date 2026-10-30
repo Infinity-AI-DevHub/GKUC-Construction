@@ -60,7 +60,8 @@ export function calculatePayslip(employee, policy, components = [], payFrequency
   const payableDays = daysPresent + paidLeaveDays;
   // The monthly statutory basis is not earnings. Approved paid leave is earnings;
   // unpaid leave is excluded once, never subtracted again as a second deduction.
-  const basic = money(dailyRate * payableDays);
+  const shortDayReduction = money(Math.max(0, Number(employee.short_day_reduction || 0)));
+  const basic = money(Math.max(0, dailyRate * payableDays - shortDayReduction));
   const paidLeavePay = money(dailyRate * paidLeaveDays);
   const overtimePay = Number(employee.overtime_pay);
   const componentTotal = kind => money(components.filter(row => row.kind === kind)
@@ -97,7 +98,7 @@ export function calculatePayslip(employee, policy, components = [], payFrequency
   const employerCost = money(grossEarnings + reimbursementTotal + epfEmployerContribution + etfEmployerContribution);
 
   return {
-    basic: money(basic), paidLeaveDays, unpaidLeaveDays, payableDays, paidLeavePay, contributionBase, overtimePay: money(overtimePay), allowanceTotal, reimbursementTotal,
+    basic: money(basic), shortDayReduction, paidLeaveDays, unpaidLeaveDays, payableDays, paidLeavePay, contributionBase, overtimePay: money(overtimePay), allowanceTotal, reimbursementTotal,
     grossEarnings, epfEmployeeDeduction, epfEmployerContribution, etfEmployerContribution,
     otherDeduction, lateDeduction, unpaidLeaveDeduction, salaryAdvanceDeduction, deductions, netPay, employerCost
   };

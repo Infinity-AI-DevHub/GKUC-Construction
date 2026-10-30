@@ -117,6 +117,7 @@ export const patch = (path, body) => api(path, { method: 'PATCH', body: JSON.str
 
 /* Formatting shared across every module so figures read the same way everywhere. */
 export const money = value => `LKR ${(Number(value || 0) / 1000000).toFixed(1)}M`;
+export const rupeesExact = value => `LKR ${Number(value || 0).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const rupees = value => `LKR ${Number(value || 0).toLocaleString('en-LK', { maximumFractionDigits: 0 })}`;
 export const initials = name => (name || '?').split(' ').map(part => part[0]).slice(0, 2).join('');
 export const shortDate = value => (value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');

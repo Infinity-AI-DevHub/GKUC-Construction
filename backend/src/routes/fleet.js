@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { audit, getOne, pool, query, today, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
 import { dueLabel } from './bootstrap.js';
+import { maintenanceDue, maintenancePresets } from '../lib/vehicle-maintenance.js';
 import { publishChange } from '../lib/realtime.js';
 
 const router = Router();
@@ -14,13 +15,22 @@ const select = `SELECT f.id,f.vehicle,f.registration reg,CASE WHEN f.driver_empl
   COALESCE(primary_doc.expiry_date,f.due_date) due_date,f.odometer,
   f.project_id projectId,p.name project,e.id driverEmployeeId,e.name driverName,e.phone driverPhone,
   f.service_interval_km serviceIntervalKm,f.service_interval_months serviceIntervalMonths,
-  f.last_service_date lastServiceDate,f.last_service_odometer lastServiceOdometer
+  f.last_service_date lastServiceDate,f.last_service_odometer lastServiceOdometer,
+  f.make,f.model,f.model_year modelYear,f.engine_code engineCode,f.manufacturer_notes manufacturerNotes
   FROM fleet f LEFT JOIN projects p ON p.id=f.project_id LEFT JOIN visible_employees e ON e.id=f.driver_employee_id
   LEFT JOIN vehicle_documents primary_doc ON primary_doc.vehicle_id=f.id AND primary_doc.doc_type=f.renewal_type`;
 
 const fleetSchema = z.object({
   vehicle: z.string().min(2).max(180),
   registration: z.string().min(2).max(60),
+  make: z.string().trim().max(100).nullable().optional(),
+  model: z.string().trim().max(100).nullable().optional(),
+  modelYear: z.number().int().min(1900).max(2100).nullable().optional(),
+  engineCode: z.string().trim().max(100).nullable().optional(),
+  manufacturerNotes: z.string().trim().max(1500).nullable().optional(),
+  maintenanceProfile: z.enum(['Japanese','European']).optional(),
+  engineOilBaselineKm: z.number().int().nonnegative().optional(),
+  brakeOilBaselineKm: z.number().int().nonnegative().optional(),
   driver: z.string().max(120).optional(),
   status: z.enum(['Available', 'Assigned', 'Repair', 'Inactive']),
   renewal: z.string().min(2).max(100),
@@ -54,7 +64,9 @@ export function serviceDue(vehicle) {
 
 router.get('/', auth, permit('transport.view','transport.manage'), wrap(async (_req, res) => {
   const vehicles = await query(`${select} ORDER BY f.id`);
-  res.json(vehicles.map(vehicle => ({ ...vehicle, due: dueLabel(vehicle.due_date), service: serviceDue(vehicle) })));
+  const schedules = await query(scheduleSelect);
+  res.json(vehicles.map(vehicle => ({ ...vehicle, due: dueLabel(vehicle.due_date), service: serviceDue(vehicle),
+    maintenanceSchedules: schedules.filter(row => Number(row.vehicleId) === Number(vehicle.id)).map(row => maintenanceDue(row,vehicle.odometer)) })));
 }));
 
 /* Vehicles are shared; the selected company determines which funded fuel float can pay. */
@@ -111,9 +123,50 @@ router.get('/monthly-report',auth,permit('finance.vehicleExpenses','transport.vi
     totals:{...totals,costPerKm:totals.distanceKm>0?Math.round(totals.totalCost/totals.distanceKm*100)/100:null}});
 }));
 
+const scheduleSelect = `SELECT s.id,s.vehicle_id vehicleId,s.name,s.interval_km intervalKm,s.last_odometer lastOdometer,
+  s.last_completed_date lastCompletedDate,s.remind_before_km remindBeforeKm,s.active,
+  f.vehicle,f.registration,f.odometer,f.status vehicleStatus FROM vehicle_maintenance_schedules s JOIN fleet f ON f.id=s.vehicle_id`;
+const scheduleSchema = z.object({ name: z.string().trim().min(2).max(120), intervalKm: z.number().int().positive().max(10000000),
+  lastOdometer: z.number().int().nonnegative(), lastCompletedDate: isoDate.nullable().optional(),
+  remindBeforeKm: z.number().int().nonnegative().default(500), active: z.boolean().default(true)
+}).refine(value => value.remindBeforeKm < value.intervalKm, { message: 'The reminder distance must be below the maintenance interval.', path: ['remindBeforeKm'] });
+
+router.get('/maintenance-schedules', auth, permit('transport.view','transport.manage'), wrap(async (_req,res) => {
+  res.json((await query(`${scheduleSelect} ORDER BY f.registration,s.name`)).map(row => maintenanceDue(row,row.odometer)));
+}));
+
+async function saveMaintenanceSchedule(req,res) {
+  const body = req.body;
+  const id = await transaction(async connection => {
+    const [[vehicle]] = await connection.execute('SELECT id,odometer FROM fleet WHERE id=? FOR UPDATE',[req.params.id]);
+    if (!vehicle) throw Object.assign(new Error('Vehicle not found'),{status:404});
+    if (body.lastOdometer > Number(vehicle.odometer)) throw Object.assign(new Error('The last maintenance reading cannot exceed the current odometer.'),{status:400});
+    if (body.lastCompletedDate && body.lastCompletedDate > today()) throw Object.assign(new Error('The last maintenance date cannot be in the future.'),{status:400});
+    let before = null;
+    if (req.params.scheduleId) {
+      [[before]] = await connection.execute('SELECT * FROM vehicle_maintenance_schedules WHERE id=? AND vehicle_id=? FOR UPDATE',[req.params.scheduleId,vehicle.id]);
+      if (!before) throw Object.assign(new Error('Maintenance reminder not found for this vehicle.'),{status:404});
+      await connection.execute(`UPDATE vehicle_maintenance_schedules SET name=?,interval_km=?,last_odometer=?,last_completed_date=?,remind_before_km=?,active=? WHERE id=?`,
+        [body.name,body.intervalKm,body.lastOdometer,body.lastCompletedDate||null,body.remindBeforeKm,body.active, before.id]);
+    } else {
+      const [created] = await connection.execute(`INSERT INTO vehicle_maintenance_schedules
+        (vehicle_id,name,interval_km,last_odometer,last_completed_date,remind_before_km,active,created_by) VALUES (?,?,?,?,?,?,?,?)`,
+        [vehicle.id,body.name,body.intervalKm,body.lastOdometer,body.lastCompletedDate||null,body.remindBeforeKm,body.active,req.user.id]);
+      before = { id: created.insertId };
+    }
+    await audit(connection,req.user.id,req.params.scheduleId ? 'UPDATE' : 'CREATE','vehicle_maintenance_schedule',before.id,before,body,req.ip);
+    return before.id;
+  });
+  publishChange('fleet',{vehicleId:Number(req.params.id)});
+  res.status(req.params.scheduleId ? 200 : 201).json({id});
+}
+router.post('/:id/maintenance-schedules', auth, permit('transport.manage'), validate(scheduleSchema), wrap(saveMaintenanceSchedule));
+router.put('/:id/maintenance-schedules/:scheduleId', auth, permit('transport.manage'), validate(scheduleSchema), wrap(saveMaintenanceSchedule));
+
 router.get('/:id', auth, permit('transport.view','transport.manage'), wrap(async (req, res) => {
   const vehicle = await getOne(`${select} WHERE f.id=?`, [req.params.id]);
   if (!vehicle) return res.status(404).json({ error: 'Asset not found' });
+  const schedules = (await query(`${scheduleSelect} WHERE s.vehicle_id=? ORDER BY s.name`,[vehicle.id])).map(row => maintenanceDue(row,vehicle.odometer));
   const [documents, fuel, maintenance, running, drivers, readings, renewals] = await Promise.all([
     query('SELECT id,doc_type docType,reference,expiry_date expiryDate,cost FROM vehicle_documents WHERE vehicle_id=? ORDER BY expiry_date', [vehicle.id]),
     query(`SELECT f.id,f.fuel_date fuelDate,f.litres,f.cost,f.odometer,f.driver,p.name project,
@@ -122,7 +175,7 @@ router.get('/:id', auth, permit('transport.view','transport.manage'), wrap(async
       LEFT JOIN petty_cash_entries pce ON pce.fuel_record_id=f.id
       LEFT JOIN petty_cash_floats pcf ON pcf.id=pce.float_id
       WHERE f.vehicle_id=? ORDER BY f.fuel_date DESC LIMIT 50`, [vehicle.id]),
-    query(`SELECT m.id,m.service_date serviceDate,m.maintenance_kind kind,m.description,m.cost,m.garage,m.odometer,
+    query(`SELECT m.id,m.service_date serviceDate,m.maintenance_kind kind,m.description,m.cost,m.garage,m.odometer,m.completed_schedules completedSchedules,
       p.name project FROM vehicle_maintenance m LEFT JOIN projects p ON p.id=m.project_id
       WHERE m.vehicle_id=? ORDER BY m.service_date DESC,m.id DESC`, [vehicle.id]),
     query(`SELECT COALESCE((SELECT SUM(cost) FROM fuel_records WHERE vehicle_id=?),0) fuelCost,
@@ -146,6 +199,7 @@ router.get('/:id', auth, permit('transport.view','transport.manage'), wrap(async
     documents: documents.map(document => ({ ...document, due: dueLabel(document.expiryDate) })),
     fuel,
     maintenance,
+    maintenanceSchedules: schedules,
     drivers,readings,renewals,
     running: {...running[0],distanceKm:distance,litresPer100Km:distance>0?Math.round(measuredLitres/distance*10000)/100:null}
   });
@@ -166,6 +220,18 @@ router.post('/', auth, permit('transport.manage'), validate(fleetSchema), wrap(a
         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,[body.vehicle,body.registration,driver,body.driverEmployeeId||null,
         body.status,body.renewal,body.dueDate,body.projectId||null,body.odometer||0,
         body.serviceIntervalKm||0,body.serviceIntervalMonths||0]);
+      await connection.execute(`UPDATE fleet SET make=?,model=?,model_year=?,engine_code=?,manufacturer_notes=? WHERE id=?`,
+        [body.make||null,body.model||null,body.modelYear||null,body.engineCode||null,body.manufacturerNotes||null,result.insertId]);
+      if (body.maintenanceProfile) {
+        for (const preset of maintenancePresets(body.maintenanceProfile)) {
+          const baseline = preset.name === 'Engine oil change' ? body.engineOilBaselineKm : body.brakeOilBaselineKm;
+          if (baseline === undefined || baseline > (body.odometer || 0))
+            throw Object.assign(new Error('Enter each last oil-change reading at or below the current odometer.'), { status: 400 });
+          await connection.execute(`INSERT INTO vehicle_maintenance_schedules
+            (vehicle_id,name,interval_km,last_odometer,remind_before_km,created_by) VALUES (?,?,?,?,500,?)`,
+            [result.insertId,preset.name,preset.intervalKm,baseline,req.user.id]);
+        }
+      }
       if(driver)await connection.execute(`INSERT INTO vehicle_driver_assignments
         (vehicle_id,employee_id,driver_name,project_id,assigned_on,assigned_by) VALUES (?,?,?,?,CURDATE(),?)`,
         [result.insertId,body.driverEmployeeId||null,driver,body.projectId||null,req.user.id]);
@@ -194,9 +260,10 @@ router.post('/', auth, permit('transport.manage'), validate(fleetSchema), wrap(a
 router.patch('/:id', auth, permit('transport.manage'), validate(fleetSchema.partial()), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM fleet WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Asset not found' });
-  if(['driver','driverEmployeeId','odometer','renewal','dueDate'].some(key=>key in req.body))
+  if(['maintenanceProfile','engineOilBaselineKm','brakeOilBaselineKm','driver','driverEmployeeId','odometer','renewal','dueDate'].some(key=>key in req.body))
     return res.status(400).json({error:'Use the dated driver, odometer or document record to change these fields'});
   const columns = {
+    modelYear:'model_year',engineCode:'engine_code',manufacturerNotes:'manufacturer_notes',
     renewal: 'renewal_type', dueDate: 'due_date', projectId: 'project_id', driverEmployeeId: 'driver_employee_id',
     serviceIntervalKm: 'service_interval_km', serviceIntervalMonths: 'service_interval_months',
     lastServiceDate: 'last_service_date', lastServiceOdometer: 'last_service_odometer'
@@ -372,6 +439,7 @@ router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
 
 router.post('/:id/maintenance', auth, permit('transport.manage'), validate(z.object({
   companyId:z.number().int().positive().optional(),
+  completedScheduleIds: z.array(z.number().int().positive()).max(50).default([]),
   kind:z.enum(['Service','Repair','Inspection']).default('Service'),
   serviceDate: isoDate,
   description: z.string().min(3).max(400),
@@ -394,9 +462,20 @@ router.post('/:id/maintenance', auth, permit('transport.manage'), validate(z.obj
     if(!companyId&&vehicle.project_id){const [[assignedProject]]=await connection.execute('SELECT company_id companyId FROM projects WHERE id=?',[vehicle.project_id]);companyId=assignedProject?.companyId||null;}
     const [[company]]=companyId?await connection.execute('SELECT id FROM companies WHERE id=? AND active=1',[companyId]):[[null]];
     if(!company)throw Object.assign(new Error('Operating company not found'),{status:400});
+    const scheduleIds = [...new Set(body.completedScheduleIds)];
+    const [schedules] = scheduleIds.length ? await connection.execute(`SELECT id,name,last_completed_date FROM vehicle_maintenance_schedules
+      WHERE vehicle_id=? AND active=1 AND id IN (${scheduleIds.map(()=>'?').join(',')}) ORDER BY id FOR UPDATE`, [vehicle.id,...scheduleIds]) : [[]];
+    if (schedules.length !== scheduleIds.length) throw Object.assign(new Error('Choose active maintenance reminders belonging to this vehicle.'),{status:400});
+    if (schedules.some(row => row.last_completed_date && String(row.last_completed_date).slice(0,10) > body.serviceDate))
+      throw Object.assign(new Error('This work predates the last completion of a selected maintenance reminder.'),{status:400});
     const [result]=await connection.execute(`INSERT INTO vehicle_maintenance
       (vehicle_id,company_id,project_id,service_date,maintenance_kind,description,cost,garage,odometer,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)`,
       [vehicle.id,companyId,body.projectId||null,body.serviceDate,body.kind,body.description,body.cost,body.garage||null,body.odometer,req.user.id]);
+    if (scheduleIds.length) {
+      await connection.execute('UPDATE vehicle_maintenance SET completed_schedules=? WHERE id=?', [JSON.stringify(schedules.map(row=>({id:row.id,name:row.name}))),result.insertId]);
+      await connection.execute(`UPDATE vehicle_maintenance_schedules SET last_odometer=?,last_completed_date=?,last_maintenance_id=?
+        WHERE vehicle_id=? AND id IN (${scheduleIds.map(()=>'?').join(',')})`, [body.odometer,body.serviceDate,result.insertId,vehicle.id,...scheduleIds]);
+    }
     if(body.kind==='Service')await connection.execute(`UPDATE fleet SET last_service_date=?,last_service_odometer=?,
       odometer=GREATEST(odometer,?),status=COALESCE(?,status) WHERE id=?`,
       [body.serviceDate,body.odometer,body.odometer,body.setStatus||null,vehicle.id]);
@@ -414,6 +493,7 @@ router.post('/:id/maintenance', auth, permit('transport.manage'), validate(z.obj
     return result.insertId;
   });
   const row=await getOne('SELECT * FROM vehicle_maintenance WHERE id=?',[id]);
+  publishChange('fleet', {vehicleId:Number(req.params.id)});
   res.status(201).json(row);
 }));
 
