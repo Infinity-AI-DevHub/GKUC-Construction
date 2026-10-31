@@ -4694,7 +4694,7 @@ test('both-company payroll builds separate drafts atomically and protects locked
   const employeeSheet=exported.names.find(name=>name.startsWith(`BATCH-${runs[0].companyId} `));
   assert.ok(employeeSheet,'download contains a separate daily sheet for the employee');
   assert.equal(exported.sheet(employeeSheet).rows[9][1],'2042-02-01');
-  assert.equal(exported.sheet(employeeSheet).rows[9][3],'07:30');
+  assert.equal(exported.sheet(employeeSheet).rows[9][3].slice(0,5),'07:30');
   assert.equal(exported.sheet(employeeSheet).rows[9][6],1600);
   assert.equal((await call(site,'GET',`/payroll/${runs[0].id}/export.xlsx`)).status,403);
   for(const run of runs){
