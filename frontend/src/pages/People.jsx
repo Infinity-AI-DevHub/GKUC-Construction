@@ -370,6 +370,7 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
         <div><strong>Employee EPF</strong><p>{settings.activePolicy?.epfEmployeeRate ?? 'Not set'}%</p></div>
         <div><strong>Employer EPF</strong><p>{settings.activePolicy?.epfEmployerRate ?? 'Not set'}%</p></div>
         <div><strong>Employer ETF</strong><p>{settings.activePolicy?.etfEmployerRate ?? 'Not set'}%</p></div>
+        {settings.activePolicy && ['epfEmployeeRate','epfEmployerRate','etfEmployerRate'].some(key => !(Number(settings.activePolicy[key]) > 0)) && <p className="form-error wide">Contribution rates are zero in this company's current policy. Use Set / change rates to save a corrected dated policy, then regenerate affected Draft payrolls. Approved or paid payrolls remain locked.</p>}
         <p className="form-note wide">EPF and ETF apply only to monthly payroll and use the full configured monthly statutory salary basis without proration. Daily and weekly runs have no EPF/ETF. Earnings, leave, OT, allowances and reimbursements do not change the basis. Employee eligibility remains configurable. Existing salary sheets are not recalculated automatically.</p>
       </div>
     </section>
@@ -441,7 +442,7 @@ function PayrollSchedule({companyId}) {
   </>;
 }
 
-function PolicyForm({ companyId, policy, close, reload }) {
+export function PolicyForm({ companyId, policy, close, reload }) {
   const statutoryRules=(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)||{};
   return <FormModal title="Payroll rules" close={close} label="Save dated policy" wide onSubmit={async values => {
     await post('/payroll/settings/policies', {
@@ -488,9 +489,10 @@ function PolicyForm({ companyId, policy, close, reload }) {
     <div className="payroll-policy-heading wide"><span>06</span><div><strong>Supervisor site charge</strong><p>HR decides whether a qualifying visit or mobilisation should be claimed. It is never paid just because this rate is set.</p></div></div>
     <Field name="supervisorSiteCharge" label="Approved supervisor site charge (LKR per day)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.supervisorSiteCharge ?? 500} />
     <div className="payroll-policy-heading wide"><span>07</span><div><strong>EPF and ETF percentages</strong><p>Employee EPF reduces take-home pay; employer EPF and ETF add to company cost.</p></div></div>
-    <Field name="epfEmployeeRate" label="EPF employee rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.epfEmployeeRate ?? 0} />
-    <Field name="epfEmployerRate" label="EPF employer rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.epfEmployerRate ?? 0} />
-    <Field name="etfEmployerRate" label="ETF employer rate (%)" type="number" min="0" max="100" step="0.001" defaultValue={policy?.etfEmployerRate ?? 0} />
+    {policy && ['epfEmployeeRate','epfEmployerRate','etfEmployerRate'].some(key => !(Number(policy[key]) > 0)) && <p className="form-error wide">The saved policy contains zero contribution rates. This replacement starts with employee EPF 8%, employer EPF 12% and employer ETF 3% for missing/zero rates. Review them and choose an effective date on or before the payroll period end. Save, then regenerate the affected Draft payroll; saved payslips do not change automatically.</p>}
+    <Field name="epfEmployeeRate" label="EPF employee rate (%)" type="number" min="0.001" max="100" step="0.001" defaultValue={Number(policy?.epfEmployeeRate) > 0 ? policy.epfEmployeeRate : 8} />
+    <Field name="epfEmployerRate" label="EPF employer rate (%)" type="number" min="0.001" max="100" step="0.001" defaultValue={Number(policy?.epfEmployerRate) > 0 ? policy.epfEmployerRate : 12} />
+    <Field name="etfEmployerRate" label="ETF employer rate (%)" type="number" min="0.001" max="100" step="0.001" defaultValue={Number(policy?.etfEmployerRate) > 0 ? policy.etfEmployerRate : 3} />
     <p className="form-note wide">Before saving, check the effective date and transport threshold. Eligibility also depends on each employee's profile and contribution start date. Previously recorded overtime and approved payslips keep their original values.</p>
   </FormModal>;
 }

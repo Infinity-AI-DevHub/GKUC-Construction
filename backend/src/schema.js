@@ -296,9 +296,9 @@ async function createHrTables() {
     driver_travel_ot_rate DECIMAL(10,2) NULL,
     supervisor_site_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 225,
     supervisor_travel_ot_rate DECIMAL(10,2) NOT NULL DEFAULT 100,
-    epf_employee_rate DECIMAL(6,3) NOT NULL DEFAULT 0,
-    epf_employer_rate DECIMAL(6,3) NOT NULL DEFAULT 0,
-    etf_employer_rate DECIMAL(6,3) NOT NULL DEFAULT 0,
+    epf_employee_rate DECIMAL(6,3) NOT NULL DEFAULT 8,
+    epf_employer_rate DECIMAL(6,3) NOT NULL DEFAULT 12,
+    etf_employer_rate DECIMAL(6,3) NOT NULL DEFAULT 3,
     epf_basis ENUM('Basic earnings','Gross earnings') NOT NULL DEFAULT 'Basic earnings',
     etf_basis ENUM('Basic earnings','Gross earnings') NOT NULL DEFAULT 'Basic earnings',
     created_by BIGINT UNSIGNED NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -306,8 +306,9 @@ async function createHrTables() {
   ) ENGINE=InnoDB`);
   await query(`INSERT INTO payroll_policies
     (effective_from,office_ot_rate,site_labour_site_ot_rate,site_labour_travel_ot_rate,
-     driver_ot_rate,supervisor_site_ot_rate,supervisor_travel_ot_rate)
-    SELECT '2000-01-01',225,200,100,225,225,100
+     driver_ot_rate,supervisor_site_ot_rate,supervisor_travel_ot_rate,
+     epf_employee_rate,epf_employer_rate,etf_employer_rate)
+    SELECT '2000-01-01',225,200,100,225,225,100,8,12,3
     WHERE NOT EXISTS (SELECT 1 FROM payroll_policies)`);
   await query(`CREATE TABLE IF NOT EXISTS employees (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, code VARCHAR(40) NOT NULL UNIQUE, name VARCHAR(120) NOT NULL,
@@ -2808,8 +2809,9 @@ async function migrateExistingInstalls() {
     'UNIQUE KEY uq_payroll_policy_company_date(company_id,effective_from)');
   await query(`INSERT INTO payroll_policies
     (company_id,effective_from,office_ot_rate,site_labour_site_ot_rate,site_labour_travel_ot_rate,
-     driver_ot_rate,supervisor_site_ot_rate,supervisor_travel_ot_rate)
-    SELECT 2,'2000-01-01',225,200,100,225,225,100
+     driver_ot_rate,supervisor_site_ot_rate,supervisor_travel_ot_rate,
+     epf_employee_rate,epf_employer_rate,etf_employer_rate)
+    SELECT 2,'2000-01-01',225,200,100,225,225,100,8,12,3
     WHERE NOT EXISTS (SELECT 1 FROM payroll_policies WHERE company_id=2)`);
   await addColumn('supplier_invoices', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
   await addColumn('supplier_invoices', 'net_amount', 'DECIMAL(15,2) NOT NULL DEFAULT 0');

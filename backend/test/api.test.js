@@ -4686,7 +4686,16 @@ test('both-company payroll builds separate drafts atomically and protects locked
   const runs=created.body.runs;
   const excel=await fetch(`${base}/payroll/${runs[0].id}/export.xlsx`,{headers:{Authorization:`Bearer ${owner}`}});
   assert.equal(excel.status,200);assert.match(excel.headers.get('content-type'),/spreadsheetml/);
-  assert.equal(Buffer.from(await excel.arrayBuffer()).subarray(0,2).toString(),'PK');
+  const excelBuffer=Buffer.from(await excel.arrayBuffer());
+  assert.equal(excelBuffer.subarray(0,2).toString(),'PK');
+  const {readWorkbook}=await import('../src/lib/xlsx.js');
+  const exported=readWorkbook(excelBuffer);
+  assert.equal(exported.names[0],'Salary details');
+  const employeeSheet=exported.names.find(name=>name.startsWith(`BATCH-${runs[0].companyId} `));
+  assert.ok(employeeSheet,'download contains a separate daily sheet for the employee');
+  assert.equal(exported.sheet(employeeSheet).rows[9][1],'2042-02-01');
+  assert.equal(exported.sheet(employeeSheet).rows[9][3].slice(0,5),'07:30');
+  assert.equal(exported.sheet(employeeSheet).rows[9][6],1600);
   assert.equal((await call(site,'GET',`/payroll/${runs[0].id}/export.xlsx`)).status,403);
   for(const run of runs){
     const detail=await call(owner,'GET',`/payroll/${run.id}`);
@@ -5468,4 +5477,48 @@ test('petty cash accounts open with audited funding and edit details without rew
   assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${empty.body.id}`,{...details,name:'Fuel reserve',accountType:'Fuel'})).status,204);
   const [[audit]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.audit_logs WHERE entity='petty_cash_float' AND entity_id=?`,[String(id)]);
   assert.equal(audit.total,2);
+});
+
+test('zero legacy EPF policy blocks payroll atomically and a dated correction deducts 2400 from take-home pay',async()=>{
+  const owner=await login();
+  for (const companyId of [1,2]) {
+    const settings=await call(owner,'GET',`/payroll/settings?companyId=${companyId}`);
+    const baseline=settings.body.policies.find(row=>String(row.effectiveFrom).startsWith('2000-01-01'));
+    assert.ok(baseline);assert.equal(Number(baseline.epfEmployeeRate),8);
+    assert.equal(Number(baseline.epfEmployerRate),12);assert.equal(Number(baseline.etfEmployerRate),3);
+  }
+  const person=await call(owner,'POST','/employees',{code:`EPF-ZERO-${Date.now()}`,name:'EPF zero policy regression',joinDate:'2049-01-01',
+    compensationEffectiveFrom:'2049-01-01',payrollCompanyId:2,payBasis:'Monthly salary',payFrequency:'Monthly',dailyRate:3200,
+    basicSalary:30000,employmentType:'Permanent',epfEligible:true,etfEligible:true});
+  assert.equal(person.status,201,JSON.stringify(person.body));
+  await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out,work_location)
+    VALUES (?,?,'Worker','2049-02-01','Checked out','07:30','16:30','Office')`,[person.body.id,person.body.name]);
+  const policy={companyId:2,effectiveFrom:'2049-01-01',officeOtRate:225,siteLabourSiteOtRate:200,siteLabourTravelOtRate:100,
+    driverOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3};
+  for(const key of ['epfEmployeeRate','epfEmployerRate','etfEmployerRate'])
+    assert.equal((await call(owner,'POST','/payroll/settings/policies',{...policy,[key]:0})).status,400);
+  const saved=await call(owner,'POST','/payroll/settings/policies',policy);
+  assert.equal(saved.status,201,JSON.stringify(saved.body));
+  // Reproduce a previously saved zero policy, without allowing the new settings API to create one.
+  await admin.query(`UPDATE ${testDatabase}.payroll_policies SET epf_employee_rate=0,epf_employer_rate=0,etf_employer_rate=0 WHERE id=?`,[saved.body.id]);
+  const body={companyId:2,periodStart:'2049-02-01',periodEnd:'2049-02-22',payFrequency:'Monthly'};
+  const blocked=await call(owner,'POST','/payroll',body);
+  assert.equal(blocked.status,409,JSON.stringify(blocked.body));assert.match(blocked.body.error,/rates are zero or invalid/);
+  const [[count]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.payroll_runs WHERE company_id=2 AND period_start='2049-02-01'`);
+  assert.equal(count.count,0);
+  const corrected=await call(owner,'POST','/payroll/settings/policies',{...policy,effectiveFrom:'2049-02-01'});
+  assert.equal(corrected.status,201,JSON.stringify(corrected.body));
+  const run=await call(owner,'POST','/payroll',body);assert.equal(run.status,201,JSON.stringify(run.body));
+  const slip=(await call(owner,'GET',`/payroll/${run.body.id}`)).body.payslips.find(row=>row.employeeCode===person.body.code);
+  assert.ok(slip);assert.equal(Number(slip.contributionBase),30000);assert.equal(Number(slip.epfEmployeeDeduction),2400);
+  assert.equal(Number(slip.grossEarnings),3200);assert.equal(Number(slip.netPay),800);
+  assert.equal(Number(slip.netPay),Number(slip.grossEarnings)+Number(slip.reimbursementTotal)-Number(slip.deductions));
+  assert.equal(Number(slip.epfEmployerContribution),3600);assert.equal(Number(slip.etfEmployerContribution),900);
+  const before=JSON.stringify(slip);
+  await admin.query(`UPDATE ${testDatabase}.payroll_policies SET epf_employee_rate=0 WHERE id=?`,[corrected.body.id]);
+  const failedRebuild=await call(owner,'POST','/payroll',body);assert.equal(failedRebuild.status,409);
+  const unchanged=(await call(owner,'GET',`/payroll/${run.body.id}`)).body.payslips.find(row=>row.employeeCode===person.body.code);
+  assert.equal(JSON.stringify(unchanged),before,'failed regeneration preserves the original draft and its slips');
+  assert.equal((await call(owner,'DELETE',`/payroll/${run.body.id}`)).status,204);
+  await admin.query(`DELETE FROM ${testDatabase}.payroll_policies WHERE id IN (?,?)`,[saved.body.id,corrected.body.id]);
 });

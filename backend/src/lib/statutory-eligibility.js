@@ -5,6 +5,17 @@ export const DEFAULT_STATUTORY_RULES = Object.freeze({
   dailyDaysPerMonth: 25
 });
 
+export function contributionRateProblems(employee, policy, payFrequency) {
+  if (payFrequency !== 'Monthly') return [];
+  const problems = [];
+  for (const [eligible,key,label] of [
+    [employee.epf_eligible,'epf_employee_rate','Employee EPF'],
+    [employee.epf_eligible,'epf_employer_rate','Employer EPF'],
+    [employee.etf_eligible,'etf_employer_rate','Employer ETF']
+  ]) if (eligible && !(Number(policy[key]) > 0 && Number(policy[key]) <= 100)) problems.push(label);
+  return problems;
+}
+
 export function statutoryRules(policy) {
   const stored = typeof policy?.statutory_rules === 'string'
     ? JSON.parse(policy.statutory_rules) : policy?.statutory_rules;

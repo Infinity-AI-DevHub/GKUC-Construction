@@ -1,4 +1,5 @@
 import {payslipDetail} from './payslip-detail.js';
+import {employeePayrollSheets} from './payroll-workbook-detail.js';
 const fields=[['Employee code','employeeCode'],['Employee','employee'],['Worked days','daysPresent'],['Absent days','daysAbsent'],['Paid leave days','paidLeaveDays'],['Unpaid leave days','unpaidLeaveDays'],['Payable days','payableDays'],['Earned salary','basic'],['Paid leave pay (included in salary)','paidLeavePay'],['Office OT hours','officeOtHours'],['Office OT pay','officeOtPay'],['Site OT hours','siteOtHours'],['Site OT pay','siteOtPay'],['Travel OT hours','travelOtHours'],['Travel OT pay','travelOtPay'],['Allowances','allowanceTotal'],['Reimbursements','reimbursementTotal'],['Gross earnings','grossEarnings'],['Late minutes','lateMinutes'],['Late deduction','lateDeduction'],['Employee EPF','epfEmployeeDeduction'],['Other deductions','otherDeduction'],['Salary advance recovery','salaryAdvanceDeduction'],['Total deductions','deductions'],['Take-home pay','netPay'],['EPF/ETF salary basis','contributionBase'],['Employer EPF','epfEmployerContribution'],['Employer ETF','etfEmployerContribution'],['Employer cost','employerCost']];
 const parse=value=>typeof value==='string'?JSON.parse(value):value||{};
 const sheet=(name,headers,rows)=>({name,columns:headers.map((_,i)=>i<2?28:20),freeze:1,rows:[headers.map(value=>({value,style:1})),...rows]});
@@ -13,8 +14,9 @@ export function payrollSheets(run){
     for(const row of slip.advanceRecoveries||[])advances.push([...who,row.advanceDate,row.description,Number(row.amount)]);
     for(const row of d.warnings||[])warnings.push([...who,row.workDate,row.message]);
   }
-  return [sheet('Run',['Company','Reference','From','To','Frequency','Status','Currency'],[[run.company,run.reference,run.periodStart,run.periodEnd,run.payFrequency,run.status,'LKR']]),
-    sheet('Salary details',fields.map(([label])=>label),run.payslips.map(s=>fields.map(([,key],i)=>i<2?s[key]:Number(s[key]||0)))),
+  return [sheet('Salary details',fields.map(([label])=>label),run.payslips.map(s=>fields.map(([,key],i)=>i<2?s[key]:Number(s[key]||0)))),
+    ...employeePayrollSheets(run,['Salary details','Run','OT details','Attendance and lateness','Leave','Pay components','Advance recoveries','Warnings']),
+    sheet('Run',['Company','Reference','From','To','Frequency','Status','Currency'],[[run.company,run.reference,run.periodStart,run.periodEnd,run.payFrequency,run.status,'LKR']]),
     sheet('OT details',['Code','Employee','Date','Type','Source','Hours','Rate (LKR)','Pay (LKR)','Policy'],ot),
     sheet('Attendance and lateness',['Code','Employee','Date','In','Out','Normal start','Normal end','Daily rate','Late minutes','Deductible minutes','Deduction','Policy','Normal hours worked','Paid hours per day','Short-day reduction (already excluded from earned salary)'],attendance),
     sheet('Leave',['Code','Employee','Date','Payment','Type','Requests'],leave),

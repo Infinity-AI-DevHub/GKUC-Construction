@@ -8,14 +8,14 @@ import {calculateAttendancePayroll} from '../lib/attendance-payroll.js';
 import {calculatePayrollLeave} from '../lib/payroll-leave.js';
 import { PAY_BASES, PAY_FREQUENCIES, PAYROLL_CATEGORIES, calculatePayslip, payProfileError } from '../lib/payroll-policy.js';
 import {rulesFor,calculateTransport,INITIAL_HR_RULES} from '../lib/hr-payroll-rules.js';
-import { contributionEligibility, contributionExplanation, DEFAULT_STATUTORY_RULES } from '../lib/statutory-eligibility.js';
+import { contributionEligibility, contributionExplanation, contributionRateProblems, DEFAULT_STATUTORY_RULES } from '../lib/statutory-eligibility.js';
 import {writeWorkbook} from '../lib/xlsx-write.js';
 import {sendDocument} from '../lib/document-pdf.js';
 import {payrollSheets,payslipDocument} from '../lib/payroll-export.js';
 
 const router = Router();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const percent = z.number().min(0).max(100);
+const percent = z.number().positive('Enter a contribution rate greater than zero. Employee exclusions belong in the employee profile.').max(100);
 const money = value => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 
 router.get('/schedules',auth,permit("hr.settings"),wrap(async(req,res)=>res.json(await query('SELECT id,period_start periodStart,period_end periodEnd,pay_frequency payFrequency,run_at runAt,status,message FROM payroll_schedules WHERE company_id=? ORDER BY id DESC',[Number(req.query.companyId)||1]))));
@@ -332,6 +332,8 @@ async function buildPayroll(req,connection){
         const eligibility = contributionEligibility(row, policy, periodEnd);
         row.epf_eligible = eligibility.epf;
         row.etf_eligible = eligibility.etf;
+        const missingRates = contributionRateProblems(row,policy,payFrequency);
+        if (missingRates.length) throw fail(409,`${payrollCompany.name}: ${row.name} is eligible for contributions, but ${missingRates.join(', ')} rates are zero or invalid in policy ${policy.id} (${String(policy.effective_from).slice(0,10)}). Open People > Payroll settings > Set / change rates, save a corrected dated policy effective on or before ${periodEnd}, then regenerate this Draft payroll. No payroll changes were saved.`);
         const days=attendanceForEmployee(row,attendanceRows,employeeNames);
         try {
           const leave=calculatePayrollLeave(row,days,approvedLeave,periodStart,periodEnd);
