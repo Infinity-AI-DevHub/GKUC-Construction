@@ -348,17 +348,29 @@ function Payroll({ can, companyId }) {
   </>;
 }
 
-const POLICY_TEMPLATE = '120px repeat(11,110px) repeat(3,105px)';
+const POLICY_TEMPLATE = '120px repeat(11,110px) repeat(3,105px) 120px';
 const PROFILE_TEMPLATE = 'minmax(180px,1.3fr) 135px 105px 140px 80px 80px 100px';
 
-function PayrollSettings({ data, reload, companies, companyId, company }) {
+export function PayrollSettings({ data, reload, companies, companyId, company }) {
   const [settings, setSettings] = useState({ activePolicy: null, policies: [], components: [] });
   const [policyOpen, setPolicyOpen] = useState(false);
+  const [removingPolicy,setRemovingPolicy]=useState(false);
+  const [policyError,setPolicyError]=useState('');
   const [profile, setProfile] = useState(null);
   const [componentEmployee, setComponentEmployee] = useState(null);
   const load = () => api(`/payroll/settings?companyId=${companyId}`).then(setSettings);
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
+  const removePolicy=async row=>{
+    const label=row ? `the policy effective ${shortDate(row.effectiveFrom)}` : `all ${settings.policies.length} payroll policies`;
+    if(!window.confirm(`Delete ${label} for ${company?.name || 'this company'}? They will no longer be used for calculations. Saved salary, OT and claim history stays unchanged. Save correct rules before running payroll again.`))return;
+    setRemovingPolicy(true);setPolicyError('');
+    try{
+      await del(`/payroll/settings/policies${row?`/${row.id}`:''}?companyId=${companyId}`);
+      await load();
+      notice({title:'Payroll policies deleted',message:'Save a corrected dated policy before calculating payroll again.',severity:'Info'});
+    }catch(error){setPolicyError(error.message);}finally{setRemovingPolicy(false);}
+  };
   const payrollEmployees = data.employees.filter(row => Number(row.payrollCompanyId || 1) === Number(companyId));
   const toggleComponent = async row => { await patch(`/payroll/settings/components/${row.id}`, { active: !row.active }); await load(); };
 
@@ -382,9 +394,10 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
       <div><span>EPF / ETF eligible</span><strong>{payrollEmployees.filter(row => row.epfEligible || row.etfEligible).length}</strong></div>
     </div>
 
-    <Table columns={['Effective', 'Office OT', 'Labour site', 'Labour travel', 'Driver OT', 'Driver site', 'Driver travel', 'Supervisor site', 'Supervisor travel', 'Custom office', 'Custom site', 'Custom travel', 'EPF employee', 'EPF employer', 'ETF employer']}
+    {policyError && <p className="form-error" role="alert">{policyError}</p>}
+    <Table columns={['Effective', 'Office OT', 'Labour site', 'Labour travel', 'Driver OT', 'Driver site', 'Driver travel', 'Supervisor site', 'Supervisor travel', 'Custom office', 'Custom site', 'Custom travel', 'EPF employee', 'EPF employer', 'ETF employer', 'Actions']}
       template={POLICY_TEMPLATE} title="Effective-dated payroll policies"
-      tools={<button className="status-button" onClick={() => setPolicyOpen(true)}>Set payroll rates</button>}>
+      tools={<div className="row-actions"><button className="secondary" type="button" onClick={() => setPolicyOpen(true)}>Set payroll rates</button>{settings.policies.length>0 && <button className="secondary" type="button" disabled={removingPolicy} onClick={()=>removePolicy(null)}><Trash2 size={14}/> Delete all policies</button>}</div>}>
       {settings.policies.map(row => <Row template={POLICY_TEMPLATE} key={row.id}>
         <strong>{shortDate(row.effectiveFrom)}</strong><span>{rupees(row.officeOtRate)}</span>
         <span>{rupees(row.siteLabourSiteOtRate)}</span><span>{rupees(row.siteLabourTravelOtRate)}</span>
@@ -393,6 +406,7 @@ function PayrollSettings({ data, reload, companies, companyId, company }) {
         {['customOfficeOtRate','customSiteOtRate','customTravelOtRate'].map((name,index)=><span key={name}>{rupees((typeof row.hrRules==='string'?JSON.parse(row.hrRules):row.hrRules)?.[name]??[row.officeOtRate,row.siteLabourSiteOtRate,row.siteLabourTravelOtRate][index])}</span>)}
         <span>{row.epfEmployeeRate}%</span>
         <span>{row.epfEmployerRate}%</span><span>{row.etfEmployerRate}%</span>
+        <span><button className="status-button" type="button" disabled={removingPolicy} aria-label={`Delete payroll policy effective ${shortDate(row.effectiveFrom)}`} onClick={()=>removePolicy(row)}><Trash2 size={14}/> Delete</button></span>
       </Row>)}
     </Table>
 

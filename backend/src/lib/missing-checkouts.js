@@ -8,7 +8,7 @@ export function colomboClock(now=new Date()){
 
 export async function missingCheckouts(companyId,{details=false,offset=0,now=new Date()}={}){
   const {day,time}=colomboClock(now);
-  const policy=await getOne('SELECT hr_rules FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[companyId,day]);
+  const policy=await getOne('SELECT hr_rules FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[companyId,day]);
   const rules=typeof policy?.hr_rules==='string'?JSON.parse(policy.hr_rules):policy?.hr_rules;
   const end=rules?.normalEnd||'16:30';
   const from=`FROM visible_attendance a JOIN visible_employees e ON a.employee_id=e.id

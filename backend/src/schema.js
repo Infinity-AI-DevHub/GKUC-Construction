@@ -2803,10 +2803,13 @@ async function migrateExistingInstalls() {
   await addIndex('payroll_runs', 'uq_payroll_company_period_frequency',
     'UNIQUE KEY uq_payroll_company_period_frequency(company_id,period_start,period_end,pay_frequency)');
   await addColumn('payroll_policies', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
+  await addColumn('payroll_policies', 'archive_key', 'BIGINT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn('payroll_policies', 'archived_at', 'DATETIME NULL');
   await addForeignKey('payroll_policies', 'fk_payroll_policy_company', 'CONSTRAINT fk_payroll_policy_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await dropIndex('payroll_policies', 'effective_from');
-  await addIndex('payroll_policies', 'uq_payroll_policy_company_date',
-    'UNIQUE KEY uq_payroll_policy_company_date(company_id,effective_from)');
+  await addIndex('payroll_policies', 'uq_payroll_policy_company_date_archive',
+    'UNIQUE KEY uq_payroll_policy_company_date_archive(company_id,effective_from,archive_key)');
+  await dropIndex('payroll_policies', 'uq_payroll_policy_company_date');
   await query(`INSERT INTO payroll_policies
     (company_id,effective_from,office_ot_rate,site_labour_site_ot_rate,site_labour_travel_ot_rate,
      driver_ot_rate,supervisor_site_ot_rate,supervisor_travel_ot_rate,
