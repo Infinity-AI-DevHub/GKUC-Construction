@@ -1,0 +1,788 @@
+[
+  {
+    "sheet": "Contacts",
+    "row": 6,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 711261670 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 7,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 711261670 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 8,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 711261670 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 9,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 711261670 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 10,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 352229563 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 11,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 711261670 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 12,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 711261670 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 13,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 711261670 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 14,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 352229563 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 15,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 352229563 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 16,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 704316199 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 17,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 262222753 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 18,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 352229563 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 19,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 711324111 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 20,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 771876893 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 21,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 352229563 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Contacts",
+    "row": 22,
+    "field": "PRIMARY_CONTACT",
+    "message": "Contains 773358505 instead of Yes/No; PHONE is blank. Confirm the phone and primary-contact flag; no number is moved or padded automatically."
+  },
+  {
+    "sheet": "Projects",
+    "row": 6,
+    "field": "COMPANY",
+    "message": "Confirm company alias GKUC Ready mix = GKUC Readymix; resolve against live company IDs, never assume ID 2."
+  },
+  {
+    "sheet": "Projects",
+    "row": 6,
+    "field": "CURRENT_BUDGET_LKR",
+    "message": "Blank budget: do not substitute contract value or zero without deciding the intended initial budget."
+  },
+  {
+    "sheet": "Projects",
+    "row": 7,
+    "field": "STAGE / STATUS / PROGRESS_PERCENT",
+    "message": "Stage=Completed, status=Current, progress=50%; confirm the intended lifecycle state."
+  },
+  {
+    "sheet": "Projects",
+    "row": 7,
+    "field": "CONTRACT_VALUE_LKR",
+    "message": "Value is 0.05; confirm whether this is an amount or a percentage/rate contract."
+  },
+  {
+    "sheet": "Projects",
+    "row": 7,
+    "field": "CURRENT_BUDGET_LKR",
+    "message": "Blank budget: do not substitute contract value or zero without deciding the intended initial budget."
+  },
+  {
+    "sheet": "Projects",
+    "row": 8,
+    "field": "CURRENT_BUDGET_LKR",
+    "message": "Blank budget: do not substitute contract value or zero without deciding the intended initial budget."
+  },
+  {
+    "sheet": "Projects",
+    "row": 9,
+    "field": "COMPANY",
+    "message": "Confirm company alias GKUC Ready mix = GKUC Readymix; resolve against live company IDs, never assume ID 2."
+  },
+  {
+    "sheet": "Projects",
+    "row": 10,
+    "field": "COMPANY",
+    "message": "Confirm company alias GKUC Ready mix = GKUC Readymix; resolve against live company IDs, never assume ID 2."
+  },
+  {
+    "sheet": "Projects",
+    "row": 10,
+    "field": "AWARD_REFERENCE",
+    "message": "Award date present without an award reference. Do not invent an award record/reference."
+  },
+  {
+    "sheet": "Projects",
+    "row": 11,
+    "field": "COMPANY",
+    "message": "Confirm company alias GKUC Ready mix = GKUC Readymix; resolve against live company IDs, never assume ID 2."
+  },
+  {
+    "sheet": "Projects",
+    "row": 12,
+    "field": "COMPANY",
+    "message": "Confirm company alias GKUC Ready mix = GKUC Readymix; resolve against live company IDs, never assume ID 2."
+  },
+  {
+    "sheet": "Projects",
+    "row": 13,
+    "field": "COMPANY",
+    "message": "Confirm company alias GKUC Ready mix = GKUC Readymix; resolve against live company IDs, never assume ID 2."
+  },
+  {
+    "sheet": "Projects",
+    "row": 14,
+    "field": "COMPANY",
+    "message": "Confirm company alias GKUC Ready mix = GKUC Readymix; resolve against live company IDs, never assume ID 2."
+  },
+  {
+    "sheet": "Projects",
+    "row": 14,
+    "field": "AWARD_REFERENCE",
+    "message": "Award date present without an award reference. Do not invent an award record/reference."
+  },
+  {
+    "sheet": "Projects",
+    "row": 15,
+    "field": "COMPANY",
+    "message": "Confirm company alias GKUC Ready mix = GKUC Readymix; resolve against live company IDs, never assume ID 2."
+  },
+  {
+    "sheet": "Projects",
+    "row": 15,
+    "field": "AWARD_REFERENCE",
+    "message": "Award date present without an award reference. Do not invent an award record/reference."
+  },
+  {
+    "sheet": "Projects",
+    "row": 16,
+    "field": "COMPANY",
+    "message": "Confirm company alias GKUC Ready mix = GKUC Readymix; resolve against live company IDs, never assume ID 2."
+  },
+  {
+    "sheet": "Projects",
+    "row": 17,
+    "field": "STAGE / STATUS / PROGRESS_PERCENT",
+    "message": "Stage=Completed, status=Completed, progress=50%; confirm the intended lifecycle state."
+  },
+  {
+    "sheet": "Projects",
+    "row": 17,
+    "field": "CONTRACT_VALUE_LKR",
+    "message": "More than two currency decimals; confirm rounding before storing an amount."
+  },
+  {
+    "sheet": "Projects",
+    "row": 18,
+    "field": "STAGE / STATUS / PROGRESS_PERCENT",
+    "message": "Stage=Completed, status=Completed, progress=50%; confirm the intended lifecycle state."
+  },
+  {
+    "sheet": "Projects",
+    "row": 18,
+    "field": "CONTRACT_VALUE_LKR",
+    "message": "More than two currency decimals; confirm rounding before storing an amount."
+  },
+  {
+    "sheet": "Projects",
+    "row": 19,
+    "field": "STAGE / STATUS / PROGRESS_PERCENT",
+    "message": "Stage=Completed, status=Completed, progress=50%; confirm the intended lifecycle state."
+  },
+  {
+    "sheet": "Projects",
+    "row": 20,
+    "field": "STAGE / STATUS / PROGRESS_PERCENT",
+    "message": "Stage=Completed, status=Completed, progress=50%; confirm the intended lifecycle state."
+  },
+  {
+    "sheet": "Projects",
+    "row": 22,
+    "field": "AWARD_REFERENCE",
+    "message": "Award date present without an award reference. Do not invent an award record/reference."
+  },
+  {
+    "sheet": "Projects",
+    "row": 23,
+    "field": "STAGE / STATUS / PROGRESS_PERCENT",
+    "message": "Stage=Completed, status=Completed, progress=50%; confirm the intended lifecycle state."
+  },
+  {
+    "sheet": "Projects",
+    "row": 6,
+    "field": "PROJECT_NAME",
+    "message": "338 characters exceeds current database limit 180; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 6,
+    "field": "TITLE",
+    "message": "342 characters exceeds current database limit 180; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 210,
+    "field": "DESCRIPTION",
+    "message": "315 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 233,
+    "field": "DESCRIPTION",
+    "message": "377 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 234,
+    "field": "DESCRIPTION",
+    "message": "509 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 271,
+    "field": "DESCRIPTION",
+    "message": "326 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 347,
+    "field": "DESCRIPTION",
+    "message": "376 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 352,
+    "field": "DESCRIPTION",
+    "message": "557 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 356,
+    "field": "DESCRIPTION",
+    "message": "388 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 363,
+    "field": "DESCRIPTION",
+    "message": "339 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 365,
+    "field": "DESCRIPTION",
+    "message": "331 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 366,
+    "field": "DESCRIPTION",
+    "message": "335 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 368,
+    "field": "DESCRIPTION",
+    "message": "323 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 372,
+    "field": "DESCRIPTION",
+    "message": "335 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 373,
+    "field": "DESCRIPTION",
+    "message": "323 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 379,
+    "field": "DESCRIPTION",
+    "message": "331 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 385,
+    "field": "DESCRIPTION",
+    "message": "331 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 391,
+    "field": "DESCRIPTION",
+    "message": "331 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 393,
+    "field": "DESCRIPTION",
+    "message": "335 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 394,
+    "field": "DESCRIPTION",
+    "message": "323 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 402,
+    "field": "DESCRIPTION",
+    "message": "331 characters exceeds current database limit 300; choose a shorter display label with full source retained, or explicitly extend schema. No silent truncation."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 6,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 7,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 8,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 9,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 10,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 11,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 12,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 13,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 14,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 15,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 16,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 17,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 18,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 19,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 20,
+    "field": "BOQ_CODE",
+    "message": "No BOQ Header for BOQ-2026-0001; header BOQ-2024-0001 has no items. Confirm mapping; no year/code correction applied."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 25,
+    "field": "QUANTITY / RATE_LKR / AMOUNT_LKR",
+    "message": "Quantity x rate = 16,089.65; stated amount = 16,090.00; difference = 0.35. Confirm the correct values; no recalculation overwrites source."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 167,
+    "field": "QUANTITY / RATE_LKR / AMOUNT_LKR",
+    "message": "Quantity x rate = 42,995.70; stated amount = 43,073.10; difference = 77.40. Confirm the correct values; no recalculation overwrites source."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 208,
+    "field": "QUANTITY / RATE_LKR / AMOUNT_LKR",
+    "message": "Quantity x rate = 33,750.00; stated amount = 93,750.00; difference = 60,000.00. Confirm the correct values; no recalculation overwrites source."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 413,
+    "field": "QUANTITY / RATE_LKR / AMOUNT_LKR",
+    "message": "Quantity x rate = 14,909.52; stated amount = 14,910.00; difference = 0.48. Confirm the correct values; no recalculation overwrites source."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 964,
+    "field": "QUANTITY / RATE_LKR / AMOUNT_LKR",
+    "message": "Quantity x rate = 46,575.00; stated amount = 46,515.00; difference = -60.00. Confirm the correct values; no recalculation overwrites source."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 353,
+    "field": "BOQ_CODE + LINE_NO",
+    "message": "Duplicate key ('BOQ-2024-0018', '1.1'); rows 353, 362. Confirm both are distinct work or a duplicate."
+  },
+  {
+    "sheet": "BOQ Items",
+    "row": 362,
+    "field": "BOQ_CODE + LINE_NO",
+    "message": "Duplicate key ('BOQ-2024-0018', '1.1'); rows 353, 362. Confirm both are distinct work or a duplicate."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 6,
+    "field": "DECLARED_TOTAL_LKR",
+    "message": "BOQ-2024-0001: declared 5,211,500.00; 0 matching lines sum to 0.00; difference -5,211,500.00. Do not approve or change project budget from this unreconciled source."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 7,
+    "field": "DECLARED_TOTAL_LKR",
+    "message": "BOQ-2024-0002: declared 0.05; 19 matching lines sum to 3,704,531.00; difference 3,704,530.95. Do not approve or change project budget from this unreconciled source."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 9,
+    "field": "DECLARED_TOTAL_LKR",
+    "message": "BOQ-2024-0004: declared 4,750,444.00; 15 matching lines sum to 4,509,080.00; difference -241,364.00. Do not approve or change project budget from this unreconciled source."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 11,
+    "field": "DECLARED_TOTAL_LKR",
+    "message": "BOQ-2024-0006: declared 3,539,865.45; 23 matching lines sum to 3,523,725.45; difference -16,140.00. Do not approve or change project budget from this unreconciled source."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 13,
+    "field": "DECLARED_TOTAL_LKR",
+    "message": "BOQ-2024-0008: declared 3,785,750.00; 23 matching lines sum to 3,851,780.00; difference 66,030.00. Do not approve or change project budget from this unreconciled source."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 14,
+    "field": "DECLARED_TOTAL_LKR",
+    "message": "BOQ-2024-0009: declared 960,471.89; 12 matching lines sum to 965,471.88; difference 4,999.99. Do not approve or change project budget from this unreconciled source."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 15,
+    "field": "DECLARED_TOTAL_LKR",
+    "message": "BOQ-2024-0010: declared 1,372,676.05; 41 matching lines sum to 1,373,000.74; difference 324.69. Do not approve or change project budget from this unreconciled source."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 16,
+    "field": "DECLARED_TOTAL_LKR",
+    "message": "BOQ-2024-0011: declared 9,650,520.00; 46 matching lines sum to 9,565,250.00; difference -85,270.00. Do not approve or change project budget from this unreconciled source."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 27,
+    "field": "DECLARED_TOTAL_LKR",
+    "message": "BOQ-2024-0023: declared 13,440,869.00; 70 matching lines sum to 13,440,809.00; difference -60.00. Do not approve or change project budget from this unreconciled source."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 6,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 7,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 8,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 9,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 10,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 11,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 12,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 13,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 14,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 15,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 16,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 17,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 18,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 19,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 20,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 21,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 22,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 23,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 24,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 25,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 26,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 27,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Project Team",
+    "row": 28,
+    "field": "ASSIGNED_DATE",
+    "message": "No assignment date supplied. Do not create a false historical date."
+  },
+  {
+    "sheet": "Projects",
+    "row": null,
+    "field": "PROJECT_MANAGER_EMPLOYEE_CODE",
+    "message": "All 23 managers use EMP-001; all 23 team rows use EMP-0001. Confirm employee identity against the live employee register; codes are not assumed equivalent."
+  },
+  {
+    "sheet": "Database",
+    "row": null,
+    "field": "EXISTING RECORDS",
+    "message": "Production database was not supplied. Existing record IDs, duplicates, company IDs, employee identities, permissions and exact schema must be checked against that database before final insert-only SQL can be verified."
+  },
+  {
+    "sheet": "Database",
+    "row": null,
+    "field": "AUDIT USER",
+    "message": "No import actor was specified. Resolve the actual user ID; do not invent preparer/approver/audit attribution for historical approved BOQs."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 6,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 7,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 8,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 9,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 10,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 11,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 12,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 13,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 14,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 15,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  },
+  {
+    "sheet": "BOQ Headers",
+    "row": 16,
+    "field": "SOURCE_FILENAME",
+    "message": "Placeholder filename; no actual source PDF supplied. Workbook provenance can be retained but this is not an uploaded approval proof."
+  }
+]

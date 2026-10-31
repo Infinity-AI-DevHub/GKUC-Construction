@@ -34,3 +34,12 @@ test('contribution explanations distinguish eligibility, run frequency and rate 
   for (const text of ['Probation','below','2026-03-01','disabled','rate is zero']) assert.ok(excluded.epfReasons.some(reason=>reason.includes(text)),text);
   assert.equal(before.epf_eligible,true);
 });
+
+test('monthly contribution rate validation blocks zero eligible rates without affecting exclusions or weekly pay',async()=>{
+  const {contributionRateProblems}=await import('../src/lib/statutory-eligibility.js');
+  const zero={epf_employee_rate:0,epf_employer_rate:0,etf_employer_rate:0};
+  assert.deepEqual(contributionRateProblems({epf_eligible:true,etf_eligible:true},zero,'Monthly'),['Employee EPF','Employer EPF','Employer ETF']);
+  assert.deepEqual(contributionRateProblems({epf_eligible:false,etf_eligible:false},zero,'Monthly'),[]);
+  assert.deepEqual(contributionRateProblems({epf_eligible:true,etf_eligible:true},zero,'Weekly'),[]);
+  assert.deepEqual(contributionRateProblems({epf_eligible:true,etf_eligible:true},{epf_employee_rate:8,epf_employer_rate:12,etf_employer_rate:3},'Monthly'),[]);
+});
