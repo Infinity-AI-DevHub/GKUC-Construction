@@ -191,10 +191,27 @@ export function parseBoqWorkbook(buffer, { categories = CATEGORIES } = {}) {
 
   const at = (row, key) => (columns[key] === undefined ? null : row[columns[key]] ?? null);
   const items = [];
+  // Some filled templates use Category for consultant item references. Only interpret
+  // it that way when multiple priced lines consistently use section-number references.
+  const pricedCategories = rows.slice(headerIndex + 1).filter(row => row &&
+    (toNumber(at(row, 'quantity')) !== null || toNumber(at(row, 'rate')) !== null))
+    .map(row => String(at(row, 'category') ?? '').trim()).filter(Boolean);
+  const referenceColumn = pricedCategories.length >= 2 && pricedCategories.every(value =>
+    /^[A-Z]+\s*[-.]\s*\d+(?:[.-]\d+)*$/i.test(value) && !matchCategory(value, categories));
+  const sections = [];
+  const excludedRows = [];
+  let section = null;
 
   for (let index = headerIndex + 1; index < rows.length; index++) {
     const row = rows[index];
     if (!row) continue;
+    // A second description/amount heading starts a summary, not more detail lines.
+    const summaryColumns = mapColumns(row);
+    if (summaryColumns.description !== undefined && summaryColumns.amount !== undefined &&
+        summaryColumns.quantity === undefined && summaryColumns.rate === undefined) {
+      excludedRows.push({ row: index, reason: 'Summary table and following rows' });
+      break;
+    }
     /* A row nobody typed in. Skipped silently — the template ships with 40 of them. */
     const hasAnything = COLUMNS.some(column => {
       const value = at(row, column.key);
@@ -207,16 +224,30 @@ export function parseBoqWorkbook(buffer, { categories = CATEGORIES } = {}) {
     const notices = [];
     const description = String(at(row, 'description') ?? '').trim();
     const rawCategory = at(row, 'category');
-    const category = matchCategory(rawCategory, categories) || String(rawCategory ?? '').trim() || null;
+    const category = referenceColumn ? null : matchCategory(rawCategory, categories) || String(rawCategory ?? '').trim() || null;
     const unit = String(at(row, 'unit') ?? '').trim();
     const quantity = toNumber(at(row, 'quantity'));
     const rate = toNumber(at(row, 'rate'));
     const statedAmount = toNumber(at(row, 'amount'));
 
+    const noFigures = quantity === null && rate === null;
+    if (noFigures && !unit && description && /^(?:sub\s*total|grand\s*total|total\s+carried|carried\s+to|brought\s+forward)\b/i.test(description)) {
+      excludedRows.push({ row: index, reason: 'Subtotal', amount: statedAmount });
+      continue;
+    }
+    if (referenceColumn && noFigures && !unit && statedAmount === null &&
+        (description || rawCategory) && !at(row, 'method') && !at(row, 'notes') &&
+        (!rawCategory || /^[A-Z]+$/i.test(String(rawCategory).trim()) || !description)) {
+      section = description || String(rawCategory).trim();
+      sections.push({ row: index, title: section });
+      continue;
+    }
+
     if (!description) problems.push('No description');
     else if (description.length > 300) problems.push('Description is longer than 300 characters and will be shortened');
 
     if (category && !categories.includes(category)) problems.push(`"${rawCategory}" is not one of ${categories.join(', ')}`);
+    if (category && category.length > 60) problems.push('Category is longer than 60 characters; correct it before submitting');
 
     if (!unit) problems.push('No unit');
     if (quantity === null) problems.push('Quantity is not a number');
@@ -236,11 +267,12 @@ export function parseBoqWorkbook(buffer, { categories = CATEGORIES } = {}) {
     }
 
     items.push({
-      sourceRow: index + 1,
-      category, description: description.slice(0, 300), unit: unit.slice(0, 30),
+      sourceRow: index,
+      category: category?.slice(0, 60) || null, description: description.slice(0, 300), unit: unit.slice(0, 30),
       quantity, rate, amount,
       method: String(at(row, 'method') ?? '').trim() || null,
-      notes: String(at(row, 'notes') ?? '').trim() || null,
+      notes: [referenceColumn && rawCategory ? `Ref ${rawCategory}` : null,
+        referenceColumn ? section : null, String(at(row, 'notes') ?? '').trim()].filter(Boolean).join(' · ').slice(0, 600) || null,
       raw: {
         category: rawCategory ?? null, description: at(row, 'description') ?? null,
         unit: at(row, 'unit') ?? null, quantity: at(row, 'quantity') ?? null,
@@ -254,7 +286,9 @@ export function parseBoqWorkbook(buffer, { categories = CATEGORIES } = {}) {
     return { ok: false, error: 'No priced rows were found. Fill in at least one line below the column headings.' };
   }
 
-  return { ok: true, title, client, items, sheet: sheetName };
+  return { ok: true, title: title?.slice(0, 180) || null, client, items, sheet: sheetName,
+    layout: { foreign: false, sheet: sheetName, referenceColumn, sections, excludedRows,
+      notes: referenceColumn ? ['Category contains item references; references and section headings are preserved in line notes.'] : [] } };
 }
 
 /* Consultant BOQs often put their control totals ahead of separate detail sheets. Keep
