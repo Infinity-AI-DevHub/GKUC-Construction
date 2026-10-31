@@ -470,6 +470,27 @@ test('BOQ lines can be uncategorised and QS can maintain categories from the BOQ
   assert.equal(detail.body.comparison.find(row => row.category === 'Uncategorised')?.estimated, 200);
 });
 
+test('sectioned BOQ template stages all 60 detail lines without category overflow or summary duplication', async () => {
+  const qs = await login('qs@gkuc.lk');
+  const projects = await call(qs, 'GET', '/projects');
+  const projectId = projects.body[0]?.id;
+  assert.ok(projectId);
+  const xlsx = await readFile(new URL('../fixtures/boq-sectioned-template.xlsx', import.meta.url));
+  const form = new FormData();
+  form.append('file', new Blob([xlsx], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'sectioned-template.xlsx');
+  form.append('projectId', String(projectId));
+  const response = await fetch(`${base}/boq/import`, { method: 'POST', headers: { authorization: `Bearer ${qs}` }, body: form });
+  const staged = await response.json();
+  assert.equal(response.status, 201, JSON.stringify(staged));
+  assert.equal(staged.rowCount, 60);
+  assert.equal(staged.problemCount, 0);
+  assert.equal(Number(staged.total), 16140350.70);
+  assert.equal(staged.items[0].sourceRow, 10);
+  assert.match(staged.items[0].notes, /Ref A-01/);
+  const committed = await call(qs, 'POST', `/boq/imports/${staged.id}/commit`, { projectId });
+  assert.equal(committed.status, 201, JSON.stringify(committed.body));
+});
+
 test('BOQ Excel upload and commit accept an empty Category cell', async () => {
   const qs = await login('qs@gkuc.lk');
   const owner = await login();
