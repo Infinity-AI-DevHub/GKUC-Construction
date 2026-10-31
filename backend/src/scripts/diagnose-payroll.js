@@ -10,7 +10,7 @@ try {
     WHERE LOCATE(?,name)>0 OR code=? ORDER BY code LIMIT 20`,[name,name]);
   if (!employees.length) throw new Error('No matching employee. Try a shorter part of the name or the employee code.');
   for (const employee of employees) {
-    const policies=await query('SELECT * FROM payroll_policies WHERE company_id=? ORDER BY effective_from DESC,id DESC',[employee.payroll_company_id]);
+    const policies=await query('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? ORDER BY effective_from DESC,id DESC',[employee.payroll_company_id]);
     const current=policies.find(p=>String(p.effective_from).slice(0,10)<=today());
     console.log(JSON.stringify({employee:employee.name,code:employee.code,companyId:employee.payroll_company_id,
       classification:employee.employment_type,frequency:employee.pay_frequency,basis:Number(employee.basic_salary),epfEnabled:Boolean(employee.epf_eligible),

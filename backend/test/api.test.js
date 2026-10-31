@@ -5522,3 +5522,52 @@ test('zero legacy EPF policy blocks payroll atomically and a dated correction de
   assert.equal((await call(owner,'DELETE',`/payroll/${run.body.id}`)).status,204);
   await admin.query(`DELETE FROM ${testDatabase}.payroll_policies WHERE id IN (?,?)`,[saved.body.id,corrected.body.id]);
 });
+
+test('payroll policies delete individually or by company without changing saved payroll history and allow same-date replacements',async()=>{
+  const owner=await login(),site=await login('supervisor@gkuc.lk');
+  const policy={companyId:2,effectiveFrom:'2048-06-01',officeOtRate:225,siteLabourSiteOtRate:200,siteLabourTravelOtRate:100,
+    driverOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3};
+  const created=await call(owner,'POST','/payroll/settings/policies',policy);assert.equal(created.status,201,JSON.stringify(created.body));
+  const person=await call(owner,'POST','/employees',{code:`POLICY-DELETE-${Date.now()}`,name:'Policy history preservation',joinDate:'2048-01-01',
+    compensationEffectiveFrom:'2048-01-01',payrollCompanyId:2,payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1600,epfEligible:false,etfEligible:false});
+  assert.equal(person.status,201,JSON.stringify(person.body));
+  await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out,work_location)
+    VALUES (?,?,'Worker','2048-06-10','Checked out','07:30','16:30','Office')`,[person.body.id,person.body.name]);
+  const payload={companyId:2,periodStart:'2048-06-10',periodEnd:'2048-06-10',payFrequency:'Daily'};
+  const run=await call(owner,'POST','/payroll',payload);assert.equal(run.status,201,JSON.stringify(run.body));
+  const before=(await call(owner,'GET',`/payroll/${run.body.id}`)).body;
+  const [otCreated]=await admin.query(`INSERT INTO ${testDatabase}.overtime_records(employee_id,work_date,overtime_type,hours,rate,policy_id,status)
+    VALUES (?,'2048-06-09','Office',1,225,?,'Approved')`,[person.body.id,created.body.id]);
+  const [otBefore]=await admin.query(`SELECT * FROM ${testDatabase}.overtime_records WHERE id=?`,[otCreated.insertId]);
+
+  const [[otherBefore]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.payroll_policies WHERE company_id=1 AND archive_key=0`);
+  assert.equal((await call(site,'DELETE',`/payroll/settings/policies/${created.body.id}?companyId=2`)).status,403);
+  assert.equal((await call(owner,'DELETE',`/payroll/settings/policies/${created.body.id}`)).status,400);
+  assert.equal((await call(owner,'DELETE',`/payroll/settings/policies/${created.body.id}?companyId=1`)).status,404);
+  const deleted=await call(owner,'DELETE',`/payroll/settings/policies/${created.body.id}?companyId=2`);
+  assert.equal(deleted.status,200,JSON.stringify(deleted.body));assert.equal(deleted.body.deleted,1);
+  assert.deepEqual((await call(owner,'GET',`/payroll/${run.body.id}`)).body,before);
+  const active=(await call(owner,'GET','/payroll/settings?companyId=2')).body;
+  assert.ok(!active.policies.some(row=>row.id===created.body.id));
+  const [[archived]]=await admin.query(`SELECT archive_key,archived_at FROM ${testDatabase}.payroll_policies WHERE id=?`,[created.body.id]);
+  assert.equal(Number(archived.archive_key),created.body.id);assert.ok(archived.archived_at);
+  const replacement=await call(owner,'POST','/payroll/settings/policies',policy);assert.equal(replacement.status,201,JSON.stringify(replacement.body));
+  assert.equal((await call(owner,'POST','/payroll/settings/policies',policy)).status,409,'active same-date duplicates remain blocked');
+  const bulk=await call(owner,'DELETE','/payroll/settings/policies?companyId=2');assert.equal(bulk.status,200,JSON.stringify(bulk.body));
+  const empty=(await call(owner,'GET','/payroll/settings?companyId=2')).body;
+  assert.equal(empty.policies.length,0);assert.equal(empty.activePolicy,null);
+  const [otAfter]=await admin.query(`SELECT * FROM ${testDatabase}.overtime_records WHERE id=?`,[otCreated.insertId]);
+  assert.deepEqual(otAfter,otBefore,'existing FK-linked OT history is unchanged');
+  const newOt=await call(owner,'POST',`/employees/${person.body.id}/overtime`,{workDate:'2048-06-11',hours:1,overtimeType:'Office'});
+  assert.equal(newOt.status,409);assert.match(newOt.body.error,/Configure an overtime policy/);
+
+  const [[otherAfter]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.payroll_policies WHERE company_id=1 AND archive_key=0`);
+  assert.equal(otherAfter.total,otherBefore.total);
+  assert.deepEqual((await call(owner,'GET',`/payroll/${run.body.id}`)).body,before);
+  const blocked=await call(owner,'POST','/payroll',payload);assert.equal(blocked.status,409);assert.match(blocked.body.error,/Configure a payroll policy/);
+  assert.deepEqual((await call(owner,'GET',`/payroll/${run.body.id}`)).body,before,'failed regeneration rolls back without changing salary');
+  const restored=await call(owner,'POST','/payroll/settings/policies',policy);assert.equal(restored.status,201,JSON.stringify(restored.body));
+  assert.equal((await call(owner,'POST','/payroll',payload)).status,201);
+  const [[audits]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.audit_logs WHERE entity='payroll_policy' AND action='DELETE' AND entity_id=?`,[created.body.id]);
+  assert.equal(audits.total,1);
+});

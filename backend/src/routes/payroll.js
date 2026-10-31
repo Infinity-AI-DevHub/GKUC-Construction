@@ -106,7 +106,7 @@ router.get('/', auth, permit('hr.payroll'), wrap(async (req, res) => {
 router.get('/settings', auth, permit("hr.settings"), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 1);
   const [policies, components] = await Promise.all([
-    query(`${policySelect} WHERE p.company_id=? ORDER BY p.effective_from DESC,p.id DESC`, [companyId]),
+    query(`${policySelect} WHERE p.company_id=? AND p.archive_key=0 ORDER BY p.effective_from DESC,p.id DESC`, [companyId]),
     query(`SELECT c.id,c.employee_id employeeId,e.code employeeCode,e.name employee,c.name,c.kind,c.amount,
       c.pay_frequency payFrequency,c.effective_from effectiveFrom,c.effective_to effectiveTo,c.active,c.calculation_method calculationMethod,c.allowance_type allowanceType,
       u.name createdBy,c.created_at createdAt
@@ -116,6 +116,28 @@ router.get('/settings', auth, permit("hr.settings"), wrap(async (req, res) => {
   res.json({ activePolicy: policies.find(row => String(row.effectiveFrom).slice(0, 10) <= new Date().toISOString().slice(0, 10)) || null,
     policies, components });
 }));
+
+// Removal excludes policies from future calculations while their FK-linked snapshots
+// remain available to old payrolls, overtime records and claims.
+async function removePolicies(req,res,policyId=null) {
+  const companyId=Number(req.query.companyId);
+  if(!Number.isSafeInteger(companyId)||companyId<1)throw fail(400,'Choose the company whose payroll policies you want to delete.');
+  if(policyId!==null&&(!Number.isSafeInteger(policyId)||policyId<1))throw fail(400,'Choose a valid payroll policy.');
+  const count=await transaction(async connection=>{
+    const [[company]]=await connection.execute('SELECT id FROM companies WHERE id=? FOR UPDATE',[companyId]);
+    if(!company)throw fail(404,'Company not found.');
+    const [policies]=await connection.execute(`SELECT * FROM payroll_policies WHERE company_id=? AND archive_key=0${policyId===null?'':' AND id=?'} FOR UPDATE`,policyId===null?[companyId]:[companyId,policyId]);
+    if(policyId!==null&&!policies.length)throw fail(404,'Policy not found in this company, or already deleted.');
+    for(const policy of policies){
+      await connection.execute('UPDATE payroll_policies SET archive_key=id,archived_at=NOW() WHERE id=? AND archive_key=0',[policy.id]);
+      await audit(connection,req.user.id,'DELETE','payroll_policy',policy.id,policy,{removedFromCalculations:true,historyRetained:true},req.ip);
+    }
+    return policies.length;
+  });
+  res.json({deleted:count,companyId});
+}
+router.delete('/settings/policies',auth,permit('hr.settings'),wrap((req,res)=>removePolicies(req,res)));
+router.delete('/settings/policies/:id',auth,permit('hr.settings'),wrap((req,res)=>removePolicies(req,res,Number(req.params.id))));
 
 router.post('/settings/policies', auth, permit("hr.settings"), validate(policySchema), wrap(async (req, res) => {
   const body = req.body;
@@ -305,7 +327,7 @@ async function buildPayroll(req,connection){
       if(conflicting.length)throw fail(409,`Overlapping payroll: ${conflicting.map(row=>`${row.reference} (${payrollCompany.name}, ${row.pay_frequency}, ${row.period_start} to ${row.period_end}, ${row.status})`).join('; ')}. Delete the named Draft payroll or use its exact dates to recalculate it. Approved/paid payroll cannot be deleted.`);
       if(existing)await clearDraftPayroll(connection,existing,req.user.id,'REGENERATE',req.ip);
 
-      const policy = await getOne('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1', [companyId, periodEnd]);
+      const policy = await getOne('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1', [companyId, periodEnd]);
       if (!policy) throw fail(409,'Configure a payroll policy for this period first');
 
       const employees = await query(`SELECT e.id,e.code,e.name,e.designation,e.department_id,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,e.payroll_category,e.payroll_company_id,e.worker_type,
@@ -325,7 +347,7 @@ async function buildPayroll(req,connection){
       const attendanceRows=await query(`SELECT * FROM visible_attendance WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id`,[periodStart,periodEnd]);
       const otRows=await query('SELECT * FROM visible_overtime_records WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id',[periodStart,periodEnd]);
       const travelClaims=await query("SELECT * FROM visible_hr_payroll_claims WHERE kind='Travel' AND work_date BETWEEN ? AND ?",[periodStart,periodEnd]);
-      const datedPolicies=await query('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC',[companyId,periodEnd]);
+      const datedPolicies=await query('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC',[companyId,periodEnd]);
       const approvedLeave=await query("SELECT * FROM visible_leave_requests WHERE status='Approved' AND from_date<=? AND to_date>=? ORDER BY from_date,id",[periodEnd,periodStart]);
       for (const row of employees) {
         const contributionDetail = contributionExplanation(row, policy, periodEnd, payFrequency);

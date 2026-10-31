@@ -12,7 +12,7 @@ const time=z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 router.get('/',wrap(async(req,res)=>{
   const claims=await query(`SELECT c.*,e.name employee,p.name project FROM visible_hr_payroll_claims c JOIN visible_employees e ON e.id=c.employee_id LEFT JOIN projects p ON p.id=c.project_id ORDER BY c.work_date DESC,c.id DESC LIMIT 2000`);
   const attendance=await query(`SELECT a.*,e.payroll_company_id company_id,e.name employee,e.payroll_category,p.name project FROM visible_attendance a JOIN visible_employees e ON e.id=a.employee_id LEFT JOIN projects p ON p.id=a.project_id ORDER BY a.work_date DESC LIMIT 2000`);
-  const policies=await query('SELECT * FROM payroll_policies ORDER BY effective_from DESC,id DESC');
+  const policies=await query('SELECT * FROM payroll_policies WHERE archive_key=0 ORDER BY effective_from DESC,id DESC');
   const ot=await query('SELECT o.*,e.payroll_company_id company_id FROM visible_overtime_records o JOIN visible_employees e ON e.id=o.employee_id ORDER BY o.id DESC');
   const corrections=await query(`SELECT DISTINCT a.id,a.employee_id,a.work_date,a.project_id,'Attendance correction after draft' kind,'Needs review' status FROM visible_attendance a JOIN audit_logs l ON l.entity='attendance' AND CAST(l.entity_id AS UNSIGNED)=a.id AND l.action='CORRECTION' JOIN payslips ps ON ps.employee_id=a.employee_id JOIN payroll_runs pr ON pr.id=ps.run_id AND pr.status='Draft' AND a.work_date BETWEEN pr.period_start AND pr.period_end WHERE l.created_at>pr.created_at`);
   const suggestions=attendance.map(a=>{
@@ -36,7 +36,7 @@ const payrollClaimSchema=z.union([manualTravelSchema,claimSchema.extend({calcula
 async function recordClaim(req,conn,b){
     const q=async(sql,values)=>(await conn.query(sql,values))[0];
     const [employee]=await q('SELECT * FROM visible_employees WHERE id=? FOR UPDATE',[b.employeeId]);if(!employee||employee.status==='Left')throw fail(400,'Select an active employee.');
-    const [policy]=await q('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.payroll_company_id,b.workDate]);if(!policy)throw fail(409,'Configure an effective payroll policy before recording this claim.');
+    const [policy]=await q('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.payroll_company_id,b.workDate]);if(!policy)throw fail(409,'Configure an effective payroll policy before recording this claim.');
     if(b.projectId){const [project]=await q('SELECT id,company_id FROM projects WHERE id=? AND active=1',[b.projectId]);if(!project)throw fail(400,'Choose an active project.');if(b.kind==='Supervisor site charge'&&Number(project.company_id)!==Number(employee.payroll_company_id))throw fail(400,'This supervisor and project belong to different payroll companies. Ask HR to check the assignment.');}
     const eligibility=parse(employee.allowance_eligibility);
     const key={Travel:'longDistance',Mileage:'motorcycle','Special duty':'specialDuty','Machine/operator':'machine'}[b.kind];
@@ -113,7 +113,7 @@ router.patch('/:id/review',validate(z.object({status:z.enum(['Confirmed','Approv
 router.post('/suggestions/:attendanceId',validate(z.object({hours:z.number().positive().max(24),reason:z.string().trim().min(3).max(1000)})),wrap(async(req,res)=>{
   const attendance=await getOne('SELECT * FROM visible_attendance WHERE id=?',[req.params.attendanceId]);if(!attendance)throw fail(404,'Attendance not found.');
   const employee=await getOne('SELECT * FROM visible_employees WHERE id=?',[attendance.employee_id]);
-  const policy=await getOne('SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.payroll_company_id,attendance.work_date]);if(!policy)throw fail(409,'Configure a payroll policy for this date.');
+  const policy=await getOne('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.payroll_company_id,attendance.work_date]);if(!policy)throw fail(409,'Configure a payroll policy for this date.');
   const suggestion=suggestOvertime(attendance,rulesFor(policy));
   if(!suggestion.intervals.length)throw fail(409,'Valid attended times are required. No payable OT is allowed on absent or leave days.');
   const type=attendanceOvertimeType(employee,attendance);

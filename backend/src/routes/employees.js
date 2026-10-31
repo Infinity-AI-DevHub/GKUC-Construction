@@ -830,7 +830,7 @@ router.post('/:id/overtime', auth, permit('hr.payroll'), validate(z.object({
 })), wrap(async (req, res) => {
   const employee = await getOne('SELECT * FROM visible_employees WHERE id=?', [req.params.id]);
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
-  const policy = await getOne(`SELECT * FROM payroll_policies WHERE company_id=? AND effective_from<=?
+  const policy = await getOne(`SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=?
     ORDER BY effective_from DESC,id DESC LIMIT 1`, [employee.payroll_company_id, req.body.workDate]);
   if (!policy) return res.status(409).json({ error: 'Configure an overtime policy for this date first' });
   if(req.body.overtimeType==='Travel')return res.status(409).json({error:'Record Travel OT through Payroll Inputs → Travel claim, with departure and return times. Do not infer it from ordinary attendance.'});
