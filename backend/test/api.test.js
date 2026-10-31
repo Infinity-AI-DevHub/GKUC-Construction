@@ -2348,6 +2348,40 @@ test('approving a BOQ and its variation sets the project budget', async () => {
   assert.equal(Number(project.budget), 2500000, 'an approved variation moves the approved budget');
 });
 
+test('one daily cost line links several completed tasks and posts its cost only once', async () => {
+  const qs = await login('qs@gkuc.lk'), owner = await login();
+  const tasks = [];
+  for (let index=0; index<3; index++) {
+    const created = await call(qs,'POST','/boq/cost-control/tasks',{
+      projectId:1,title:`Shared cost completed activity ${index+1}`,workDate:today(),priority:'Medium',employeeIds:[]
+    });
+    assert.equal(created.status,201,JSON.stringify(created.body));
+    tasks.push(created.body.id);
+  }
+  const line = {taskIds:[...tasks,tasks[0]],source:'Material',costType:'Expected',description:'Shared materials for three tasks',amount:1234};
+  const payload = {projectId:1,workDate:today(),lines:[line]};
+  const missing = await call(qs,'POST','/boq/cost-control/daily-sheets',{...payload,lines:[{...line,taskIds:undefined}]});
+  assert.equal(missing.status,400);
+  const foreign = await call(qs,'POST','/boq/cost-control/tasks',{
+    projectId:2,title:'Different project completed task',workDate:today(),priority:'Low',employeeIds:[]
+  });
+  assert.equal(foreign.status,201);
+  assert.equal((await call(qs,'POST','/boq/cost-control/daily-sheets',{...payload,lines:[{...line,taskIds:[tasks[0],foreign.body.id]}]})).status,400);
+  const submitted = await call(qs,'POST','/boq/cost-control/daily-sheets',payload);
+  assert.equal(submitted.status,201,JSON.stringify(submitted.body));
+  const detail = (await call(qs,'GET',`/boq/cost-control/daily-sheets/${submitted.body.id}`)).body;
+  assert.equal(detail.lines.length,1);
+  assert.deepEqual(detail.lines[0].taskIds,tasks);
+  assert.equal(Number(detail.lines[0].amount),1234);
+  assert.ok(tasks.every(id => detail.lines[0].tasks.some(task => task.id===id)));
+  const approved = await call(owner,'POST',`/boq/cost-control/daily-sheets/${submitted.body.id}/review`,{decision:'Approved'});
+  assert.equal(approved.status,200,JSON.stringify(approved.body));
+  const [[posted]] = await admin.query(`SELECT COUNT(*) count,SUM(amount) total FROM ${testDatabase}.expenses WHERE origin_type='daily_cost_line' AND origin_id=?`,[detail.lines[0].id]);
+  assert.equal(Number(posted.count),1);
+  assert.equal(Number(posted.total),1234);
+  assert.equal((await call(owner,'POST',`/boq/cost-control/daily-sheets/${submitted.body.id}/review`,{decision:'Approved'})).status,409);
+});
+
 test('QS tracks daily actual costs, item overruns, forecasts and unexpected expenses', async () => {
   const qs = await login('qs@gkuc.lk');
   const owner = await login();

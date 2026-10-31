@@ -175,7 +175,9 @@ router.get('/cost-control', auth, permit('qs.view','qs.boq','finance.view','fina
 }));
 
 const dailyLineSchema = z.object({
-  taskId: z.number().int().positive(), boqItemId: z.number().int().positive().nullable().optional(),
+  taskId: z.number().int().positive().optional(),
+  taskIds: z.array(z.number().int().positive()).min(1).max(100).optional(),
+  boqItemId: z.number().int().positive().nullable().optional(),
   source: z.enum(['Material','Labour','Fuel','Equipment','Subcontractor','Overhead','Other']),
   costType: z.enum(['Expected','Variation','Unexpected']).default('Expected'),
   description: z.string().trim().min(2).max(400),
@@ -392,6 +394,16 @@ router.get('/cost-control/daily-sheets/:id', auth, permit('qs.view','qs.boq','qs
     LEFT JOIN petty_cash_floats pf ON pf.id=l.fuel_float_id
     LEFT JOIN quotation_items qi ON qi.id=l.quotation_item_id
     WHERE l.sheet_id=? ORDER BY l.id`, [sheet.id]);
+  const linkedTasks = await query(`SELECT lt.line_id lineId,t.id,t.title FROM daily_cost_line_tasks lt
+    JOIN daily_cost_lines l ON l.id=lt.line_id JOIN tasks t ON t.id=lt.task_id
+    WHERE l.sheet_id=? ORDER BY t.id`, [sheet.id]);
+  for (const line of lines) {
+    line.tasks = linkedTasks.filter(task => Number(task.lineId) === Number(line.id))
+      .map(({id,title}) => ({id,title}));
+    if (!line.tasks.length) line.tasks = [{id:line.task_id,title:line.work}];
+    line.taskIds = line.tasks.map(task => task.id);
+    line.work = line.tasks.map(task => task.title).join(' · ');
+  }
   res.json({ ...sheet, lines });
 }));
 
@@ -406,8 +418,16 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
     const fuelRecordsOnSheet = new Set();
     const labourersOnSheet = new Set();
     for (const line of lines) {
-      const [[task]] = await connection.execute('SELECT id FROM tasks WHERE id=? AND project_id=?', [line.taskId, projectId]);
-      if (!task) throw costError('One selected work task does not belong to this project. Refresh the task list and try again.');
+      const taskIds = [...new Set(line.taskIds || (line.taskId ? [line.taskId] : []))];
+      if (!taskIds.length) throw costError('Select at least one completed work task for every cost line.');
+      if (line.taskIds && line.taskId && !taskIds.includes(line.taskId)) throw costError('The primary work task must be included in the selected tasks.');
+      for (const taskId of taskIds) {
+        const [[task]] = await connection.execute('SELECT id,status FROM tasks WHERE id=? AND project_id=? FOR UPDATE', [taskId, projectId]);
+        if (!task) throw costError('One selected work task does not belong to this project. Refresh the task list and try again.');
+        if (line.taskIds && task.status !== 'Completed') throw costError('Select completed work tasks only.');
+      }
+      line.taskIds = taskIds;
+      line.taskId = taskIds[0];
       if (line.boqItemId) {
         const [[item]] = await connection.execute(`SELECT bi.id FROM boq_items bi JOIN boqs b ON b.id=bi.boq_id
           WHERE bi.id=? AND b.project_id=?`, [line.boqItemId, projectId]);
@@ -475,7 +495,8 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
     const [created] = await connection.execute(`INSERT INTO daily_cost_sheets
       (project_id,work_date,status,notes,submitted_by) VALUES (?,?,'Submitted',?,?)`,
       [projectId, workDate, notes || null, req.user.id]);
-    for (const line of lines) await connection.execute(`INSERT INTO daily_cost_lines
+    for (const line of lines) {
+      const [createdLine] = await connection.execute(`INSERT INTO daily_cost_lines
       (sheet_id,task_id,boq_item_id,source,cost_type,description,quantity,unit,unit_rate,amount,
        employee_id,vehicle_id,fuel_origin,fuel_record_id,fuel_float_id,odometer,reserve_material_id,reference,quotation_item_id,quoted_recovery)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -483,6 +504,9 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
         line.quantity || null,line.unit || null,line.unitRate ?? null,line.amount,line.employeeId || null,
         line.vehicleId || null,line.fuelOrigin || null,line.fuelRecordId || null,line.fuelFloatId || null,line.odometer || null,line.reserveMaterialId || null,
         line.reference || null,line.quotationItemId || null,line.quotedRecovery]);
+      for (const taskId of line.taskIds) await connection.execute(
+        'INSERT INTO daily_cost_line_tasks (line_id,task_id) VALUES (?,?)', [createdLine.insertId,taskId]);
+    }
     await audit(connection,req.user.id,'SUBMIT','daily_cost_sheet',created.insertId,null,req.body,req.ip);
     return created.insertId;
   });
