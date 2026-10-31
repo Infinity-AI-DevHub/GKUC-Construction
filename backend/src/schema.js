@@ -641,6 +641,12 @@ async function createDailyCostTables() {
     INDEX idx_daily_line_fuel(fuel_record_id),
     INDEX idx_daily_line_task(task_id)
   ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS daily_cost_line_tasks (
+    line_id BIGINT UNSIGNED NOT NULL, task_id BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY(line_id,task_id),
+    CONSTRAINT fk_cost_task_line FOREIGN KEY(line_id) REFERENCES daily_cost_lines(id) ON DELETE CASCADE,
+    CONSTRAINT fk_cost_task_task FOREIGN KEY(task_id) REFERENCES tasks(id)
+  ) ENGINE=InnoDB`);
   await addColumn('daily_cost_lines','fuel_float_id','BIGINT UNSIGNED NULL');
   await addColumn('daily_cost_lines','odometer','INT UNSIGNED NULL');
   await addForeignKey('daily_cost_lines','fk_daily_line_float',
