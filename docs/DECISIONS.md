@@ -73,3 +73,14 @@ The detailed specification lives in [PAYROLL.md](PAYROLL.md). The decisions belo
 - Historical client/project/BOQ Excel import files were deliberately deferred pending revised source workbooks. Do not import them based on earlier preflight analysis without a new user request and fresh validation.
 - Contabo S3 migration must be verified with the actual server environment and provider credentials. A successful connection diagnostic does not prove production uploads/permissions are correct.
 - Full backend suite may include older date-sensitive tests. Report focused validation and any broader failures separately; never call the whole suite green without running it.
+
+## 2026-11-02 — client invoice presentation
+
+- Use the supplied invoice body format while preserving the system's current letterhead and its saved company address (the user explicitly selected the saved address rather than the PDF's address).
+- Always print a purchaser TIN field. If the saved invoice snapshot has no TIN, leave a dotted space for handwriting; never invent a tax identifier.
+- New invoices start with Reference, Description and Amount columns. Unit, Quantity and Rate remain selectable and persist per invoice; existing saved selections remain intact. Financial calculations and saved invoice amounts do not change.
+
+## 2026-11-02 — optional invoice recipient
+
+- Company-level invoices may be created without selecting or creating a client. Keep purchaser fields blank and provide dotted write-in spaces on the print; do not invent a client identity.
+- Company ownership, pricing and tax rules still apply. Previous paid-invoice credits require a saved client so unnamed purchasers are never treated as the same billing account.

@@ -2697,6 +2697,8 @@ async function createFleetHistoryTables() {
     FOREIGN KEY(created_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
   await addColumn('vehicle_maintenance', 'completed_schedules', 'JSON NULL');
+  if (!(await columnIsNullable('fuel_records','litres')))
+    await query('ALTER TABLE fuel_records MODIFY litres DECIMAL(10,2) NULL');
   await addColumn('fuel_records','company_id','TINYINT UNSIGNED NULL');
   await addForeignKey('fuel_records','fk_fuel_company','CONSTRAINT fk_fuel_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await addColumn('vehicle_maintenance','maintenance_kind',"ENUM('Service','Repair','Inspection') NOT NULL DEFAULT 'Service'");

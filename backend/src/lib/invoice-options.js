@@ -7,6 +7,7 @@ export function invoiceOptions(value) {
 
 /** Resolve settled invoices and their ancestors once, within the same billing account. */
 export async function previousInvoiceCredits(load, ids, scope) {
+  if (ids.length && !scope.clientId) reject('Choose a saved client before deducting previous invoices.');
   const found = new Map();
   const pending = [...ids];
   while (pending.length) {

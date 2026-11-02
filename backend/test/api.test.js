@@ -3951,6 +3951,38 @@ test('logging a service resets the vehicle service schedule', async () => {
     'company fleet service appears in the selected company monthly report');
 });
 
+test('fleet fuel accepts optional float and litres without cash movements',async()=>{
+  const owner=await login();
+  const created=await call(owner,'POST','/fleet',{vehicle:'Optional fuel truck',registration:`OPT-FUEL-${Date.now()}`,
+    status:'Available',renewal:'Insurance',dueDate:today(),odometer:100});
+  assert.equal(created.status,201);
+  const endpoint=`/fleet/${created.body.id}/fuel`;
+  const base={companyId:1,projectId:1,fuelDate:today(),cost:500,odometer:110};
+  const saved=await call(owner,'POST',endpoint,base);
+  assert.equal(saved.status,201,JSON.stringify(saved.body));
+  assert.equal(saved.body.litres,null);
+  assert.equal(Number(saved.body.company_id),1);
+  const [[count]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.petty_cash_entries WHERE fuel_record_id=?`,[saved.body.id]);
+  assert.equal(Number(count.n),0);
+  const [[expense]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.expenses WHERE origin_type='fuel_record' AND origin_id=?`,[String(saved.body.id)]);
+  assert.equal(Number(expense.n),1);
+  assert.equal((await call(owner,'POST',endpoint,{...base,litres:10,odometer:120,projectId:null})).status,201);
+  for(const litres of [0,-1,2001])assert.equal((await call(owner,'POST',endpoint,{...base,litres,odometer:130})).status,400);
+  assert.equal((await call(owner,'POST',endpoint,{...base,companyId:2,odometer:130})).status,400);
+  assert.equal((await call(owner,'POST',endpoint,{...base,fuelFloatId:999999,odometer:130})).status,400);
+  const opened=await call(owner,'POST','/receivables/petty-cash',{name:`Optional litres ${Date.now()}`,
+    accountType:'Fuel',holderName:'Transport',companyId:1,ceiling:1000,lowAt:100});
+  assert.equal(opened.status,201);
+  assert.equal((await call(owner,'POST',`/receivables/petty-cash/${opened.body.id}/entries`,{
+    kind:'Top up',amount:1000,entryDate:today(),description:'Fuel test funding'})).status,201);
+  const funded=await call(owner,'POST',endpoint,{...base,fuelFloatId:opened.body.id,odometer:130});
+  assert.equal(funded.status,201,JSON.stringify(funded.body));
+  assert.equal(funded.body.litres,null);
+  const ledger=(await call(owner,'GET',`/receivables/petty-cash/${opened.body.id}/entries`)).body;
+  assert.equal(ledger.filter(row=>row.fuelRecordId===funded.body.id).length,1);
+  assert.equal((await call(owner,'GET',`/fleet/${created.body.id}`)).body.running.litresPer100Km,null);
+});
+
 test('fleet fuel draws one funded float movement and one project expense without double entry', async () => {
   const owner = await login();
   const transport = await login('transport@gkuc.lk');
@@ -4030,6 +4062,37 @@ test('fleet fuel draws one funded float movement and one project expense without
   assert.match(wrongCompany.body.error, /different company/);
   const otherReport=await call(transport,'GET',`/fleet/monthly-report?companyId=2&period=${today().slice(0,7)}`);
   assert.ok(!otherReport.body.rows.some(row=>row.vehicleId===vehicle.body.id),'shared vehicle costs stay with the company that paid them');
+});
+
+test('fleet creation saves multiple renewal types atomically',async()=>{
+  const owner=await login();
+  const registration=`MULTI-${Date.now()}`;
+  const payload={vehicle:'Multiple renewal asset',registration,status:'Available',
+    renewal:'Insurance',dueDate:'2027-12-01',renewals:[
+      {docType:'Insurance',expiryDate:'2027-12-01'},
+      {docType:'Revenue licence',expiryDate:'2027-01-01'},
+      {docType:'Emission test',expiryDate:'2027-06-01'}]};
+  const duplicate=await call(owner,'POST','/fleet',{...payload,renewals:[payload.renewals[0],payload.renewals[0]]});
+  assert.equal(duplicate.status,400);
+  const invalid=await call(owner,'POST','/fleet',{...payload,renewals:[{docType:'Unknown',expiryDate:'2027-01-01'}]});
+  assert.equal(invalid.status,400);
+  assert.equal((await call(owner,'POST','/fleet',{...payload,renewals:[]})).status,400);
+  const created=await call(owner,'POST','/fleet',payload);
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  assert.equal(created.body.renewal,'Revenue licence');
+  assert.equal(created.body.due_date.slice(0,10),'2027-01-01');
+  const detail=(await call(owner,'GET',`/fleet/${created.body.id}`)).body;
+  assert.equal(detail.documents.length,3);
+  assert.equal(detail.renewals.length,3);
+  for(const renewal of payload.renewals){
+    assert.equal(detail.documents.find(row=>row.docType===renewal.docType).expiryDate.slice(0,10),renewal.expiryDate);
+    assert.ok(detail.renewals.some(row=>row.docType===renewal.docType));
+  }
+  assert.equal((await call(owner,'PATCH',`/fleet/${created.body.id}`,{renewals:payload.renewals})).status,400);
+  const legacy=await call(owner,'POST','/fleet',{vehicle:'Legacy renewal asset',registration:`LEGACY-${Date.now()}`,
+    status:'Available',renewal:'Insurance',dueDate:'2027-12-01'});
+  assert.equal(legacy.status,201);
+  assert.equal((await call(owner,'GET',`/fleet/${legacy.body.id}`)).body.documents.length,1);
 });
 
 test('fleet histories preserve driver handovers, odometer, repairs and renewals',async()=>{
@@ -4956,6 +5019,111 @@ test('payment suspension blocks business data while status and session hygiene r
   }
 });
 
+test('litres and barrels persist and calculate independently in invoices and quotations',async()=>{
+  const owner=await login();
+  const client=await call(owner,'POST','/clients',{type:'Organisation',name:`Tar purchaser ${Date.now()}`});
+  assert.equal(client.status,201);
+  const lines=[
+    {category:'Material',description:'Tar supplied by litre',unit:'Litres',quantity:125.5,rate:320},
+    {category:'Material',description:'Tar supplied by barrel',unit:'Barrels',quantity:2,rate:50000}
+  ];
+  const quote=await call(owner,'POST','/qs/quotations/manual',{
+    companyId:1,clientId:client.body.id,title:'Tar supply by selected unit',quoteDate:today(),
+    markupPercent:0,vatPercent:18,lines});
+  assert.equal(quote.status,201,JSON.stringify(quote.body));
+  assert.equal(Number(quote.body.subtotal),140160);
+  assert.equal(Number(quote.body.total),165388.8);
+  const quoteDetail=(await call(owner,'GET',`/qs/quotations/${quote.body.id}`)).body;
+  assert.deepEqual(quoteDetail.items.map(row=>row.unit),['Litres','Barrels']);
+  assert.deepEqual(quoteDetail.items.map(row=>Number(row.quantity)),[125.5,2]);
+  const invoice=await call(owner,'POST','/receivables/invoices',{
+    companyId:1,clientId:client.body.id,title:'Tar supply invoice',invoiceDate:today(),
+    documentType:'Tax Invoice',taxTreatment:'Standard',vatRate:18,
+    columns:{unit:true,quantity:true,rate:true},
+    items:lines.map(({category,...line})=>line)});
+  assert.equal(invoice.status,201,JSON.stringify(invoice.body));
+  assert.equal(Number(invoice.body.gross),140160);
+  assert.equal(Number(invoice.body.netPayable),165388.8);
+  const detail=(await call(owner,'GET',`/receivables/invoices/${invoice.body.id}`)).body;
+  assert.deepEqual(detail.items.map(row=>row.unit),['Litres','Barrels']);
+  assert.deepEqual(detail.items.map(row=>Number(row.amount)),[40160,100000]);
+  for(const endpoint of [`/qs/quotations/${quote.body.id}/document`,`/receivables/invoices/${invoice.body.id}/document`]){
+    const response=await fetch(`${base}${endpoint}`,{headers:{authorization:`Bearer ${owner}`}});
+    assert.equal(response.status,200);
+    const html=await response.text();
+    assert.match(html,/>Litres</);
+    assert.match(html,/>Barrels</);
+    assert.match(html,/125.5/);
+    assert.match(html,/40,160.00/);
+    assert.match(html,/100,000.00/);
+  }
+});
+
+test('invoices can be saved, issued and paid without a named client',async()=>{
+  const finance=await login('finance@gkuc.lk');
+  const payload={companyId:1,title:'Invoice without named purchaser',invoiceDate:today(),
+    documentType:'Tax Invoice',taxTreatment:'Standard',vatRate:18,
+    items:[{description:'Completed work',quantity:1,rate:1000}]};
+  const [[before]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.clients`);
+  const preview=await call(finance,'POST','/receivables/preview',payload);
+  assert.equal(preview.status,200,JSON.stringify(preview.body));
+  assert.equal(preview.body.netPayable,1180);
+  const saved=await call(finance,'POST','/receivables/invoices',payload);
+  assert.equal(saved.status,201,JSON.stringify(saved.body));
+  const detail=(await call(finance,'GET',`/receivables/invoices/${saved.body.id}`)).body;
+  assert.equal(detail.client_id,null);
+  assert.equal(detail.client,'');
+  assert.equal(detail.buyer_address,null);
+  assert.equal(detail.buyer_tin,null);
+  assert.equal(Number(detail.company_id),1);
+  const html=await (await fetch(`${base}/receivables/invoices/${saved.body.id}/document`,{
+    headers:{authorization:`Bearer ${finance}`}})).text();
+  assert.match(html,/Purchaser's Name:<\/strong> <span class="write-in">\.{20,}/);
+  assert.match(html,/Purchaser's TIN:<\/strong> <span class="write-in">\.{20,}/);
+  assert.equal((await call(finance,'POST',`/receivables/invoices/${saved.body.id}/issue`)).status,204);
+  assert.equal((await call(finance,'POST',`/receivables/invoices/${saved.body.id}/receipts`,{
+    amount:1180,receivedDate:today(),method:'Cash'})).status,201);
+  const paid=(await call(finance,'GET',`/receivables/invoices/${saved.body.id}`)).body;
+  assert.equal(paid.status,'Paid');
+  const anonymousCredit={...payload,previousInvoiceIds:[saved.body.id],items:[{description:'Other work',quantity:1,rate:2000}]};
+  assert.equal((await call(finance,'POST','/receivables/invoices',anonymousCredit)).status,400);
+  assert.equal((await call(finance,'POST','/receivables/preview',anonymousCredit)).status,400);
+  const standard=await call(finance,'POST','/receivables/invoices',{
+    ...payload,companyId:2,clientId:null,documentType:'Invoice',taxTreatment:'Exempt'});
+  assert.equal(standard.status,201,JSON.stringify(standard.body));
+  assert.equal(Number((await call(finance,'GET',`/receivables/invoices/${standard.body.id}`)).body.company_id),2);
+  assert.equal((await call(finance,'POST','/receivables/invoices',{...payload,clientId:999999})).status,400);
+  const [[after]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.clients`);
+  assert.equal(Number(after.n),Number(before.n),'no placeholder client is created');
+});
+
+test('invoice users can create and select a client without client management permissions',async()=>{
+  const finance=await login('finance@gkuc.lk');
+  const store=await login('store@gkuc.lk');
+  const payload={type:'Organisation',name:`Invoice inline client ${Date.now()}`,
+    billingAddress:'New purchaser address',phone:'0771234567',tin:'INLINE-TIN'};
+  assert.equal((await call(store,'POST','/clients',payload)).status,403);
+  assert.equal((await call(finance,'POST','/clients',{...payload,name:'X'})).status,400);
+  const created=await call(finance,'POST','/clients',payload);
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  assert.equal(created.body.tin,payload.tin);
+  assert.equal((await call(finance,'POST','/clients',payload)).status,409);
+  const clients=await call(finance,'GET','/clients');
+  assert.equal(clients.status,200);
+  assert.ok(clients.body.some(row=>row.id===created.body.id));
+  assert.equal((await call(finance,'PATCH',`/clients/${created.body.id}`,{name:'Unexpected edit'})).status,403);
+  const invoice=await call(finance,'POST','/receivables/invoices',{
+    companyId:1,clientId:created.body.id,title:'New client invoice',invoiceDate:today(),
+    documentType:'Tax Invoice',taxTreatment:'Standard',vatRate:18,
+    items:[{description:'Completed work',quantity:1,rate:1000}]});
+  assert.equal(invoice.status,201,JSON.stringify(invoice.body));
+  const detail=(await call(finance,'GET',`/receivables/invoices/${invoice.body.id}`)).body;
+  assert.equal(Number(detail.client_id),created.body.id);
+  assert.equal(detail.buyer_tin,payload.tin);
+  assert.equal(detail.buyer_address,payload.billingAddress);
+  assert.equal(detail.buyer_phone,payload.phone);
+});
+
 test('invoice columns and cumulative paid-invoice deductions persist without duplicate receipts or VAT', async () => {
   const owner = await login();
   const client = await call(owner, 'POST', '/clients', { type: 'Private', name: `Cumulative Billing ${Date.now()}` });
@@ -4965,6 +5133,9 @@ test('invoice columns and cumulative paid-invoice deductions persist without dup
     items: [{ description: 'Work', quantity: 1, rate: 1000 }] };
   const first = await call(owner, 'POST', '/receivables/invoices', body);
   assert.equal(first.status, 201, JSON.stringify(first.body));
+  const firstDetail=(await call(owner,'GET',`/receivables/invoices/${first.body.id}`)).body;
+  const firstOptions=typeof firstDetail.invoice_options==='string'?JSON.parse(firstDetail.invoice_options):firstDetail.invoice_options;
+  assert.deepEqual(firstOptions.columns,{unit:false,quantity:false,rate:false});
   const unpaid = await call(owner, 'POST', '/receivables/invoices', { ...body, previousInvoiceIds: [first.body.id], items: [{ description: 'All work', quantity: 1, rate: 2500 }] });
   assert.equal(unpaid.status, 400);
   assert.equal((await call(owner, 'POST', `/receivables/invoices/${first.body.id}/issue`)).status, 204);

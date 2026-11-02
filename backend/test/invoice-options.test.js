@@ -73,3 +73,26 @@ test('cumulative retention and recoveries contribute only their new portions to 
   assert.equal(sums.netPayable, 1570);
   assert.equal(sums.vatCollected, 270);
 });
+
+test('reference invoice layout retains saved address and a writable missing purchaser TIN', () => {
+  const render = buyerTin => invoiceDocument({
+    company: { name: 'Saved company', address: 'Saved address line 1\nSaved address line 2', tin: 'SUPPLIER-TIN' },
+    invoice: { reference: 'INV-FORMAT', invoiceDate: '2026-11-02', client: 'Purchaser <Company>',
+      buyerTin, title: 'Work completed', taxTreatment: 'Standard', vatRate: 18,
+      gross: 100, vatAmount: 18, netPayable: 118, paymentMode: 'Cheque',
+      invoiceOptions: { columns: { unit: false, quantity: false, rate: false } } },
+    items: [{ description: 'Completed work', amount: 100, quantity: 1, rate: 100 }]
+  });
+  const html = render(null);
+  assert.match(html, /Purchaser's TIN:<\/strong> <span class="write-in">\.{20,}<\/span>/);
+  assert.match(html, /data-piece="companyDetails"[^>]*>Saved address line 1<br>Saved address line 2/);
+  assert.match(html, /Supplier's Name:/);
+  assert.match(html, /Date of Delivery:/);
+  assert.match(html, /Place of Supply:/);
+  assert.match(html, /Additional Information if any:/);
+  assert.match(html, /Mode of Payment:<\/strong> Cheque/);
+  assert.match(html, /Purchaser &lt;Company&gt;/);
+  assert.match(html, /<th class="ref">Reference<\/th>/);
+  assert.match(render('BUYER-123'), /Purchaser's TIN:<\/strong> BUYER-123/);
+  assert.doesNotMatch(render('BUYER-123'), /Purchaser's TIN:<\/strong> <span/);
+});

@@ -5,6 +5,8 @@ import {
   Badge, EmptyState, Field, FormModal, WorkflowForm, Modal, Row, SelectField, Summary, Table, TextArea, useLiveList
 } from './ui.jsx';
 import WorkflowChecklist from './WorkflowChecklist.jsx';
+import { ClientForm } from './pages/ClientDirectory.jsx';
+import MeasurementUnit from './MeasurementUnit.jsx';
 import DocumentNumbering,{NumberEdit} from './DocumentNumbering.jsx';
 import { clientCollectionSteps } from './workflow-paths.js';
 
@@ -193,7 +195,7 @@ const AGEING_TEMPLATE = 'minmax(160px,1.2fr) minmax(150px,1fr) 130px 130px 130px
 function AgeingTable({ rows }) {
   return <Table columns={AGEING_COLUMNS} template={AGEING_TEMPLATE} title="How long it has been owed">
     {rows.map(row => <Row template={AGEING_TEMPLATE} key={`${row.client}-${row.project}`}>
-      <strong>{row.client}</strong>
+      <strong>{row.client || 'No client specified'}</strong>
       <span>{row.project}</span>
       <span>{rupees(row.current)}</span>
       <span>{rupees(row.upTo30)}</span>
@@ -310,12 +312,13 @@ function InvoiceColumnForm({ invoice, close, reload }) {
 const BLANK_LINE = { description: '', unit: '', quantity: '', rate: '', quotationItemId: '', boqItemId: '' };
 
 function CertificateForm({ data, companyId, close, reload }) {
-  const [columns, setColumns] = useState({ unit: true, quantity: true, rate: true });
+  const [columns, setColumns] = useState({ unit: false, quantity: false, rate: false });
   const [previousInvoiceIds, setPreviousInvoiceIds] = useState([]);
   const [previewError, setPreviewError] = useState('');
   const [lines, setLines] = useState([{ ...BLANK_LINE }]);
   const [projectId,setProjectId]=useState('');
   const [clientId,setClientId]=useState('');
+  const [addingClient,setAddingClient]=useState(false);
   const [paidInvoices, setPaidInvoices] = useState([]);
   const [paidInvoiceError, setPaidInvoiceError] = useState('');
   useEffect(() => {
@@ -328,7 +331,14 @@ function CertificateForm({ data, companyId, close, reload }) {
     return () => { live = false; };
   }, [clientId, projectId, companyId]);
   const [clients,setClients]=useState([]);
-  useEffect(() => { api('/clients').then(setClients).catch(() => setClients([])); }, []);
+  useEffect(() => {
+    let live = true;
+    api('/clients').then(rows => {
+      if (live) setClients(current => [...new Map([...rows, ...current].map(row => [Number(row.id), row])).values()]
+        .sort((a,b) => a.name.localeCompare(b.name)));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, []);
   const clientProjects = data.projects.filter(project => Number(project.companyId || project.company_id) === Number(companyId)
     && String(project.clientId || project.client_id) === String(clientId));
   const [quoteLines,setQuoteLines]=useState([]);
@@ -386,8 +396,8 @@ function CertificateForm({ data, companyId, close, reload }) {
     return () => { live = false; clearTimeout(timer); };
   }, [signature]);
 
-  return <WorkflowForm title="Create client invoice" close={close} label="Save invoice as draft" summary={[
-    ['Client', clients.find(client => String(client.id) === String(clientId))?.name || 'Choose a client'],
+  return <><WorkflowForm title="Create client invoice" close={close} label="Save invoice as draft" summary={[
+    ['Client', clients.find(client => String(client.id) === String(clientId))?.name || 'No client — purchaser left blank'],
     ['Project', clientProjects.find(project => String(project.id) === String(projectId))?.name || 'Company-level invoice'],
     ['Format', documentType], ['Line items', String(items.length)],
     ['PDF columns', ['Description', ...Object.entries({ unit: 'Unit', quantity: 'Quantity', rate: 'Rate' }).filter(([key]) => columns[key]).map(([, label]) => label), 'Amount'].join(', ')],
@@ -397,7 +407,7 @@ function CertificateForm({ data, companyId, close, reload }) {
       if (!items.length) throw new Error('Add at least one line with a description and a quantity or lump-sum amount');
       await post('/receivables/invoices', {
         projectId: values.projectId ? Number(values.projectId) : null,
-        clientId: Number(values.clientId),
+        clientId: values.clientId ? Number(values.clientId) : undefined,
         kind: values.kind,
         title: values.title,
         reference: values.reference || undefined,
@@ -412,11 +422,11 @@ function CertificateForm({ data, companyId, close, reload }) {
       });
       await reload();
     }}>
-    <div className="qs-form-section wide"><span>01</span><div><h3>Invoice recipient</h3><p>Select the client, project and billing type.</p></div></div>
+    <div className="qs-form-section wide"><span>01</span><div><h3>Invoice recipient</h3><p>Select a client if needed, or leave it blank for an invoice without a named purchaser.</p></div></div>
     <Field name="reference" label="Invoice number (optional; blank uses sequence)" required={false} />
-    <label>Client *<select name="clientId" value={clientId} required onChange={event=>{const chosen=event.target.value;setClientId(chosen);setProjectId('');setPreviousInvoiceIds([]);setLines([{...BLANK_LINE}]);}}>
-      <option value="">Choose saved client…</option>{clients.map(client=><option key={client.id} value={client.id}>{client.name}</option>)}
-    </select></label>
+    <label>Client (optional)<select name="clientId" value={clientId} onChange={event=>{const chosen=event.target.value;setClientId(chosen);setProjectId('');setPreviousInvoiceIds([]);setLines([{...BLANK_LINE}]);}}>
+      <option value="">No client — leave purchaser blank</option>{clients.map(client=><option key={client.id} value={client.id}>{client.name}</option>)}
+    </select><button type="button" className="secondary" onClick={() => setAddingClient(true)}>Add new client</button></label>
     <label>Project (optional)<select name="projectId" value={projectId} onChange={event=>{setProjectId(event.target.value);setPreviousInvoiceIds([]);setLines([{...BLANK_LINE}]);}}>
       <option value="">No project — company-level invoice</option>{clientProjects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}
     </select></label>
@@ -437,6 +447,8 @@ function CertificateForm({ data, companyId, close, reload }) {
 
     <div className="qs-form-section wide"><span>02</span><div><h3>What is being invoiced</h3><p>Use accepted quotation or BOQ items, or add a manual line.</p></div></div>
     <div className="wide"><InvoiceColumnControls columns={columns} setColumns={setColumns} />
+      <button type="button" className="secondary" onClick={() => setColumns({ unit: true, quantity: true, rate: true })}>Use quantity × rate</button>
+      <p className="invoice-note">For tar or other materials, choose Litres or Barrels and enter the rate per selected unit. Quantities are not converted between units.</p>
       <p className="invoice-note">Choose which columns appear on this invoice's PDF. Description and amount always appear. Hide both Quantity and Rate to enter a manual lump-sum amount.</p></div>
     <div className="invoice-lines wide">
       <h3>What is being invoiced</h3>
@@ -457,8 +469,13 @@ function CertificateForm({ data, companyId, close, reload }) {
         </select>
         <input value={line.description} aria-label={`Line ${index + 1} description`} placeholder="Description of goods or work"
           onChange={event => setLine(index, 'description', event.target.value)} />
-        <input value={line.unit} aria-label={`Line ${index + 1} unit`} placeholder="Unit"
-          onChange={event => setLine(index, 'unit', event.target.value)} />
+        <MeasurementUnit value={line.unit} aria-label={`Line ${index + 1} unit`}
+          onChange={event => {
+            const unit = event.target.value;
+            setLine(index, 'unit', unit);
+            if (/^(litres?|liters?|barrels?)$/i.test(unit.trim()))
+              setColumns({ unit: true, quantity: true, rate: true });
+          }} />
         {amountOnly ? <input value={line.quantity === '' && line.rate === '' ? '' : (Number(line.quantity) || 0) * (Number(line.rate) || 0)} aria-label={`Line ${index + 1} amount`} type="number" step="0.01" min="0" placeholder="Amount (LKR)" readOnly={Boolean(line.quotationItemId || line.boqItemId)} onChange={event => setLines(current => current.map((row, position) => position === index ? { ...row, quantity: '1', rate: event.target.value } : row))} /> : <>
         <input value={line.quantity} aria-label={`Line ${index + 1} quantity`} type="number" step="any" min="0" max={line.boqItemId ? boqLines.find(row=>String(row.id)===String(line.boqItemId))?.remainingQuantity : undefined} placeholder="Qty"
           onChange={event => setLine(index, 'quantity', event.target.value)} />
@@ -526,7 +543,20 @@ function CertificateForm({ data, companyId, close, reload }) {
         passes instead, so it is not part of what the client pays.
       </p>}
     </div>}
-  </WorkflowForm>;
+  </WorkflowForm>
+    {addingClient && <ClientForm client={{}} close={() => setAddingClient(false)} saved={async client => {
+      setClients(current => [...current.filter(row => Number(row.id) !== Number(client.id)), client]
+        .sort((a,b) => a.name.localeCompare(b.name)));
+      setClientId(String(client.id));
+      setProjectId('');
+      setPreviousInvoiceIds([]);
+      setLines(current => {
+        const manual = current.filter(line => !line.quotationItemId && !line.boqItemId);
+        return manual.length ? manual : [{ ...BLANK_LINE }];
+      });
+      setAddingClient(false);
+    }} />}
+  </>;
 }
 
 /* ---- bank guarantees ------------------------------------------------------ */

@@ -3,6 +3,7 @@ import { Download, FileText, Plus, Trash2, Upload, ChartNoAxesCombined, Calculat
 import { api, fetchDownload, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import BoqImport from '../BoqImport.jsx';
+import MeasurementUnit from '../MeasurementUnit.jsx';
 import BoqChanges from '../BoqChanges.jsx';
 import CostControl from './CostControl.jsx';
 import ProgressClaims from './ProgressClaims.jsx';
@@ -1275,7 +1276,7 @@ function QuotationForm({ data, companyId, close, reload }) {
     <Field name="preparedByName" label="Prepared by name" required={false} placeholder="Name shown on this quotation" />
     <Field name="preparedByDesignation" label="Prepared by designation" required={false} placeholder="Quantity Surveyor / Managing Director" />
     {mode === 'manual' && <div className="manual-quotation-lines wide">
-      <div className="manual-quotation-heading"><div><strong>Quoted items</strong><span>Amounts are calculated automatically.</span></div>
+      <div className="manual-quotation-heading"><div><strong>Quoted items</strong><span>Choose a unit, including Litres or Barrels, and enter the rate per unit. Amount = quantity × rate; units are not converted.</span></div>
         <button type="button" className="secondary" onClick={() => setLines(current => [...current,
           blankLine()])}><Plus size={15} />Add item</button></div>
       {lines.map((line, index) => <div className="manual-quotation-line" key={index}>
@@ -1290,7 +1291,7 @@ function QuotationForm({ data, companyId, close, reload }) {
         <input aria-label={`Item ${index + 1} category`} placeholder="Category" value={line.category} onChange={event => updateLine(index, 'category', event.target.value)} />
         <input aria-label={`Item ${index + 1} item number or surfacing`} placeholder="Item no. / surfacing" value={line.area} onChange={event => updateLine(index, 'area', event.target.value)} />
         <input aria-label={`Item ${index + 1} description`} placeholder="Description" value={line.description} onChange={event => updateLine(index, 'description', event.target.value)} />
-        <input aria-label={`Item ${index + 1} unit`} placeholder="Unit" value={line.unit} onChange={event => updateLine(index, 'unit', event.target.value)} />
+        <MeasurementUnit aria-label={`Item ${index + 1} unit`} value={line.unit} onChange={event => updateLine(index, 'unit', event.target.value)} />
         <input aria-label={`Item ${index + 1} quantity`} type="number" min="0.001" step="0.001" placeholder="Qty" value={line.quantity} disabled={Boolean(line.subQuotationId)} onChange={event => updateLine(index, 'quantity', event.target.value)} />
         <input aria-label={`Item ${index + 1} rate`} type="number" min="0" step="0.01" placeholder="Rate" value={line.rate} disabled={Boolean(line.subQuotationId)} onChange={event => updateLine(index, 'rate', event.target.value)} />
         <strong>{rupees(Number(line.quantity || 0) * Number(line.rate || 0))}</strong>
@@ -1427,7 +1428,7 @@ function QuotationWording({ quotation, close, reload }) {
         <input aria-label={`Item ${index + 1} category`} placeholder="Category" value={line.category} onChange={event => updateLine(index, 'category', event.target.value)} />
         <input aria-label={`Item ${index + 1} item number or surfacing`} placeholder="Item no. / surfacing" value={line.area} onChange={event => updateLine(index, 'area', event.target.value)} />
         <input aria-label={`Item ${index + 1} description`} placeholder="Description" value={line.description} onChange={event => updateLine(index, 'description', event.target.value)} />
-        <input aria-label={`Item ${index + 1} unit`} placeholder="Unit" value={line.unit} onChange={event => updateLine(index, 'unit', event.target.value)} />
+        <MeasurementUnit aria-label={`Item ${index + 1} unit`} value={line.unit} onChange={event => updateLine(index, 'unit', event.target.value)} />
         <input aria-label={`Item ${index + 1} quantity`} type="number" min="0.001" step="0.001" value={line.quantity} onChange={event => updateLine(index, 'quantity', event.target.value)} />
         <input aria-label={`Item ${index + 1} rate`} type="number" min="0" step="0.01" value={line.rate} onChange={event => updateLine(index, 'rate', event.target.value)} />
         <strong>{rupees(Number(line.quantity || 0) * Number(line.rate || 0))}</strong>
