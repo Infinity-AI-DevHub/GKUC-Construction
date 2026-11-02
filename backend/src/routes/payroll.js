@@ -74,7 +74,7 @@ const policySchema = z.object({
     permanentOnly: z.boolean(), minimumMonthlySalary: z.number().nonnegative(),
     weeklyWeeksPerMonth: z.number().positive(), dailyDaysPerMonth: z.number().positive()
   }).default(DEFAULT_STATUTORY_RULES),
-  hrRules:z.object({normalStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),normalEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),paidHoursPerDay:z.number().positive().max(24).default(8),otInterval:z.number().positive().max(4),minimumOt:z.number().nonnegative().max(24),otGraceMinutes:z.number().int().min(0).max(240).default(0),maxDailyOt:z.number().positive().max(24),lateGraceMinutes:z.number().int().nonnegative().default(30),transportDivisor:z.number().positive().max(366),fullTransportDays:z.number().int().min(0).max(366).nullable(),fullTransportComparison:z.enum(['At least','More than']),longDistanceKm:z.number().nonnegative(),longDistancePayment:z.number().nonnegative(),supervisorSiteCharge:z.number().nonnegative().default(500),mileageRate:z.number().nonnegative(),fixedTravelPayment:z.number().nonnegative(),allowMileageAndFixed:z.boolean(),countLeaveForTransport:z.boolean(),countAbsenceForTransport:z.boolean(),separateApproval:z.boolean().default(false)}).refine(r=>r.normalEnd>r.normalStart,'Normal shift end must be after its start').default(INITIAL_HR_RULES)
+  hrRules:z.object({normalStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),normalEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),paidHoursPerDay:z.number().positive().max(24).default(8),otInterval:z.number().positive().max(4),minimumOt:z.number().nonnegative().max(24),otGraceMinutes:z.number().int().min(0).max(240).default(0),maxDailyOt:z.number().positive().max(24),earlyOtLatestCheckIn:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('07:00'),officeOtMinimumMinutes:z.number().int().min(0).max(240).default(30),labourSiteOtMinimumMinutes:z.number().int().min(0).max(240).default(30),labourTravelOtMinimumMinutes:z.number().int().min(0).max(240).default(31),supervisorSiteOtMinimumMinutes:z.number().int().min(0).max(240).default(30),supervisorTravelOtMinimumMinutes:z.number().int().min(0).max(240).default(31),driverSiteOtMinimumMinutes:z.number().int().min(0).max(240).default(31),driverTravelOtMinimumMinutes:z.number().int().min(0).max(240).default(30),lateGraceMinutes:z.number().int().nonnegative().default(15),monthlyOvertimeDayThreshold:z.number().positive().max(366).default(25),monthlyOvertimeMultiplier:z.number().positive().max(10).default(1.5),transportDivisor:z.number().positive().max(366),fullTransportDays:z.number().int().min(0).max(366).nullable(),fullTransportComparison:z.enum(['At least','More than']),longDistanceKm:z.number().nonnegative(),longDistancePayment:z.number().nonnegative(),supervisorSiteCharge:z.number().nonnegative().default(500),mileageRate:z.number().nonnegative(),fixedTravelPayment:z.number().nonnegative(),allowMileageAndFixed:z.boolean(),countLeaveForTransport:z.boolean(),countAbsenceForTransport:z.boolean(),separateApproval:z.boolean().default(false)}).refine(r=>r.normalEnd>r.normalStart,'Normal shift end must be after its start').default(INITIAL_HR_RULES)
 });
 
 const policySelect = `SELECT p.id,p.company_id companyId,c.name company,p.effective_from effectiveFrom,p.office_ot_rate officeOtRate,
@@ -139,6 +139,13 @@ async function removePolicies(req,res,policyId=null) {
 router.delete('/settings/policies',auth,permit('hr.settings'),wrap((req,res)=>removePolicies(req,res)));
 router.delete('/settings/policies/:id',auth,permit('hr.settings'),wrap((req,res)=>removePolicies(req,res,Number(req.params.id))));
 
+const policyRules=body=>JSON.stringify({...body.hrRules,
+  customOfficeOtRate: body.customOfficeOtRate ?? body.officeOtRate,
+  customSiteOtRate: body.customSiteOtRate ?? body.siteLabourSiteOtRate,
+  customTravelOtRate: body.customTravelOtRate ?? body.siteLabourTravelOtRate
+});
+const policyValues=(body,userId)=>[body.companyId,body.effectiveFrom,body.officeOtRate,body.siteLabourSiteOtRate,body.siteLabourTravelOtRate,
+  body.driverOtRate,body.supervisorSiteOtRate,body.supervisorTravelOtRate,body.epfEmployeeRate,body.epfEmployerRate,body.etfEmployerRate,body.epfBasis,body.etfBasis,userId];
 router.post('/settings/policies', auth, permit("hr.settings"), validate(policySchema), wrap(async (req, res) => {
   const body = req.body;
   try {
@@ -146,15 +153,9 @@ router.post('/settings/policies', auth, permit("hr.settings"), validate(policySc
       (company_id,effective_from,office_ot_rate,site_labour_site_ot_rate,site_labour_travel_ot_rate,driver_ot_rate,
        supervisor_site_ot_rate,supervisor_travel_ot_rate,epf_employee_rate,epf_employer_rate,etf_employer_rate,
        epf_basis,etf_basis,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [body.companyId, body.effectiveFrom, body.officeOtRate, body.siteLabourSiteOtRate, body.siteLabourTravelOtRate,
-      body.driverOtRate, body.supervisorSiteOtRate, body.supervisorTravelOtRate, body.epfEmployeeRate,
-      body.epfEmployerRate, body.etfEmployerRate, body.epfBasis, body.etfBasis, req.user.id]);
+    policyValues(body,req.user.id));
     await query('UPDATE payroll_policies SET hr_rules=?,driver_site_ot_rate=?,driver_travel_ot_rate=? WHERE id=?',
-      [JSON.stringify({...body.hrRules,
-        customOfficeOtRate: body.customOfficeOtRate ?? body.officeOtRate,
-        customSiteOtRate: body.customSiteOtRate ?? body.siteLabourSiteOtRate,
-        customTravelOtRate: body.customTravelOtRate ?? body.siteLabourTravelOtRate
-      }),body.driverSiteOtRate ?? body.driverOtRate,body.driverTravelOtRate ?? body.driverOtRate,result.insertId]);
+      [policyRules(body),body.driverSiteOtRate ?? body.driverOtRate,body.driverTravelOtRate ?? body.driverOtRate,result.insertId]);
     await query('UPDATE payroll_policies SET statutory_rules=? WHERE id=?',[JSON.stringify(body.statutoryRules),result.insertId]);
     const row = await getOne(`${policySelect} WHERE p.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'payroll_policy', row.id, null, row, req.ip);
@@ -163,6 +164,24 @@ router.post('/settings/policies', auth, permit("hr.settings"), validate(policySc
     if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'A payroll policy already starts on that date' });
     throw error;
   }
+}));
+
+// Policy edits are intentional and auditable. Existing payslips retain their saved
+// calculations; only future or regenerated Draft payrolls use the changed policy.
+router.patch('/settings/policies/:id', auth, permit('hr.settings'), validate(policySchema), wrap(async (req,res)=>{
+  const body=req.body,id=Number(req.params.id);
+  if(!Number.isSafeInteger(id)||id<1)throw fail(400,'Choose a valid payroll policy.');
+  const before=await getOne('SELECT * FROM payroll_policies WHERE id=? AND company_id=? AND archive_key=0',[id,body.companyId]);
+  if(!before)throw fail(404,'Policy not found in this company.');
+  await query(`UPDATE payroll_policies SET effective_from=?,office_ot_rate=?,site_labour_site_ot_rate=?,site_labour_travel_ot_rate=?,driver_ot_rate=?,
+    driver_site_ot_rate=?,driver_travel_ot_rate=?,supervisor_site_ot_rate=?,supervisor_travel_ot_rate=?,epf_employee_rate=?,epf_employer_rate=?,etf_employer_rate=?,
+    epf_basis=?,etf_basis=?,hr_rules=?,statutory_rules=? WHERE id=?`,[
+      body.effectiveFrom,body.officeOtRate,body.siteLabourSiteOtRate,body.siteLabourTravelOtRate,body.driverOtRate,
+      body.driverSiteOtRate ?? body.driverOtRate,body.driverTravelOtRate ?? body.driverOtRate,body.supervisorSiteOtRate,body.supervisorTravelOtRate,
+      body.epfEmployeeRate,body.epfEmployerRate,body.etfEmployerRate,body.epfBasis,body.etfBasis,policyRules(body),JSON.stringify(body.statutoryRules),id]);
+  const row=await getOne(`${policySelect} WHERE p.id=?`,[id]);
+  await audit(pool,req.user.id,'UPDATE','payroll_policy',id,before,row,req.ip);
+  res.json(row);
 }));
 
 const componentSchema = z.object({
@@ -345,6 +364,10 @@ async function buildPayroll(req,connection){
       const employeeNames=await query('SELECT id,name FROM employees');
       const departments=await query('SELECT id,name FROM departments');
       const attendanceRows=await query(`SELECT * FROM visible_attendance WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id`,[periodStart,periodEnd]);
+      // The 1.5× day-rate threshold resets each calendar month, so payroll needs
+      // the earlier attendance in the opening month as well as the run dates.
+      const calendarStart=`${periodStart.slice(0,7)}-01`;
+      const calendarAttendanceRows=await query(`SELECT * FROM visible_attendance WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id`,[calendarStart,periodEnd]);
       const otRows=await query('SELECT * FROM visible_overtime_records WHERE work_date BETWEEN ? AND ? ORDER BY work_date,id',[periodStart,periodEnd]);
       const travelClaims=await query("SELECT * FROM visible_hr_payroll_claims WHERE kind='Travel' AND work_date BETWEEN ? AND ?",[periodStart,periodEnd]);
       const datedPolicies=await query('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC',[companyId,periodEnd]);
@@ -362,7 +385,8 @@ async function buildPayroll(req,connection){
           const {attendance,detail,...leaveCounts}=leave;
           Object.assign(row,leaveCounts);
           Object.assign(row,calculateAttendancePayroll(row,attendance,otRows.filter(o=>Number(o.employee_id)===Number(row.id)),
-            datedPolicies,travelClaims.filter(c=>Number(c.employee_id)===Number(row.id))));
+            datedPolicies,travelClaims.filter(c=>Number(c.employee_id)===Number(row.id)),
+            attendanceForEmployee(row,calendarAttendanceRows,employeeNames)));
           row.calculation_detail.leave=detail;
           row.calculation_detail.contributions=contributionDetail;
           row.calculation_detail.employee={name:row.name,code:row.code,designation:row.designation,
@@ -411,7 +435,7 @@ async function buildPayroll(req,connection){
         if (Number(employee.days_present)+Number(employee.paid_leave_days)>0 && Number(employee.daily_rate)<=0)
           throw fail(409,`${employee.name}: worked/paid-leave days exist, but the daily salary rate is zero. Set the employee daily rate in Payroll settings and rebuild this draft. The EPF/ETF basis cannot replace the daily rate.`);
         const calculation = calculatePayslip(employee, policy, employeeComponents, payFrequency);
-        employee.calculation_detail.salary={dailyRate:Number(employee.daily_rate),workedDays:Number(employee.days_present),
+        employee.calculation_detail.salary={dailyRate:Number(employee.daily_rate),workedDays:Number(employee.days_present),attendanceBasic:Number(employee.attendance_basic),
           paidLeaveDays:Number(employee.paid_leave_days),shortDayReduction:calculation.shortDayReduction,
           issues:salaryCalculationIssues(employee,calculation)};
         for(const message of employee.calculation_detail.salary.issues)
