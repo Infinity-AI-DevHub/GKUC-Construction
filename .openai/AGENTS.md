@@ -1,0 +1,3 @@
+# OpenAI agent instructions
+
+Read and follow the repository's root [AGENTS.md](../AGENTS.md), [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md), [docs/DECISIONS.md](../docs/DECISIONS.md), [docs/PAYROLL.md](../docs/PAYROLL.md), and append-only [PROGRESS.md](../PROGRESS.md). Root instructions are authoritative.

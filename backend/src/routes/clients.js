@@ -31,7 +31,7 @@ const select = `SELECT id,type,name,contact_person contactPerson,phone,alternate
   consultant_phone consultantPhone,consultant_email consultantEmail,consultant_address consultantAddress,
   preferred_contact preferredContact,notes,active,created_at createdAt,updated_at updatedAt FROM clients`;
 
-router.get('/', auth, permit('clients.view'), wrap(async (req, res) => {
+router.get('/', auth, permit('clients.view','finance.invoice'), wrap(async (req, res) => {
   const archived = req.query.archived === '1';
   res.json(await query(`${select} WHERE active=? ORDER BY name,id`, [archived ? 0 : 1]));
 }));
@@ -80,7 +80,7 @@ router.get('/:id', auth, permit('clients.view'), wrap(async (req, res) => {
       received: payments.reduce((sum, row) => sum + Number(row.amount), 0) } });
 }));
 
-router.post('/', auth, permit('clients.manage'), validate(shape), wrap(async (req, res) => {
+router.post('/', auth, permit('clients.manage','finance.invoice'), validate(shape), wrap(async (req, res) => {
   const duplicate = await getOne('SELECT id FROM clients WHERE LOWER(name)=LOWER(?) AND type=? LIMIT 1', [req.body.name, req.body.type]);
   if (duplicate) return res.status(409).json({ error: 'A client with this name and type already exists. Open that profile instead of adding a duplicate.' });
   if (['Agency','Both'].includes(req.body.preferredContact) && !req.body.consultantAgencyName)

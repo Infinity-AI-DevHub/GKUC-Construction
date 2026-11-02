@@ -151,7 +151,7 @@ test('long quotations print the full letterhead only on page one while invoices 
         assert.ok(page.includes('Address line 1 with additional company information'),
           'the applicable page retains the company details');
       }
-      assert.equal((text.match(index === 0 ? /Subtotal/g : /Net payable/g) || []).length, 1,
+      assert.equal((text.match(index === 0 ? /Subtotal/g : /Total amount including VAT/g) || []).length, 1,
         'document totals must not repeat on every page');
     }
   } finally { await rm(temporary, { recursive: true, force: true }); }

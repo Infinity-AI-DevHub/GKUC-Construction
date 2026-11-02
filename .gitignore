@@ -4,7 +4,15 @@ data/
 .env
 *.log
 .claude
+!.claude/
+.claude/*
+!.claude/CLAUDE.md
 uploads/
 fixtures/dl-template.xlsx
 tmp/
 docs/
+!docs/
+docs/*
+!docs/ARCHITECTURE.md
+!docs/DECISIONS.md
+!docs/PAYROLL.md

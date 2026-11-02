@@ -176,12 +176,12 @@ router.get('/receivables/ageing', auth, permit('finance.view', 'finance.invoice'
 
 const invoiceColumnsSchema = z.object({ unit: z.boolean().default(true), quantity: z.boolean().default(true), rate: z.boolean().default(true) });
 const invoiceSchema = z.object({
-  columns: invoiceColumnsSchema.optional(),
+  columns: invoiceColumnsSchema.default({ unit: false, quantity: false, rate: false }),
   previousInvoiceIds: z.array(z.coerce.number().int().positive()).max(50).default([]),
   reference: z.string().trim().min(1).max(60).regex(/^[A-Za-z0-9][A-Za-z0-9 ./_-]*$/).optional(),
   companyId: z.coerce.number().int().positive().optional(),
   projectId: z.coerce.number().int().positive().nullable().optional(),
-  clientId: z.coerce.number().int().positive().optional(),
+  clientId: z.coerce.number().int().positive().nullable().optional(),
   documentType: z.enum(['Tax Invoice','Invoice']).optional(),
   kind: z.enum(['Interim', 'Final', 'Advance', 'Variation', 'Other']).default('Interim'),
   title: z.string().trim().min(3).max(200),
@@ -270,7 +270,6 @@ const createInvoice = async (req, res, next) => {
         WHERE p.id=? AND p.active=1`, [req.body.projectId]) : null;
       if (req.body.projectId && !project) throw fail(404, 'That project does not exist');
       if(project?.billingRoute==='Progress claims')throw fail(409,'This project uses progress claims. Issue the optional invoice against its certificate in Progress claims to avoid a second receivable.');
-      if (!project && !req.body.clientId) throw fail(400, 'Choose a saved client for an invoice without a project');
       if (project?.clientId && req.body.clientId && Number(req.body.clientId) !== Number(project.clientId))
         throw fail(400, 'The selected client does not match the project client. Choose a project for that client.');
       const clientId = req.body.clientId || project?.clientId || null;
@@ -349,7 +348,7 @@ const createInvoice = async (req, res, next) => {
               gross,tax_treatment,vat_rate,vat_amount,svat_voucher,retention_percent,retention_amount,
               advance_recovery,other_deductions,deduction_note,net_payable,notes,created_by,quotation_id,billing_term_id,invoice_options)
            VALUES (${Array(35).fill('?').join(',')})`,
-          [reference, project?.id || null, companyId, clientId, client?.name || project?.client,
+          [reference, project?.id || null, companyId, clientId, client?.name || project?.client || '',
             req.body.kind, documentType, req.body.title,
             req.body.invoiceDate, req.body.deliveryDate || null, req.body.placeOfSupply || client?.clientSite || project?.site || null,
             req.body.paymentMode || null, client?.buyerTin || null, client?.buyerVatNumber || null,

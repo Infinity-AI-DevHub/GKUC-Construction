@@ -160,7 +160,7 @@ function VehicleDetail({ vehicle, data, close, can, refresh }) {
         <Table columns={['Date', 'Litres', 'Cost', 'Odometer', 'Project']} template="130px 90px 120px 110px minmax(140px,1fr)"
           title="Fuel records" empty="No fuel recorded.">
           {vehicle.fuel.map(row => <Row template="130px 90px 120px 110px minmax(140px,1fr)" key={row.id}>
-            <span>{shortDate(row.fuelDate)}</span><span>{row.litres}</span><span>{rupees(row.cost)}</span>
+            <span>{shortDate(row.fuelDate)}</span><span>{row.litres ?? '—'}</span><span>{rupees(row.cost)}</span>
             <span>{row.odometer}</span><span>{row.project || '—'}{row.fuelFloat ? <small>Paid from {row.fuelFloat}</small> : null}</span>
           </Row>)}
         </Table>
@@ -392,7 +392,7 @@ function FuelAndService({ data }) {
     {rows.map(row => <Row template={template} key={row.id} id={`fuel-${row.id}`} className={new URLSearchParams(window.location.search).get('record') === String(row.id) ? 'linked-record' : ''}>
       <div><strong>{row.vehicle}</strong><small>{row.reg}</small></div>
       <span>{shortDate(row.fuelDate)}</span>
-      <span>{row.litres}</span>
+      <span>{row.litres ?? '—'}</span>
       <span>{rupees(row.cost)}</span>
       <span>{row.odometer}</span>
       <span>{row.project || '—'}{row.fuelFloat ? <small>Paid from {row.fuelFloat}</small> : null}<small>Also visible in <a href="/finance/petty-cash">Finance petty cash</a>. This Fleet fuel record is the source; do not enter the spend again.</small></span>
@@ -525,7 +525,13 @@ function EquipmentServiceForm({ item, close, reload }) {
 function VehicleForm({ data, close, reload }) {
   const docTypes = useOptions('vehicle.document');
   const [maintenanceProfile, setMaintenanceProfile] = useState('');
+  const [renewalRows, setRenewalRows] = useState([0]);
+  const [nextRenewalKey, setNextRenewalKey] = useState(1);
   return <FormModal title="Add fleet asset" close={close} label="Add asset" repeat onSubmit={async values => {
+    const renewals = renewalRows.map(key => ({ docType: values[`renewal_${key}`], expiryDate: values[`dueDate_${key}`] }));
+    if (new Set(renewals.map(row => row.docType)).size !== renewals.length)
+      throw new Error('Choose a different renewal type for each row.');
+    const nextRenewal = [...renewals].sort((a, b) => a.expiryDate.localeCompare(b.expiryDate))[0];
     await post('/fleet', {
       ...machineDetailsPayload(values),
       maintenanceProfile: maintenanceProfile || undefined,
@@ -537,8 +543,9 @@ function VehicleForm({ data, close, reload }) {
         ? data.employees.find(employee => String(employee.id) === values.driverEmployeeId)?.name
         : undefined,
       status: values.status,
-      renewal: values.renewal,
-      dueDate: values.dueDate,
+      renewal: nextRenewal.docType,
+      dueDate: nextRenewal.expiryDate,
+      renewals,
       projectId: values.projectId ? Number(values.projectId) : null,
       odometer: Number(values.odometer || 0),
       serviceIntervalKm: Number(values.serviceIntervalKm || 0),
@@ -552,8 +559,18 @@ function VehicleForm({ data, close, reload }) {
     <SelectField name="driverEmployeeId" label="Assigned driver (optional)" required={false}
       options={[['', 'Unassigned'], ...data.employees.map(employee => [employee.id, employee.name])]} />
     <SelectField name="status" label="Status" options={['Available', 'Assigned', 'Repair', 'Inactive']} />
-    <SelectField name="renewal" label="Next renewal type" options={docTypes} />
-    <Field name="dueDate" label="Renewal due date" type="date" defaultValue={todayInput()} />
+    <div className="wide">
+      <p className="form-note">Add each renewal type with its own due date. The earliest date appears in the asset summary.</p>
+      {renewalRows.map((key, index) => <div className="fleet-renewal-row" key={key}>
+        <SelectField name={`renewal_${key}`} label={`Renewal type ${index + 1}`} options={docTypes} defaultValue={docTypes[index]} />
+        <Field name={`dueDate_${key}`} label="Renewal due date" type="date" defaultValue={todayInput()} />
+        {renewalRows.length > 1 && <div className="wide"><button type="button" className="secondary" onClick={() => setRenewalRows(rows => rows.filter(row => row !== key))}>Remove renewal {index + 1}</button></div>}
+      </div>)}
+      <button type="button" className="secondary" disabled={renewalRows.length >= docTypes.length} onClick={() => {
+        setRenewalRows(rows => [...rows, nextRenewalKey]);
+        setNextRenewalKey(key => key + 1);
+      }}>Add renewal</button>
+    </div>
     <SelectField name="projectId" label="Assigned site" required={false} options={[['', 'Yard'], ...data.projects.map(project => [project.id, project.name])]} />
     <Field name="odometer" label="Odometer" type="number" min="0" defaultValue="0" required={false} />
     <label>Oil maintenance defaults<select value={maintenanceProfile} onChange={event => setMaintenanceProfile(event.target.value)}><option value="">Set reminders later</option><option value="Japanese">Japanese — engine oil every 5,000 km</option><option value="European">European — engine oil every 15,000 km</option></select></label>
@@ -597,30 +614,30 @@ function FuelForm({ data, vehicle, close, reload }) {
   }, [data.companyId]);
   const selectedFloat = floats.find(float => String(float.id) === fuelFloatId);
   return <FormModal title="Record fuel" close={close} label="Save fuel record" onSubmit={async values => {
-    if (!values.fuelFloatId) throw new Error('Choose a funded fuel float. Finance can open and top one up first.');
     await post(`/fleet/${vehicle?.id||values.vehicleId}/fuel`, {
-      fuelFloatId: Number(values.fuelFloatId),
+      fuelFloatId: values.fuelFloatId ? Number(values.fuelFloatId) : undefined,
+      companyId: Number(data.companyId),
       projectId: values.projectId ? Number(values.projectId) : null,
       fuelDate: values.fuelDate,
-      litres: Number(values.litres),
+      litres: values.litres === '' ? undefined : Number(values.litres),
       cost: Number(values.cost),
       vendor: values.vendor || undefined,
       odometer: Number(values.odometer)
     });
     await reload();
   }}>
-    <p className="form-note wide">Record the fuel purchase once here. The same fuel record appears in <a href="/finance/petty-cash">Finance → Petty cash</a> and project costs; do not create a second expense.</p>
+    <p className="form-note wide">Record the fuel purchase once here. Project costs are recorded automatically. Selecting a fuel float also records the payment in <a href="/finance/petty-cash">Finance → Petty cash</a>; leave it blank if no float was used.</p>
     <SelectField name="vehicleId" label="Vehicle" options={(vehicle?[vehicle]:data.fleet).map(item => [item.id, `${item.vehicle} — ${item.reg}`])} />
-    <label>Fuel float <span aria-hidden="true">*</span><select name="fuelFloatId" value={fuelFloatId}
-      onChange={event => setFuelFloatId(event.target.value)} required>
-      <option value="">Choose a funded fuel float…</option>
+    <label>Fuel float (optional)<select name="fuelFloatId" value={fuelFloatId}
+      onChange={event => setFuelFloatId(event.target.value)}>
+      <option value="">No fuel float</option>
       {floats.map(float => <option key={float.id} value={float.id}>{float.name} — {rupees(float.balance)} available</option>)}
     </select></label>
-    {!floats.length && <p className="form-note wide">There is no fuel float for this company. Open and top up one in Finance → Petty cash first.</p>}
+    {!floats.length && <p className="form-note wide">No fuel float is available for this company. You can save without one; no petty cash payment will be created.</p>}
     {selectedFloat && <p className="form-note wide">Available in this float: {rupees(selectedFloat.balance)}. The amount entered below cannot exceed it.</p>}
     <SelectField name="projectId" label="Charge to project" options={[["",'Not project-specific'], ...data.projects.filter(project=>Number(project.companyId)===Number(data.companyId)).map(project => [project.id, project.name])]} defaultValue={vehicle?.projectId||''}/>
     <Field name="fuelDate" label="Date" type="date" defaultValue={todayInput()} />
-    <Field name="litres" label="Litres" type="number" step="any" min="0" />
+    <Field name="litres" label="Litres (optional)" required={false} type="number" step="any" min="0" />
     <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" max={selectedFloat ? Number(selectedFloat.balance) : undefined} />
     <Field name="vendor" label="Fuel station / payee" required={false} placeholder="Where the fuel was bought" />
     <Field name="odometer" label="Odometer" type="number" min={vehicle?.odometer||1} defaultValue={vehicle?.odometer||''} />

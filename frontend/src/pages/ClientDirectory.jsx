@@ -99,7 +99,7 @@ function ClientHistory({ title, columns, rows }) {
   </Table>;
 }
 
-function ClientForm({ client, close, saved }) {
+export function ClientForm({ client, close, saved }) {
   const edit = Boolean(client.id);
   return <FormModal title={edit ? `Edit ${client.name}` : 'Add client'} close={close} label={edit ? 'Save client' : 'Add client'} wide
     onSubmit={async values => {
