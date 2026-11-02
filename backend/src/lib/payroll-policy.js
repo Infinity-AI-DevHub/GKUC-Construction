@@ -16,7 +16,7 @@ export function payProfileError(profile) {
 export function allowedOvertimeTypes(category) {
   if (category === 'Office employee') return ['Office'];
   if (category === 'Site labourer' || category === 'Supervisor') return ['Site', 'Travel'];
-  if (category === 'Driver') return ['Office', 'Site', 'Travel'];
+  if (category === 'Driver') return ['Site', 'Travel'];
   return OVERTIME_TYPES;
 }
 
@@ -47,6 +47,23 @@ export function resolveOvertimeRate(employee, type, policy) {
   throw new Error('Select a valid payroll category before recording overtime');
 }
 
+export function overtimeMinimumMinutes(employee, type, policy) {
+  const rules = typeof policy?.hr_rules === 'string' ? JSON.parse(policy.hr_rules) : (policy?.hr_rules || {});
+  const category = employee.payroll_category;
+  if (category === 'Office employee') return Number(rules.officeOtMinimumMinutes ?? 30);
+  if (category === 'Site labourer') return Number(type === 'Travel' ? rules.labourTravelOtMinimumMinutes ?? 31 : rules.labourSiteOtMinimumMinutes ?? 30);
+  if (category === 'Supervisor') return Number(type === 'Travel' ? rules.supervisorTravelOtMinimumMinutes ?? 31 : rules.supervisorSiteOtMinimumMinutes ?? 30);
+  if (category === 'Driver') return Number(type === 'Travel' ? rules.driverTravelOtMinimumMinutes ?? 30 : rules.driverSiteOtMinimumMinutes ?? 31);
+  return Number(type === 'Office' ? rules.officeOtMinimumMinutes ?? 30 : rules.labourSiteOtMinimumMinutes ?? 30);
+}
+
+// Late arrivals use the rate for the employee's normal attended work, never a
+// travel rate. This keeps late deductions independent from travel claims.
+export function resolveLateRate(employee, policy) {
+  const type = employee.payroll_category === 'Office employee' ? 'Office' : 'Site';
+  return resolveOvertimeRate(employee, type, policy);
+}
+
 /**
  * The single payroll arithmetic engine used by both the API and the scenario suite.
  * Inputs deliberately mirror the database row names so no second set of payroll rules
@@ -61,7 +78,9 @@ export function calculatePayslip(employee, policy, components = [], payFrequency
   // The monthly statutory basis is not earnings. Approved paid leave is earnings;
   // unpaid leave is excluded once, never subtracted again as a second deduction.
   const shortDayReduction = money(Math.max(0, Number(employee.short_day_reduction || 0)));
-  const basic = money(Math.max(0, dailyRate * payableDays - shortDayReduction));
+  const attendanceBasic = Number.isFinite(Number(employee.attendance_basic))
+    ? Number(employee.attendance_basic) : dailyRate * daysPresent - shortDayReduction;
+  const basic = money(Math.max(0, attendanceBasic + dailyRate * paidLeaveDays));
   const paidLeavePay = money(dailyRate * paidLeaveDays);
   const overtimePay = Number(employee.overtime_pay);
   const componentTotal = kind => money(components.filter(row => row.kind === kind)
