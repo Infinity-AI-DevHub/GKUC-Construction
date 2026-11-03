@@ -304,8 +304,8 @@ function App() {
         setServiceAccess(error.details.serviceAccess);
         return;
       }
-      token.clear();
-      setUser(null);
+      // A temporary network/server failure must not end an authenticated session.
+      if (error.status === 401) { token.clear(); setUser(null); }
     } finally {
       setLoading(false);
     }
@@ -372,7 +372,12 @@ function App() {
     let pending = null;
 
     const off = onRealtime((type, payload) => {
-      if (type === 'connected') setLive(true);
+      if (type === 'connected') {
+        setLive(true);
+        // Events missed while disconnected are not replayed by the server.
+        clearTimeout(pending);
+        pending = setTimeout(load, 250);
+      }
       else if (type === 'disconnected') setLive(false);
       else if (type === 'unauthorised') { setLive(false); token.clear(); setUser(null); }
       else if (type === 'notification' || type === 'banner') {

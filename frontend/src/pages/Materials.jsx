@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Check, FileText, PackageCheck } from 'lucide-react';
 import { api, openDocument, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { askText, Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
 import WorkflowChecklist from '../WorkflowChecklist.jsx';
 import { requestSteps, orderSteps } from '../purchasing-workflow.js';
@@ -426,7 +426,7 @@ function OrderForm({ data, close, reload }) {
     };
     const check = await post('/purchasing/orders/check', payload);
     if (check.warnings.length) {
-      const reason = window.prompt(`Purchase risk review:\n${check.warnings.map(item => `• ${item.message}`).join('\n')}\n\nExplain why this order should proceed:`);
+      const reason = await askText(`Purchase risk review:\n${check.warnings.map(item => `• ${item.message}`).join('\n')}\n\nExplain why this order should proceed:`);
       if (!reason || reason.trim().length < 10) throw new Error('Enter at least 10 characters explaining the purchase risk before saving.');
       payload.riskAccepted = true;
       payload.riskReason = reason.trim();

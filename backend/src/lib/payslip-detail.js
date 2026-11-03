@@ -26,7 +26,8 @@ export function payslipDetail(run,slip) {
     const payable=source.some(row=>worked.has(row.state))||leave?.paymentType==='Paid';
     const known=complete||source.length>0||Boolean(leave);
     const dailyRate=attendance[0]?.dailyRate??rate;
-    const basic=known && (!payable||dailyRate!=null)?cash(payable?Math.max(0,Number(dailyRate)-shortReduction):0):null;
+    const savedEarned=leave?.paymentType==='Paid'?leave.earnedBasic:attendance.length&&attendance.every(row=>row.shortDay?.earnedBasic!=null)?attendance.reduce((sum,row)=>sum+Number(row.shortDay.earnedBasic),0):null;
+    const basic=known && (!payable||savedEarned!=null||dailyRate!=null)?cash(payable?(savedEarned??Math.max(0,Number(dailyRate)-shortReduction)):0):null;
     const plus=cash(adjustments.filter(row=>row.kind!=='Deduction').reduce((sum,row)=>sum+row.amount,0));
     const minus=cash(adjustments.filter(row=>row.kind==='Deduction').reduce((sum,row)=>sum+row.amount,0));
     const ot=cash(overtime.reduce((sum,row)=>sum+Number(row.amount||0),0));

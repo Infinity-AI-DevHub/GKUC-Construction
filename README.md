@@ -1,5 +1,11 @@
 # GKUC SiteOps
 
+The Electron desktop client uses the same online API and database as the browser.
+Default server: `https://staff.gkucconstruction.com`. See [desktop setup, builds and
+verification limits](docs/DESKTOP.md). Use Node 22.12+ for desktop tooling.
+See the [manual UI verification report](docs/MANUAL_QA.md) and
+[production rollout instructions](docs/DEPLOYMENT.md) before distributing a release.
+
 Construction Operations Management System for GKUC Construction, built to the approved
 Project Identification Document. A React client and a secured Node API are served as one
 application over a persistent MySQL database.
@@ -395,3 +401,20 @@ allocations atomically, while pending cheques and forecasts avoid duplicate cove
 See [multi-invoice cheques](MULTI_INVOICE_CHEQUES.md) for the workflow and migration details.
 
 Payroll zero-salary review and safe legacy attendance matching are documented in [PAYROLL_ZERO_SALARY.md](PAYROLL_ZERO_SALARY.md).
+
+### Special daily pay (HR)
+
+People → Payroll Inputs → Special daily pay supports effective-dated employee methods for
+Bass/Gola work and machine-hour operators. HR first saves the correct employee's method
+(default effective date 2026-01-01), then records each date's work type or meter/standby
+hours. Keep recording/importing attendance normally. Missing details block Draft payroll;
+corrected details require explicit Draft regeneration. Approved/Paid snapshots remain
+unchanged. No live employee method is assigned from source code. See
+[the payroll specification](docs/PAYROLL.md) for rates, premiums and contributions.
+
+Current operator distinction: Machine dates have no OT. Standby dates receive normal
+labour Site OT at the company policy effective on the work date (currently LKR 225/hour),
+with a 30-minute minimum. Operator late deductions remain excluded on both types.
+Bass/Gola daily selection, operator minimum/standby pay, transport and the monthly
+25-day premium are documented in the payroll specification. All special methods are
+opt-in per employee from the saved effective date; the agreed start is 2026-01-01.

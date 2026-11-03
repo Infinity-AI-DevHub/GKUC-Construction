@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
 import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Badge, Field, FormModal, Page, Progress, Row, SelectField, Summary, Table, Tabs, useLiveList } from '../ui.jsx';
+import { askText, Badge, Field, FormModal, Page, Progress, Row, SelectField, Summary, Table, Tabs, useLiveList } from '../ui.jsx';
 import { useOptions } from '../options.js';
 import { Bonds, ClientInvoices, PettyCash } from '../Receivables.jsx';
 import FinanceReports from './FinanceReports.jsx';
@@ -266,7 +266,7 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
   useEffect(() => { load(); }, [companyId]);
 
   const approveException = async row => {
-    const reason = window.prompt(`This supplier invoice has no purchase order or goods receipt. Explain why payment may proceed for ${row.invoiceNo}:`);
+    const reason = await askText(`This supplier invoice has no purchase order or goods receipt. Explain why payment may proceed for ${row.invoiceNo}:`);
     if (!reason) return;
     try {
       await post(`/purchasing/invoices/${row.id}/payment-exception`, { reason: reason.trim() });
@@ -373,7 +373,7 @@ function ExpenseForm({ data, close, reload }) {
   }}>
     <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
     <SelectField name="source" label="Cost type" options={costTypes} />
-    <SelectField name="categoryId" label="Category" options={[['', 'Uncategorised'], ...categories.map(category => [category.id, category.name])]} />
+    <SelectField name="categoryId" label="Category" required={false} options={[['', 'Uncategorised'], ...categories.map(category => [category.id, category.name])]} />
     <Field name="amount" label="Total cost (LKR)" type="number" step="0.01" min="0.01" />
     <Field name="expenseDate" label="Date" type="date" defaultValue={todayInput()} />
     <Field name="reference" label="Reference" required={false} />
@@ -470,7 +470,7 @@ function InvoiceForm({ companyId, close, reload, creditOnly=false }) {
     };
     const check = await post('/purchasing/invoices/check', payload);
     if (check.warnings.length) {
-      const reason = window.prompt(`Possible duplicate invoice:\n${check.warnings.map(item => `• ${item.message}`).join('\n')}\n\nExplain why this is a separate invoice:`);
+      const reason = await askText(`Possible duplicate invoice:\n${check.warnings.map(item => `• ${item.message}`).join('\n')}\n\nExplain why this is a separate invoice:`);
       if (!reason || reason.trim().length < 10) throw new Error('Review the possible duplicate and enter a reason before saving.');
       payload.riskAccepted = true;
       payload.riskReason = reason.trim();

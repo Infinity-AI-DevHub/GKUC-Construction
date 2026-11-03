@@ -13,7 +13,15 @@
     "access:suspend": "npm run access:suspend --prefix backend",
     "access:restore": "npm run access:restore --prefix backend",
     "start": "npm start --prefix backend",
-    "test": "npm test --prefix backend && npm test --prefix frontend"
+    "test": "npm test --prefix backend && npm test --prefix frontend",
+    "desktop:setup": "npm install --prefix desktop",
+    "desktop:prepare": "npm run build --prefix frontend && npm run prepare:ui --prefix desktop",
+    "desktop:start": "npm start --prefix desktop",
+    "desktop:test": "npm test --prefix desktop",
+    "desktop:test:e2e": "npm run test:e2e --prefix desktop",
+    "desktop:pack": "npm run desktop:prepare && npm run pack --prefix desktop",
+    "desktop:dist:mac": "npm run desktop:prepare && npm run dist:mac --prefix desktop",
+    "desktop:dist:win": "npm run desktop:prepare && npm run dist:win --prefix desktop"
   },
   "pnpm": {
     "overrides": {

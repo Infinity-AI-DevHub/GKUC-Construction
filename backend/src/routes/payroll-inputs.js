@@ -1,3 +1,4 @@
+import {activeSpecialRule} from '../lib/special-pay.js';
 import {Router} from 'express';
 import {z} from 'zod';
 import {query,getOne,transaction,audit,pool} from '../db.js';
@@ -15,9 +16,14 @@ router.get('/',wrap(async(req,res)=>{
   const policies=await query('SELECT * FROM payroll_policies WHERE archive_key=0 ORDER BY effective_from DESC,id DESC');
   const ot=await query('SELECT o.*,e.payroll_company_id company_id FROM visible_overtime_records o JOIN visible_employees e ON e.id=o.employee_id ORDER BY o.id DESC');
   const corrections=await query(`SELECT DISTINCT a.id,a.employee_id,a.work_date,a.project_id,'Attendance correction after draft' kind,'Needs review' status FROM visible_attendance a JOIN audit_logs l ON l.entity='attendance' AND CAST(l.entity_id AS UNSIGNED)=a.id AND l.action='CORRECTION' JOIN payslips ps ON ps.employee_id=a.employee_id JOIN payroll_runs pr ON pr.id=ps.run_id AND pr.status='Draft' AND a.work_date BETWEEN pr.period_start AND pr.period_end WHERE l.created_at>pr.created_at`);
+  const specialProfiles=await query('SELECT * FROM employee_special_pay_rules ORDER BY effective_from DESC,id DESC');
+  const specialDays=await query('SELECT employee_id,work_date,work_kind FROM employee_special_pay_days WHERE active=1');
   const suggestions=attendance.map(a=>{
     const policy=policies.find(p=>p.company_id===a.company_id&&p.effective_from<=a.work_date);
-    const suggestion=policy?suggestOvertime(a,rulesFor(policy)):{hours:0,warnings:['Configure an effective payroll policy.']};
+    const special=activeSpecialRule({special_pay_rules:specialProfiles.filter(row=>Number(row.employee_id)===Number(a.employee_id))},a.work_date);
+    const work=specialDays.find(row=>Number(row.employee_id)===Number(a.employee_id)&&row.work_date===a.work_date);
+    const operatorBlocked=special?.mode==='Machine operator'&&work?.work_kind!=='Standby';
+    const suggestion=operatorBlocked?{hours:0,rawHours:0,intervals:[],warnings:[work?'No OT on machine-operating days.':'Record HR Standby/Machine work before reviewing operator OT.']}:policy?suggestOvertime(a,rulesFor(policy),special?30:undefined):{hours:0,warnings:['Configure an effective payroll policy.']};
     return {...a,suggestion,existing:ot.filter(o=>o.employee_id===a.employee_id&&o.work_date===a.work_date&&o.overtime_type!=='Travel')};
   });
   const issues=[...corrections];
@@ -36,6 +42,9 @@ const payrollClaimSchema=z.union([manualTravelSchema,claimSchema.extend({calcula
 async function recordClaim(req,conn,b){
     const q=async(sql,values)=>(await conn.query(sql,values))[0];
     const [employee]=await q('SELECT * FROM visible_employees WHERE id=? FOR UPDATE',[b.employeeId]);if(!employee||employee.status==='Left')throw fail(400,'Select an active employee.');
+    const [special]=await q('SELECT * FROM employee_special_pay_rules WHERE employee_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.id,b.workDate]);
+    if(special&&special.mode!=='Standard')employee.special_pay_rule=special;
+    if(special?.mode==='Machine operator'&&b.kind==='Travel'&&b.hours>0)throw fail(409,'The operator pay agreement has no Travel OT.');
     const [policy]=await q('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.payroll_company_id,b.workDate]);if(!policy)throw fail(409,'Configure an effective payroll policy before recording this claim.');
     if(b.projectId){const [project]=await q('SELECT id,company_id FROM projects WHERE id=? AND active=1',[b.projectId]);if(!project)throw fail(400,'Choose an active project.');if(b.kind==='Supervisor site charge'&&Number(project.company_id)!==Number(employee.payroll_company_id))throw fail(400,'This supervisor and project belong to different payroll companies. Ask HR to check the assignment.');}
     const eligibility=parse(employee.allowance_eligibility);
@@ -114,9 +123,15 @@ router.post('/suggestions/:attendanceId',validate(z.object({hours:z.number().pos
   const attendance=await getOne('SELECT * FROM visible_attendance WHERE id=?',[req.params.attendanceId]);if(!attendance)throw fail(404,'Attendance not found.');
   const employee=await getOne('SELECT * FROM visible_employees WHERE id=?',[attendance.employee_id]);
   const policy=await getOne('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.payroll_company_id,attendance.work_date]);if(!policy)throw fail(409,'Configure a payroll policy for this date.');
-  const suggestion=suggestOvertime(attendance,rulesFor(policy));
-  if(!suggestion.intervals.length)throw fail(409,'Valid attended times are required. No payable OT is allowed on absent or leave days.');
+  const special=await getOne('SELECT * FROM employee_special_pay_rules WHERE employee_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.id,attendance.work_date]);
+  if(special&&special.mode!=='Standard')employee.special_pay_rule=special;
+  if(special?.mode==='Machine operator'){
+    employee.special_pay_day=await getOne('SELECT * FROM employee_special_pay_days WHERE employee_id=? AND work_date=? AND active=1',[employee.id,attendance.work_date]);
+    if(employee.special_pay_day?.work_kind!=='Standby')throw fail(409,'Operator Site OT requires an HR-recorded Standby day. No OT is payable on machine-operating days.');
+  }
   const type=attendanceOvertimeType(employee,attendance);
+  const suggestion=suggestOvertime(attendance,rulesFor(policy),special?30:undefined);
+  if(!suggestion.intervals.length)throw fail(409,'Valid attended times are required. No payable OT is allowed on absent or leave days.');
   await transaction(async conn=>{
     await conn.query('SELECT id FROM visible_employees WHERE id=? FOR UPDATE',[employee.id]);
     const [existing]=await conn.query('SELECT * FROM visible_overtime_records WHERE employee_id=? AND work_date=?',[employee.id,attendance.work_date]);

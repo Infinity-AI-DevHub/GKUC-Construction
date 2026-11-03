@@ -30,7 +30,7 @@ export function employeePayrollSheets(run,reserved=[]) {
       [],header(dailyHeaders)];
     for(const day of view.days) {
       const punches=day.source.length?day.source:day.attendance;
-      const notes=[...day.overtime.map(ot=>`${ot.type} OT: ${ot.hours} h x ${ot.rate} = ${ot.amount} (${ot.source || 'Saved'})`),
+      const notes=[...day.attendance.filter(row=>row.specialPay).map(row=>`${row.specialPay.workKind}: ${row.specialPay.formula} (HR input #${row.specialPay.inputId})`),...day.overtime.map(ot=>`${ot.type} OT: ${ot.hours} h x ${ot.rate} = ${ot.amount} (${ot.source || 'Saved'})`),
         ...day.adjustments.map(row=>`${row.kind}: ${row.name} (${row.amount})`),...day.warnings.map(row=>row.message)];
       rows.push([day.date,day.state,time(punches.map(row=>row.checkIn||row.check_in)),time(punches.map(row=>row.checkOut||row.check_out)),
         amount(day.dailyRate),amount(day.basic),sum(day.overtime,'hours'),amount(day.ot),number(day.lateMinutes),number(day.chargedLateMinutes),

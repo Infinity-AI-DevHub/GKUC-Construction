@@ -726,7 +726,7 @@ test('HR reviewed inputs reach weekly payroll once with separate OT, allowances 
   const attendance=await call(hr,'POST','/attendance',{employeeId,name:'HR Inputs QA',role:'Labourer',projectId:1,date,state:'On site',checkIn:'07:00',checkOut:'17:30',informationSource:'Signed timesheet',sourceNotes:'QA source'});assert.equal(attendance.status,201);
   assert.equal((await call(site,'GET','/payroll/inputs')).status,403);
   const suggestions=(await call(hr,'GET','/payroll/inputs')).body.suggestions;
-  assert.equal(suggestions.find(r=>r.id===attendance.body.id).suggestion.hours,1.25);
+  assert.equal(suggestions.find(r=>r.id===attendance.body.id).suggestion.hours,1.5);
   const suggested=await call(hr,'POST',`/payroll/inputs/suggestions/${attendance.body.id}`,{hours:1.5,reason:'Checked signed record'});assert.equal(suggested.status,201);
   assert.equal((await call(hr,'POST',`/payroll/inputs/suggestions/${attendance.body.id}`,{hours:1.5,reason:'Duplicate'})).status,409);
   const ot=(await call(hr,'GET','/employees/overtime/all')).body.find(o=>o.employee==='HR Inputs QA');
@@ -1589,8 +1589,9 @@ test('client directory links projects, quotations, invoices and payments without
   const invoicePage = await fetch(`${base}/receivables/invoices/${invoice.body.id}/document`, { headers: { authorization: `Bearer ${owner}` } });
   assert.equal(invoicePage.status, 200);
   const invoiceHtml = await invoicePage.text();
+  const invoiceText = invoiceHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').toLowerCase();
   for (const detail of ['TIN-12345', 'VAT-98765', 'Project Site Road', 'Mode of payment: Cheque', 'Total amount in words']) {
-    assert.ok(invoiceHtml.includes(detail), `${detail} should appear on the invoice`);
+    assert.ok(invoiceText.includes(detail.toLowerCase()), `${detail} should appear on the invoice`);
   }
   const pdfResponse = await fetch(`${base}/receivables/invoices/${invoice.body.id}/document?download=pdf`, {
     headers: { authorization: `Bearer ${owner}` }
@@ -3617,6 +3618,135 @@ test('approved paid leave restores LKR 1600 across payroll frequencies without p
   await admin.query(`DELETE FROM ${testDatabase}.leave_policies WHERE id=?`,[leavePolicy.body.id]);
 });
 
+test('HR special daily work and operator records persist, generate drafts and preserve approved snapshots',async()=>{
+  const owner=await login(),hr=await login('hr@gkuc.lk'),site=await login('supervisor@gkuc.lk');
+  const first='2057-01-05',last='2057-01-07';
+  const policy=await call(owner,'POST','/payroll/settings/policies',{companyId:2,effectiveFrom:'2057-01-01',
+    officeOtRate:225,siteLabourSiteOtRate:999,siteLabourTravelOtRate:999,driverOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,
+    epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3,hrRules:INITIAL_HR_RULES});
+  assert.equal(policy.status,201,JSON.stringify(policy.body));
+  const people=[];
+  for(const [index,mode] of ['Work role','Machine operator'].entries()){
+    const created=await call(owner,'POST','/employees',{code:`SPECIAL-${Date.now()}-${index}`,name:`Special pay QA ${index}`,
+      joinDate:first,compensationEffectiveFrom:first,payrollCompanyId:2,payBasis:'Daily rate',payFrequency:'Daily',
+      dailyRate:index?1800:2500,basicSalary:45000,epfEligible:true,etfEligible:false});
+    assert.equal(created.status,201,JSON.stringify(created.body));people.push(created.body.id);
+    const body={employeeId:created.body.id,date:'2026-01-01',mode,reason:'Agreed special pay method'};
+    assert.equal((await call(site,'POST','/payroll/special-pay/rules',body)).status,403);
+    const saved=await call(hr,'POST','/payroll/special-pay/rules',body);
+    assert.equal(saved.status,200,JSON.stringify(saved.body));
+    for(const date of [first,'2057-01-06',last]){
+      const response=await call(hr,'POST','/attendance',{employeeId:created.body.id,date,state:'Checked out',workLocation:'Office',
+        checkIn:index&&date==='2057-01-06'?'10:00':'07:30',checkOut:date===last?'11:30':index&&date==='2057-01-06'?'18:00':'16:30',
+        informationSource:'Signed timesheet',sourceNotes:'Special pay QA'});
+      assert.equal(response.status,201,JSON.stringify(response.body));
+    }
+  }
+  const runBody={companyId:2,periodStart:first,periodEnd:last,payFrequency:'Daily'};
+  const missing=await call(hr,'POST','/payroll',runBody);
+  assert.equal(missing.status,409);assert.match(missing.body.error,/Record HR daily work/);
+  const entry=(employeeId,date,kind,extra={})=>({employeeId,date,kind,reason:'HR checked daily work',...extra});
+  assert.equal((await call(hr,'POST','/payroll/special-pay/days',entry(people[0],first,'Machine',{startMeter:10,endMeter:16}))).status,400);
+  assert.equal((await call(hr,'POST','/payroll/special-pay/days',entry(people[1],first,'Machine',{startMeter:16,endMeter:10}))).status,400);
+  for(const body of [entry(people[0],first,'Bass'),entry(people[0],'2057-01-06','Gola'),entry(people[0],last,'Gola'),
+    entry(people[1],first,'Machine',{startMeter:10,endMeter:16}),entry(people[1],'2057-01-06','Machine',{startMeter:16,endMeter:18}),
+    entry(people[1],last,'Standby',{hours:4})])assert.equal((await call(hr,'POST','/payroll/special-pay/days',body)).status,200);
+  const generated=await call(hr,'POST','/payroll',runBody);
+  assert.equal(generated.status,201,JSON.stringify(generated.body));
+  const id=generated.body.id;
+  let run=(await call(hr,'GET',`/payroll/${id}`)).body;
+  let role=run.payslips.find(row=>row.employeeId===people[0]),operator=run.payslips.find(row=>row.employeeId===people[1]);
+  assert.equal(role.basic,6750);assert.equal(operator.basic,6600);assert.equal(operator.allowanceTotal,900);
+  assert.equal(operator.netPay,7500);assert.equal(operator.overtimePay,0);assert.equal(operator.lateDeduction,0);
+  assert.equal(operator.epfEmployeeDeduction,0);assert.equal(role.epfEmployeeDeduction,0);
+  const snapshot=typeof operator.calculationDetail==='string'?JSON.parse(operator.calculationDetail):operator.calculationDetail;
+  assert.equal(snapshot.attendance[0].specialPay.meterHours,6);
+  assert.ok(snapshot.attendance.every(row=>row.specialPay.recordedBy));
+  assert.equal((await call(hr,'POST','/payroll/special-pay/days',entry(people[1],first,'Machine',{startMeter:10,endMeter:15}))).status,200);
+  assert.equal((await call(hr,'GET',`/payroll/${id}`)).body.payslips.find(row=>row.employeeId===people[1]).basic,6600,'input edits do not recalculate existing drafts automatically');
+  assert.equal((await call(hr,'POST','/payroll',runBody)).status,201);
+  run=(await call(hr,'GET',`/payroll/${id}`)).body;operator=run.payslips.find(row=>row.employeeId===people[1]);
+  assert.equal(operator.basic,5950);assert.equal(operator.netPay,6850);
+  assert.equal((await call(hr,'PATCH',`/payroll/${id}`,{status:'Approved'})).status,200);
+  const locked=JSON.stringify(operator.calculationDetail);
+  assert.equal((await call(hr,'POST','/payroll/special-pay/days',entry(people[1],first,'Machine',{startMeter:10,endMeter:14}))).status,200);
+  assert.equal((await call(hr,'POST','/payroll',runBody)).status,409);
+  assert.equal(JSON.stringify((await call(hr,'GET',`/payroll/${id}`)).body.payslips.find(row=>row.employeeId===people[1]).calculationDetail),locked);
+  const list=await call(hr,'GET','/payroll/special-pay?companyId=2');assert.equal(list.status,200);
+  assert.ok(list.body.days.some(row=>row.employee_id===people[1]));
+  assert.ok(!(await call(hr,'GET','/payroll/special-pay?companyId=1')).body.profiles.some(row=>row.employee_id===people[0]));
+  const archived=list.body.days.find(row=>row.employee_id===people[1]&&row.work_date===last);
+  assert.equal((await call(hr,'POST',`/payroll/special-pay/days/${archived.id}/archive`,{reason:'Correct duplicate source'})).status,200);
+  const [[history]]=await admin.query(`SELECT active FROM ${testDatabase}.employee_special_pay_days WHERE id=?`,[archived.id]);assert.equal(history.active,0);
+  const [[audit]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.audit_logs WHERE entity='employee_special_pay_days' AND action='ARCHIVE' AND entity_id=?`,[String(archived.id)]);assert.equal(Number(audit.n),1);
+});
+
+test('operator Standby OT is suggested, reviewed and paid while Machine days remain excluded',async()=>{
+  const owner=await login(),hr=await login('hr@gkuc.lk');
+  const standby='2061-01-08',machine='2061-01-09';
+  const policy=await call(owner,'POST','/payroll/settings/policies',{companyId:2,effectiveFrom:'2061-01-01',officeOtRate:225,
+    siteLabourSiteOtRate:225,siteLabourTravelOtRate:100,driverOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,
+    epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3,hrRules:INITIAL_HR_RULES});assert.equal(policy.status,201);
+  const person=await call(owner,'POST','/employees',{code:`STANDBY-OT-${Date.now()}`,name:'Standby OT QA',joinDate:standby,
+    compensationEffectiveFrom:standby,payrollCompanyId:2,payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1800,epfEligible:false,etfEligible:false});
+  assert.equal(person.status,201);const employeeId=person.body.id;
+  assert.equal((await call(hr,'POST','/payroll/special-pay/rules',{employeeId,date:'2026-01-01',mode:'Machine operator',reason:'Operator agreement'})).status,200);
+  const attendance=[];
+  for(const date of [standby,machine]){
+    const row=await call(hr,'POST','/attendance',{employeeId,date,state:'Checked out',workLocation:'Office',checkIn:'07:30',checkOut:'17:01',informationSource:'Signed timesheet',sourceNotes:'OT QA'});
+    assert.equal(row.status,201);attendance.push(row.body.id);
+  }
+  assert.equal((await call(hr,'POST',`/payroll/inputs/suggestions/${attendance[0]}`,{hours:0.5,reason:'HR reviewed'})).status,409,'a missing daily choice must not enable OT');
+  assert.equal((await call(hr,'POST','/payroll/special-pay/days',{employeeId,date:standby,kind:'Standby',hours:8,reason:'No machine work'})).status,200);
+  assert.equal((await call(hr,'POST','/payroll/special-pay/days',{employeeId,date:machine,kind:'Machine',startMeter:10,endMeter:16,reason:'Meter verified'})).status,200);
+  const suggestions=(await call(hr,'GET','/payroll/inputs')).body.suggestions;
+  assert.equal(suggestions.find(row=>row.id===attendance[0]).suggestion.hours,0.52);
+  assert.equal(suggestions.find(row=>row.id===attendance[1]).suggestion.hours,0);
+  assert.equal((await call(hr,'POST',`/payroll/inputs/suggestions/${attendance[1]}`,{hours:0.5,reason:'Invalid machine OT'})).status,409);
+  assert.equal((await call(hr,'POST',`/employees/${employeeId}/overtime`,{workDate:machine,overtimeType:'Site',hours:0.5,reason:'Invalid machine OT'})).status,400);
+  const body={companyId:2,periodStart:standby,periodEnd:machine,payFrequency:'Daily'};
+  const run=await call(hr,'POST','/payroll',body);assert.equal(run.status,201,JSON.stringify(run.body));
+  let slip=(await call(hr,'GET',`/payroll/${run.body.id}`)).body.payslips.find(row=>row.employeeId===employeeId);
+  assert.equal(slip.basic,5700);assert.equal(slip.siteOtPay,116.25);assert.equal(slip.lateDeduction,0);assert.equal(slip.allowanceTotal,600);
+  assert.equal((await call(hr,'POST',`/payroll/inputs/suggestions/${attendance[0]}`,{hours:0.5,reason:'HR approves thirty minutes'})).status,201);
+  const [[ot]]=await admin.query(`SELECT id,rate FROM ${testDatabase}.overtime_records WHERE employee_id=? AND work_date=?`,[employeeId,standby]);assert.equal(Number(ot.rate),225);
+  assert.equal((await call(hr,'PATCH',`/employees/overtime/${ot.id}`,{status:'Approved'})).status,200);
+  assert.equal((await call(hr,'POST','/payroll',body)).status,201);
+  slip=(await call(hr,'GET',`/payroll/${run.body.id}`)).body.payslips.find(row=>row.employeeId===employeeId);
+  assert.equal(slip.siteOtPay,112.5,'reviewed OT replaces automatic OT instead of paying both');
+});
+
+test('special monthly paid leave uses the chosen role and disables only EPF with saved daily reconciliation',async()=>{
+  const owner=await login();
+  const date='2058-01-08',leaveDate='2058-01-09';
+  const policy=await call(owner,'POST','/payroll/settings/policies',{companyId:2,effectiveFrom:'2058-01-01',officeOtRate:225,
+    siteLabourSiteOtRate:225,siteLabourTravelOtRate:100,driverOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,
+    epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3,hrRules:INITIAL_HR_RULES});
+  assert.equal(policy.status,201,JSON.stringify(policy.body));
+  const person=await call(owner,'POST','/employees',{code:`SPECIAL-MONTH-${Date.now()}`,name:'Special monthly QA',
+    joinDate:date,compensationEffectiveFrom:date,payrollCompanyId:2,payBasis:'Monthly salary',payFrequency:'Monthly',
+    basicSalary:45000,dailyRate:0,epfEligible:true,etfEligible:true});
+  assert.equal(person.status,201,JSON.stringify(person.body));
+  const id=person.body.id;
+  assert.equal((await call(owner,'POST','/payroll/special-pay/rules',{employeeId:id,date:'2026-01-01',mode:'Work role',reason:'Agreed special rates'})).status,200);
+  assert.equal((await call(owner,'POST','/attendance',{employeeId:id,date,state:'Checked out',workLocation:'Office',checkIn:'07:30',checkOut:'16:30',informationSource:'Signed timesheet',sourceNotes:'QA'})).status,201);
+  await admin.query(`INSERT INTO ${testDatabase}.leave_requests(employee_id,leave_type,from_date,to_date,days,reason,status,payment_type)
+    VALUES (?,'Annual',?,?,1,'Approved test leave','Approved','Paid')`,[id,leaveDate,leaveDate]);
+  for(const [workDate,kind] of [[date,'Gola'],[leaveDate,'Bass']])assert.equal((await call(owner,'POST','/payroll/special-pay/days',{employeeId:id,date:workDate,kind,reason:'HR selected daily role'})).status,200);
+  const run=await call(owner,'POST','/payroll',{companyId:2,periodStart:date,periodEnd:leaveDate,payFrequency:'Monthly'});
+  assert.equal(run.status,201,JSON.stringify(run.body));
+  const detail=(await call(owner,'GET',`/payroll/${run.body.id}`)).body;
+  const slip=detail.payslips.find(row=>row.employeeId===id);
+  assert.equal(slip.basic,5500);assert.equal(slip.paidLeavePay,3000);
+  assert.equal(slip.epfEmployeeDeduction,0);assert.equal(slip.epfEmployerContribution,0);assert.equal(slip.etfEmployerContribution,1350);
+  const {payslipDetail}=await import('../src/lib/payslip-detail.js');
+  assert.equal(payslipDetail(detail,slip).reconciliation.basic,0);
+  const {payrollSheets}=await import('../src/lib/payroll-export.js');
+  assert.ok(payrollSheets(detail).some(row=>row.name==='Special daily pay'));
+  const profile=(await call(owner,'GET',`/employees/${id}`)).body;
+  assert.equal(Boolean(profile.epfEligible),true,'the employee profile itself is not overwritten');
+});
+
 test('biometric attendance pays automatic OT and minute lateness for every category using dated settings', async () => {
   const owner=await login();
   const firstDate=shift(1400),secondDate=shift(1401);
@@ -3632,9 +3762,9 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
     hrRules:{...INITIAL_HR_RULES,normalStart:'08:00',normalEnd:'16:00'}});
   assert.equal(newPolicy.status,201,JSON.stringify(newPolicy.body));
   const people=[];
-  for(const [index,[category,workerType,expectedOt]] of [
-    ['Office employee','Office',731.25],['Site labourer','Site',650],['Supervisor','Site',975],
-    ['Driver','Office',812.5],['Driver','Site',893.75],['Custom','Site',1137.5],['Custom','Office',1300]
+  for(const [index,[category,workerType,expectedOt,expectedLate]] of [
+    ['Office employee','Office',900,337.5],['Site labourer','Site',800,300],['Supervisor','Site',1200,450],
+    ['Driver','Office',0,412.5],['Driver','Site',1100,412.5],['Custom','Site',1400,525],['Custom','Office',1600,525]
   ].entries()) {
     const code=`AUTOPAY-${Date.now()}-${index}`;
     const created=await call(owner,'POST','/employees',{code,name:'Shared Automatic Payroll QA',
@@ -3642,7 +3772,7 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
       dailyRate:3200,epfEligible:false,etfEligible:false});
     assert.equal(created.status,201,JSON.stringify(created.body));
     assert.equal((await call(owner,'POST','/biometric/mappings',{code,employeeId:created.body.id})).status,200);
-    people.push({...created.body,expectedOt});
+    people.push({...created.body,expectedOt,expectedLate,expectedHours:category==='Driver'&&workerType==='Office'?0:2.5});
   }
   const imported=await call(owner,'POST','/biometric/commit',{rows:people.flatMap(person=>[
     {code:person.code,date:firstDate,checkIn:'08:15:00',checkOut:'17:30:00'},
@@ -3657,12 +3787,12 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
   for(const person of people) {
     const slip=detail.payslips.find(s=>s.employeeCode===person.code);
     assert.equal(Number(slip.daysPresent),2);
-    assert.equal(Number(slip.overtimeHours),2);
+    assert.equal(Number(slip.overtimeHours),person.expectedHours);
     assert.equal(Number(slip.overtimePay),person.expectedOt,person.payrollCategory);
     assert.equal(Number(slip.lateMinutes),90);
-    assert.equal(Number(slip.lateDeduction),200);
-    assert.equal(Number(slip.basic),6200);
-    assert.equal(Number(slip.netPay),6000+person.expectedOt);
+    assert.equal(Number(slip.lateDeduction),person.expectedLate);
+    assert.equal(Number(slip.basic),6400);
+    assert.equal(Number(slip.netPay),6400-person.expectedLate+person.expectedOt);
     const calculation=typeof slip.calculationDetail==='string'?JSON.parse(slip.calculationDetail):slip.calculationDetail;
     assert.deepEqual(calculation.attendance.map(row=>row.policyId),[oldPolicy.body.id,newPolicy.body.id]);
     assert.ok(calculation.overtime.every(row=>row.source==='Attendance'));
@@ -3681,10 +3811,17 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
   await admin.query(`DELETE FROM ${testDatabase}.payroll_policies WHERE id IN (?,?)`,[oldPolicy.body.id,newPolicy.body.id]);
 });
 
-test('draft payroll can be rebuilt and deleted atomically without losing source records', async () => {
+test('draft payroll can be rebuilt and deleted atomically without losing source records', async t => {
   const owner=await login();
   const store=await login('store@gkuc.lk');
   const workDate=shift(1100);
+  // Own the policy fixture: unrelated tests must not supply the missing transport threshold.
+  const fixturePolicy=await call(owner,'POST','/payroll/settings/policies',{companyId:1,effectiveFrom:workDate,
+    officeOtRate:225,siteLabourSiteOtRate:200,siteLabourTravelOtRate:100,driverOtRate:225,
+    driverSiteOtRate:100,driverTravelOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,
+    epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3,hrRules:{...INITIAL_HR_RULES,fullTransportDays:null}});
+  assert.equal(fixturePolicy.status,201,JSON.stringify(fixturePolicy.body));
+  t.after(()=>admin.query(`DELETE FROM ${testDatabase}.payroll_policies WHERE id=?`,[fixturePolicy.body.id]));
   const person=await call(owner,'POST','/employees',{code:`REBUILD-${Date.now()}`,name:'Payroll Rebuild QA',
     joinDate:today(),dailyRate:1000,epfEligible:false,etfEligible:false});
   assert.equal(person.status,201,JSON.stringify(person.body));

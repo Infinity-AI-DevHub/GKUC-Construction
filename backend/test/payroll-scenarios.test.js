@@ -78,7 +78,7 @@ const scenarios = [
   { employee: labourer, name: 'advance capped at two days earnings', input: { days_present: 2, salary_advance: 20000 }, expected: { basic: 7000, salaryAdvanceDeduction: 7000, deductions: 7000, netPay: 0, employerCost: 7000 } },
 
   { employee: driver, name: 'ordinary week has no statutory contributions', input: {}, expected: { basic: 30000, contributionBase: 0, epfEmployeeDeduction: 0, netPay: 30000, employerCost: 30000 } },
-  { employee: driver, name: 'office overtime', input: { overtime: [['Office', 4]] }, expected: { overtimePay: 900, grossEarnings: 30900, netPay: 30900, employerCost: 30900 } },
+  { employee: driver, name: 'travel overtime', input: { overtime: [['Travel', 4]] }, expected: { overtimePay: 900, grossEarnings: 30900, netPay: 30900, employerCost: 30900 } },
   { employee: driver, name: 'site and travel overtime at driver rate', input: { overtime: [['Site', 2], ['Travel', 3]] }, expected: { overtimePay: 1125, grossEarnings: 31125, netPay: 31125, employerCost: 31125 } },
   { employee: driver, name: 'one unpaid-leave day reduces attended earnings once', input: { days_present: 5, unpaid_days: 1 }, expected: { basic: 25000, contributionBase: 0, unpaidLeaveDeduction: 0, epfEmployeeDeduction: 0, deductions: 0, netPay: 25000, employerCost: 25000 } },
   { employee: driver, name: 'allowance, deduction and advance', input: { salary_advance: 10000, components: [component('Allowance', 3000), component('Deduction', 1000)] }, expected: { allowanceTotal: 3000, otherDeduction: 1000, salaryAdvanceDeduction: 10000, deductions: 11000, netPay: 22000, employerCost: 33000 } },
@@ -116,6 +116,7 @@ test('pay-type and overtime guardrails reject invalid combinations', () => {
   assert.match(payProfileError({ payBasis: 'Weekly rate', payFrequency: 'Monthly' }), /weekly/i);
   assert.throws(() => resolveOvertimeRate(office, 'Site', basicPolicy), /cannot record site overtime/);
   assert.throws(() => resolveOvertimeRate(labourer, 'Office', basicPolicy), /cannot record office overtime/);
+  assert.throws(() => resolveOvertimeRate(driver, 'Office', basicPolicy), /cannot record office overtime/);
 });
 
 test('every OT entry uses policy rates, never legacy employee overrides', () => {
@@ -125,7 +126,7 @@ test('every OT entry uses policy rates, never legacy employee overrides', () => 
     custom_site_ot_rate: 9999, custom_travel_ot_rate: 9999};
   for (const [category, rates] of [
     ['Office employee', {Office: 225}], ['Site labourer', {Site: 200, Travel: 100}],
-    ['Driver', {Office: 225, Site: 240, Travel: 125}],
+    ['Driver', {Site: 240, Travel: 125}],
     ['Supervisor', {Site: 225, Travel: 100}], ['Custom', {Office: 310, Site: 360, Travel: 160}]
   ]) for (const [type, rate] of Object.entries(rates)) {
     assert.equal(resolveOvertimeRate({...legacy, payroll_category: category}, type, policy), rate);

@@ -90,3 +90,195 @@ This file is append-only. Every material implementation, investigation, decision
 - Validation: Parser/identity unit tests, focused API integration tests and frontend build results recorded below.
 - Open items / limits: Earlier mappings have no scanner name until a future manual match includes it; existing scanner-number recognition continues to work. One remembered name is retained per scanner-number link; additional scanner numbers for the same employee may retain different names. Ambiguous names still require review rather than unsafe guessing. Full backend suite and interactive browser review were not run.
 - Final validation: All 13 identity/parser unit tests passed. Seven focused API tests passed (155 skipped by name filter), covering manual scanner-name persistence, later legacy-Excel recognition/commit, private alias storage and audit, duplicate names, old number-only links, multiple numbers, deactivation and corrupt-file handling. The supplied report's opt-in test passed through import/reimport and payroll identity checks in the temporary test database. Frontend production build and `git diff --check` passed.
+
+## 2026-11-03 — effective HR work-role and machine-operator daily pay
+
+- Decision / request: Implement both confirmed agreements from 2026-01-01. HR records Bass/Gola per day without supervisor approval. Operator uses machine-meter pay/minimum or standby hours, daily transport, no OT/late, and the confirmed 1,800 × 1.5 extra-day basic. Keep these employee-specific and preserve saved payroll.
+- Changed: Added effective employee pay-method/rate snapshots and audited daily work/meter records, with reversible daily archival. People → Payroll Inputs → Special daily pay lets HR explicitly select the real employee, save the effective method and enter/correct daily evidence. No employee ID is inferred from a name. The existing attendance/import process remains. Generation blocks missing/mismatched/orphan/review-required inputs, uses the correct dated method and month-to-date count, pays role-based basic/short days/paid leave, enforces Site 225/30-minute and Travel 100/31-minute OT, and applies operator minimum/standby/transport/premium exclusions. Pending/approved operator OT and overlapping transport/machine entitlements require review instead of double payment. Advances use the existing recovery ledger. Special EPF is disabled only in calculation while effective; ETF retains existing profile eligibility/basis and other employees are unchanged.
+- Persistence / exports: Added guarded `employee_special_pay_rules` and `employee_special_pay_days` tables and an `hr.payroll`-protected `/payroll/special-pay` API. All inputs/rule changes are audited. Payslips snapshot the HR source, rule/rates, role, readings, formula and earned amounts; PDFs and XLSX show saved special detail, including a Special daily pay sheet. Daily reconciliation uses saved earned basic, not a generic profile rate. Special project allocations use saved earned salary. Existing Drafts update only on explicit regeneration; Approved/Paid snapshots remain immutable. Added employeeId to payslip API rows for stable identity.
+- Data or deployment action: No deployment, PM2 restart, live migration, live employee-method assignment or live payroll write. Only the isolated temporary local test database was written. The actual employees still need their correct effective methods saved through the app after deployment; code does not silently configure live profiles/policies.
+- Validation: Focused tests and final checks recorded below. Rendered both sample methods to two-page PDFs using synthetic data and inspected all pages. Frontend build passed.
+- Known existing test discrepancy: The older API test `biometric attendance pays automatic OT and minute lateness for every category using dated settings` still expects 2 OT hours, while the unchanged HEAD calculation produces 2.5 for its 16:30/16:00 shift-end fixture. Reproduced against the original calculation source to confirm it predates this change; that legacy assertion was not rewritten. Full backend suite and interactive browser workflow review were not run.
+- Final validation: 40 focused calculation/export/schema/attendance-match tests passed, including the new special-method scenarios. Five filtered API tests passed (159 skipped): HR persistence/authorization, missing inputs, Draft regeneration, approved snapshot protection, paid leave/EPF/ETF reconciliation, existing draft lifecycle, manual/calculated travel and one-time deduction handling. Frontend production build passed. All four pages of the two synthetic payslip PDFs were visually checked; special earnings/transport reconciled, machine readings/formulas were legible, role late-rate display used the saved LKR 225/h and operator late-rate rows were omitted. Final `git diff --check` passed. Full-suite success is not claimed because of the separately documented pre-existing OT test assertion.
+
+## 2026-11-03 — operator Standby-day Site OT clarification
+
+- Decision / request: Supersede the earlier blanket operator OT exclusion. On non-machine Standby dates only, pay ordinary labour Site OT from 30 minutes. Machine-operating dates retain no OT; operator late deduction stays excluded.
+- Changed: Special employee calculation context includes the active daily work record. Automatic and reviewed Standby Site OT use the company policy effective on the work date, minimum 30 minutes, and actual minutes for automatic OT money. Machine-day and non-Site operator OT remain blocked. HR suggestions, suggestion confirmation and employee OT entry check the saved work type; missing/archived choices cannot enable OT. Reviewed Standby Site OT replaces automatic OT. Updated daily-pay guidance and authoritative payroll/architecture/decision documentation. No schema or existing data change.
+- Data or deployment action: Local code only; no deployment, production restart, live database writes or saved payroll recalculation. API tests write only the temporary local test database. The clarification uses the existing 2026-01-01 effective special agreement.
+- Validation: 22 focused special-pay/attendance/HR-rule/export tests passed. Three filtered API tests passed (162 skipped), covering Standby eligibility/suggestions/manual review, no Machine-day OT, missing-choice blocking, exact-minute automatic amounts, reviewed-vs-automatic replacement, draft lifecycle and existing special paid-leave/contribution behavior. Frontend production build and `git diff --check` passed.
+- Open items / limits: Full backend suite and interactive browser review were not run. The normal labour Site rate comes from the effective company policy (agreed current rate LKR 225/h), not the LKR 650 machine meter rate. Approved/Paid snapshots remain unchanged.
+
+## 2026-11-03 — documentation completeness review for special payroll
+
+- Decision / request: Verify that the newly implemented employee-specific payroll methods and final Operator Standby OT correction are included in durable documentation.
+- Findings / changed: The full Bass/Gola and operator rules, effective date 2026-01-01, HR setup/entry workflow, storage/API, saved-payslip protection, validation and deployment limits were already recorded in `docs/PAYROLL.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, README and this progress log. Corrected the older decision summary that still said blanket no operator OT, added the final Machine-versus-Standby distinction to the README, updated the payroll specification's confirmation date and linked the new calculation/API/UI owners in its code map. Prior progress entries remain unchanged as historical records; the later OT clarification supersedes the earlier blanket exclusion.
+- Validation: Cross-checked the current rule descriptions across the five documents and ran `git diff --check` and `git diff --cached --check`. No code tests/build were rerun because this follow-up changes Markdown only.
+- Data or deployment action: Documentation-only local changes. No deployment, application database writes, employee rule assignment or payroll recalculation.
+- Open items / limits: Live configuration/deployment is still a separate action; documentation does not imply it has happened.
+
+
+## 2026-11-03 — Electron desktop client and local verification
+
+Added `desktop/` with Electron 45.2.1, electron-builder 26.18.0, locked dependencies,
+root build/run/test scripts, bundled existing React assets, secure custom-protocol API
+streaming, sandboxed isolated renderer, restricted settings bridge, native download
+save dialogs, popup/print support and HTTPS connection settings. Default production
+origin supplied by user: https://staff.gkucconstruction.com. No backend/DB is packaged.
+Windows x64 NSIS and Mac arm64 ZIP builds are unsigned; browser remains available.
+Shared frontend now resyncs on live connection/reconnection and preserves tokens during
+transient bootstrap failures; 401 handling remains sign-out.
+
+Validation: frontend build succeeded; 34 frontend and 3 desktop core tests passed.
+Real macOS Electron transport test passed (local fixture: bearer headers, multipart,
+incremental SSE, secure renderer, popup and PDF generation). Separate real-backend
+Electron test passed using a new disposable loopback MySQL database: UI login,
+authenticated bootstrap, live connection and second-client write refresh. Full Node 20
+backend suite: 322 passed, 7 failed, 2 skipped. Failures concern weekly OT, invoice
+payment-mode text, biometric OT, Draft duplication and driver/legacy OT expectations;
+backend source was not changed in this desktop change. See docs/DESKTOP.md for details.
+
+No deployment, remote DB write, production configuration edit or production account
+login. Windows runtime, actual printers, low-spec hardware benchmarks, full network
+failure recovery and signed releases remain unverified. Full-suite failures need
+reconciliation before claiming complete release readiness. Updated README, architecture,
+decisions and desktop handoff documentation in this change set.
+
+### Desktop verification follow-up — 2026-11-03
+
+Both Windows x64 NSIS installer and macOS arm64 ZIP builds completed successfully.
+The packaged Mac app launched its local login with an unreachable HTTPS test server.
+Actual-backend desktop coverage also passed a simulated bootstrap 503 without sign-out,
+then stopped/restarted the local backend and verified live reconnection plus bootstrap
+resync with the same session. The transport test additionally saved and checked an
+attachment download. Both package archives were inspected: expected default HTTPS
+origin, no backend directory or `.env` file. No production connection/account write was
+used. This supplements the earlier verification limits; long/proxy-specific outages,
+Windows runtime and physical printers remain unverified.
+
+## 2026-11-03 — manual desktop UI verification and rollout guide
+
+User requested local manual testing and production instructions. Used actual Electron
+and Express with a new disposable loopback MySQL database (43974), then browser parity
+checks against that same data. Visited all 16 main modules and 100 section views/tabs;
+inspected additional finance/HR entry dialogs. Submitted synthetic fleet renewals,
+optional fuel, maintenance, invoice/client, quotation, scanner mapping/import, task,
+project/recovery, supplier/credit purchase, expense, stock, Drive and payroll workflows.
+HR Daily payroll reconciled to 3,000; saved PDF/XLSX, Draft regeneration, Approved/Paid
+locking and rejection of duplicate Paid-period generation were checked. No bank transfer.
+
+Corrected seven issue groups: wrong-login wording; optional fuel project validation;
+blank/unstable desktop PDF previews via network-origin ticket windows and PDF support;
+optional expense category; equipment-service unchanged status; online origins for QR/
+Drive links; unsupported native text prompts across eight call sites via shared async
+in-app dialog, including real cancellation of subcontractor decisions. Backend business
+source, schema and payroll formulas were not changed.
+
+Added docs/MANUAL_QA.md with observed results and explicit gaps; docs/DEPLOYMENT.md with
+server backup/build, single PM2 worker, HTTPS/SSE proxy, HR policy setup, client signing/
+distribution and rollback instructions. Updated README, desktop, architecture, decisions
+and payroll verification documentation. Added a guarded local-only manual QA launcher;
+it rejects occupied ports/non-loopback DBs/non-local storage and disables outbound
+notification credentials in future runs. Existing dirty work was retained.
+
+Validation at this stage: frontend build passed; 37 frontend tests passed; desktop core
+checks passed. Full backend Node 22 compatibility run repeated the earlier result:
+322 passed, 7 failed, 2 skipped. No full-suite green claim. Final desktop integration/
+packaging checks are recorded in the follow-up below. Project-less quotation acceptance
+still emits misleading project-budget wording; noted separately. Not every form mutation,
+role/row combination or hardware/provider branch was exercised manually. See the report.
+
+No deployment, PM2 restart, production .env edit, remote storage operation or live DB
+write. Only disposable local test data was written; public-link exercise used a synthetic
+local file and was revoked. No external messages or actual printer output were sent.
+
+### Manual QA final verification — 2026-11-03
+
+Final frontend suite: 38 passed (including desktop PDF origin rejection and online-link
+origin tests). Desktop core: 3 passed; real Electron transport: passed; actual local
+backend login/live update/transient-error/restart-resync integration: passed; rebuilt
+packaged Mac offline-login smoke: passed. Browser in-app prompt focused its response
+field and Escape cancelled it. Both Windows NSIS and Mac ZIP builds completed, their
+packaged runtime/UI bytes matched source, default HTTPS origin was correct, and backend,
+.env and QA fixtures were absent. Generated SHA256SUMS beside installers.
+
+The manually downloaded synthetic invoice PDF and payroll XLSX were retained under
+ignored desktop/test-results as local evidence. Browser/test windows were closed and
+both owned manual QA databases were removed; the local QA port was no longer listening.
+A launcher guard retest rejected an occupied IPv6/wildcard port before creating data;
+startup now requires its own child server's ready log, avoiding another process's
+health endpoint. No production action occurred. Full backend suite remains 322/7/2
+(pass/fail/skip), as documented above; Windows/device/provider coverage is still open.
+
+- Final launcher smoke: started a fresh isolated Node 22 backend successfully using its
+  own readiness log, then stopped it. Confirmed all three databases allocated during
+  manual QA/launcher verification were removed. No production schema/data was touched.
+
+## 2026-11-03 — precise explanation of full-suite failures
+
+Re-read exact failing assertions after the user asked what failed. Correction to the
+prior shorthand: the Draft lifecycle failure is not its duplicate/overlap check. It is
+at api.test.js:3850: an inserted invalid transport component was expected to reject
+regeneration with 409, but generation returned 201; therefore that test did not establish
+the subsequent rollback assertion. Corrected MANUAL_QA.md and DESKTOP.md accordingly.
+
+Seven counted failures group into five areas: weekly OT suggestion expected 1.25h but
+returned 1.5h (07:00–07:30 plus 16:30–17:30); invoice raw-HTML string mismatch for Mode
+of Payment/Cheque; biometric overtime expected 2h but returned 2.5h; the invalid transport
+rejection above; two tests attempting prohibited Driver Office OT plus their parent
+scenario-suite failure. The driver rule matches PAYROLL.md; its test fixtures need
+reconciliation. No business code changed or tests rerun for this explanation/correction.
+No production action or database write was performed.
+
+
+## 2026-11-03 — reconcile backend regressions and confirm manual allowances
+
+User supplied Construction payroll-settings screenshots and confirmed that the
+Operator's LKR 300 per worked day is the only automatic allowance; other variable
+allowances are HR-entered. Documented that clarification and the screenshot evidence
+limits in PAYROLL.md. Existing manual claim/component persistence already supports
+HR amounts; policy rates alone do not create paid allowance claims. No runtime
+calculation, live policy or saved payslip was changed.
+
+Corrected stale tests: weekly 07:00–17:30 OT is 1.5 hours; biometric calculations use
+each day's policy, actual attended basic pay and category-specific late rates; Driver
+Office OT is prohibited. Invoice checks compare visible payment text across markup.
+Draft rollback owns its dated policy with a missing transport threshold and synthetic
+LKR 200 Site rate, avoiding leaked settings from preceding tests. Added a regression
+for variable manually approved transport amounts without a threshold, while keeping
+explicit prorated transport blocked until HR configures its threshold.
+
+Validation: full backend Node 20.12.2 `node --test` from backend: **330 passed,
+0 failed, 2 skipped; 332 including nested tests**. New allowance unit test also
+passed separately (6/6 in hr-payroll-rules.test.js). `git diff --check` passed.
+Updated MANUAL_QA.md, DESKTOP.md and DEPLOYMENT.md to replace the earlier seven-failure
+release finding with actual results. Node 22 was not rerun in this follow-up;
+Windows runtime/signing/hardware and live integration remain separate outstanding
+verification. No frontend/runtime changes: no rebuild required for these test/docs
+changes. No deployment, PM2 operation, remote database write or production .env edit.
+
+
+## 2026-11-03 — GKUC Construction desktop name and rings icon
+
+User requested desktop name GKUC Construction and the existing blue rings alone on
+white. Updated Electron product/window/menu/setup/error/download labels, installer
+artifact names and shortcut name. Used the unchanged brand mark on a white square
+SVG canvas; rendered native PNG/ICO/ICNS assets with a reproducible generator.
+Windows executable resource editing is enabled so the EXE itself receives the name
+and icon, independent of signing. Preserved app ID and the old packaged user-data
+folder to retain saved connection settings across the rename. Browser/API branding
+and payroll behavior are unchanged. Updated DESKTOP.md, DEPLOYMENT.md and ARCHITECTURE.md.
+
+Validation: frontend production build passed during both platform builds (existing
+large-chunk advisory remains). Desktop core tests 3/3, Electron transport/UI test 1/1
+and new-name packaged macOS smoke test 1/1 passed. Native window title/app name were
+verified separately from the web page's unchanged document title. Mac bundled ICNS
+exactly matches the new icon; direct Windows PE resource inspection confirmed all
+six ICO sizes match the generated white-background assets and product metadata
+contains GKUC Construction. Windows runtime/client installation and code signing
+remain unverified; builds are unsigned. No backend tests were required for this
+desktop branding change. No deployment or live database write.
+
+Both renamed release artifacts were rebuilt successfully: desktop/release/
+GKUC-Construction-1.0.0-win-x64.exe and GKUC-Construction-1.0.0-mac-arm64.zip.
+SHA256SUMS now lists these final artifacts. `git diff --check` passed.

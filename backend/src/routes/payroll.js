@@ -1,3 +1,4 @@
+import {activeSpecialRule,specialRates,specialInputFor} from '../lib/special-pay.js';
 import {attendanceForEmployee,salaryCalculationIssues} from '../lib/payroll-attendance-match.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -266,7 +267,7 @@ router.get('/:id/payslips/:slipId/document',auth,permit('hr.payroll'),wrap(async
 async function payrollSnapshot(id){
   const run = await getOne(`${select} WHERE r.id=?`, [id]);
   if (!run) throw fail(404,'Payroll run not found');
-  const payslips = await query(`SELECT s.id,s.days_present daysPresent,s.days_absent daysAbsent,s.paid_leave_days paidLeaveDays,
+  const payslips = await query(`SELECT s.id,s.employee_id employeeId,s.days_present daysPresent,s.days_absent daysAbsent,s.paid_leave_days paidLeaveDays,
     s.unpaid_leave_days unpaidLeaveDays,s.paid_leave_pay paidLeavePay,COALESCE(s.payable_days,s.days_present+s.paid_leave_days) payableDays,s.overtime_hours overtimeHours,
     s.basic,s.contribution_base contributionBase,s.overtime_pay overtimePay,s.late_minutes lateMinutes,s.late_deduction lateDeduction,s.unpaid_leave_deduction unpaidLeaveDeduction,
     s.office_ot_hours officeOtHours,s.office_ot_pay officeOtPay,s.site_ot_hours siteOtHours,s.site_ot_pay siteOtPay,
@@ -372,7 +373,15 @@ async function buildPayroll(req,connection){
       const travelClaims=await query("SELECT * FROM visible_hr_payroll_claims WHERE kind='Travel' AND work_date BETWEEN ? AND ?",[periodStart,periodEnd]);
       const datedPolicies=await query('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC',[companyId,periodEnd]);
       const approvedLeave=await query("SELECT * FROM visible_leave_requests WHERE status='Approved' AND from_date<=? AND to_date>=? ORDER BY from_date,id",[periodEnd,periodStart]);
+      await connection.query(`SELECT id FROM employees WHERE id IN (${employees.map(()=>'?').join(',')}) ORDER BY id FOR UPDATE`,employees.map(row=>row.id));
+      const [specialProfiles]=await connection.query('SELECT * FROM employee_special_pay_rules WHERE effective_from<=? ORDER BY effective_from DESC,id DESC',[periodEnd]);
+      const [specialDays]=await connection.query('SELECT * FROM employee_special_pay_days WHERE active=1 AND work_date BETWEEN ? AND ? ORDER BY work_date,id',[calendarStart,periodEnd]);
       for (const row of employees) {
+        row.special_pay_rules=specialProfiles.filter(item=>Number(item.employee_id)===Number(row.id));
+        row.special_pay_days=specialDays.filter(item=>Number(item.employee_id)===Number(row.id));
+        const firstSpecial=activeSpecialRule(row,periodStart);
+        if(firstSpecial&&Number(row.daily_rate)<=0)row.daily_rate=firstSpecial.mode==='Work role'?specialRates(firstSpecial).gola:specialRates(firstSpecial).minimum;
+        if(activeSpecialRule(row,periodEnd))row.epf_eligible=false;
         const contributionDetail = contributionExplanation(row, policy, periodEnd, payFrequency);
         const eligibility = contributionEligibility(row, policy, periodEnd);
         row.epf_eligible = eligibility.epf;
@@ -387,6 +396,26 @@ async function buildPayroll(req,connection){
           Object.assign(row,calculateAttendancePayroll(row,attendance,otRows.filter(o=>Number(o.employee_id)===Number(row.id)),
             datedPolicies,travelClaims.filter(c=>Number(c.employee_id)===Number(row.id)),
             attendanceForEmployee(row,calendarAttendanceRows,employeeNames)));
+          for(const input of row.special_pay_days.filter(item=>item.work_date>=periodStart&&activeSpecialRule(row,item.work_date))) {
+            if(!attendance.some(day=>day.work_date===input.work_date&&['On site','Late','Checked out','Business trip','On leave'].includes(day.state)))
+              throw new Error(`HR daily work exists on ${input.work_date} without worked attendance or approved leave. Review the attendance first.`);
+          }
+          row.special_paid_leave_pay=0;
+          for(const leaveDay of detail.days.filter(day=>day.paymentType==='Paid')){
+            const special=activeSpecialRule(row,leaveDay.workDate);
+            let rate=Number(row.daily_rate);
+            if(special){
+              const rates=specialRates(special);
+              if(special.mode==='Work role')rate=specialInputFor(row,leaveDay.workDate).work_kind==='Bass'?rates.bass:rates.gola;
+              else rate=rates.minimum;
+            }
+            leaveDay.dailyRate=rate;leaveDay.earnedBasic=rate;row.special_paid_leave_pay+=rate;
+          }
+          if(activeSpecialRule(row,periodEnd)){
+            contributionDetail.specialPayNote='EPF disabled by the effective special pay agreement; ETF retains the existing employee eligibility.';
+            contributionDetail.epfReasons=contributionDetail.epfReasons.filter(reason=>!reason.includes('employee profile'));
+            contributionDetail.epfReasons.push(contributionDetail.specialPayNote);
+          }
           row.calculation_detail.leave=detail;
           row.calculation_detail.contributions=contributionDetail;
           row.calculation_detail.employee={name:row.name,code:row.code,designation:row.designation,
@@ -432,6 +461,13 @@ async function buildPayroll(req,connection){
           }
           employeeComponents.push({id:null,claimId:claim.id,name:claim.kind==='Travel'?(c.method==='Manual'?'Manual travel allowance':'Long-distance site allowance'):claim.kind==='Mileage'?'Motorcycle mileage reimbursement':claim.kind==='Supervisor site charge'?'Supervisor site charge':`${claim.kind} allowance`,kind:claim.kind==='Mileage'?'Reimbursement':'Allowance',amount:claim.kind==='Travel'?c.allowance:claim.kind==='Mileage'?c.total:c.amount,formula:JSON.stringify({claimId:claim.id,date:claim.work_date,projectId:claim.project_id,calculation:c})});
         }
+        const operatorDays=employee.calculation_detail.attendance.filter(day=>day.specialPay?.mode==='Machine operator');
+        if(operatorDays.length&&employeeComponents.some(component=>component.allowance_type==='Transport'||component.allowance_type==='Machine/operator'))
+          throw fail(409,`${employee.name}: remove overlapping recurring transport/machine allowances; the operator rule already pays daily earnings and transport.`);
+        if(operatorDays.length&&claims.some(claim=>claim.kind==='Machine/operator'))
+          throw fail(409,`${employee.name}: review the separate machine/operator claim before combining it with operator daily earnings.`);
+        for(const day of operatorDays)employeeComponents.push({id:null,name:'Operator daily transport',kind:'Allowance',amount:day.specialPay.transport,
+          formula:JSON.stringify({date:day.workDate,ruleId:day.specialPay.ruleId,inputId:day.specialPay.inputId,formula:'One transport allowance per worked day, including half-days and Sundays'})});
         if (Number(employee.days_present)+Number(employee.paid_leave_days)>0 && Number(employee.daily_rate)<=0)
           throw fail(409,`${employee.name}: worked/paid-leave days exist, but the daily salary rate is zero. Set the employee daily rate in Payroll settings and rebuild this draft. The EPF/ETF basis cannot replace the daily rate.`);
         const calculation = calculatePayslip(employee, policy, employeeComponents, payFrequency);
@@ -471,7 +507,7 @@ async function buildPayroll(req,connection){
           await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Claim',?,?)",[slip.insertId,c.project_id,employee.id,c.work_date,c.id,component.amount]);
         }
         const [sourceDays]=await connection.query(`SELECT a.id,a.project_id,a.work_date FROM visible_attendance a WHERE a.employee_id=? AND a.work_date BETWEEN ? AND ? AND a.state IN ('On site','Late','Checked out','Business trip') AND a.project_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM daily_cost_lines l JOIN daily_cost_sheets s ON s.id=l.sheet_id WHERE l.employee_id=a.employee_id AND s.work_date=a.work_date AND s.status IN ('Submitted','Approved'))`,[employee.id,periodStart,periodEnd]);
-        for(const a of sourceDays)await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Attendance',?,?)",[slip.insertId,a.project_id,employee.id,a.work_date,a.id,money(employee.daily_rate)]);
+        for(const a of sourceDays)await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Attendance',?,?)",[slip.insertId,a.project_id,employee.id,a.work_date,a.id,money(employee.calculation_detail.attendance.find(day=>day.workDate===a.work_date)?.specialPay?.earnedBasic ?? employee.daily_rate)]);
 
         /* Recover oldest advances first and keep any unpaid remainder for a later run. */
         let remaining = calculation.salaryAdvanceDeduction;

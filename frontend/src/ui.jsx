@@ -1,9 +1,20 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import { Check, ChevronRight, Plus, X } from 'lucide-react';
-import { initials, onDataChanged, slug } from './api.js';
+import { initials, onDataChanged, publicAppOrigin, slug } from './api.js';
 import './workflow.css';
 import { RecordScopeBadge, showScopeSaved, useRecordScope } from './record-scope.jsx';
+
+export function usePublicAppOrigin() {
+  const [origin, setOrigin] = useState('');
+  useEffect(() => {
+    let active = true;
+    publicAppOrigin().then(value => { if (active) setOrigin(value); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+  return origin;
+}
 
 /**
  * Loads a panel's own list, and loads it again whenever anything in the system changes.
@@ -160,6 +171,43 @@ export function Modal({ title, close, children, wide = false, scope }) {
       <div className="modal-content">{children}</div>
     </div>
   </div>, document.body);
+}
+
+// Electron does not implement window.prompt. Keep text/reason entry in the app so
+// the same workflow works in both clients, including an explicit cancellation.
+let textPromptQueue = Promise.resolve();
+export function askText(message) {
+  const result = textPromptQueue.then(() => new Promise(resolve => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+      queueMicrotask(() => { root.unmount(); host.remove(); });
+    };
+    root.render(<TextPrompt message={message} finish={finish} />);
+  }));
+  textPromptQueue = result.catch(() => {});
+  return result;
+}
+
+function TextPrompt({ message, finish }) {
+  const [value, setValue] = useState('');
+  const input = useRef(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => input.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  return <Modal title="Enter details" close={() => finish(null)}>
+    <form className="report-form" onSubmit={event => { event.preventDefault(); finish(value); }}>
+      <p className="wide" style={{ whiteSpace: 'pre-line' }}>{message}</p>
+      <label className="wide">Your response<textarea ref={input} value={value} onChange={event => setValue(event.target.value)} rows={3} /></label>
+      <div className="form-actions"><button type="button" className="secondary" onClick={() => finish(null)}>Cancel</button><button className="primary">Continue</button></div>
+    </form>
+  </Modal>;
 }
 
 export function EntityForm({ onSubmit, error, children, fieldErrors = {}, errorRef }) {

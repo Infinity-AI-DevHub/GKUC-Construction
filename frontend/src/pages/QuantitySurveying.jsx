@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, FileText, Plus, Trash2, Upload, ChartNoAxesCombined, Calculator, ClipboardList, ShieldCheck, Users, ChevronRight, Layers } from 'lucide-react';
 import { api, fetchDownload, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { askText, Badge, Field, FormModal, WorkflowForm, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
 import BoqImport from '../BoqImport.jsx';
 import MeasurementUnit from '../MeasurementUnit.jsx';
 import BoqChanges from '../BoqChanges.jsx';
@@ -824,9 +824,9 @@ function SubcontractQuotations({ can, data, subcontractors, companyId }) {
 
   const decide = async (row, status) => {
     setError('');
-    const note = status === 'Accepted'
-      ? window.prompt('Why this price? (optional)') ?? ''
-      : window.prompt('Why is it being turned down? (optional)') ?? '';
+    const note = await askText(status === 'Accepted'
+      ? 'Why this price? (optional)' : 'Why is it being turned down? (optional)');
+    if (note === null) return;
     try {
       await post(`/qs/subcontract-quotations/${row.id}/decision`, { status, note: note || undefined });
       await load();

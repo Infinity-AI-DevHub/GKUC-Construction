@@ -84,3 +84,34 @@ The detailed specification lives in [PAYROLL.md](PAYROLL.md). The decisions belo
 
 - Company-level invoices may be created without selecting or creating a client. Keep purchaser fields blank and provide dotted write-in spaces on the print; do not invent a client identity.
 - Company ownership, pricing and tax rules still apply. Previous paid-invoice credits require a saved client so unnamed purchasers are never treated as the same billing account.
+
+## 2026-11-03 — employee-specific HR daily pay agreements
+
+- Effective from 2026-01-01, HR may explicitly assign the actual Sunil employee a Bass/Gola daily-work method (3,000/2,500, eight hours); one work type per date, selected by HR, without a supervisor approval step. Missing choices block payroll.
+- The operator uses meter hours × 650 with a 1,800 minimum, or non-machine attendance hours × 225 capped at eight; transport is 300 per attended day including partial days/Sundays. Machine days have no OT; Standby days receive normal labour Site OT from 30 minutes at the effective company rate. No late deduction on either type. More-than-25-day Machine work pays fixed 1,800 × 1.5 basic rather than adding it to meter pay. Calendar months apply; 45,000 is not a second salary.
+- Special EPF is currently off as instructed; ETF and other staff contribution settings remain unchanged. No automatic employee-name matching or live rule assignment. HR saves effective profiles and daily evidence explicitly. Approved/Paid salary snapshots never change when those inputs are corrected.
+
+## 2026-11-03 — operator OT clarification
+
+The user's follow-up supersedes blanket operator OT exclusion: machine-operating days have no OT, while HR-recorded Standby days receive normal labour Site OT from 30 minutes, using the dated company rate. No operator late deductions; no Office/Travel OT extension. Daily work choices remain authoritative, reviewed OT replaces automatic OT, and saved approved/paid payroll is unchanged.
+
+
+## 2026-11-03 — Shared online desktop and browser behavior
+
+Use Electron with the existing bundled React interface and the same HTTPS API, database
+and live stream. Do not duplicate payroll/business logic or connect desktop clients
+directly to MySQL. The user supplied https://staff.gkucconstruction.com as the default
+server. Keep the browser available for low-performance machines. No offline business
+writes, automatic updater, guaranteed zero lag or production deployment is included.
+Connection changes restart/sign out. New releases must be checked against deployed
+API contracts. See [DESKTOP.md](DESKTOP.md) for unsigned-package and verification limits.
+
+## 2026-11-03 — desktop interoperability after manual QA
+
+Keep portable QR/share links on the selected online origin, never `siteops://app`.
+Use network-origin, short-lived ticket URLs for native desktop PDF viewing while keeping
+renderer sandboxing, TLS verification and origin restrictions. Use the same in-app text
+prompt in both clients; reason/name entry must not depend on Electron's unsupported
+native prompt. Cancellation must stop a pending decision. Manual checks and automated
+coverage remain separate; the seven full-suite failures and untested Windows runtime
+prevent an unconditional production-readiness claim. See MANUAL_QA.md and DEPLOYMENT.md.

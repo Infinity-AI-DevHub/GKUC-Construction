@@ -1,3 +1,4 @@
+import {specialRates} from './special-pay.js';
 export const PAY_BASES = ['Monthly salary', 'Weekly rate', 'Daily rate'];
 export const PAY_FREQUENCIES = ['Daily', 'Weekly', 'Monthly'];
 export const PAYROLL_CATEGORIES = ['Office employee', 'Site labourer', 'Driver', 'Supervisor', 'Custom'];
@@ -21,6 +22,14 @@ export function allowedOvertimeTypes(category) {
 }
 
 export function resolveOvertimeRate(employee, type, policy) {
+  if(employee.special_pay_rule?.mode==='Machine operator'){
+    if(type==='Site'&&employee.special_pay_day?.work_kind==='Standby')return Number(policy.site_labour_site_ot_rate);
+    throw new Error('Operator Site OT is allowed only on an HR-recorded Standby day; machine days and Travel/Office OT are not eligible.');
+  }
+  if(employee.special_pay_rule?.mode==='Work role'){
+    if(!['Site','Travel'].includes(type))throw new Error('Work-role daily pay permits only Site or Travel OT.');
+    const rates=specialRates(employee.special_pay_rule);return type==='Site'?rates.siteOt:rates.travelOt;
+  }
   if (!allowedOvertimeTypes(employee.payroll_category).includes(type))
     throw new Error(`${employee.payroll_category} cannot record ${type.toLowerCase()} overtime`);
 
@@ -48,6 +57,8 @@ export function resolveOvertimeRate(employee, type, policy) {
 }
 
 export function overtimeMinimumMinutes(employee, type, policy) {
+  if(employee.special_pay_rule?.mode==='Machine operator'&&type==='Site'&&employee.special_pay_day?.work_kind==='Standby')return 30;
+  if(employee.special_pay_rule?.mode==='Work role')return type==='Travel'?31:30;
   const rules = typeof policy?.hr_rules === 'string' ? JSON.parse(policy.hr_rules) : (policy?.hr_rules || {});
   const category = employee.payroll_category;
   if (category === 'Office employee') return Number(rules.officeOtMinimumMinutes ?? 30);
@@ -80,8 +91,8 @@ export function calculatePayslip(employee, policy, components = [], payFrequency
   const shortDayReduction = money(Math.max(0, Number(employee.short_day_reduction || 0)));
   const attendanceBasic = Number.isFinite(Number(employee.attendance_basic))
     ? Number(employee.attendance_basic) : dailyRate * daysPresent - shortDayReduction;
-  const basic = money(Math.max(0, attendanceBasic + dailyRate * paidLeaveDays));
-  const paidLeavePay = money(dailyRate * paidLeaveDays);
+  const paidLeavePay = money(employee.special_paid_leave_pay ?? dailyRate * paidLeaveDays);
+  const basic = money(Math.max(0, attendanceBasic + paidLeavePay));
   const overtimePay = Number(employee.overtime_pay);
   const componentTotal = kind => money(components.filter(row => row.kind === kind)
     .reduce((sum, row) => sum + Number(row.amount), 0));
