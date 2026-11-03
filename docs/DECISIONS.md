@@ -88,7 +88,7 @@ The detailed specification lives in [PAYROLL.md](PAYROLL.md). The decisions belo
 ## 2026-11-03 — employee-specific HR daily pay agreements
 
 - Effective from 2026-01-01, HR may explicitly assign the actual Sunil employee a Bass/Gola daily-work method (3,000/2,500, eight hours); one work type per date, selected by HR, without a supervisor approval step. Missing choices block payroll.
-- The operator uses meter hours × 650 with a 1,800 minimum, or non-machine attendance hours × 225 capped at eight; transport is 300 per attended day including partial days/Sundays. No OT or late deduction. More-than-25-day Machine work pays fixed 1,800 × 1.5 basic rather than adding it to meter pay. Calendar months apply; 45,000 is not a second salary.
+- The operator uses meter hours × 650 with a 1,800 minimum, or non-machine attendance hours × 225 capped at eight; transport is 300 per attended day including partial days/Sundays. Machine days have no OT; Standby days receive normal labour Site OT from 30 minutes at the effective company rate. No late deduction on either type. More-than-25-day Machine work pays fixed 1,800 × 1.5 basic rather than adding it to meter pay. Calendar months apply; 45,000 is not a second salary.
 - Special EPF is currently off as instructed; ETF and other staff contribution settings remain unchanged. No automatic employee-name matching or live rule assignment. HR saves effective profiles and daily evidence explicitly. Approved/Paid salary snapshots never change when those inputs are corrected.
 
 ## 2026-11-03 — operator OT clarification

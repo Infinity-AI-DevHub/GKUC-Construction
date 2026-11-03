@@ -405,3 +405,10 @@ hours. Keep recording/importing attendance normally. Missing details block Draft
 corrected details require explicit Draft regeneration. Approved/Paid snapshots remain
 unchanged. No live employee method is assigned from source code. See
 [the payroll specification](docs/PAYROLL.md) for rates, premiums and contributions.
+
+Current operator distinction: Machine dates have no OT. Standby dates receive normal
+labour Site OT at the company policy effective on the work date (currently LKR 225/hour),
+with a 30-minute minimum. Operator late deductions remain excluded on both types.
+Bass/Gola daily selection, operator minimum/standby pay, transport and the monthly
+25-day premium are documented in the payroll specification. All special methods are
+opt-in per employee from the saved effective date; the agreed start is 2026-01-01.

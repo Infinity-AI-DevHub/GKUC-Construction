@@ -1,6 +1,6 @@
 # Payroll architecture and agreed rules
 
-This is the authoritative payroll specification as agreed on 2026-11-02. It replaces attempts to reproduce every exception in the former manually-entered salary workbook. The objective is a transparent, repeatable calculation that can be shown day by day in the payslip and salary-details export.
+This is the authoritative payroll specification, including the employee-specific agreements and Operator Standby OT clarification confirmed on 2026-11-03. It replaces attempts to reproduce every exception in the former manually-entered salary workbook. The objective is a transparent, repeatable calculation that can be shown day by day in the payslip and salary-details export.
 
 ## Policy model
 
@@ -106,6 +106,8 @@ The current application uses each eligible monthly employee's saved statutory sa
 | Category OT and late rate selection; payslip totals | `backend/src/lib/payroll-policy.js` |
 | Attendance, short day, day premium, OT and late calculation | `backend/src/lib/attendance-payroll.js` |
 | Payroll settings UI | `frontend/src/pages/People.jsx` |
+| Employee-specific daily rules and HR input API | `backend/src/lib/special-pay.js`, `backend/src/routes/special-pay.js` |
+| HR daily work/meter entry UI | `frontend/src/pages/SpecialDailyPay.jsx` |
 | Payroll test scenarios | `backend/test/hr-payroll-rules.test.js`, `backend/test/attendance-payroll.test.js` |
 
 ## Change checklist
