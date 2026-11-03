@@ -1,3 +1,4 @@
+import {withDeveloperCredit} from './developer-credit.js';
 import { spawn } from 'node:child_process';
 import { access, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -32,7 +33,7 @@ export async function renderDocumentPdf(html) {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'gkuc-document-pdf-'));
   try {
     const logo = await readFile(path.join(root, 'frontend/public/brand/gkuc-mark-256.png'));
-    const localHtml = html.replaceAll('/brand/gkuc-mark-256.png', `data:image/png;base64,${logo.toString('base64')}`);
+    const localHtml = withDeveloperCredit(html).replaceAll('/brand/gkuc-mark-256.png', `data:image/png;base64,${logo.toString('base64')}`);
     const input = path.join(temporary, 'document.html');
     const output = path.join(temporary, 'document.pdf');
     await writeFile(input, localHtml);
@@ -78,6 +79,7 @@ export async function renderDocumentPdf(html) {
 }
 
 export async function sendDocument(req, res, html, filename) {
+  html=withDeveloperCredit(html);
   if (req.query.download !== 'pdf' && req.query.preview !== 'pdf') return res.type('html').send(html);
   const pdf = await renderDocumentPdf(html);
   res.type('application/pdf');

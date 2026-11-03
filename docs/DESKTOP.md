@@ -16,9 +16,15 @@ Assets load locally through secure `siteops://app`. `/api`, `/uploads` and `/s` 
 stream to the selected HTTPS server, preserving bearer headers, multipart bodies and
 SSE responses. Cross-server redirects are refused and TLS verification remains on.
 The renderer uses sandboxing, context isolation and no Node integration. Its preload
-only exposes connection read/save; saving is accepted from the dedicated settings page.
+exposes connection read/save and narrowly scoped saved-session operations. Connection
+saving is accepted from the dedicated settings page; session operations are restricted
+to the main local application frame.
 Settings persist in the OS user-data folder and changing them restarts the app.
-Sessions retain the web app's sessionStorage behavior; restart requires sign-in.
+Desktop sign-in is encrypted with Electron safeStorage in `session.enc` under the OS
+user-data folder and restored before React/bootstrap starts. Passwords are never saved.
+The encrypted token is bound to the selected server. Logout, expired/revoked sessions
+and server-address changes remove the saved token. OS encryption must be available;
+there is no plaintext/basic_text fallback. Browser sign-in remains sessionStorage-only.
 
 **GKUC Construction → Connection settings** changes the server; **Open browser version** opens
 the browser alternative for low-spec computers. The hostname appears in the window
@@ -80,7 +86,7 @@ Packaged clients require HTTPS. `SITEOPS_DESKTOP_USER_DATA` isolates test profil
   Opt in with `SITEOPS_TEST_MYSQL=1 npm run test:backend --prefix desktop`.
   Set `SITEOPS_BACKEND_NODE` to a Node 20 executable if the runner uses another version.
   Do not run fixed-port integration suites concurrently.
-- Latest full Node 20 backend suite: **330 passed, 0 failed, 2 skipped** (332 including
+- Latest full Node 20 backend suite: **333 passed, 0 failed, 2 skipped** (335 including
   nested tests). The earlier seven counted failures were resolved by aligning stale
   expectations with exact minutes, per-date rates, Driver Site/Travel rules, rendered
   invoice text and an isolated missing-threshold transport fixture. Added coverage
@@ -120,3 +126,37 @@ the `GKUC SiteOps` user-data directory, preventing a rename from resetting setti
 The app is still an unsigned pilot build. Windows executable resource editing is
 enabled so the application file itself receives the icon and product metadata; this
 is separate from certificate-based signing.
+
+### Icon rasterization fix — 2026-11-04 (1.0.1)
+
+The 1.0.0 multi-size screenshot generator captured stale compositor tiles at some
+viewport sizes, producing the clipped/repeated rings shown in the user's screenshot.
+The generator now renders the SVG directly to a fresh canvas per size, with opaque
+white-border/nonblank guards. ICNS uses PNG-backed standard/Retina representations
+instead of the malformed legacy small representations emitted by the local iconutil
+encoder. Native PNG/ICO/ICNS representations were extracted and checked individually.
+Both platform artifacts are version 1.0.1 so the corrected release is distinguishable
+from the earlier files. Replace the old installed application with the new version;
+no production API or database update is required for this icon-only correction.
+
+## Remembered sign-in and print credit — 2026-11-04 (1.0.2)
+
+Desktop login sends `rememberDevice:true`: the server issues a revocable 30-day opaque
+session. Ordinary/browser logins retain the existing 12-hour expiry. Closing/reopening
+the application restores a still-valid token automatically; expiry, administrator
+revocation, account deactivation or signing out still requires authentication again.
+Transient network/bootstrap failures retain the saved login. All business permission
+and company checks continue on the server. Install the updated backend before this
+client to receive the longer duration; an older server ignores the extra flag.
+A one-time fresh sign-in is needed to create the first encrypted saved session.
+
+Generated PDFs show Developed by Infinity AI (Pvt) Ltd, Sri Lanka at document end.
+Payslips put it in the print page margin on every page. This rendering is supplied by
+the server, so updating the desktop alone does not update PDF output.
+
+Verification for 1.0.2: 39 frontend tests; 4 desktop core/encrypted-store tests; actual
+backend desktop test covering OS encryption, full process restart, invalidated expiry,
+logout and second restart; real multi-page PDF checks (five-page payslip, one credit
+per page, invoice credit once at end). The full backend suite passes 333, fails zero,
+skips two optional external-fixture tests. API date fixtures now use the same local
+business date as the API/seed, preventing UTC/local-midnight fixture mismatches.

@@ -9,7 +9,7 @@ import './workspace.css';
 import './login.css';
 import LoginArchitecture from './LoginArchitecture.jsx';
 
-import { announceDataChanged, api, onServiceAccessChanged, post, setUploadLimit, slug, token } from './api.js';
+import { announceDataChanged, api, onServiceAccessChanged, post, setUploadLimit, slug, token, restoreDesktopSession } from './api.js';
 import { Modal } from './ui.jsx';
 import NotificationBell from './NotificationBell.jsx';
 import Banners, { useBanners, SoundToggle } from './Banners.jsx';
@@ -134,8 +134,8 @@ function Login({ onLogin }) {
     setError('');
     const form = new FormData(event.currentTarget);
     try {
-      const result = await post('/auth/login', { email: form.get('email'), password: form.get('password') });
-      token.set(result.token);
+      const result = await post('/auth/login', { email: form.get('email'), password: form.get('password'), ...(window.siteopsDesktop?.saveSession?{rememberDevice:true}:{}) });
+      await token.set(result.token);
       onLogin(result.user);
     } catch (failure) {
       setError(failure.message);
@@ -424,7 +424,7 @@ function App() {
 
   const logout = async () => {
     try { await post('/auth/logout'); } finally {
-      token.clear();
+      await token.clear();
       setUser(null);
       setData(null);
       goTo('Dashboard');
@@ -612,4 +612,4 @@ function App() {
   </div>;
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+restoreDesktopSession().finally(()=>createRoot(document.getElementById('root')).render(<App />));

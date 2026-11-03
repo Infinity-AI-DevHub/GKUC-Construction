@@ -6,6 +6,7 @@ import { auth, bearer, permissionsFor, tokenHash, validate, wrap } from '../lib/
 import { passwordProblems, strongPassword } from '../lib/passwords.js';
 
 const SESSION_HOURS = 12;
+const REMEMBERED_SESSION_HOURS = 30 * 24;
 const router = Router();
 
 /*
@@ -53,15 +54,15 @@ const recordFailure = keys => {
 
 const clearAttempts = keys => { for (const key of keys) attempts.delete(key); };
 
-async function issueSession(userId) {
+async function issueSession(userId,rememberDevice=false) {
   const token = crypto.randomBytes(32).toString('base64url');
-  const expires = new Date(Date.now() + SESSION_HOURS * 3600000);
+  const expires = new Date(Date.now() + (rememberDevice?REMEMBERED_SESSION_HOURS:SESSION_HOURS) * 3600000);
   await query('INSERT INTO sessions (user_id,token_hash,expires_at) VALUES (?,?,?)', [userId, tokenHash(token), expires]);
   await query('DELETE FROM sessions WHERE expires_at < NOW()');
   return { token, expires };
 }
 
-router.post('/login', validate(z.object({ email: z.string().email(), password: z.string().min(8) })), wrap(async (req, res) => {
+router.post('/login', validate(z.object({ email: z.string().email(), password: z.string().min(8), rememberDevice:z.boolean().default(false) })), wrap(async (req, res) => {
   const email = req.body.email.toLowerCase();
   const keys = attemptKeys(req, email);
 
@@ -89,8 +90,8 @@ router.post('/login', validate(z.object({ email: z.string().email(), password: z
   }
 
   clearAttempts(keys);
-  const session = await issueSession(user.id);
-  await audit(pool, user.id, 'LOGIN', 'session', '', null, { expires: session.expires }, req.ip);
+  const session = await issueSession(user.id,req.body.rememberDevice);
+  await audit(pool, user.id, 'LOGIN', 'session', '', null, { expires: session.expires,rememberDevice:req.body.rememberDevice }, req.ip);
   res.json({
     token: session.token,
     user: {

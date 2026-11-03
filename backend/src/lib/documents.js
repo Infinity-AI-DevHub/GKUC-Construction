@@ -1,3 +1,4 @@
+import {withDeveloperCredit} from './developer-credit.js';
 import { invoiceOptions } from './invoice-options.js';
 import { amountInWords } from './amount-in-words.js';
 import { DEFAULT_DESIGN, fontStack, normaliseDesign, orderedBlocks, shows } from './document-design.js';
@@ -49,12 +50,6 @@ export const DEFAULT_DOCUMENT_SETTINGS = {
 };
 
 const settingsFor = given => ({ ...DEFAULT_DOCUMENT_SETTINGS, ...(given || {}) });
-
-/**
- * Every document says who built the system. Fixed rather than configurable — it is an
- * attribution, not a preference, and it prints as well as showing on screen.
- */
-const BUILDER = 'Built by Infinity AI (Pvt) Ltd, Sri Lanka';
 
 /** Turns a design into the stylesheet the document is drawn with. */
 function stylesheet(design) {
@@ -184,8 +179,7 @@ function footer(company, reference, settings) {
     <span>${escape(reference)}</span>
     <span>${escape(company.name)}</span>
   </div>
-  ${settings.footerNote ? `<p class="foot-note">${escape(settings.footerNote)}</p>` : ''}
-  <p class="builder">${BUILDER}</p>`;
+  ${settings.footerNote ? `<p class="foot-note">${escape(settings.footerNote)}</p>` : ''}`;
 }
 
 /**
@@ -287,7 +281,7 @@ function page({ design, company, title, heading, reference, date, blocks, settin
         ${escape(design.watermark.text)}</div>`
     : '';
 
-  return `<!doctype html>
+  return withDeveloperCredit(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escape(title)}</title>
@@ -302,8 +296,9 @@ function page({ design, company, title, heading, reference, date, blocks, settin
   ${firstPageLetterhead ? (blocks.letterhead || '') : ''}
   <table class="print-pages">${firstPageLetterhead ? '' : `<thead><tr><td>${blocks.letterhead || ''}</td></tr></thead>`}
     <tbody><tr><td>${drawn}</td></tr></tbody></table>
+<!-- developer-credit -->
 </div>
-</body></html>`;
+</body></html>`);
 }
 
 export function quotationDocument({ company, quotation, items, bankAccount, settings: given, design: givenDesign }) {
@@ -585,7 +580,7 @@ export function purchaseOrderDocument({ company, order, items, settings: given, 
     notes:`<div class="notes" data-block="notes"><h3>Control trail</h3><p>Prepared by: ${escape(order.issuedBy||'—')}</p>
       <p>Approval: ${direct?'Direct-delivery route — quantity receipt and invoice verification remain mandatory':order.status==='Pending approval'?'Awaiting approval':'Approved for issue'}</p></div>`,
     signatures:settings.showSignatures?`<div class="signatures" data-block="signatures"><div><span>Prepared by</span></div><div><span>${direct?'Site acknowledgement':'Authorised by'}</span></div></div>`:'',
-    footer:`<div class="footer" data-block="footer">${escape(settings.footerNote||'')}<span>${BUILDER}</span></div>`
+    footer:`<div class="footer" data-block="footer">${escape(settings.footerNote||'')}</div>`
   };
   return page({design,company,title:order.reference,heading:direct?'Direct Delivery Instruction':'Purchase Order',reference:order.reference,date:order.orderDate,blocks,settings});
 }

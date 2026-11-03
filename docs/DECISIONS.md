@@ -115,3 +115,13 @@ prompt in both clients; reason/name entry must not depend on Electron's unsuppor
 native prompt. Cancellation must stop a pending decision. Manual checks and automated
 coverage remain separate; the seven full-suite failures and untested Windows runtime
 prevent an unconditional production-readiness claim. See MANUAL_QA.md and DEPLOYMENT.md.
+
+## 2026-11-04 — remember desktop sign-in and mandatory document attribution
+
+Per user request, remember desktop sign-in on the device using OS-encrypted opaque
+sessions, not saved passwords or browser localStorage. Use a revocable 30-day server
+session for remembered logins; preserve the 12-hour browser default. Restore before
+bootstrap and clear on logout, invalidation or connection change. No offline access
+or authorization bypass is introduced. Every generated document ends with Developed
+by Infinity AI (Pvt) Ltd, Sri Lanka; payslips repeat it on each printed page. Keep
+this credit separate from editable company footer settings and historical salary data.

@@ -19,11 +19,12 @@ let testUploadDir;
 let lastOwnerToken;
 let lastFinanceToken;
 
-const today = () => new Date().toISOString().slice(0, 10);
+// Fixtures must use the same business day as the API/seed, including after local midnight.
+const today = () => new Intl.DateTimeFormat('en-CA',{timeZone:process.env.TZ||'Asia/Colombo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 const shift = days => {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
+  const date = new Date(`${today()}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate()+days);
+  return date.toISOString().slice(0,10);
 };
 
 test('full supplied biometric report imports and reimports without name collisions', {
@@ -5934,4 +5935,18 @@ test('payroll policies delete individually or by company without changing saved 
   assert.equal((await call(owner,'POST','/payroll',payload)).status,201);
   const [[audits]]=await admin.query(`SELECT COUNT(*) total FROM ${testDatabase}.audit_logs WHERE entity='payroll_policy' AND action='DELETE' AND entity_id=?`,[created.body.id]);
   assert.equal(audits.total,1);
+});
+
+
+test('remembered device login has a revocable 30-day session while ordinary login stays 12 hours',async()=>{
+  const crypto=await import('node:crypto');
+  for(const [rememberDevice,hours] of [[false,12],[true,720]]){
+    const response=await fetch(`${base}/auth/login`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:'owner@gkuc.lk',password:'GKUC@2026',rememberDevice})});
+    assert.equal(response.status,200);const {token}=await response.json();
+    const hash=crypto.createHash('sha256').update(token).digest('hex');
+    const [[row]]=await admin.query(`SELECT TIMESTAMPDIFF(SECOND,NOW(),expires_at) seconds FROM ${testDatabase}.sessions WHERE token_hash=?`,[hash]);
+    assert.ok(Math.abs(Number(row.seconds)-hours*3600)<120,'expiry matches the selected session duration');
+    assert.equal((await call(token,'POST','/auth/logout')).status,204);
+    assert.equal((await call(token,'GET','/bootstrap')).status,401);
+  }
 });
