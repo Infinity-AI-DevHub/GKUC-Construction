@@ -16,3 +16,11 @@ docs/*
 !docs/ARCHITECTURE.md
 !docs/DECISIONS.md
 !docs/PAYROLL.md
+!docs/DESKTOP.md
+!docs/MANUAL_QA.md
+!docs/DEPLOYMENT.md
+
+# Generated desktop bundle, installers and test artifacts
+desktop/ui/
+desktop/release/
+desktop/test-results/

@@ -1,5 +1,11 @@
 # GKUC SiteOps
 
+The Electron desktop client uses the same online API and database as the browser.
+Default server: `https://staff.gkucconstruction.com`. See [desktop setup, builds and
+verification limits](docs/DESKTOP.md). Use Node 22.12+ for desktop tooling.
+See the [manual UI verification report](docs/MANUAL_QA.md) and
+[production rollout instructions](docs/DEPLOYMENT.md) before distributing a release.
+
 Construction Operations Management System for GKUC Construction, built to the approved
 Project Identification Document. A React client and a secured Node API are served as one
 application over a persistent MySQL database.

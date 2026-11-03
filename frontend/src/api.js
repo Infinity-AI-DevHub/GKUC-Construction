@@ -15,6 +15,16 @@ export const token = {
   clear: () => sessionStorage.removeItem(TOKEN_KEY)
 };
 
+/** URLs handed to another device must use the online server, not a desktop scheme. */
+export async function publicAppOrigin() {
+  const value = window.siteopsDesktop?.connection
+    ? (await window.siteopsDesktop.connection()).serverUrl : window.location.origin;
+  const url = new URL(value);
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password)
+    throw new Error('The online application address is unavailable.');
+  return url.origin;
+}
+
 /**
  * What actually went wrong, in words the person filling the form can act on.
  *
@@ -97,7 +107,8 @@ export const api = async (path, options = {}) => {
     if (response.status === 423 && body?.code === 'PAYMENT_OVERDUE') {
       window.dispatchEvent(new CustomEvent(SERVICE_ACCESS_EVENT, { detail: body.serviceAccess }));
     }
-    const message = responseError(response, body);
+    const message = path === '/auth/login' && response.status === 401
+      ? readableError(body) : responseError(response, body);
     reportFailure(path, message);
     const failure = new Error(message);
     failure.status = response.status;
@@ -373,6 +384,15 @@ export const openDocument = async path => {
     const pdfPath = `${path}${separator}download=pdf`;
     const previewPath = `${path}${separator}preview=pdf`;
     const { url: previewUrl } = await post('/document-download-tickets', { path: previewPath });
+    // Chromium's PDF viewer needs a network URL rather than the desktop asset scheme.
+    // Only the short-lived document ticket travels; never put the session in a URL.
+    if (window.siteopsDesktop?.connection) {
+      const { serverUrl } = await window.siteopsDesktop.connection();
+      const desktopUrl = new URL(previewUrl, serverUrl);
+      if (desktopUrl.origin !== new URL(serverUrl).origin) throw new Error('The document URL does not belong to this SiteOps server.');
+      tab.location.replace(desktopUrl.href);
+      return true;
+    }
     // Safari leaves embedded PDF frames blank in a document-written tab. A direct,
     // same-site inline PDF opens in Safari's own viewer, with its native Save control.
     const agent = window.navigator?.userAgent || '';

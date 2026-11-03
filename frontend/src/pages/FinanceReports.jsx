@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { BarChart3, Building2, Download, FileText, Search, TrendingDown, TrendingUp } from 'lucide-react';
 import { api, rupees, shortDate, todayInput } from '../api.js';
+import { askText } from '../ui.jsx';
 
 const n = value => Number(value || 0);
 const total = (rows, key) => rows.reduce((sum, row) => sum + n(typeof key === 'function' ? key(row) : row[key]), 0);
@@ -191,8 +192,8 @@ export default function FinanceReports({ projects, companyId, company }) {
     try { setSavedScopes(JSON.parse(localStorage.getItem(`gkuc:report-scopes:${companyId}`) || '[]')); }
     catch { setSavedScopes([]); }
   }, [companyId]);
-  const saveScope = () => {
-    const name = window.prompt('Name this report view (for example, Monthly construction review)');
+  const saveScope = async () => {
+    const name = await askText('Name this report view (for example, Monthly construction review)');
     if (!name?.trim()) return;
     const next = [...savedScopes.filter(item => item.name !== name.trim()), { name: name.trim(), scope, from, to, reportId: selectedId }];
     localStorage.setItem(`gkuc:report-scopes:${companyId}`, JSON.stringify(next)); setSavedScopes(next);

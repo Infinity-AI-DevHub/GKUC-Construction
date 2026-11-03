@@ -1,7 +1,49 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { api, readableError, openDocument, openPrintDocument } from './api.js';
+import { api, readableError, openDocument, openPrintDocument, publicAppOrigin } from './api.js';
 import { onNotice } from './notices.js';
+
+test('shared links use the configured online origin on desktop and browser origin on web', async () => {
+  const original=globalThis.window;
+  try {
+    globalThis.window={location:{origin:'siteops://app'},siteopsDesktop:{connection:async()=>({serverUrl:'https://staff.example'})}};
+    assert.equal(await publicAppOrigin(),'https://staff.example');
+    globalThis.window={location:{origin:'https://browser.example'}};
+    assert.equal(await publicAppOrigin(),'https://browser.example');
+    globalThis.window={location:{origin:'siteops://app'}};
+    await assert.rejects(publicAppOrigin(),/unavailable/);
+  } finally {globalThis.window=original;}
+});
+
+test('incorrect login preserves the server message; expired authenticated calls explain sign-in', async () => {
+  const originals={fetch:globalThis.fetch,sessionStorage:globalThis.sessionStorage};
+  globalThis.sessionStorage={getItem:()=>null};
+  globalThis.fetch=async()=>Response.json({error:'Incorrect email or password'},{status:401});
+  try {
+    await assert.rejects(api('/auth/login'),/Incorrect email or password/);
+    await assert.rejects(api('/bootstrap'),/session has expired/);
+  } finally {Object.assign(globalThis,originals);}
+});
+
+test('desktop PDF opens a ticket URL on its configured server, without the session in the URL', async () => {
+  const originals={fetch:globalThis.fetch,window:globalThis.window,sessionStorage:globalThis.sessionStorage};
+  let destination='';
+  globalThis.sessionStorage={getItem:()=> 'private-session'};
+  globalThis.window={siteopsDesktop:{connection:async()=>({serverUrl:'https://staff.example'})},open:()=>({document:{write(){}},location:{replace:url=>{destination=url;}},close(){}})};
+  globalThis.fetch=async()=>Response.json({url:'/api/doc?preview=pdf&downloadTicket=one-use'});
+  try{assert.equal(await openDocument('/doc'),true);assert.equal(destination,'https://staff.example/api/doc?preview=pdf&downloadTicket=one-use');assert.ok(!destination.includes('private-session'));}
+  finally{Object.assign(globalThis,originals);}
+});
+
+test('desktop PDF refuses a ticket pointing at a different server', async () => {
+  const originals={fetch:globalThis.fetch,window:globalThis.window,sessionStorage:globalThis.sessionStorage};
+  let closed=false,navigated=false;
+  globalThis.sessionStorage={getItem:()=> 'private-session'};
+  globalThis.window={siteopsDesktop:{connection:async()=>({serverUrl:'https://staff.example'})},open:()=>({document:{write(){}},location:{replace:()=>{navigated=true;}},close(){closed=true;}})};
+  globalThis.fetch=async()=>Response.json({url:'https://other.example/doc?downloadTicket=test'});
+  try{assert.equal(await openDocument('/doc'),false);assert.equal(navigated,false);assert.equal(closed,true);}
+  finally{Object.assign(globalThis,originals);}
+});
 
 test('document preview uses same-site inline PDF and a separate one-use download link', async () => {
   const originals = { fetch: globalThis.fetch, window: globalThis.window, sessionStorage: globalThis.sessionStorage };

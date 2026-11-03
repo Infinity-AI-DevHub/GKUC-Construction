@@ -94,3 +94,24 @@ The detailed specification lives in [PAYROLL.md](PAYROLL.md). The decisions belo
 ## 2026-11-03 — operator OT clarification
 
 The user's follow-up supersedes blanket operator OT exclusion: machine-operating days have no OT, while HR-recorded Standby days receive normal labour Site OT from 30 minutes, using the dated company rate. No operator late deductions; no Office/Travel OT extension. Daily work choices remain authoritative, reviewed OT replaces automatic OT, and saved approved/paid payroll is unchanged.
+
+
+## 2026-11-03 — Shared online desktop and browser behavior
+
+Use Electron with the existing bundled React interface and the same HTTPS API, database
+and live stream. Do not duplicate payroll/business logic or connect desktop clients
+directly to MySQL. The user supplied https://staff.gkucconstruction.com as the default
+server. Keep the browser available for low-performance machines. No offline business
+writes, automatic updater, guaranteed zero lag or production deployment is included.
+Connection changes restart/sign out. New releases must be checked against deployed
+API contracts. See [DESKTOP.md](DESKTOP.md) for unsigned-package and verification limits.
+
+## 2026-11-03 — desktop interoperability after manual QA
+
+Keep portable QR/share links on the selected online origin, never `siteops://app`.
+Use network-origin, short-lived ticket URLs for native desktop PDF viewing while keeping
+renderer sandboxing, TLS verification and origin restrictions. Use the same in-app text
+prompt in both clients; reason/name entry must not depend on Electron's unsupported
+native prompt. Cancellation must stop a pending decision. Manual checks and automated
+coverage remain separate; the seven full-suite failures and untested Windows runtime
+prevent an unconditional production-readiness claim. See MANUAL_QA.md and DEPLOYMENT.md.

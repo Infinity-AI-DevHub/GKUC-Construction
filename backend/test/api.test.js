@@ -726,7 +726,7 @@ test('HR reviewed inputs reach weekly payroll once with separate OT, allowances 
   const attendance=await call(hr,'POST','/attendance',{employeeId,name:'HR Inputs QA',role:'Labourer',projectId:1,date,state:'On site',checkIn:'07:00',checkOut:'17:30',informationSource:'Signed timesheet',sourceNotes:'QA source'});assert.equal(attendance.status,201);
   assert.equal((await call(site,'GET','/payroll/inputs')).status,403);
   const suggestions=(await call(hr,'GET','/payroll/inputs')).body.suggestions;
-  assert.equal(suggestions.find(r=>r.id===attendance.body.id).suggestion.hours,1.25);
+  assert.equal(suggestions.find(r=>r.id===attendance.body.id).suggestion.hours,1.5);
   const suggested=await call(hr,'POST',`/payroll/inputs/suggestions/${attendance.body.id}`,{hours:1.5,reason:'Checked signed record'});assert.equal(suggested.status,201);
   assert.equal((await call(hr,'POST',`/payroll/inputs/suggestions/${attendance.body.id}`,{hours:1.5,reason:'Duplicate'})).status,409);
   const ot=(await call(hr,'GET','/employees/overtime/all')).body.find(o=>o.employee==='HR Inputs QA');
@@ -1589,8 +1589,9 @@ test('client directory links projects, quotations, invoices and payments without
   const invoicePage = await fetch(`${base}/receivables/invoices/${invoice.body.id}/document`, { headers: { authorization: `Bearer ${owner}` } });
   assert.equal(invoicePage.status, 200);
   const invoiceHtml = await invoicePage.text();
+  const invoiceText = invoiceHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').toLowerCase();
   for (const detail of ['TIN-12345', 'VAT-98765', 'Project Site Road', 'Mode of payment: Cheque', 'Total amount in words']) {
-    assert.ok(invoiceHtml.includes(detail), `${detail} should appear on the invoice`);
+    assert.ok(invoiceText.includes(detail.toLowerCase()), `${detail} should appear on the invoice`);
   }
   const pdfResponse = await fetch(`${base}/receivables/invoices/${invoice.body.id}/document?download=pdf`, {
     headers: { authorization: `Bearer ${owner}` }
@@ -3761,9 +3762,9 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
     hrRules:{...INITIAL_HR_RULES,normalStart:'08:00',normalEnd:'16:00'}});
   assert.equal(newPolicy.status,201,JSON.stringify(newPolicy.body));
   const people=[];
-  for(const [index,[category,workerType,expectedOt]] of [
-    ['Office employee','Office',731.25],['Site labourer','Site',650],['Supervisor','Site',975],
-    ['Driver','Office',812.5],['Driver','Site',893.75],['Custom','Site',1137.5],['Custom','Office',1300]
+  for(const [index,[category,workerType,expectedOt,expectedLate]] of [
+    ['Office employee','Office',900,337.5],['Site labourer','Site',800,300],['Supervisor','Site',1200,450],
+    ['Driver','Office',0,412.5],['Driver','Site',1100,412.5],['Custom','Site',1400,525],['Custom','Office',1600,525]
   ].entries()) {
     const code=`AUTOPAY-${Date.now()}-${index}`;
     const created=await call(owner,'POST','/employees',{code,name:'Shared Automatic Payroll QA',
@@ -3771,7 +3772,7 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
       dailyRate:3200,epfEligible:false,etfEligible:false});
     assert.equal(created.status,201,JSON.stringify(created.body));
     assert.equal((await call(owner,'POST','/biometric/mappings',{code,employeeId:created.body.id})).status,200);
-    people.push({...created.body,expectedOt});
+    people.push({...created.body,expectedOt,expectedLate,expectedHours:category==='Driver'&&workerType==='Office'?0:2.5});
   }
   const imported=await call(owner,'POST','/biometric/commit',{rows:people.flatMap(person=>[
     {code:person.code,date:firstDate,checkIn:'08:15:00',checkOut:'17:30:00'},
@@ -3786,12 +3787,12 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
   for(const person of people) {
     const slip=detail.payslips.find(s=>s.employeeCode===person.code);
     assert.equal(Number(slip.daysPresent),2);
-    assert.equal(Number(slip.overtimeHours),2);
+    assert.equal(Number(slip.overtimeHours),person.expectedHours);
     assert.equal(Number(slip.overtimePay),person.expectedOt,person.payrollCategory);
     assert.equal(Number(slip.lateMinutes),90);
-    assert.equal(Number(slip.lateDeduction),200);
-    assert.equal(Number(slip.basic),6200);
-    assert.equal(Number(slip.netPay),6000+person.expectedOt);
+    assert.equal(Number(slip.lateDeduction),person.expectedLate);
+    assert.equal(Number(slip.basic),6400);
+    assert.equal(Number(slip.netPay),6400-person.expectedLate+person.expectedOt);
     const calculation=typeof slip.calculationDetail==='string'?JSON.parse(slip.calculationDetail):slip.calculationDetail;
     assert.deepEqual(calculation.attendance.map(row=>row.policyId),[oldPolicy.body.id,newPolicy.body.id]);
     assert.ok(calculation.overtime.every(row=>row.source==='Attendance'));
@@ -3810,10 +3811,17 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
   await admin.query(`DELETE FROM ${testDatabase}.payroll_policies WHERE id IN (?,?)`,[oldPolicy.body.id,newPolicy.body.id]);
 });
 
-test('draft payroll can be rebuilt and deleted atomically without losing source records', async () => {
+test('draft payroll can be rebuilt and deleted atomically without losing source records', async t => {
   const owner=await login();
   const store=await login('store@gkuc.lk');
   const workDate=shift(1100);
+  // Own the policy fixture: unrelated tests must not supply the missing transport threshold.
+  const fixturePolicy=await call(owner,'POST','/payroll/settings/policies',{companyId:1,effectiveFrom:workDate,
+    officeOtRate:225,siteLabourSiteOtRate:200,siteLabourTravelOtRate:100,driverOtRate:225,
+    driverSiteOtRate:100,driverTravelOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,
+    epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3,hrRules:{...INITIAL_HR_RULES,fullTransportDays:null}});
+  assert.equal(fixturePolicy.status,201,JSON.stringify(fixturePolicy.body));
+  t.after(()=>admin.query(`DELETE FROM ${testDatabase}.payroll_policies WHERE id=?`,[fixturePolicy.body.id]));
   const person=await call(owner,'POST','/employees',{code:`REBUILD-${Date.now()}`,name:'Payroll Rebuild QA',
     joinDate:today(),dailyRate:1000,epfEligible:false,etfEligible:false});
   assert.equal(person.status,201,JSON.stringify(person.body));

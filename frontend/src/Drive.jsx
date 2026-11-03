@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Folder, FolderPlus, Upload, File, FileText, FileSpreadsheet, Image, Video, Archive, PenTool, ChevronRight, Users, Globe, Lock, Share2, Download, Trash2, X, Check, Link2, Search, UserPlus } from 'lucide-react';
 import { api, post, del, fileSize, shortDate, fetchDownload } from './api.js';
-import { Avatar, useLiveList } from './ui.jsx';
+import { askText, Avatar, useLiveList, usePublicAppOrigin } from './ui.jsx';
 
 /*
  * The company's document store.
@@ -40,7 +40,7 @@ export default function Drive({ user }) {
   useEffect(() => { load(); }, [folder, tab]);
 
   const newFolder = async () => {
-    const name = window.prompt('Name the folder');
+    const name = await askText('Name the folder');
     if (!name?.trim()) return;
     try { await post('/drive/folders', { name: name.trim(), parentId: folder }); await load(); }
     catch (failure) { setError(failure.message); }
@@ -230,7 +230,8 @@ function SharingPanel({ item, user, onClose }) {
     catch (failure) { setError(failure.message); }
   };
 
-  const fullLink = detail?.publicLink ? `${window.location.origin}${detail.publicLink}` : null;
+  const publicOrigin = usePublicAppOrigin();
+  const fullLink = detail?.publicLink && publicOrigin ? `${publicOrigin}${detail.publicLink}` : null;
 
   return <div className="chat-picker-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
     <div className="chat-picker drive-sharing" role="dialog" aria-label={`Sharing for ${item.name}`}>

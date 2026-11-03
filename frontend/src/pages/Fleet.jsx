@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, CalendarDays, Fuel, Gauge, QrCode, Truck, Users, Wrench } from 'lucide-react';
 import { api, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { allowedTabs, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList } from '../ui.jsx';
+import { allowedTabs, Badge, Field, FormModal, Modal, Page, Row, SelectField, Summary, Table, Tabs, TextArea, useLiveList, usePublicAppOrigin } from '../ui.jsx';
 import { toSvg } from '../qr.js';
 import { useOptions } from '../options.js';
 import { RecordScopeProvider } from '../record-scope.jsx';
@@ -439,6 +439,7 @@ function Equipment({ data, reload, can }) {
 
 /** Assignment history, maintenance record, and the printable QR label (PID 2.9). */
 function EquipmentDetail({ item, close, refresh, can }) {
+  const publicOrigin = usePublicAppOrigin();
   const [servicing, setServicing] = useState(false);
   const assignTemplate = 'minmax(150px,1.2fr) minmax(140px,1fr) 110px 110px 110px';
   const maintTemplate = '130px 120px minmax(180px,1.6fr) 120px';
@@ -460,9 +461,9 @@ function EquipmentDetail({ item, close, refresh, can }) {
         <div>
           <strong>QR label</strong>
           <small>{item.qrToken ? 'Print this label and fix it to the asset. Scanning it opens this record.' : 'No label issued yet.'}</small>
-          {item.qrToken && <code>{`${window.location.origin}/scan/${item.qrToken}`}</code>}
+          {item.qrToken && <code>{publicOrigin ? `${publicOrigin}/scan/${item.qrToken}` : 'Preparing online link…'}</code>}
         </div>
-        {item.qrToken && <QrCodeImage value={`${window.location.origin}/scan/${item.qrToken}`} />}
+        {item.qrToken && publicOrigin && <QrCodeImage value={`${publicOrigin}/scan/${item.qrToken}`} />}
         {can.lending && <button type="button" className="secondary" onClick={issueQr}>
           <QrCode size={15} />{item.qrToken ? 'Reissue label' : 'Issue label'}
         </button>}
@@ -517,7 +518,7 @@ function EquipmentServiceForm({ item, close, reload }) {
     <SelectField name="maintenanceType" label="Type" options={maintenanceTypes} />
     <Field name="performedAt" label="Date" type="date" defaultValue={todayInput()} />
     <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" defaultValue="0" required={false} />
-    <SelectField name="setStatus" label="Set status to" options={[['', 'Leave unchanged'], 'Available', 'Maintenance']} />
+    <SelectField name="setStatus" label="Set status to" required={false} options={[['', 'Leave unchanged'], 'Available', 'Maintenance']} />
     <TextArea name="notes" label="What was done" required={false} placeholder="Optional" />
   </FormModal>;
 }
@@ -635,7 +636,7 @@ function FuelForm({ data, vehicle, close, reload }) {
     </select></label>
     {!floats.length && <p className="form-note wide">No fuel float is available for this company. You can save without one; no petty cash payment will be created.</p>}
     {selectedFloat && <p className="form-note wide">Available in this float: {rupees(selectedFloat.balance)}. The amount entered below cannot exceed it.</p>}
-    <SelectField name="projectId" label="Charge to project" options={[["",'Not project-specific'], ...data.projects.filter(project=>Number(project.companyId)===Number(data.companyId)).map(project => [project.id, project.name])]} defaultValue={vehicle?.projectId||''}/>
+    <SelectField name="projectId" label="Charge to project" required={false} options={[["",'Not project-specific'], ...data.projects.filter(project=>Number(project.companyId)===Number(data.companyId)).map(project => [project.id, project.name])]} defaultValue={vehicle?.projectId||''}/>
     <Field name="fuelDate" label="Date" type="date" defaultValue={todayInput()} />
     <Field name="litres" label="Litres (optional)" required={false} type="number" step="any" min="0" />
     <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" max={selectedFloat ? Number(selectedFloat.balance) : undefined} />

@@ -161,3 +161,46 @@ Coverage: `backend/test/special-pay.test.js` tests effective dates, role/short-d
 ### 2026-11-03 clarification — operator Standby OT
 
 The initial blanket “no operator OT” instruction is superseded: only Machine work dates exclude OT. Standby uses the dated normal labour Site rate and 30-minute minimum, independent of the employee's ordinary payroll category. Late deductions remain excluded on both types. This clarification applies within the special agreement effective from 2026-01-01 and only affects future or explicitly regenerated Draft runs; existing saved Approved/Paid calculations are not rewritten.
+
+## Manual UI verification — 2026-11-03
+
+In disposable local data, HR created a Daily employee at LKR 3,000, entered an office
+07:30–16:30 attendance day, and built a one-employee Draft with gross/net LKR 3,000.
+The saved two-page payslip and downloaded salary XLSX reflected that record. Explicit
+Draft regeneration retained the total. After approval and marking Paid in test data,
+recalculate/delete controls disappeared and rebuilding the same period was blocked.
+The browser read the same Paid record created in Electron. No money was transferred.
+
+HR also saved an effective Work role rule and a dated Bass input through the UI. These
+checks supplement existing automated calculation/API coverage; they do not prove every
+operator/25-day/OT combination through manual UI tests or live policy configuration.
+The test used local seeded policy. Production still requires the agreed 2026-01-01
+policies and explicit employee setup. No payroll calculation changed in this QA pass.
+See MANUAL_QA.md for exclusions and DEPLOYMENT.md for the production setup sequence.
+
+## 2026-11-03 production settings and manual allowance clarification
+
+HR confirmed that variable allowances are entered manually. The sole agreed automatic
+allowance is the Operator's LKR 300 per worked date (including half-days/Sundays).
+Keep that entitlement separate from HR-entered allowances and preserve the duplicate
+Transport/Machine safeguards. Policy travel/site-charge rates alone do not generate
+an allowance: an explicit eligible HR input/claim and its approval are required.
+Manual approved amounts retain the amount entered; they are not silently prorated.
+Attendance-prorated transport remains an explicit separate method and requires a
+configured full-transport day threshold; the supplied screenshot leaves it blank.
+Existing saved Approved/Paid payslip amounts remain unchanged.
+
+The supplied Construction settings screenshots show effective date 2026-01-01,
+07:30–16:30 work, morning eligibility through 07:00, eight paid hours, 15-minute late
+grace and the existing 30/31-minute category OT thresholds. They show Office/Site
+labour/Supervisor Site OT at 225, labour/Supervisor Travel at 100, Driver Site at 100
+and Driver Travel at 225 LKR/hour; 25 attended days then 1.5×; contribution basis
+30,000 and percentage settings 8/12/3. These screenshots verify the supplied values,
+not that the dialog was saved or that both companies have production policies.
+No source-code change writes those values to production.
+
+Regression expectations now use actual OT minutes and per-work-date policies,
+category-specific late rates and actual attended basic pay. Driver Office OT is
+rejected; only Site/Travel are allowed. The Draft rollback test owns its missing
+transport-threshold policy fixture instead of depending on policies left by other
+tests. Invoice payment-mode verification compares rendered text rather than markup.

@@ -1,0 +1,61 @@
+{
+  "name": "gkuc-siteops-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GKUC Construction desktop client",
+  "author": "Infinity AI (Pvt) Ltd",
+  "main": "src/main.cjs",
+  "scripts": {
+    "prepare:ui": "node scripts/prepare-ui.cjs",
+    "start": "electron .",
+    "test": "node --test test/core.test.cjs",
+    "test:e2e": "node --test test/e2e.test.cjs",
+    "test:backend": "node --test test/backend.test.cjs",
+    "test:packaged": "node --test test/packaged.test.cjs",
+    "pack": "electron-builder --dir --publish never",
+    "dist:mac": "electron-builder --mac zip --arm64 --publish never",
+    "dist:win": "electron-builder --win nsis --x64 --publish never",
+    "generate:icons": "node scripts/generate-icons.cjs"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0",
+    "playwright": "1.58.2"
+  },
+  "build": {
+    "appId": "com.gkuc.siteops",
+    "productName": "GKUC Construction",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**",
+      "resources/**",
+      "ui/**",
+      "package.json"
+    ],
+    "mac": {
+      "target": "zip",
+      "category": "public.app-category.business",
+      "identity": null,
+      "icon": "resources/icon.icns"
+    },
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": true,
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "installerHeaderIcon": "resources/icon.ico",
+      "shortcutName": "GKUC Construction"
+    },
+    "artifactName": "GKUC-Construction-${version}-${os}-${arch}.${ext}"
+  }
+}

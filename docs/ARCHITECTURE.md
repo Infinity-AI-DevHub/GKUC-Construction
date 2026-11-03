@@ -118,3 +118,40 @@ Two additive, guarded tables hold `employee_special_pay_rules` and `employee_spe
 `backend/src/lib/special-pay.js` selects the employee's effective method per work date and produces saved per-day calculation evidence. `attendance-payroll.js` combines it with company-dated policies, month-to-date work counts, ordinary OT/late and the operator exclusions. Payroll generation validates required/orphan inputs, applies the special EPF exception without changing profile data (ETF stays governed by the existing profile/policy), saves operator transport as dated payslip components and allocates special earned basic to project costs. Paid leave snapshots its selected rate. Original/approved payslips remain immutable; exports use saved details via `payslip-detail.js`, including variable/premium daily earnings and machine readings. See `docs/PAYROLL.md` for the exact business rules.
 
 Operator OT eligibility is resolved from the saved, active daily work record in calculation, HR suggestion review and manual OT entry. Standby maps to labour Site OT at the company policy's effective rate with a 30-minute minimum; Machine and missing daily choices cannot enable OT. The pure employee context carries the selected day's input alongside its effective rule. Operator late exclusion remains independent of this day-specific OT eligibility. No schema change is required for the Standby clarification.
+
+
+## 2026-11-03 — Electron online desktop client
+
+`desktop/` packages the existing React build with Electron 45.2.1. A secure custom
+protocol serves local assets and streams same-origin API/upload/share requests to the
+configured HTTPS server (default https://staff.gkucconstruction.com). Existing bearer
+sessions, server authorization, persistence and SSE remain authoritative; there is no
+local database or backend. Sandbox/context isolation remain enabled. The small preload
+only exposes connection settings, with writes restricted to the settings page.
+Successful live connections resync bootstrap; transient bootstrap failures preserve
+authentication. Windows x64 NSIS and macOS arm64 ZIP packaging use electron-builder;
+releases are currently unsigned, manually updated and online-only. See
+[DESKTOP.md](DESKTOP.md) for build commands, test evidence and rollout limits.
+
+## 2026-11-03 — manual desktop QA corrections
+
+Document previews use a short-lived ticket on the configured network server origin in
+an isolated PDF-enabled Electron window. This avoids blank/custom-protocol PDF rendering;
+no bearer token is embedded in a URL. QR and Drive public URLs resolve through
+`publicAppOrigin` / `usePublicAppOrigin`, so a desktop asset origin is never handed to
+another device. The configured HTTPS origin remains authoritative in packaged builds.
+
+`askText` in shared UI replaces native prompt calls with a queued asynchronous in-app
+dialog. Drive folder naming, saved finance views, purchasing risk reasons, gallery
+withdrawal and subcontractor decisions share this behavior in browser and desktop.
+Existing server validation still applies; Cancel does not submit a subcontractor decision.
+Optional fuel project, expense category and equipment-service status fields now permit
+their existing empty/default options. No backend route, calculation or schema changed.
+See MANUAL_QA.md for coverage and DEPLOYMENT.md for rollout/rollback instructions.
+
+### Desktop product identity (2026-11-03)
+
+Electron is branded GKUC Construction with a white-background rings-only native icon.
+The application ID and legacy packaged user-data directory remain stable across the
+rename. Packaging and regeneration details are in DESKTOP.md. Browser/API branding,
+server selection and shared database behavior are unchanged.

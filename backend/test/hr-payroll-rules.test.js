@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {INITIAL_HR_RULES,suggestOvertime,calculateLateDeduction} from '../src/lib/hr-payroll-rules.js';
+import {INITIAL_HR_RULES,suggestOvertime,calculateLateDeduction,calculateTransport} from '../src/lib/hr-payroll-rules.js';
 import {calculatePayslip,resolveLateRate,resolveOvertimeRate,overtimeMinimumMinutes} from '../src/lib/payroll-policy.js';
 
 const rules={...INITIAL_HR_RULES};
@@ -49,4 +49,13 @@ test('late deduction ignores the first 15 minutes and charges actual minutes aft
 test('attendance basic supplied by the daily calculation is preserved in the payslip',()=>{
   const result=calculatePayslip({daily_rate:1800,days_present:1,attendance_basic:2700,paid_leave_days:0,overtime_pay:0,salary_advance:0},{},[]);
   assert.equal(result.basic,2700);
+});
+
+// HR supplies variable allowance amounts; a policy rate does not create an entitlement.
+test('manual transport preserves HR amounts without a full-transport threshold',()=>{
+  for(const amount of [300,725.50]) {
+    assert.equal(calculateTransport(amount,1,'Manually approved amount',rules).amount,amount);
+    assert.equal(calculateTransport(amount,20,'Manually approved amount',rules).amount,amount);
+  }
+  assert.throws(()=>calculateTransport(725.50,1,'Attendance-prorated amount',rules),/configure.*threshold/);
 });

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Camera, FolderPlus, Images, Trash2, Upload, X } from 'lucide-react';
 import { api, del, fileSize, post } from './api.js';
+import { askText } from './ui.jsx';
 
 /**
  * The site's photographic record.
@@ -115,7 +116,7 @@ export default function ProjectGallery({ projectId, canManage }) {
   };
 
   const withdraw = async photo => {
-    const reason = window.prompt('Why is this photo being withdrawn? It stays on the record either way.');
+    const reason = await askText('Why is this photo being withdrawn? It stays on the record either way.');
     if (reason === null) return;
     try {
       await del(`/gallery/photos/${photo.id}?reason=${encodeURIComponent(reason)}`);
