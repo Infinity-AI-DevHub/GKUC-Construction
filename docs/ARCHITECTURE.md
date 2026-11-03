@@ -155,3 +155,23 @@ Electron is branded GKUC Construction with a white-background rings-only native 
 The application ID and legacy packaged user-data directory remain stable across the
 rename. Packaging and regeneration details are in DESKTOP.md. Browser/API branding,
 server selection and shared database behavior are unchanged.
+
+### Remembered desktop sessions and document credit (2026-11-04)
+
+`POST /api/auth/login` accepts optional boolean rememberDevice (default false). Existing
+hashed sessions/expiry/revocation remain authoritative: remembered sessions expire in
+30 days; normal sessions in 12 hours. No new database columns or silent policy writes.
+Electron stores only the opaque token+server origin, encrypted through safeStorage,
+with atomic queued writes and file mode 0600. Its three session IPC handlers require
+the main local top frame; remote PDF/pop-up frames cannot read/write them. Connection
+changes clear the encrypted token. Frontend restores it before bootstrap; invalid
+sessions/logouts remove both the in-window copy and encrypted copy. Browser behavior
+is unchanged. Plaintext OS storage backends are refused.
+
+`developer-credit.js` is the shared mandatory print attribution decorator, used by
+common documents, employee letters, payslips and the send/render-PDF fallback. It is
+idempotent and independent of configurable company footers. Ordinary documents show
+one end credit; payslips use a bottom-centre @page margin credit on every printed page
+with existing confidentiality/page-number margins retained. Saved financial payroll
+calculations and approved/paid records are not changed. Existing uploaded PDF files
+are not rewritten; the rule applies to system-generated documents.

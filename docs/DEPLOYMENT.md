@@ -8,7 +8,7 @@ The repository's PM2 definition assumes `/www/wwwroot/siteops/backend`, process 
 ## Release gate
 
 Read [MANUAL_QA.md](MANUAL_QA.md) and [DESKTOP.md](DESKTOP.md) first. The latest
-full Node 20 backend regression run passes 330 tests, with zero failures and two
+full Node 20 backend regression run passes 333 tests, with zero failures and two
 optional skips. Earlier seven failures were stale expectations/test-fixture coupling;
 no payroll calculation change was needed. The follow-up was not rerun on Node 22.
 Windows runtime/signing, client hardware and production integration remain unverified.
@@ -164,8 +164,8 @@ npm run desktop:dist:mac
 npm run test:packaged --prefix desktop
 ```
 
-Outputs are `desktop/release/GKUC-Construction-1.0.0-win-x64.exe` and
-`desktop/release/GKUC-Construction-1.0.0-mac-arm64.zip` for the current version. Version each
+Outputs are `desktop/release/GKUC-Construction-1.0.2-win-x64.exe` and
+`desktop/release/GKUC-Construction-1.0.2-mac-arm64.zip` for the current version. Version each
 subsequent release in desktop/package.json and keep its lockfile/release notes aligned.
 The Mac packaged smoke test applies to macOS only. A Windows installer build produced
 on a Mac still needs installation/runtime testing on an actual Windows machine.
@@ -200,3 +200,13 @@ A database restore can discard new business entries. Treat it as a separate plan
 recovery operation with an agreed cutoff/reconciliation, not a routine code rollback.
 Use the browser version while a desktop issue is corrected; that does not require a
 second database or rewriting business logic.
+
+## 1.0.2 follow-up — remembered desktop login and PDF footer
+
+Deploy the updated backend and browser build first, then distribute 1.0.2 desktop.
+Remembered desktop sessions use the existing sessions table and 30-day expiry;
+browser logins keep 12 hours. A fresh desktop sign-in creates the OS-encrypted local
+session. Check process quit/reopen, manual sign-out/reopen and server expiry; verify
+PDF credit at an invoice's end and on every payslip page. Old installers cannot gain
+the new local session behavior from a server update alone. No database reset, policy
+recalculation, storage migration or live test payroll payment is needed.

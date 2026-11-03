@@ -418,3 +418,8 @@ with a 30-minute minimum. Operator late deductions remain excluded on both types
 Bass/Gola daily selection, operator minimum/standby pay, transport and the monthly
 25-day premium are documented in the payroll specification. All special methods are
 opt-in per employee from the saved effective date; the agreed start is 2026-01-01.
+
+Desktop 1.0.2 remembers sign-in using OS-encrypted device storage and revocable
+30-day sessions; browser sessions retain 12 hours. Generated documents end with the
+Infinity AI developer credit, repeated on every payslip page. Deploy the updated API
+before distributing the new desktop build. See docs/DESKTOP.md and docs/DEPLOYMENT.md.

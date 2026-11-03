@@ -40,6 +40,11 @@ test('real Electron: bundled UI, secure renderer, API auth, upload, streaming, p
     });
     assert.equal(results.api.ok,true);assert.equal(results.upload.ok,true);
     assert.match(results.first,/first/);assert.match(results.rest,/second/);assert.match(results.pdf,/^%PDF/);assert.equal(results.popup,true);
+    const childDenied=await electron.evaluate(async({BrowserWindow})=>{
+      const child=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='about:blank');
+      return child.webContents.executeJavaScript('(async()=>{try{await window.siteopsDesktop.restoreSession();return false;}catch{return true;}})()');
+    });
+    assert.equal(childDenied,true,'print/pop-up frames cannot read saved sign-in');
     assert.equal(received.find(r=>r.url==='/api/transport-test').auth,'Bearer local-test-token');
     assert.match(received.find(r=>r.url==='/api/upload-test').body,/attendance test/);
     const bytes=await electron.evaluate(async({BrowserWindow})=>Array.from(await BrowserWindow.getAllWindows().find(w=>w.webContents.getURL()==='about:blank').webContents.printToPDF({})));
@@ -53,5 +58,7 @@ test('real Electron: bundled UI, secure renderer, API auth, upload, streaming, p
     assert.match(await fs.readFile(download,'utf8'),/Desktop,1/);
     await fs.mkdir(path.resolve(__dirname,'../test-results'),{recursive:true});
     await page.screenshot({path:path.resolve(__dirname,'../test-results/login.png')});
+    await page.goto('siteops://app/desktop-setup');
+    await assert.rejects(page.evaluate(()=>window.siteopsDesktop.restoreSession()),/only to the main application/);
   }finally{if(electron)await electron.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await fs.rm(directory,{recursive:true,force:true});}
 });

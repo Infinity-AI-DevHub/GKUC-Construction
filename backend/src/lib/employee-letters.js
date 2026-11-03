@@ -1,3 +1,4 @@
+import {withDeveloperCredit} from './developer-credit.js';
 export const LETTER_TYPES = Object.freeze({
   probation: 'Probation confirmation',
   'one-year': 'One-year service'
@@ -51,7 +52,7 @@ export function employeeLetterHtml({ employee, company, type, milestone, issuedO
     : `<p>To whom it may concern,</p>
        <p>This is to certify that <strong>${employeeName}</strong> (employee ID ${escape(employee.code)}) joined ${companyName} on ${dateText(employee.joinDate)} and completed <strong>one year of service</strong> on ${dateText(milestone)}.</p>
        <p>The employee's current designation is <strong>${designation}</strong>. This letter is issued at the employee's request as a record of service.</p>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escape(heading)} - ${employeeName}</title>
+  return withDeveloperCredit(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escape(heading)} - ${employeeName}</title>
   <style>
     @page{size:A4;margin:0}*{box-sizing:border-box}body{margin:0;background:#edf1f6;color:#17263b;font:15px/1.65 Arial,sans-serif}
     .bar{background:#092342;color:#fff;padding:12px 24px;display:flex;justify-content:space-between;align-items:center;gap:20px}.bar button{border:0;border-radius:6px;background:#a71930;color:#fff;padding:10px 17px;font-weight:700;cursor:pointer}
@@ -70,5 +71,5 @@ export function employeeLetterHtml({ employee, company, type, milestone, issuedO
   ${company.registrationNumber ? `Business Reg. No: ${escape(company.registrationNumber)}<br>` : ''}${company.telephone ? `Tel: ${escape(company.telephone)}` : ''}</div></header>
   <main>${draft ? '<div class="draft">DRAFT - NOT ISSUED</div>' : ''}<h1>${escape(heading)}</h1><h2>Human Resources</h2><div class="ref">Employee: ${employeeName} &nbsp;|&nbsp; ID: ${escape(employee.code)}</div>
   ${body}<div class="signature"><div class="line">${draft ? 'Authorised HR signatory' : escape(signer)}</div><small>Human Resources · ${companyName}</small></div></main>
-  <footer>This letter is issued by ${companyName} and reflects the employee record at the time of issue.</footer></article></body></html>`;
+  <footer>This letter is issued by ${companyName} and reflects the employee record at the time of issue.</footer><!-- developer-credit --></article></body></html>`);
 }

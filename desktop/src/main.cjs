@@ -1,4 +1,4 @@
-const {app,BrowserWindow,protocol,net,session,ipcMain,Menu,shell,dialog}=require('electron');
+const {app,BrowserWindow,protocol,net,session,ipcMain,Menu,shell,dialog,safeStorage}=require('electron');
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const {ORIGIN,serverOrigin,requestTarget,assetPath,navigationAllowed,externalAllowed}=require('./core.cjs');
@@ -7,7 +7,8 @@ if(process.env.SITEOPS_DESKTOP_USER_DATA)app.setPath('userData',process.env.SITE
 app.setName('GKUC Construction');
 // Keep existing desktop profiles and saved connection settings across the name change.
 if(!process.env.SITEOPS_DESKTOP_USER_DATA)app.setPath('userData',path.join(app.getPath('appData'),app.isPackaged?'GKUC SiteOps':'gkuc-siteops-desktop'));
-const windows=new Set();let mainWindow,server;
+const {sessionStore}=require('./session-store.cjs');
+const windows=new Set();let mainWindow,server,savedSession;
 const allowLocal=!app.isPackaged&&process.env.SITEOPS_ALLOW_LOCAL_HTTP==='1';
 const uiRoot=path.resolve(__dirname,'../ui');
 const preferences={preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,plugins:true};
@@ -66,16 +67,25 @@ function createWindow(){
 }
 app.whenReady().then(async()=>{
   server=await connection();
+  savedSession=sessionStore(app.getPath('userData'),safeStorage);
   protocol.handle('siteops',route);
   session.defaultSession.setPermissionRequestHandler((contents,permission,callback)=>{
     const own=navigationAllowed(contents.getURL(),server);
     callback(own&&['media','notifications','clipboard-sanitized-write','fullscreen'].includes(permission));
   });
   session.defaultSession.on('will-download',(_event,item)=>item.setSaveDialogOptions({title:'Save GKUC Construction file',defaultPath:path.join(app.getPath('downloads'),path.basename(item.getFilename()))}));
+  const sessionFrame=event=>{
+    const url=new URL(event.senderFrame?.url||'about:blank');
+    if(event.sender!==mainWindow?.webContents||event.senderFrame!==event.sender.mainFrame||url.protocol!=='siteops:'||url.hostname!=='app'||url.pathname==='/desktop-setup')throw new Error('Saved sign-in is available only to the main application.');
+  };
+  ipcMain.handle('session:get',event=>{sessionFrame(event);return savedSession.read(server);});
+  ipcMain.handle('session:set',(event,value)=>{sessionFrame(event);return savedSession.save(server,value);});
+  ipcMain.handle('session:clear',event=>{sessionFrame(event);return savedSession.clear();});
   ipcMain.handle('connection:get',()=>({serverUrl:server}));
   ipcMain.handle('connection:set',async(event,value)=>{
     if(event.senderFrame?.url!==ORIGIN+'/desktop-setup')throw new Error('Connection settings are not open.');
     const next=serverOrigin(value,allowLocal);
+    await savedSession.clear();
     await fs.mkdir(app.getPath('userData'),{recursive:true});
     const config=path.join(app.getPath('userData'),'connection.json');
     await fs.writeFile(config+'.tmp',JSON.stringify({serverUrl:next}));await fs.rename(config+'.tmp',config);

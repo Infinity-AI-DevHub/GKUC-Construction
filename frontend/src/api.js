@@ -11,9 +11,23 @@ export const onServiceAccessChanged = listener => {
 
 export const token = {
   get: () => sessionStorage.getItem(TOKEN_KEY),
-  set: value => sessionStorage.setItem(TOKEN_KEY, value),
-  clear: () => sessionStorage.removeItem(TOKEN_KEY)
+  set: async value => {
+    if(globalThis.window?.siteopsDesktop?.saveSession)await window.siteopsDesktop.saveSession(value);
+    sessionStorage.setItem(TOKEN_KEY,value);
+  },
+  clear: () => {
+    sessionStorage.removeItem(TOKEN_KEY);
+    return globalThis.window?.siteopsDesktop?.clearSession?.().catch(()=>{
+      notice({title:'Saved sign-in',message:'The saved sign-in could not be removed from this device. Please try signing out again.',severity:'Warning'});
+    });
+  }
 };
+
+export async function restoreDesktopSession(){
+  if(!globalThis.window?.siteopsDesktop?.restoreSession)return;
+  try{const saved=await window.siteopsDesktop.restoreSession();if(saved)sessionStorage.setItem(TOKEN_KEY,saved);}
+  catch{sessionStorage.removeItem(TOKEN_KEY);}
+}
 
 /** URLs handed to another device must use the online server, not a desktop scheme. */
 export async function publicAppOrigin() {

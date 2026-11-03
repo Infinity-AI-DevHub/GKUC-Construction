@@ -282,3 +282,80 @@ desktop branding change. No deployment or live database write.
 Both renamed release artifacts were rebuilt successfully: desktop/release/
 GKUC-Construction-1.0.0-win-x64.exe and GKUC-Construction-1.0.0-mac-arm64.zip.
 SHA256SUMS now lists these final artifacts. `git diff --check` passed.
+
+
+## 2026-11-04 — fix clipped/repeated desktop app icon (1.0.1)
+
+User's Finder screenshot showed a repeated lower logo fragment. Reproduced in the
+1.0.0 256px ICO payload; validating only the 1024px PNG had missed it. Multi-size
+viewport screenshots captured stale raster tiles. Replaced that rendering with
+fresh per-size canvas rasterization of the unchanged logo/white SVG, with guards
+for nonblank content, opacity and clear edge margins. Also removed malformed legacy
+small ICNS representations and write PNG-backed standard/Retina entries directly.
+Bumped desktop package and lockfile to 1.0.1; rebuilt Mac and Windows artifacts and
+updated SHA256SUMS. Updated DESKTOP.md and DEPLOYMENT.md with corrected version/limits.
+
+Validation: generated and extracted all six ICO and eight ICNS PNG representations;
+checked opacity and mark bounds at each size, visually inspected corrected 256px and
+small Retina versions. Rendered the actual rebuilt app icon through macOS NSWorkspace
+and visually confirmed a single complete logo centred on its rounded white tile.
+Native preview is ignored desktop/test-results/icon-1.0.1-mac-native.png. Windows
+PE inspection confirms all six corrected icon payloads are embedded in the EXE;
+Mac bundled ICNS exactly matches source. Desktop core tests 3/3 and packaged Mac
+login/name/security smoke test 1/1 passed; both platform builds succeeded.
+`git diff --check` passed. Windows installation/runtime and signing remain unverified;
+packages remain unsigned. No frontend/backend behavior, production deployment or
+live data was changed. Unrelated desktop/.DS_Store was left untouched.
+
+
+## 2026-11-04 — recreate deleted desktop release outputs
+
+User requested rebuilding after deleting release files. Rebuilt GKUC Construction
+1.0.1 Mac arm64 ZIP and Windows x64 NSIS installer from the current frontend and
+corrected icon assets; regenerated SHA256SUMS for these two final files. Both builds
+completed successfully. Packaged macOS login/name/security smoke test passed 1/1;
+bundled ICNS matches the corrected source. Existing large frontend chunk advisory
+remains. No source behavior changed. Windows runtime remains unverified and builds
+remain unsigned. No deployment or live database write.
+
+
+## 2026-11-04 — remembered desktop login and developer credit (1.0.2)
+
+User requested desktop sign-in survive app close/reopen and exact attribution on
+generated PDFs (once at end, every page for payslips). Desktop saves only opaque
+session+server in OS-encrypted safeStorage, never passwords; queued atomic mode-0600
+writes prevent save/logout races. Main-frame IPC only; PDF/pop-up/settings frames
+cannot access the saved login. Restore happens before React/bootstrap; logout,
+expiry/revocation and connection changes clear it. Unavailable/plaintext OS storage
+is refused. Login API optional rememberDevice flag issues revocable 30-day sessions;
+browser defaults remain 12 hours. Existing sessions schema and permission checks
+remain unchanged. No silent live data/policy changes.
+
+Added shared idempotent developer-credit decorator with exact Developed by Infinity
+AI (Pvt) Ltd, Sri Lanka. Common documents and HR letters show it once at end, outside
+editable footer settings. Payslips use reserved @page bottom-centre margin on every
+page alongside confidentiality and page numbers. PDF/HTML send fallback also covers
+older saved letter HTML without rewriting the stored letter; credit stays inside
+its white paper container. Uploaded third-party PDFs are not rewritten. Salary and
+Approved/Paid calculation snapshots remain unchanged.
+
+Validation: frontend 39/39, desktop core/store 4/4, transport/security 1/1 (pop-up and
+settings-frame access denied), actual local-backend integration 1/1 with encrypted
+file check, full process restart authenticated, server-expired-token removal, manual
+logout and signed-out restart; packaged Mac smoke 1/1. Initial integration retries
+exposed the seeded introduction overlay intercepting the test's logout click; the
+test now dismisses the introduction and waits for persisted clearing.
+Full Node 20 backend: 333 passed, zero failed, two optional skips (335 incl nested).
+An initial midnight run exposed three existing UTC/local-day fixture mismatches;
+aligned API test today/shift with the API/seed business day and reran successfully,
+without changing financial calculations. Focused PDF-credit tests reran 2/2 after
+adding legacy-letter placement. Multi-page invoice credit is once on final page;
+five-page payslip credit once on each page. Rendered pages visually verified with
+no footer overlap. Frontend production build passed (existing chunk advisory).
+
+Both 1.0.2 platform artifacts rebuilt successfully, inspected to contain encrypted
+session implementation, and SHA256SUMS regenerated. Updated README, ARCHITECTURE,
+DECISIONS, PAYROLL, DESKTOP, DEPLOYMENT and MANUAL_QA. Deploy updated backend/browser
+first, then new desktop; first desktop sign-in creates saved device login. Windows
+installation/runtime and signing remain unverified; artifacts remain unsigned.
+`git diff --check` passed. No deployment, PM2 action or live database write.

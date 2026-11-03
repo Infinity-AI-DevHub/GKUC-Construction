@@ -204,3 +204,12 @@ category-specific late rates and actual attended basic pay. Driver Office OT is
 rejected; only Site/Travel are allowed. The Draft rollback test owns its missing
 transport-threshold policy fixture instead of depending on policies left by other
 tests. Invoice payment-mode verification compares rendered text rather than markup.
+
+## Payslip print attribution — 2026-11-04
+
+Every printed/generated payslip page includes the exact line Developed by Infinity AI
+(Pvt) Ltd, Sri Lanka in its bottom-centre page margin. Confidentiality and page counts
+remain, with space reserved to avoid overlaps. This is a presentation-only change;
+existing Approved/Paid payroll calculations and saved snapshots are unchanged. Actual
+five-page PDF regression checks verify one attribution per page, while a multi-page
+invoice receives one at its end.

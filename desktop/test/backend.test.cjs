@@ -29,11 +29,12 @@ test('desktop login and live authenticated bootstrap against the actual backend'
     let ready=false;for(let i=0;i<120;i++){try{if((await fetch('http://127.0.0.1:43973/api/health')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,150));}
     assert.ok(ready,'Local backend started');
     electron=await _electron.launch({args:[path.resolve(__dirname,'..')],env:{...process.env,SITEOPS_SERVER_URL:'http://127.0.0.1:43973',SITEOPS_ALLOW_LOCAL_HTTP:'1',SITEOPS_DESKTOP_USER_DATA:path.join(temp,'profile')}});
-    const page=await electron.firstWindow();
+    let page=await electron.firstWindow();
     await page.getByLabel('Email address').fill('owner@gkuc.lk');await page.getByLabel('Password',{exact:true}).fill('GKUC@2026');
     await page.getByRole('button',{name:'Sign in',exact:true}).click();
     await page.locator('.bell-group.is-live').first().waitFor({timeout:30000});
     assert.equal(await page.getByRole('button',{name:'Sign in',exact:true}).count(),0);
+    await page.getByRole('button',{name:'Close the introduction',exact:true}).click();
     const result=await page.evaluate(async()=>{const r=await fetch('/api/bootstrap',{headers:{Authorization:`Bearer ${sessionStorage.getItem('gkuc-token')}`}});const body=await r.json();return {status:r.status,hasUser:!!body.user,hasData:!!body.data};});
     assert.deepEqual(result,{status:200,hasUser:true,hasData:true});
     // A write from a second API client must cause a renderer bootstrap refresh.
@@ -60,6 +61,29 @@ test('desktop login and live authenticated bootstrap against the actual backend'
     await recovered;await page.locator('.bell-group.is-live').first().waitFor();
     assert.equal(await page.evaluate(()=>sessionStorage.getItem('gkuc-token')),savedToken);
     await page.screenshot({path:path.resolve(__dirname,'../test-results/dashboard.png')});
+    const encrypted=await fs.readFile(path.join(temp,'profile/session.enc'));
+    assert.equal(encrypted.includes(savedToken),false,'OS-encrypted file must not contain the bearer token');
+    await electron.close();electron=null;
+    const launch=()=>_electron.launch({args:[path.resolve(__dirname,'..')],env:{...process.env,SITEOPS_SERVER_URL:'http://127.0.0.1:43973',SITEOPS_ALLOW_LOCAL_HTTP:'1',SITEOPS_DESKTOP_USER_DATA:path.join(temp,'profile')}});
+    electron=await launch();page=await electron.firstWindow();
+    await page.locator('.bell-group.is-live').first().waitFor({timeout:30000});
+    assert.equal(await page.evaluate(()=>sessionStorage.getItem('gkuc-token')),savedToken,'full process restart restores the authenticated session');
+    await mysql.query(`UPDATE ${db}.sessions SET expires_at=DATE_SUB(NOW(),INTERVAL 1 MINUTE) WHERE token_hash=SHA2(?,256)`,[savedToken]);
+    await electron.close();electron=null;electron=await launch();page=await electron.firstWindow();
+    await page.getByRole('button',{name:'Sign in',exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.siteopsDesktop.restoreSession()),null);
+    await assert.rejects(fs.access(path.join(temp,'profile/session.enc')),'expired saved token is removed');
+    await page.getByLabel('Email address').fill('owner@gkuc.lk');await page.getByLabel('Password',{exact:true}).fill('GKUC@2026');
+    await page.getByRole('button',{name:'Sign in',exact:true}).click();
+    await page.locator('.bell-group.is-live').first().waitFor({timeout:30000});
+
+    await page.locator('.account-trigger').first().click();await page.getByRole('menuitem',{name:'Sign out',exact:true}).click();
+    await page.getByRole('button',{name:'Sign in',exact:true}).waitFor();
+    await assert.rejects(fs.access(path.join(temp,'profile/session.enc')));
+    await electron.close();electron=null;electron=await launch();page=await electron.firstWindow();
+    await page.getByRole('button',{name:'Sign in',exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>sessionStorage.getItem('gkuc-token')),null,'logout survives a second restart');
+
   }finally{
     if(electron)await electron.close();
     if(child){child.kill('SIGTERM');await new Promise(r=>child.once('exit',r));}

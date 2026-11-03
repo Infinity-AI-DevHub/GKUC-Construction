@@ -1,6 +1,6 @@
 {
   "name": "gkuc-siteops-desktop",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": true,
   "description": "GKUC Construction desktop client",
   "author": "Infinity AI (Pvt) Ltd",
@@ -8,7 +8,7 @@
   "scripts": {
     "prepare:ui": "node scripts/prepare-ui.cjs",
     "start": "electron .",
-    "test": "node --test test/core.test.cjs",
+    "test": "node --test test/core.test.cjs test/session-store.test.cjs",
     "test:e2e": "node --test test/e2e.test.cjs",
     "test:backend": "node --test test/backend.test.cjs",
     "test:packaged": "node --test test/packaged.test.cjs",

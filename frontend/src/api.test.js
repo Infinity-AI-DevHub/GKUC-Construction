@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { api, readableError, openDocument, openPrintDocument, publicAppOrigin } from './api.js';
+import { api, readableError, openDocument, openPrintDocument, publicAppOrigin,token,restoreDesktopSession } from './api.js';
 import { onNotice } from './notices.js';
 
 test('shared links use the configured online origin on desktop and browser origin on web', async () => {
@@ -176,4 +176,18 @@ test('storage outages show the actionable storage message instead of a generic s
     globalThis.fetch = originalFetch;
     globalThis.sessionStorage = originalSession;
   }
+});
+
+
+test('desktop restores saved sign-in before bootstrap and clears it on logout; web stays session-only',async()=>{
+  const originals={window:globalThis.window,sessionStorage:globalThis.sessionStorage};
+  const values=new Map();let disk='remembered-session',cleared=false;
+  globalThis.sessionStorage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
+  try{
+    globalThis.window={siteopsDesktop:{restoreSession:async()=>disk,saveSession:async value=>{disk=value;},clearSession:async()=>{disk=null;cleared=true;}}};
+    await restoreDesktopSession();assert.equal(token.get(),'remembered-session');
+    await token.set('new-session');assert.equal(disk,'new-session');assert.equal(token.get(),'new-session');
+    await token.clear();assert.equal(token.get(),null);assert.equal(disk,null);assert.equal(cleared,true);
+    globalThis.window={};await token.set('browser-session');assert.equal(disk,null);assert.equal(token.get(),'browser-session');
+  }finally{Object.assign(globalThis,originals);}
 });

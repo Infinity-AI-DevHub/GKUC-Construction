@@ -142,3 +142,15 @@ QA runs were removed. Synthetic downloaded evidence remains locally in ignored
 launcher additionally rejects an occupied wildcard/IPv6 port before creating data and
 waits for its own child server's ready message, rather than trusting another server's
 health reply.
+
+## 2026-11-04 automated follow-up — remembered desktop sign-in / credit
+
+Separate from the earlier manual coverage: actual Electron+local-MySQL checks now
+verify encrypted token storage, full process quit/reopen with no new sign-in, expired
+server token removal, explicit sign-out and signed-out restart. PDF text checks verify
+one credit at a multi-page invoice's end and one per page on a five-page payslip;
+rendered payslip pages were visually checked for footer overlap. Full backend Node 20
+run: 333 passed, zero failed, two optional skips; frontend: 39 passed. An initial run
+after local midnight exposed UTC-based test fixtures disagreeing with the API's local
+date; fixed the fixtures, not financial calculations, and reran successfully. Windows
+installation/runtime, signing and production deployment remain unverified.
