@@ -70,7 +70,8 @@ export default function BiometricImport({ data, projects = data.projects, can, r
     setBusy(true); setError('');
     setIdentityErrors(current => ({ ...current, [code]: '' }));
     try {
-      await post('/biometric/mappings', { code, employeeId: Number(employeeId), replaceExisting: true });
+      const scannerName = preview?.unknownDevices?.find(device => String(device.code) === String(code))?.name?.trim();
+      await post('/biometric/mappings', { code, scannerName: scannerName || undefined, employeeId: Number(employeeId), replaceExisting: true });
       const refreshed = lastFile.current ? await read(lastFile.current, true) : false;
       if (refreshed && !refreshed.unknownDevices?.some(device => String(device.code) === String(code))) {
         notice({ title: 'Scanner identity linked', message: `Device #${code} is matched in this file and will match on future imports.`, severity: 'Info' });

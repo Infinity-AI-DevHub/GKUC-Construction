@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { audit, getOne, pool, query, transaction } from '../db.js';
 import { auth, permit, validate, wrap } from '../lib/http.js';
 import { parseBiometricFile } from '../lib/biometric.js';
+import { resolveScannerRows } from '../lib/biometric-identities.js';
 import { readUpload, readUploadedFile } from '../lib/storage.js';
 
 const router = Router();
@@ -17,22 +18,11 @@ const LATE_AFTER = process.env.ATTENDANCE_LATE_AFTER || '08:00:00';
  * the payroll input, so somebody should see what it contains before it lands.
  */
 
-/** Only HR-approved scanner numbers match automatically. One employee can have several. */
+/** Saved scanner names are internal matching data, never employee display names. */
 async function resolveEmployees(rows) {
-  const mappings = await query(`SELECT b.code,e.id,e.name FROM visible_employee_biometric_ids b
-    JOIN visible_employees e ON e.id=b.employee_id WHERE e.status <> 'Left'`);
-  const key = value => String(value ?? '').trim().toLowerCase();
-  const byDevice = new Map(mappings.map(item => [key(item.code), item]));
-  const hidden = await query(`SELECT b.code FROM \`employee_biometric_ids\` b
-    JOIN \`employees\` e ON e.id=b.employee_id WHERE e.deactivated_at IS NOT NULL`);
-  const hiddenCodes = new Set(hidden.map(item => key(item.code)));
-
-  return rows.filter(row => !hiddenCodes.has(key(row.code))).map(row => {
-    /* Only a mapping approved by HR is automatic. Names in this export are often first
-       names and employee codes belong to a different numbering scheme. */
-    const match = (row.code && byDevice.get(key(row.code))) || null;
-    return { ...row, employeeId: match?.id || null, employee: match?.name || null };
-  });
+  const mappings = await query(`SELECT b.code,b.scanner_name scannerName,e.id,e.name,e.status,e.deactivated_at deactivatedAt
+    FROM employee_biometric_ids b JOIN employees e ON e.id=b.employee_id`);
+  return resolveScannerRows(rows, mappings);
 }
 
 /*
@@ -245,20 +235,21 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
 }));
 
 /**
- * Ties a terminal enrolment number to an employee. Done once per person: every future
- * export recognises them without anyone matching names by hand again.
+ * Ties the terminal number and optional export name to an employee using the existing
+ * HR decision. Saved names are internal aliases, not replacement profile names.
  */
 router.post('/mappings', auth, permit('hr.attendance'), validate(z.object({
-  code: z.string().min(1).max(40),
+  code: z.string().trim().min(1).max(40),
+  scannerName: z.string().trim().min(1).max(120).optional(),
   employeeId: z.number().int().positive(),
   replaceExisting: z.boolean().optional()
 })), wrap(async (req, res) => {
-  const employee = await getOne('SELECT id,name,code FROM visible_employees WHERE id=?', [req.body.employeeId]);
+  const employee = await getOne("SELECT id,name,code FROM visible_employees WHERE id=? AND status<>'Left'", [req.body.employeeId]);
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
   await transaction(async connection => {
-    const [[owner]] = await connection.execute(`SELECT e.id,e.name FROM visible_employee_biometric_ids b
-      JOIN visible_employees e ON e.id=b.employee_id WHERE b.code=? FOR UPDATE`, [req.body.code]);
+    const [[owner]] = await connection.execute(`SELECT e.id,e.name,b.scanner_name scannerName FROM employee_biometric_ids b
+      JOIN employees e ON e.id=b.employee_id WHERE b.code=? FOR UPDATE`, [req.body.code]);
     const taken = owner?.id !== employee.id ? owner : null;
     if (taken && !req.body.replaceExisting) throw Object.assign(
       new Error(`Device number ${req.body.code} is already ${taken.name}'s. Confirm reassignment before changing it.`),
@@ -270,9 +261,13 @@ router.post('/mappings', auth, permit('hr.attendance'), validate(z.object({
       await connection.execute(`INSERT INTO employee_biometric_ids (code,employee_id) VALUES (?,?)
         ON DUPLICATE KEY UPDATE employee_id=VALUES(employee_id)`, [req.body.code, employee.id]);
     }
+    if (req.body.scannerName || taken) await connection.execute(
+      'UPDATE employee_biometric_ids SET scanner_name=? WHERE code=? AND employee_id=?',
+      [req.body.scannerName || null, req.body.code, employee.id]);
     await connection.execute('UPDATE employees SET biometric_id=? WHERE id=? AND biometric_id IS NULL', [req.body.code, employee.id]);
     await audit(connection, req.user.id, taken ? 'REASSIGN' : 'UPDATE', 'employee_biometric', employee.id,
-      taken ? { employeeId: taken.id, name: taken.name } : null, { biometricId: req.body.code }, req.ip);
+      owner ? { employeeId: owner.id, scannerName: owner.scannerName || null } : null,
+      { biometricId: req.body.code, scannerName: req.body.scannerName || (taken ? null : owner?.scannerName) || null }, req.ip);
   });
   const codes = await query('SELECT code FROM visible_employee_biometric_ids WHERE employee_id=? ORDER BY code', [employee.id]);
   res.json({ employeeId: employee.id, name: employee.name, code: req.body.code, codes: codes.map(row => row.code) });
@@ -313,7 +308,7 @@ router.post('/people', auth, permit('hr.attendance'), validate(z.object({
       VALUES (?,?,?,?,?,?,'Active',?,?)`, [employeeCode, body.name.trim(), departmentId,
       body.department?.trim() ? `${body.department.trim()} team` : 'Worker', officeDepartment ? 'Office' : 'Site', body.firstDate, body.code,
       'Profile created from biometric import; HR review required.']);
-    await connection.execute('INSERT INTO employee_biometric_ids (code,employee_id) VALUES (?,?)', [body.code, result.insertId]);
+    await connection.execute('INSERT INTO employee_biometric_ids (code,employee_id,scanner_name) VALUES (?,?,?)', [body.code, result.insertId, body.name.trim()]);
     await audit(connection, req.user.id, 'CREATE', 'employee', result.insertId, null,
       { code: employeeCode, name: body.name.trim(), biometricId: body.code, source: 'Biometric import' }, req.ip);
     return { id: result.insertId, code: employeeCode };
