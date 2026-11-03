@@ -833,6 +833,9 @@ router.post('/:id/overtime', auth, permit('hr.payroll'), validate(z.object({
   const policy = await getOne(`SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=?
     ORDER BY effective_from DESC,id DESC LIMIT 1`, [employee.payroll_company_id, req.body.workDate]);
   if (!policy) return res.status(409).json({ error: 'Configure an overtime policy for this date first' });
+  const special=await getOne('SELECT * FROM employee_special_pay_rules WHERE employee_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.id,req.body.workDate]);
+  if(special&&special.mode!=='Standard')employee.special_pay_rule=special;
+  if(special?.mode==='Machine operator')employee.special_pay_day=await getOne('SELECT * FROM employee_special_pay_days WHERE employee_id=? AND work_date=? AND active=1',[employee.id,req.body.workDate]);
   if(req.body.overtimeType==='Travel')return res.status(409).json({error:'Record Travel OT through Payroll Inputs → Travel claim, with departure and return times. Do not infer it from ordinary attendance.'});
   const attendance=await getOne('SELECT * FROM visible_attendance WHERE employee_id=? AND work_date=?',[employee.id,req.body.workDate]);
   if(attendance&&['Absent','On leave'].includes(attendance.state))return res.status(409).json({error:'No OT is payable for an absent or leave day. Correct attendance first if it is wrong.'});

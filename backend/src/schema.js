@@ -2930,8 +2930,23 @@ async function migrateExistingInstalls() {
     INDEX idx_biometric_identity_employee(employee_id)
   ) ENGINE=InnoDB`);
   await addColumn('employee_biometric_ids', 'scanner_name', 'VARCHAR(120) NULL');
+  await query(`CREATE TABLE IF NOT EXISTS employee_special_pay_rules (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,employee_id BIGINT UNSIGNED NOT NULL,effective_from DATE NOT NULL,
+    mode ENUM('Work role','Machine operator','Standard') NOT NULL,rates JSON NOT NULL,reason VARCHAR(500) NOT NULL,
+    recorded_by BIGINT UNSIGNED NOT NULL,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_special_employee_date(employee_id,effective_from),
+    FOREIGN KEY(employee_id) REFERENCES employees(id),FOREIGN KEY(recorded_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS employee_special_pay_days (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,employee_id BIGINT UNSIGNED NOT NULL,work_date DATE NOT NULL,
+    work_kind ENUM('Bass','Gola','Machine','Standby') NOT NULL,active TINYINT NOT NULL DEFAULT 1,start_meter DECIMAL(14,3) NULL,end_meter DECIMAL(14,3) NULL,hours DECIMAL(7,3) NULL,
+    reason VARCHAR(500) NOT NULL,recorded_by BIGINT UNSIGNED NOT NULL,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_special_pay_day(employee_id,work_date),
+    FOREIGN KEY(employee_id) REFERENCES employees(id),FOREIGN KEY(recorded_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await query(`INSERT IGNORE INTO employee_biometric_ids (code,employee_id)
     SELECT biometric_id,id FROM employees WHERE biometric_id IS NOT NULL AND biometric_id<>''`);
+  await addColumn('employee_special_pay_days','active','TINYINT NOT NULL DEFAULT 1');
   /* Office employees may normally work at head office or be sent to a site. Site workers
      are either allocated to a site or available. Nullable first lets legacy rows be
      classified once without overwriting later HR decisions on every restart. */

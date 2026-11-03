@@ -95,7 +95,7 @@ export default function People({ data, allData, reload, can, companies, companyI
     {tab === 'Employees' && <Employees data={data} can={can} reload={reload} onOpen={openEmployee} onImport={() => setOpen('Employee import')} focusRequest={employeeSearchRequest} />}
     {tab === 'Hiring' && <Hiring companies={companies} companyId={companyId} reload={reload} />}
     {tab === 'Insurance' && <Insurance />}
-    {tab === 'Payroll Inputs' && <PayrollInputs data={data}/>}
+    {tab === 'Payroll Inputs' && <PayrollInputs data={data} companyId={companyId}/>}
     {tab === 'Workforce map' && <WorkforceMap canManage={can.hr} canPlan={can.hr || can.hrImport} projects={allProjects} />}
     {tab === 'Attendance' && <Attendance data={data} projects={allProjects} reload={reload} can={can} initialDate={attendanceDate} onDateChange={setAttendanceDate} />}
     {tab === 'Attendance register' && <AttendanceRegister projects={allProjects} canCorrect={can.attendance || can.hrImport || can.hr} />}

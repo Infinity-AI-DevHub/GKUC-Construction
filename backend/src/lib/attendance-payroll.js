@@ -1,8 +1,11 @@
+import {activeSpecialRule,specialRates,specialInputFor,specialEmployeeFor,specialDayPay} from './special-pay.js';
 import {cents,rulesFor,suggestOvertime,calculateLateDeduction,minutes} from './hr-payroll-rules.js';
 import {resolveLateRate,resolveOvertimeRate,overtimeMinimumMinutes} from './payroll-policy.js';
 
 const parse=value=>typeof value==='string'?JSON.parse(value):(value||{});
 export function attendanceOvertimeType(employee,attendance) {
+  if(employee.special_pay_rule?.mode==='Work role')return 'Site';
+  if(employee.special_pay_rule?.mode==='Machine operator')return employee.special_pay_day?.work_kind==='Standby'?'Site':null;
   if(employee.payroll_category==='Office employee')return 'Office';
   if(['Site labourer','Supervisor'].includes(employee.payroll_category))return 'Site';
   if(employee.payroll_category==='Driver')return attendance.work_location==='Site'?'Site':null;
@@ -50,6 +53,12 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
   const policyFor=date=>{
     const policy=dated.find(p=>Number(p.company_id)===Number(employee.payroll_company_id)&&p.effective_from<=date);
     if(!policy)throw new Error(`Configure a payroll policy effective on or before ${date}.`);
+    const special=activeSpecialRule(employee,date);
+    if(special?.mode==='Work role') {
+      const rates=specialRates(special),hr=typeof policy.hr_rules==='string'?JSON.parse(policy.hr_rules):policy.hr_rules||{};
+      return {...policy,site_labour_site_ot_rate:rates.siteOt,site_labour_travel_ot_rate:rates.travelOt,
+        hr_rules:{...hr,paidHoursPerDay:rates.paidHours,labourSiteOtMinimumMinutes:30,labourTravelOtMinimumMinutes:31}};
+    }
     return policy;
   };
   const totals={overtime_hours:0,overtime_pay:0,office_ot_hours:0,office_ot_pay:0,site_ot_hours:0,site_ot_pay:0,
@@ -63,6 +72,11 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     totals[`${prefix}_ot_pay`]+=amount;
     detail.overtime.push({...row,type,hours:Number(hours),rate,amount});
   };
+  for(const record of overtime)if(record.status!=='Rejected'&&activeSpecialRule(employee,record.work_date)?.mode==='Machine operator'){
+    const input=specialInputFor(employee,record.work_date);
+    if(input.work_kind!=='Standby'||record.overtime_type!=='Site')
+      throw new Error(`Operator OT is allowed only as Site OT on a Standby day. Resolve the ${record.status} OT record on ${record.work_date} before payroll.`);
+  }
   // An explicit decision replaces attendance OT for that day, including Pending/Rejected.
   const reviewedDays=new Set(overtime.filter(o=>o.overtime_type!=='Travel').map(o=>o.work_date));
   const approvedKeys=new Set();
@@ -75,12 +89,12 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     if(attendance.some(day=>day.work_date===record.work_date&&['Absent','On leave'].includes(day.state)))
       throw new Error(`Review approved OT against the absent/leave attendance on ${record.work_date}.`);
     const policy=policyFor(record.work_date);
-    const minimumMinutes=overtimeMinimumMinutes(employee,record.overtime_type,policy);
+    const minimumMinutes=overtimeMinimumMinutes(specialEmployeeFor(employee,record.work_date),record.overtime_type,policy);
     if(Number(record.hours)*60<minimumMinutes) {
       detail.warnings.push({workDate:record.work_date,message:`Approved ${record.overtime_type} OT is below its ${minimumMinutes}-minute policy minimum and was not paid.`});
       continue;
     }
-    addOt(record.overtime_type,record.hours,resolveOvertimeRate(employee,record.overtime_type,policy),{
+    addOt(record.overtime_type,record.hours,resolveOvertimeRate(specialEmployeeFor(employee,record.work_date),record.overtime_type,policy),{
       source:'Reviewed OT',sourceId:record.id,projectId:record.project_id,workDate:record.work_date,
       policyId:policy.id,recordedRate:Number(record.rate),minimumMinutes});
   }
@@ -93,7 +107,12 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     const calendarDays=calendarAttendance.filter(day=>monthKey(day.work_date)===month)
       .sort((a,b)=>dateKey(a.work_date).localeCompare(dateKey(b.work_date))||Number(a.id)-Number(b.id));
     for(const day of calendarDays) {
-      const policy=policyFor(day.work_date),rules=rulesFor(policy),fraction=workedFraction(day,policy);
+      const policy=policyFor(day.work_date),rules=rulesFor(policy);
+      let fraction=workedFraction(day,policy);
+      if(WORKED_STATES.has(day.state)&&activeSpecialRule(employee,day.work_date)?.mode==='Machine operator'){
+        const input=specialInputFor(employee,day.work_date);
+        fraction=input.work_kind==='Machine'?1:Math.min(1,Number(input.hours)/specialRates(activeSpecialRule(employee,day.work_date)).paidHours);
+      }
       if(!fraction)continue;
       const next=running+fraction;
       const multiplier=next>Number(rules.monthlyOvertimeDayThreshold ?? 25)
@@ -104,6 +123,7 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
   }
   for(const day of attendance) {
     if(['Absent','On leave'].includes(day.state))continue;
+    if(day.needs_review&&activeSpecialRule(employee,day.work_date))throw new Error(`Confirm review-required attendance on ${day.work_date} before special daily pay.`);
     if(day.needs_review) {
       detail.warnings.push({workDate:day.work_date,message:'Attendance needs review; automatic OT and late deduction were not included.'});
       // Keep the existing daily earning until HR corrects the attendance; the
@@ -112,11 +132,21 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
       continue;
     }
     const policy=policyFor(day.work_date),rules=rulesFor(policy);
-    const late=calculateLateDeduction(day,rules,resolveLateRate(employee,policy));
+    const specialRule=activeSpecialRule(employee,day.work_date);
+    const payEmployee=specialEmployeeFor(employee,day.work_date);
+    const operator=specialRule?.mode==='Machine operator';
+    const late=operator?{lateMinutes:0,deductibleMinutes:0,hourlyRate:0,amount:0}:calculateLateDeduction(day,rules,resolveLateRate(payEmployee,policy));
     const multiplier=dayMultipliers.get(dateKey(day.work_date)) ?? 1;
-    const shortDay=shortAttendancePay(day,rules,employee.daily_rate,multiplier);
+    const workedHours=(minutes(day.check_out)-minutes(day.check_in))/60;
+    if(specialRule?.mode==='Work role'&&(!day.check_in||!day.check_out||!Number.isFinite(workedHours)||workedHours<=0))
+      throw new Error(`Record valid check-in and check-out times for special daily pay on ${day.work_date}.`);
+    const special=specialDayPay(employee,day,multiplier,workedHours);
+    const dailyRate=special?.dailyRate ?? Number(employee.daily_rate);
+    const shortDay=special?{amount:cents(Math.max(0,dailyRate*multiplier-special.earnedBasic)),earnedBasic:special.earnedBasic,
+      rateMultiplier:multiplier,workedMinutes:special.workedHours*60,missingMinutes:Math.max(0,8-special.workedHours)*60,
+      hourlyRate:dailyRate/8,paidHoursPerDay:8}:shortAttendancePay(day,rules,dailyRate,multiplier);
     if (shortDay.warning) detail.warnings.push({workDate:day.work_date,message:shortDay.warning});
-    if (shortDay.missingMinutes>0 && Number(employee.daily_rate)<=0)
+    if (shortDay.missingMinutes>0 && dailyRate<=0)
       throw new Error(`Set a daily salary rate before calculating short-day salary for ${day.work_date}.`);
     totals.short_day_reduction+=shortDay.amount;
     totals.attendance_basic+=shortDay.earnedBasic ?? Number(employee.daily_rate||0)*multiplier;
@@ -124,13 +154,15 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     totals.late_deduction+=late.amount;
     detail.attendance.push({attendanceId:day.id,workDate:day.work_date,policyId:policy.id,
       checkIn:day.check_in,checkOut:day.check_out,normalStart:rules.normalStart,normalEnd:rules.normalEnd,
-      dailyRate:Number(employee.daily_rate),paidHoursPerDay:rules.paidHoursPerDay,
+      dailyRate,paidHoursPerDay:special?8:rules.paidHoursPerDay,
+      ...(special?{specialPay:{...special.snapshot,transport:special.transport,earnedBasic:special.earnedBasic}}:{}),
       graceMinutes:rules.lateGraceMinutes,lateMinutes:late.lateMinutes,deductibleMinutes:late.deductibleMinutes||0,
       lateDeduction:late.amount,lateHourlyRate:late.hourlyRate,rateMultiplier:multiplier,shortDay});
+    if(operator&&special.snapshot.workKind!=='Standby')continue;
     if(reviewedDays.has(day.work_date))continue;
-    const type=attendanceOvertimeType(employee,day);
+    const type=attendanceOvertimeType(payEmployee,day);
     if(!type)continue;
-    const minimumMinutes=overtimeMinimumMinutes(employee,type,policy);
+    const minimumMinutes=overtimeMinimumMinutes(payEmployee,type,policy);
     const suggestion=suggestOvertime(day,rules,minimumMinutes);
     if(suggestion.warnings.length)detail.warnings.push(...suggestion.warnings.map(message=>({workDate:day.work_date,message})));
     if(!suggestion.intervals?.length)continue;
@@ -140,9 +172,9 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
       throw new Error(`Review travel time intervals on ${day.work_date} before calculating attendance OT.`);
     const intervals=subtractIntervals(suggestion.intervals,travel.flatMap(item=>item.intervals));
     const rawMinutes=intervals.reduce((sum,[a,b])=>sum+(b-a),0);
-    const hours=rawMinutes>=minimumMinutes?cents(rawMinutes/60):0;
+    const hours=rawMinutes>=minimumMinutes?(specialRule?rawMinutes/60:cents(rawMinutes/60)):0;
     if(!hours)continue;
-    addOt(type,hours,resolveOvertimeRate(employee,type,policy),{source:'Attendance',sourceId:day.id,
+    addOt(type,hours,resolveOvertimeRate(payEmployee,type,policy),{source:'Attendance',sourceId:day.id,
       projectId:day.project_id,workDate:day.work_date,policyId:policy.id,intervals,
       rawMinutes,minimumMinutes});
   }

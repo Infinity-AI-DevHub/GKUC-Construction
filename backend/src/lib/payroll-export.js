@@ -4,9 +4,10 @@ const fields=[['Employee code','employeeCode'],['Employee','employee'],['Worked 
 const parse=value=>typeof value==='string'?JSON.parse(value):value||{};
 const sheet=(name,headers,rows)=>({name,columns:headers.map((_,i)=>i<2?28:20),freeze:1,rows:[headers.map(value=>({value,style:1})),...rows]});
 export function payrollSheets(run){
-  const ot=[],attendance=[],leave=[],components=[],warnings=[],advances=[];
+  const ot=[],attendance=[],leave=[],components=[],warnings=[],advances=[],special=[];
   for(const slip of run.payslips){
     const d=parse(slip.calculationDetail),who=[slip.employeeCode,slip.employee];
+    for(const row of d.attendance||[])if(row.specialPay){const x=row.specialPay;special.push([...who,row.workDate,x.mode,x.workKind,x.startMeter??null,x.endMeter??null,x.meterHours??null,x.standbyHours??null,Number(x.earnedBasic),Number(x.transport),x.formula,x.ruleId,x.inputId,x.reason,x.recordedBy]);}
     for(const row of d.overtime||[])ot.push([...who,row.workDate,row.type,row.source,Number(row.hours),Number(row.rate),Number(row.amount),row.policyId]);
     for(const row of d.attendance||[])attendance.push([...who,row.workDate,row.checkIn,row.checkOut,row.normalStart,row.normalEnd,Number(row.dailyRate),Number(row.lateMinutes),Number(row.deductibleMinutes||0),Number(row.lateDeduction),row.policyId,row.shortDay?.workedMinutes == null ? null : row.shortDay.workedMinutes/60,row.shortDay?.paidHoursPerDay ?? null,Number(row.shortDay?.amount||0)]);
     for(const row of d.leave?.days||[])leave.push([...who,row.workDate,row.paymentType,row.leaveType,(row.requestIds||[]).join(', ')]);
@@ -15,13 +16,14 @@ export function payrollSheets(run){
     for(const row of d.warnings||[])warnings.push([...who,row.workDate,row.message]);
   }
   return [sheet('Salary details',fields.map(([label])=>label),run.payslips.map(s=>fields.map(([,key],i)=>i<2?s[key]:Number(s[key]||0)))),
-    ...employeePayrollSheets(run,['Salary details','Run','OT details','Attendance and lateness','Leave','Pay components','Advance recoveries','Warnings']),
+    ...employeePayrollSheets(run,['Salary details','Run','OT details','Attendance and lateness','Leave','Pay components','Advance recoveries','Warnings','Special daily pay']),
     sheet('Run',['Company','Reference','From','To','Frequency','Status','Currency'],[[run.company,run.reference,run.periodStart,run.periodEnd,run.payFrequency,run.status,'LKR']]),
     sheet('OT details',['Code','Employee','Date','Type','Source','Hours','Rate (LKR)','Pay (LKR)','Policy'],ot),
     sheet('Attendance and lateness',['Code','Employee','Date','In','Out','Normal start','Normal end','Daily rate','Late minutes','Deductible minutes','Deduction','Policy','Normal hours worked','Paid hours per day','Short-day reduction (already excluded from earned salary)'],attendance),
     sheet('Leave',['Code','Employee','Date','Payment','Type','Requests'],leave),
     sheet('Pay components',['Code','Employee','Type','Name','Amount (LKR)','Calculation'],components),
     sheet('Advance recoveries',['Code','Employee','Advance date','Description','Recovered (LKR)'],advances),
+    ...(special.length?[sheet('Special daily pay',['Code','Employee','Date','Pay method','Work type','Start meter','End meter','Meter hours','Standby hours','Earned basic','Transport','Formula','Rule ID','Input ID','HR reason','Recorded by'],special)]:[]),
     sheet('Warnings',['Code','Employee','Date','Warning'],warnings)];
 }
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -40,8 +42,8 @@ export function payslipDocument(run,slip){
   if(!rates.size&&view.rate!=null)rates.set('daily',{daily:view.rate,hours:null});
   const lateRates=new Map();
   for(const row of d.attendance||[]) {
-    if(!Number(row.paidHoursPerDay))continue;
-    const rate=Number(row.dailyRate)/Number(row.paidHoursPerDay),key=String(rate);
+    if(row.specialPay?.mode==='Machine operator'||!Number(row.paidHoursPerDay))continue;
+    const rate=Number(row.lateHourlyRate ?? Number(row.dailyRate)/Number(row.paidHoursPerDay)),key=String(rate);
     if(!lateRates.has(key))lateRates.set(key,{rate,minutes:0,amount:0});
     const group=lateRates.get(key);group.minutes+=Number(row.deductibleMinutes||0);group.amount+=Number(row.lateDeduction||0);
   }
@@ -50,7 +52,7 @@ export function payslipDocument(run,slip){
   const components=view.components.map(row=>`<tr><td>${esc(row.name)}${row.description?`<small>${esc(row.description)}</small>`:''}</td><td>${esc(row.kind)}</td><td>${row.date?esc(date(row.date)):'Payroll period'}</td><td class="num">${money(row.amount)}</td></tr>`).join('');
   const daily=view.days.map(row=>`<tr>
     <td class="day">${esc(new Date(`${row.date}T00:00:00Z`).toLocaleDateString('en-GB',{day:'2-digit',month:'short',timeZone:'UTC'}))}<small>${esc(new Date(`${row.date}T00:00:00Z`).toLocaleDateString('en-GB',{weekday:'short',timeZone:'UTC'}))}</small></td>
-    <td><strong>${esc(row.state)}</strong>${row.source.map(source=>`<small>In ${time(source.checkIn)} / Out ${time(source.checkOut)}</small>${source.needsReview?'<small class="warning">Attendance marked for review</small>':''}`).join('')}${row.warnings.map(warning=>`<small class="warning">${esc(warning.message)}</small>`).join('')}</td>
+    <td><strong>${esc(row.state)}</strong>${row.source.map(source=>`<small>In ${time(source.checkIn)} / Out ${time(source.checkOut)}</small>${source.needsReview?'<small class="warning">Attendance marked for review</small>':''}`).join('')}${row.attendance.filter(item=>item.specialPay).map(item=>`<small>${esc(item.specialPay.workKind)}: ${esc(item.specialPay.formula)}</small>${item.specialPay.meterHours!=null?`<small>Meter ${esc(item.specialPay.startMeter)} → ${esc(item.specialPay.endMeter)} (${esc(item.specialPay.meterHours)} h)</small>`:''}<small>HR daily record #${esc(item.specialPay.inputId)}</small>`).join('')}${row.warnings.map(warning=>`<small class="warning">${esc(warning.message)}</small>`).join('')}</td>
     <td class="num">${val(row.basic)}${row.attendance.filter(item=>item.shortDay?.workedMinutes!=null).map(item=>`<small>${qty(item.shortDay.workedMinutes/60)} / ${qty(item.shortDay.paidHoursPerDay)} normal h</small>`).join('')}${row.shortReduction>0?`<small>Short day -${money(row.shortReduction)}</small>`:''}</td>
     <td class="num">${money(row.ot)}${row.overtime.map(item=>`<small>${esc(item.type)} ${qty(item.hours)}h x ${money(item.rate)}</small>`).join('')}</td>
     <td class="num">${money(row.late)}${row.lateMinutes?`<small>${qty(row.lateMinutes/60)}h late / ${qty(row.chargedLateMinutes/60)}h charged</small>`:''}</td>

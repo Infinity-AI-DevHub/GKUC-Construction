@@ -2,9 +2,10 @@ import React,{useState,useEffect,useRef} from 'react';
 import {api,post,patch,todayInput,rupees} from '../api.js';
 import {Table,Row,FormModal,WorkflowForm,Field,TextArea,SelectField,Modal} from '../ui.jsx';
 import Attachments from '../Attachments.jsx';
+import SpecialDailyPay from './SpecialDailyPay.jsx';
 import {filterPayrollInput,calculationLabels} from '../payroll-input-display.js';
 const inputTypes=['Travel','Mileage','Special duty','Machine/operator','Supervisor site charge','Salary deduction'];
-export default function PayrollInputs({data}){
+export default function PayrollInputs({data,companyId}){
   const [travelMethod,setTravelMethod]=useState('Calculated');
   const [employeeMode,setEmployeeMode]=useState('Single');
   const [selectedEmployees,setSelectedEmployees]=useState([]);
@@ -22,6 +23,7 @@ export default function PayrollInputs({data}){
   }).catch(e=>setError(e.message));useEffect(()=>{load();},[]);
   const matches=row=>filterPayrollInput(row,filter);
   return <>
+    <SpecialDailyPay data={data} companyId={companyId}/>
     <div className="panel-title payroll-input-heading"><h2>Payroll Inputs · HR review</h2><div className="payroll-input-actions">
       <button type="button" className="primary" onClick={()=>{setPreview(null);setForm({type:'claim'});}}>Add travel / allowance claim</button>
       <button type="button" className="secondary" onClick={()=>{setPreview(null);setForm({type:'deduction'});}}>Add salary deduction</button>

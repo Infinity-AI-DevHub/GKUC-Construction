@@ -121,3 +121,41 @@ The current application uses each eligible monthly employee's saved statutory sa
 The existing biometric import manual-match action now saves the scanner's source name internally alongside its approved number-to-employee mapping. Later previews and commits can recognize an unambiguous saved scanner name even if the export number differs. Profile display names are unchanged. Duplicate names and number/name ownership conflicts remain for manual HR matching, and hidden/Left profiles cannot be matched by name.
 
 This changes identity resolution only: attendance preview/review/import, manual correction protection, attendance calculations, policy rates and saved payroll snapshots retain their existing behavior. Focused coverage includes remembered scanner names across CSV and legacy Excel, source/profile name differences, duplicates/conflicts, deactivated profiles, multiple scanner IDs, reimports and the supplied report in an isolated test database.
+
+## Employee-specific daily pay agreements — effective 2026-01-01
+
+These are opt-in employee agreements, not new defaults for everyone. HR must select the actual employee in **People → Payroll Inputs → Special daily pay → Set employee pay method** and save the dated rule (default effective date 2026-01-01). Source code does not guess Sunil's/operator's employee ID or silently assign either method in a live database. A later dated Standard method restores normal rules. Earlier periods retain the prior method; saved Approved/Paid payroll remains locked.
+
+### Bass / Gola work-role method
+
+- HR records exactly one work type per employee/date: Bass (LKR 3,000/day) or Gola (LKR 2,500/day). No supervisor confirmation or separate approval is required.
+- Full day is eight paid hours. Short-day earnings use actual attendance hours capped at eight, using that day's chosen rate. Attendance and work location are still recorded/imported through the existing workflow.
+- Site OT is LKR 225/h, minimum 30 minutes; Travel OT is LKR 100/h, minimum 31 minutes, with approved travel evidence. Ordinary late grace/deduction rules continue, using LKR 225/h. Special-role automatic OT money uses exact eligible minutes.
+- Calendar-month worked-day equivalents use actual attendance hours / eight, capped at one per day. Leave does not count. When the running count exceeds 25, the day's chosen Bass/Gola basic rate uses 1.5×; OT and late rates do not change.
+- Sundays/holidays use the selected daily role rate. There is no extra Sunday multiplier. Approved paid leave requires HR to select its applicable role too; the saved leave pay uses that daily rate, without adding a worked-day premium.
+- Missing daily choices, invalid attendance times or review-required attendance block Draft generation with an HR correction message. No fallback to a guessed role is allowed.
+
+### Machine operator method
+
+- HR records Machine work (start/end hour-meter readings, positive difference at most 24 hours) or Standby (hours attended without operating the machine).
+- Machine work: `max(LKR 1,800, meter hours × LKR 650)`. Attendance duration does not reduce machine pay. Meter work counts as one worked-day equivalent because it receives a full minimum daily payment.
+- Standby: `LKR 1,800 / 8 × min(attended hours, 8)`. Four hours pays LKR 900; eight pays LKR 1,800. Standby contributes the same fraction (hours / eight, capped at one) toward the calendar-month threshold.
+- When the running monthly count exceeds 25, a Machine day's basic payment is **LKR 1,800 × 1.5 = LKR 2,700**, replacing the normal meter-based basic payment on that extra day. It is not an extra LKR 2,700, an extra LKR 900, or 1.5× meter earnings. Standby uses the corresponding prorated LKR 2,700 rate. Leave does not advance the threshold; each calendar month resets it.
+- LKR 300 transport allowance applies once per worked date, including half-days and Sundays. No transport is generated on absent/leave dates. Conflicting recurring Transport/Machine allowances or separate approved machine/operator claims block generation rather than paying the same entitlement twice.
+- **Machine work dates have no OT. Standby dates qualify for normal labour Site OT**, using the company policy effective on that work date (currently LKR 225/h), with a 30-minute minimum. Once the minimum is met, use actual eligible minutes. Ordinary morning/evening OT windows apply to saved attendance; standby basic remains capped at eight hours so OT is not added to the basic hours again.
+- No operator late deduction on either work type. Office/Travel OT remains excluded. Existing non-rejected OT on a Machine date, or non-Site OT on a Standby date, must be resolved before payroll. HR OT suggestions and entry routes check the saved daily work type; missing/archived work choices cannot enable OT. Reviewed Site OT on a Standby date replaces automatic Site OT rather than adding both.
+- LKR 1,800 × 25 is an example of 25 full standby days, not a separate LKR 45,000 addition or an absence guarantee. Salary advances continue through the existing saved advance/recovery ledger.
+
+### Storage, contributions and history
+
+`employee_special_pay_rules` saves effective methods and a snapshot of the agreed rates; `employee_special_pay_days` saves HR choices/readings/hours, source/correction reason, recorder and an active flag. Edits and reversible archival are audited. Daily entries do not create attendance; an orphan daily record without worked attendance or approved leave blocks generation. Earlier operator inputs in the same month are needed to determine the premium correctly.
+
+As currently agreed, either special method disables employee/employer EPF in calculations while it is effective. The employee profile is not overwritten. **ETF retains the existing employee eligibility and statutory basis**; no inference of an ETF exemption or global LKR 30,000 basis correction is made. Contribution explanation snapshots state the special EPF exception. Non-special staff and statutory policies are unchanged.
+
+Draft generation snapshots each day's rule, work type, HR input ID/recorder/reason, rates, readings, formula, earned basic and transport. Payslip PDFs and XLSX read those saved calculations, including a Special daily pay sheet. Per-day export basic uses saved earned amounts (including premiums), not a current profile rate. Changing an input/rule does not automatically recalculate any run; explicitly regenerate a Draft. Approved/Paid runs cannot be regenerated.
+
+Coverage: `backend/test/special-pay.test.js` tests effective dates, role/short-day pay, operator minimum/standby/transport, no Machine-day OT or operator late, Standby Site OT at 29/30/31-minute boundaries, 30/31-minute role thresholds, calendar resets/premiums, Standard restoration and saved export reconciliation. API scenarios test permission/persistence, missing-input blocking, archived inputs, Draft regeneration, approved snapshot protection, role-based paid leave, EPF exception and unchanged ETF eligibility.
+
+### 2026-11-03 clarification — operator Standby OT
+
+The initial blanket “no operator OT” instruction is superseded: only Machine work dates exclude OT. Standby uses the dated normal labour Site rate and 30-minute minimum, independent of the employee's ordinary payroll category. Late deductions remain excluded on both types. This clarification applies within the special agreement effective from 2026-01-01 and only affects future or explicitly regenerated Draft runs; existing saved Approved/Paid calculations are not rewritten.
