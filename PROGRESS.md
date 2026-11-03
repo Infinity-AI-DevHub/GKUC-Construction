@@ -359,3 +359,13 @@ DECISIONS, PAYROLL, DESKTOP, DEPLOYMENT and MANUAL_QA. Deploy updated backend/br
 first, then new desktop; first desktop sign-in creates saved device login. Windows
 installation/runtime and signing remain unverified; artifacts remain unsigned.
 `git diff --check` passed. No deployment, PM2 action or live database write.
+
+
+## 2026-11-04 — rebuild deleted 1.0.2 release folder
+
+User deleted release outputs and requested rebuilding. Rebuilt current frontend
+and GKUC Construction 1.0.2 macOS arm64 ZIP and Windows x64 installer, preserving
+corrected icons and encrypted remembered-login behavior. Both platform builds
+succeeded; packaged Mac login/name/security smoke check passed 1/1. Regenerated
+SHA256SUMS for the two artifacts. Existing unsigned/Windows-runtime verification
+limits remain. No feature changes, deployment or live database writes.
