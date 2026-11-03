@@ -4235,6 +4235,62 @@ test('HR reconciles a new scanner identity and records historical site attendanc
   assert.ok(Array.isArray(analytics.body.lowAttendance));
 });
 
+test('manual biometric matches remember private scanner names for later Excel imports',async()=>{
+  const owner=await login();
+  const hr=await login('hr@gkuc.lk');
+  const stamp=Date.now();
+  const oldCode=`NAME-OLD-${stamp}`,newCode=`NAME-NEW-${stamp}`;
+  const scannerName=`Scanner alias ${stamp}`;
+  const employee=(await call(owner,'GET','/employees')).body.find(person=>!person.biometricId);
+  assert.ok(employee);
+  const date=shift(-68);
+  const preview=async(code,name,excel=false)=>{
+    let buffer=Buffer.from(`ID,Name,Date,In,Out\n${code},${name},${date},07:30,16:30\n`);
+    if(excel){
+      const {default:XLSX}=await import('xlsx');
+      const book=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet([
+        ['Attendance Logs'],['Date',null,`${date} ~ ${date}`],
+        ['ID',null,code,null,'Name',null,name],
+        [Number(date.slice(-2))],['Day'],['07:30\n16:30']
+      ]),'Attendance Logs');
+      buffer=XLSX.write(book,{bookType:'biff8',type:'buffer'});
+    }
+    const file=new FormData();
+    file.append('file',new Blob([buffer]),excel?'later.xls':'first.csv');
+    const response=await fetch(`${base}/biometric/preview`,{method:'POST',headers:{authorization:`Bearer ${hr}`},body:file});
+    assert.equal(response.status,200);
+    return response.json();
+  };
+  const before=await preview(oldCode,scannerName);
+  assert.equal(before.rows[0].employeeId,null);
+  assert.equal((await call(hr,'POST','/biometric/mappings',{
+    code:oldCode,scannerName,employeeId:employee.id,replaceExisting:true})).status,200);
+  const [[mapping]]=await admin.query(`SELECT scanner_name FROM ${testDatabase}.employee_biometric_ids WHERE code=?`,[oldCode]);
+  assert.equal(mapping.scanner_name,scannerName);
+  const after=await preview(newCode,scannerName.toUpperCase(),true);
+  assert.equal(after.rows.length,1);
+  assert.equal(after.rows[0].employeeId,employee.id);
+  assert.equal(after.rows[0].employee,employee.name);
+  assert.equal(after.unknownDevices.length,0);
+  const imported=await call(hr,'POST','/biometric/commit',{filename:'later.xls',rows:after.rows.map(row=>({...row,workLocation:'Office',projectId:null}))});
+  assert.equal(imported.status,201,JSON.stringify(imported.body));
+  const [[saved]]=await admin.query(`SELECT employee_id,employee_name FROM ${testDatabase}.attendance WHERE employee_id=? AND work_date=?`,[employee.id,date]);
+  assert.equal(Number(saved.employee_id),employee.id);
+  assert.equal(saved.employee_name,employee.name);
+  const profile=(await call(owner,'GET',`/employees/${employee.id}`)).body;
+  assert.equal(profile.name,employee.name);
+  assert.ok(!JSON.stringify(profile).includes(scannerName),'scanner alias stays out of profile display data');
+  const [[event]]=await admin.query(`SELECT after_json details FROM ${testDatabase}.audit_logs WHERE entity='employee_biometric' AND entity_id=? ORDER BY id DESC LIMIT 1`,[String(employee.id)]);
+  const details=typeof event.details==='string'?JSON.parse(event.details):event.details;
+  assert.equal(details.scannerName,scannerName);
+  const second=(await call(owner,'GET','/employees')).body.find(person=>person.id!==employee.id&&!person.biometricId);
+  assert.ok(second);
+  assert.equal((await call(hr,'POST','/biometric/mappings',{code:`NAME-OTHER-${stamp}`,scannerName,employeeId:second.id})).status,200);
+  assert.equal((await preview(`NAME-AMBIG-${stamp}`,scannerName)).rows[0].employeeId,null);
+  assert.equal((await preview(oldCode,scannerName)).rows[0].employeeId,employee.id);
+});
+
 test('HR links an existing person from a scanner preview and imports the matched day', async () => {
   const authToken = await login();
   const employee = (await call(authToken, 'GET', '/employees')).body.find(person => !person.biometricId);

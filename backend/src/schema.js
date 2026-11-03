@@ -2929,6 +2929,7 @@ async function migrateExistingInstalls() {
     CONSTRAINT fk_biometric_identity_employee FOREIGN KEY(employee_id) REFERENCES employees(id),
     INDEX idx_biometric_identity_employee(employee_id)
   ) ENGINE=InnoDB`);
+  await addColumn('employee_biometric_ids', 'scanner_name', 'VARCHAR(120) NULL');
   await query(`INSERT IGNORE INTO employee_biometric_ids (code,employee_id)
     SELECT biometric_id,id FROM employees WHERE biometric_id IS NOT NULL AND biometric_id<>''`);
   /* Office employees may normally work at head office or be sent to a site. Site workers

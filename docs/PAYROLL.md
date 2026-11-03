@@ -115,3 +115,9 @@ The current application uses each eligible monthly employee's saved statutory sa
 3. Add a focused calculation test with real times and expected money.
 4. Verify generated daily detail, payslip total and export still reconcile.
 5. Update this document and append the decision to `PROGRESS.md`.
+
+## Attendance scanner identity memory (2026-11-03)
+
+The existing biometric import manual-match action now saves the scanner's source name internally alongside its approved number-to-employee mapping. Later previews and commits can recognize an unambiguous saved scanner name even if the export number differs. Profile display names are unchanged. Duplicate names and number/name ownership conflicts remain for manual HR matching, and hidden/Left profiles cannot be matched by name.
+
+This changes identity resolution only: attendance preview/review/import, manual correction protection, attendance calculations, policy rates and saved payroll snapshots retain their existing behavior. Focused coverage includes remembered scanner names across CSV and legacy Excel, source/profile name differences, duplicates/conflicts, deactivated profiles, multiple scanner IDs, reimports and the supplied report in an isolated test database.
