@@ -86,7 +86,7 @@ Packaged clients require HTTPS. `SITEOPS_DESKTOP_USER_DATA` isolates test profil
   Opt in with `SITEOPS_TEST_MYSQL=1 npm run test:backend --prefix desktop`.
   Set `SITEOPS_BACKEND_NODE` to a Node 20 executable if the runner uses another version.
   Do not run fixed-port integration suites concurrently.
-- Latest full Node 20 backend suite: **333 passed, 0 failed, 2 skipped** (335 including
+- Latest full Node 20 backend suite: **338 passed, 0 failed, 2 skipped** (340 including
   nested tests). The earlier seven counted failures were resolved by aligning stale
   expectations with exact minutes, per-date rates, Driver Site/Travel rules, rendered
   invoice text and an isolated missing-threshold transport fixture. Added coverage
@@ -177,3 +177,31 @@ sticky scroll container. Finance/People/QS layouts no longer override the deskto
 navbar to relative positioning. Their section menus retain independent scrolling
 below the pinned navbar, with desktop/tablet clearance. Mobile drawer behavior is
 retained. Browser receives the same CSS update; desktop requires the rebuilt client.
+
+## Approved task status changes — 2026-11-04 (1.0.5)
+
+Management can now change approved tasks from the status dropdown with a mandatory
+reason, or choose Reopen task in detail. The previous approval remains in history;
+the active approver is cleared and later approval requires Completed. Deploy the
+updated tasks API and browser build before distributing this client. This supersedes
+the earlier task-only Approved lock; payroll locks are unchanged.
+
+1.0.5 checks: frontend 39/39; full backend Node 20 334 passed, zero failed, two optional
+skips; focused management authorization/reason/reapproval checks 3/3. Actual local
+Electron UI confirmed approved-task reason validation, status save/reload, approver
+clearing and preserved history. Packaged macOS smoke passed.
+
+## Quotation/invoice print choices — 2026-11-04 (1.0.6)
+
+QS quotations and Finance client invoices have Print options actions. Users select
+letterhead fields, table columns/line amounts, total summaries/words and document
+sections. Enter a shared Printed quotation number on related alternatives; leaving
+it blank uses that record's reference. Invoice numbers keep their registered value.
+Choices persist per record and apply to HTML/PDF. Hiding totals hides words and
+category totals too. Saved financial amounts remain unchanged. Deploy backend
+startup migrations and frontend before distributing this bundled UI update.
+
+1.0.6 verification: full Node 20 backend 338 passed, zero failed, two optional skips;
+frontend suite 39/39; actual Electron/local-MySQL QS and Finance print-settings save,
+shared printed numbers, reload and PDF generation passed. PDF text/visual checks
+confirmed selected prices/totals/words are absent and developer credit remains.

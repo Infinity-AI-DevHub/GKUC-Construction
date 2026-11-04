@@ -10,12 +10,13 @@ const COLUMNS = ['Task', 'Assignee', 'Due', 'Status', 'Next action'];
 const TEMPLATE = 'minmax(220px,2fr) minmax(140px,1fr) 110px 125px minmax(150px,1fr)';
 const nextAction = (status, can) => ({ 'Not started': 'Start work', 'In progress': 'Submit for approval',
   Blocked: 'Resolve blocker', Completed: can?.projects ? 'Approve or return with reason' : 'Await manager approval',
-  Approved: 'Approved · no action', Rejected: 'Review feedback and resubmit' })[status] || 'Open task';
+  Approved: can?.projects ? 'Change status with reason' : 'Approved · no action', Rejected: 'Review feedback and resubmit' })[status] || 'Open task';
 const statusChanges = (status, can) => {
   if (!can.site) return [];
   return ({'Not started':['In progress'],'In progress':['Blocked','Completed'],
     Blocked:['In progress'],Rejected:['In progress'],
-    Completed:can.projects?['Approved','Rejected']:[]})[status] || [];
+    Completed:can.projects?['Approved','Rejected']:[],
+    Approved:can.projects?['Not started','In progress','Blocked','Completed','Rejected']:[]})[status] || [];
 };
 const day = value => String(value || '').slice(0, 10);
 
@@ -84,19 +85,20 @@ export default function Tasks({ data, reload, can, user, companyId }) {
     {statusChange && <TaskStatusForm change={statusChange} close={()=>setStatusChange(null)} reload={reload} />}
     {creating && <TaskForm data={data} companyId={companyId} close={() => setCreating(false)} reload={reload} />}
     {detail && <TaskDetail task={detail} close={() => setDetail(null)} reload={reload} can={can}
+      onReopen={()=>{setStatusChange({task:detail,status:'In progress'});setDetail(null);}}
       refresh={async () => setDetail(await api(`/tasks/${detail.id}`))} />}
   </Page>;
 }
 
 function TaskStatusForm({change:{task,status},close,reload}) {
-  const reasonRequired=['Blocked','Rejected'].includes(status);
+  const reasonRequired=task.status==='Approved'||['Blocked','Rejected'].includes(status);
   return <FormModal title="Update task status" close={close} label={status==='Approved'?'Approve task':'Save status'} onSubmit={async values=>{
     await patch(`/tasks/${task.id}`,{status,...(reasonRequired?{statusReason:values.statusReason.trim()}:{})});
     await reload();
   }}>
     <p className="form-note wide"><strong>{task.title}</strong><br/>{task.status} → {status}</p>
     {status==='Completed'&&<p className="form-note wide">This submits the work for management approval.</p>}
-    {reasonRequired&&<TextArea name="statusReason" label={status==='Blocked'?'Reason for blocking':'Corrections needed'} required/>}
+    {reasonRequired&&<TextArea name="statusReason" label={task.status==='Approved'?'Reason for changing approved task':status==='Blocked'?'Reason for blocking':'Corrections needed'} required/>}
   </FormModal>;
 }
 
@@ -142,7 +144,7 @@ function TaskForm({ data, companyId, close, reload }) {
 }
 
 /** Task history: the comments and site photos that turn a task into an auditable record. */
-function TaskDetail({ task, close, reload, refresh, can }) {
+function TaskDetail({ task, close, reload, refresh, can, onReopen }) {
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState('');
@@ -210,6 +212,7 @@ function TaskDetail({ task, close, reload, refresh, can }) {
       {actionError && <p className="form-error wide" role="alert">{actionError}</p>}
       <div className="form-actions">
         <button type="button" className="secondary" onClick={close}>Close</button>
+        {can.site && can.projects && task.status==='Approved' && <button type="button" className="secondary" disabled={busy} onClick={onReopen}>Reopen task</button>}
         {can.site && task.status === 'Not started' && <button type="button" className="secondary" disabled={busy} onClick={() => act('In progress')}>Start work</button>}
         {can.site && task.status === 'Blocked' && <button type="button" className="secondary" disabled={busy} onClick={() => act('In progress')}>Resume work</button>}
         {can.site && task.status === 'Rejected' && <button type="button" className="secondary" disabled={busy} onClick={() => act('In progress')}>Resume corrections</button>}

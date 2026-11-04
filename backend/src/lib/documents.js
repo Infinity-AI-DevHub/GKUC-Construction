@@ -1,3 +1,4 @@
+import {printOptions,printBlocks,printDesign} from './document-print-options.js';
 import {withDeveloperCredit} from './developer-credit.js';
 import { invoiceOptions } from './invoice-options.js';
 import { amountInWords } from './amount-in-words.js';
@@ -302,14 +303,17 @@ function page({ design, company, title, heading, reference, date, blocks, settin
 }
 
 export function quotationDocument({ company, quotation, items, bankAccount, settings: given, design: givenDesign }) {
+  const print=printOptions(quotation.printOptions??quotation.print_options);
+  quotation={...quotation,reference:print.number?(print.printedReference||quotation.reference):''};
   const settings = settingsFor(given);
   const design = normaliseDesign(givenDesign);
+  if(quotation.printOptions||quotation.print_options)printDesign(design,print);
   const presentation = typeof quotation.presentation === 'string'
     ? (() => { try { return JSON.parse(quotation.presentation); } catch { return null; } })()
     : quotation.presentation;
   const issuer = presentation?.company || company;
   const recipient = presentation?.client || null;
-  const issuerShow = presentation?.show?.company || {};
+  const issuerShow = {...presentation?.show?.company,...((quotation.printOptions||quotation.print_options)?{logo:print.logo,name:print.companyName,bankDetails:print.bank}:{})};
   const recipientShow = presentation?.show?.client || {};
 
   const markup = Number(quotation.markupPercent || 0);
@@ -348,7 +352,7 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
   const quotationNotes = lines(quotation.notes || '');
   const terms = lines(quotation.terms || settings.quotationTerms || '');
   const paymentTerms = lines(quotation.paymentTerms || '');
-  const methods = items.filter(item => item.methodStatement).map(item => ({
+  const methods = items.filter(item => print.methods && item.methodStatement).map(item => ({
     name: item.area || item.category || item.description,
     steps: lines(item.methodStatement)
   }));
@@ -443,7 +447,7 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
   };
 
   return page({
-    design, company: issuer, blocks, settings, heading: 'Quotation', reference: quotation.reference, date: quotation.quoteDate,
+    design, company: issuer, blocks:printBlocks(blocks,print), settings, heading: 'Quotation', reference: quotation.reference, date: quotation.quoteDate,
     headerVisibility: issuerShow,
     title: `${quotation.reference} — ${quotation.clientName || 'Quotation'}`, firstPageLetterhead: true
   });
@@ -451,12 +455,14 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
 
 export function invoiceDocument({ company, invoice, items, settings: given, design: givenDesign }) {
   const options = invoiceOptions(invoice.invoiceOptions);
-  const columns = options.columns;
+  const print=printOptions(invoice.printOptions??invoice.print_options);
+  const columns = (invoice.printOptions||invoice.print_options)?{unit:print.unit,quantity:print.quantity,rate:print.rate}:options.columns;
   const span = 2 + Number(columns.unit) + Number(columns.quantity) + Number(columns.rate);
   invoice = { ...invoice, ...(options.cumulativeTotals || {}), netPayable: invoice.netPayable };
   const settings = settingsFor(given);
   const design = normaliseDesign(givenDesign);
-  if (company.address) design.header.elements = design.header.elements.map(element =>
+  if(invoice.printOptions||invoice.print_options)printDesign(design,print);
+  if (company.address && print.companyDetails) design.header.elements = design.header.elements.map(element =>
     element.id === 'companyDetails' ? { ...element, show: true } : element);
   const blank = '<span class="write-in">........................................</span>';
   const valueOrBlank = value => String(value || '').trim() ? escape(value) : blank;
@@ -482,8 +488,8 @@ export function invoiceDocument({ company, invoice, items, settings: given, desi
   const blocks = {
     letterhead: letterhead(company, invoice.documentType || (invoice.taxTreatment === 'Exempt' ? 'Invoice' : 'Tax Invoice'), invoice.reference, invoice.invoiceDate, design),
     parties: `<div data-block="parties">
-      <div class="invoice-meta"><div><strong>Date of Invoice:</strong> ${escape(longDate(invoice.invoiceDate))}</div>
-        <div><strong>${invoice.taxTreatment === 'Exempt' ? 'Invoice' : 'Tax Invoice'} No:</strong> ${escape(invoice.reference)}</div></div>
+      <div class="invoice-meta">${print.date?`<div><strong>Date of Invoice:</strong> ${escape(longDate(invoice.invoiceDate))}</div>`:''}
+        ${print.number?`<div><strong>${invoice.taxTreatment === 'Exempt' ? 'Invoice' : 'Tax Invoice'} No:</strong> ${escape(invoice.reference)}</div>`:''}</div>
       <div class="parties invoice-parties">
         <div class="party"><p><strong>Supplier's TIN:</strong> ${valueOrBlank(company.tin)}</p>
           <p><strong>Supplier's Name:</strong> ${escape(company.name)}</p>
@@ -498,7 +504,7 @@ export function invoiceDocument({ company, invoice, items, settings: given, desi
     subject: `<div class="invoice-supply" data-block="subject">
       <div class="invoice-meta"><div><strong>Date of Delivery:</strong> ${invoice.deliveryDate ? escape(longDate(invoice.deliveryDate)) : blank}</div>
         <div><strong>Place of Supply:</strong> ${valueOrBlank(invoice.placeOfSupply)}</div></div>
-      <div class="invoice-information"><strong>Additional Information if any:</strong> ${valueOrBlank(invoice.notes)}
+      <div class="invoice-information">${print.notes?`<strong>Additional Information if any:</strong> ${valueOrBlank(invoice.notes)}`:''}
         ${invoice.title ? `<p>${escape(invoice.title)}</p>` : ''}
         ${invoice.project ? `<p>Project: ${escape(invoice.project)}</p>` : ''}
         ${invoice.dueDate ? `<p>Payment due: ${escape(longDate(invoice.dueDate))}</p>` : ''}</div></div>`,
@@ -511,9 +517,9 @@ export function invoiceDocument({ company, invoice, items, settings: given, desi
     terms: terms.length ? `<div class="terms" data-block="terms"><h4>Terms &amp; conditions</h4><ul>${terms.map(line => `<li>${line}</li>`).join('')}</ul></div>` : '',
     bank: company.bankDetails ? `<div class="terms" data-block="bank"><h4>Bank details</h4><p>${lines(company.bankDetails).join('<br>')}</p></div>` : '',
     signatures: `<div class="sign" data-block="signatures"><div>For and on behalf of ${escape(company.name)}<br><br>Name &amp; signature</div></div>`,
-    footer: footer(company, invoice.reference, settings)
+    footer: footer(company, print.number?invoice.reference:'', settings)
   };
-  const html = page({ design, company, blocks, settings, title: `${invoice.reference} — ${invoice.client}`,
+  const html = page({ design, company, blocks:printBlocks(blocks,print,{columnCount:span+1}), settings, title: `${invoice.reference} — ${invoice.client}`,
     heading: invoice.documentType || (invoice.taxTreatment === 'Exempt' ? 'Invoice' : 'Tax Invoice'),
     reference: invoice.reference, date: invoice.invoiceDate });
   return html.replace('class="sheet"', 'class="sheet invoice-sheet"').replace('</head>', `<style>

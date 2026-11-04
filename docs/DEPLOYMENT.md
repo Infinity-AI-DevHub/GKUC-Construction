@@ -8,7 +8,7 @@ The repository's PM2 definition assumes `/www/wwwroot/siteops/backend`, process 
 ## Release gate
 
 Read [MANUAL_QA.md](MANUAL_QA.md) and [DESKTOP.md](DESKTOP.md) first. The latest
-full Node 20 backend regression run passes 333 tests, with zero failures and two
+full Node 20 backend regression run passes 338 tests, with zero failures and two
 optional skips. Earlier seven failures were stale expectations/test-fixture coupling;
 no payroll calculation change was needed. The follow-up was not rerun on Node 22.
 Windows runtime/signing, client hardware and production integration remain unverified.
@@ -164,8 +164,8 @@ npm run desktop:dist:mac
 npm run test:packaged --prefix desktop
 ```
 
-Outputs are `desktop/release/GKUC-Construction-1.0.4-win-x64.exe` and
-`desktop/release/GKUC-Construction-1.0.4-mac-arm64.zip` for the current version. Version each
+Outputs are `desktop/release/GKUC-Construction-1.0.6-win-x64.exe` and
+`desktop/release/GKUC-Construction-1.0.6-mac-arm64.zip` for the current version. Version each
 subsequent release in desktop/package.json and keep its lockfile/release notes aligned.
 The Mac packaged smoke test applies to macOS only. A Windows installer build produced
 on a Mac still needs installation/runtime testing on an actual Windows machine.
@@ -210,3 +210,21 @@ session. Check process quit/reopen, manual sign-out/reopen and server expiry; ve
 PDF credit at an invoice's end and on every payslip page. Old installers cannot gain
 the new local session behavior from a server update alone. No database reset, policy
 recalculation, storage migration or live test payroll payment is needed.
+
+## 1.0.5 — approved-task corrections
+
+Deploy backend and frontend together before distributing the new client. Management
+can change approved tasks with a required reason; the API clears the current approver
+and retains history. An older backend will reject the newly enabled dropdown action.
+No schema migration is required. Verify a designated test task, not an unrelated
+production record.
+
+## 1.0.6 — per-document print choices
+
+Deploy backend first: startup adds guarded nullable print_options JSON columns to
+quotations_client and client_invoices. Retain normal backup/maintenance procedure;
+do not reset or reseed business data. Deploy the browser build, then install the
+new desktop client. Verify two designated quotations sharing a printed number and
+a PDF with total/words hidden, plus an invoice whose print settings change without
+altering saved totals/payments. Existing records with NULL options retain their
+prior format until choices are saved.

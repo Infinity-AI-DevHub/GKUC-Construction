@@ -1,3 +1,4 @@
+import DocumentPrintOptions from './DocumentPrintOptions.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Landmark, TriangleAlert, Wallet, PencilLine, Trash2 } from 'lucide-react';
 import { api, openDocument, post, rupees, shortDate, slug, todayInput } from './api.js';
@@ -113,7 +114,7 @@ export function ClientInvoices({ data, can, companyId }) {
         <div className="row-actions">
           <button className="status-button" onClick={() => setSelected(invoice)}>Payments</button>
           {can.invoice&&<button className="status-button" onClick={()=>setNumberEdit(invoice)}>Edit number</button>}
-          {can.invoice && <button className="status-button" onClick={() => setColumnInvoice(invoice)}>Invoice columns</button>}
+          {can.invoice && <button className="status-button" onClick={() => setColumnInvoice(invoice)}>Print options</button>}
           <button className="status-button" onClick={() => openDocument(`/receivables/invoices/${invoice.id}/document`)}>View / PDF</button>
           {can.invoice && invoice.status === 'Draft'
             ? <button className="status-button" onClick={() => issue(invoice)}>Issue</button>
@@ -129,7 +130,7 @@ export function ClientInvoices({ data, can, companyId }) {
       <AgeingTable rows={ageing.rows} />
     </> : null}
 
-    {columnInvoice && <InvoiceColumnForm invoice={columnInvoice} close={() => setColumnInvoice(null)} reload={load} />}
+    {columnInvoice && <DocumentPrintOptions kind="invoice" id={columnInvoice.id} reference={columnInvoice.reference} close={() => setColumnInvoice(null)} reload={load} />}
     {raising && <CertificateForm data={data} companyId={companyId} close={() => setRaising(false)} reload={load} />}
     {planning && <BillingPlanForm quotations={acceptedQuotes.filter(quote => !quote.billingPlanId)} close={() => setPlanning(false)} reload={load} />}
     {termInvoice && <FormModal title={`Invoice ${termInvoice.label}`} close={() => setTermInvoice(null)} label="Save invoice as draft"
@@ -289,24 +290,6 @@ function InvoiceColumnControls({ columns, setColumns }) {
       <input type="checkbox" checked={columns[key]} onChange={event => setColumns(current => ({ ...current, [key]: event.target.checked }))} /><span>{label}</span>
     </label>)}
   </fieldset>;
-}
-
-function InvoiceColumnForm({ invoice, close, reload }) {
-  const [columns, setColumns] = useState(null);
-  const [error, setError] = useState('');
-  useEffect(() => { api(`/receivables/invoices/${invoice.id}`).then(detail => {
-    const options = typeof detail.invoice_options === 'string' ? JSON.parse(detail.invoice_options) : detail.invoice_options;
-    setColumns({ unit: true, quantity: true, rate: true, ...options?.columns });
-  }).catch(failure => setError(failure.message)); }, [invoice.id]);
-  return <FormModal title={`${invoice.reference} — invoice columns`} close={close} label="Save invoice columns" onSubmit={async () => {
-    if (!columns) throw new Error('Wait for invoice settings to load.');
-    await api(`/receivables/invoices/${invoice.id}/columns`, { method: 'PUT', body: JSON.stringify(columns) });
-    await reload();
-  }}>
-    {error && <p className="form-error wide">{error}</p>}
-    {columns && <div className="wide"><InvoiceColumnControls columns={columns} setColumns={setColumns} /></div>}
-    <p className="invoice-note wide">Changes apply to this invoice's preview and PDF. Saved amounts and recorded payments stay the same.</p>
-  </FormModal>;
 }
 
 const BLANK_LINE = { description: '', unit: '', quantity: '', rate: '', quotationItemId: '', boqItemId: '' };

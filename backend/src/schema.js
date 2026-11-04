@@ -1390,6 +1390,7 @@ async function createMethodTables() {
   await addColumn('quotations_client', 'additional_notes', 'TEXT NULL');
   await addColumn('quotations_client', 'bank_account_id', 'BIGINT UNSIGNED NULL');
   await addColumn('quotations_client', 'presentation', 'JSON NULL');
+  await addColumn('quotations_client','print_options','JSON NULL');
   await addColumn('quotations_client', 'calculation_mode', "ENUM('Combined Total','Separate Category Totals') NOT NULL DEFAULT 'Combined Total'");
   await addColumn('quotations_client', 'revision_number', 'INT UNSIGNED NOT NULL DEFAULT 0');
   await addColumn('quotations_client', 'root_quotation_id', 'BIGINT UNSIGNED NULL');
@@ -1735,6 +1736,7 @@ async function createReceivableTables() {
     INDEX idx_cinvoice_item (invoice_id)
   ) ENGINE=InnoDB`);
   await addColumn('client_invoices', 'invoice_options', 'JSON NULL');
+  await addColumn('client_invoices','print_options','JSON NULL');
   await addColumn('client_invoices', 'delivery_date', 'DATE NULL');
   await addColumn('client_invoices', 'place_of_supply', 'VARCHAR(300) NULL');
   await addColumn('client_invoices', 'payment_mode', 'VARCHAR(80) NULL');

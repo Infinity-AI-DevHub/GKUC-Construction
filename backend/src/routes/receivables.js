@@ -1,3 +1,4 @@
+import {installPrintOptions} from './document-print-options.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { pool, query, getOne, audit, transaction, nextReference } from '../db.js';
@@ -13,6 +14,7 @@ import { sendDocument } from '../lib/document-pdf.js';
 import {documentNumber} from '../lib/document-numbering.js';
 
 const router = Router();
+installPrintOptions(router,{base:'/receivables/invoices',table:'client_invoices',permission:'finance.invoice',readPermission:'finance.view',quotation:false});
 
 const money = value => `LKR ${Number(value || 0).toLocaleString('en-LK', { maximumFractionDigits: 0 })}`;
 const companyParam = req => {
@@ -420,11 +422,12 @@ router.post('/receivables/preview', auth, permit('finance.invoice'),
 router.put('/receivables/invoices/:id/columns', auth, permit('finance.invoice'), validate(invoiceColumnsSchema), async (req, res, next) => {
   try {
     await transaction(async connection => {
-      const [[invoice]] = await connection.execute('SELECT invoice_options FROM client_invoices WHERE id=? FOR UPDATE', [req.params.id]);
+      const [[invoice]] = await connection.execute('SELECT invoice_options,print_options FROM client_invoices WHERE id=? FOR UPDATE', [req.params.id]);
       if (!invoice) throw fail(404, 'That invoice was not found');
       const options = invoiceOptions(invoice.invoice_options);
       const before = options.columns;
       options.columns = req.body;
+      if(invoice.print_options){const print=typeof invoice.print_options==='string'?JSON.parse(invoice.print_options):invoice.print_options;await connection.execute('UPDATE client_invoices SET print_options=? WHERE id=?',[JSON.stringify({...print,...req.body}),req.params.id]);}
       await connection.execute('UPDATE client_invoices SET invoice_options=? WHERE id=?', [JSON.stringify(options), req.params.id]);
       await audit(connection, req.user.id, 'UPDATE_COLUMNS', 'client_invoice', req.params.id, before, req.body, req.ip);
     });
@@ -436,7 +439,7 @@ router.put('/receivables/invoices/:id/columns', auth, permit('finance.invoice'),
 router.get('/receivables/invoices/:id/document', auth, permit('finance.view', 'finance.invoice'),
   async (req, res, next) => {
     try {
-      const invoice = await getOne(`SELECT i.reference,i.client,i.kind,i.document_type documentType,i.title,i.invoice_date invoiceDate,
+      const invoice = await getOne(`SELECT i.reference,i.print_options printOptions,i.client,i.kind,i.document_type documentType,i.title,i.invoice_date invoiceDate,
         i.delivery_date deliveryDate,i.place_of_supply placeOfSupply,i.payment_mode paymentMode,
         i.buyer_tin buyerTin,i.buyer_vat_number buyerVatNumber,i.buyer_address buyerAddress,
         i.buyer_phone buyerPhone,i.due_date dueDate,i.gross,i.tax_treatment taxTreatment,

@@ -125,3 +125,21 @@ bootstrap and clear on logout, invalidation or connection change. No offline acc
 or authorization bypass is introduced. Every generated document ends with Developed
 by Infinity AI (Pvt) Ltd, Sri Lanka; payslips repeat it on each printed page. Keep
 this credit separate from editable company footer settings and historical salary data.
+
+## 2026-11-04 — approved tasks may be corrected by management
+
+User explicitly requested changing approved task statuses as well. Supersede the
+previous task lock: management with task-update permission may choose any other
+status with a required reason. Clear the current approver, retain approval and
+change history, and require Completed before reapproval. Staff without management
+permission cannot change approved task status. Payroll approval locks are unaffected.
+
+## 2026-11-04 — quotation alternatives and document visibility
+
+Allow independent quotations for the same work to use the same client-facing printed
+number. Keep each record traceable by its existing ID/reference; do not renumber
+financial links or relax invoice reference uniqueness. Users choose printed fields
+per document in QS/Finance. Hiding totals also suppresses words/category summaries;
+hiding printed values never changes saved calculations, budgets, VAT ledgers or
+payments. Keep Infinity AI attribution mandatory. Revisions inherit presentation
+choices but remain independently reviewable snapshots.
