@@ -160,3 +160,20 @@ logout and second restart; real multi-page PDF checks (five-page payslip, one cr
 per page, invoice credit once at end). The full backend suite passes 333, fails zero,
 skips two optional external-fixture tests. API date fixtures now use the same local
 business date as the API/seed, preventing UTC/local-midnight fixture mismatches.
+
+## Task-list status controls — 2026-11-04 (1.0.3)
+
+Status dropdowns on the Tasks list open a short save/approval dialog. Blocking or
+returning work requires a reason; approval permissions and Approved locks remain.
+The same existing task API persists both list and detail actions. Rebuild/reinstall
+the desktop client to receive this bundled UI update; browser users need the new
+frontend build. No database migration is required.
+
+## Pinned global navigation — 2026-11-04 (1.0.4)
+
+The desktop navbar and tablet/phone header remain visible during page scrolling.
+Root horizontal containment uses overflow-x:clip, preserving the viewport as the
+sticky scroll container. Finance/People/QS layouts no longer override the desktop
+navbar to relative positioning. Their section menus retain independent scrolling
+below the pinned navbar, with desktop/tablet clearance. Mobile drawer behavior is
+retained. Browser receives the same CSS update; desktop requires the rebuilt client.
