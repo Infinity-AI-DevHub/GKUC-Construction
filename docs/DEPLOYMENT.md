@@ -164,8 +164,8 @@ npm run desktop:dist:mac
 npm run test:packaged --prefix desktop
 ```
 
-Outputs are `desktop/release/GKUC-Construction-1.0.2-win-x64.exe` and
-`desktop/release/GKUC-Construction-1.0.2-mac-arm64.zip` for the current version. Version each
+Outputs are `desktop/release/GKUC-Construction-1.0.4-win-x64.exe` and
+`desktop/release/GKUC-Construction-1.0.4-mac-arm64.zip` for the current version. Version each
 subsequent release in desktop/package.json and keep its lockfile/release notes aligned.
 The Mac packaged smoke test applies to macOS only. A Windows installer build produced
 on a Mac still needs installation/runtime testing on an actual Windows machine.

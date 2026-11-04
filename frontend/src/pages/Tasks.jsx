@@ -11,6 +11,12 @@ const TEMPLATE = 'minmax(220px,2fr) minmax(140px,1fr) 110px 125px minmax(150px,1
 const nextAction = (status, can) => ({ 'Not started': 'Start work', 'In progress': 'Submit for approval',
   Blocked: 'Resolve blocker', Completed: can?.projects ? 'Approve or return with reason' : 'Await manager approval',
   Approved: 'Approved · no action', Rejected: 'Review feedback and resubmit' })[status] || 'Open task';
+const statusChanges = (status, can) => {
+  if (!can.site) return [];
+  return ({'Not started':['In progress'],'In progress':['Blocked','Completed'],
+    Blocked:['In progress'],Rejected:['In progress'],
+    Completed:can.projects?['Approved','Rejected']:[]})[status] || [];
+};
 const day = value => String(value || '').slice(0, 10);
 
 /** PID 2.3 — assigned work with deadlines, so no instruction depends on being remembered. */
@@ -21,6 +27,7 @@ export default function Tasks({ data, reload, can, user, companyId }) {
   const [dueFilter, setDueFilter] = useState('all');
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [statusChange,setStatusChange] = useState(null);
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
 
@@ -64,15 +71,33 @@ export default function Tasks({ data, reload, can, user, companyId }) {
         <div><button type="button" className="task-record-link" onClick={() => openRecord(`/tasks/${task.id}`, setDetail)}>{task.title}</button><small>{task.priority} priority</small></div>
         <div className="person"><Avatar name={task.assignee} /><span>{task.assignee}</span></div>
         <span className={task.due === 'Yesterday' ? 'overdue' : ''}>{task.due}</span>
-        <Badge tone={slug(task.status)}>{task.status}</Badge>
+        {statusChanges(task.status,can).length ? <select className={`task-status-select ${slug(task.status)}`}
+          aria-label={`Status for ${task.title}`} value={task.status}
+          onChange={event=>{if(event.target.value!==task.status)setStatusChange({task,status:event.target.value});}}>
+          <option value={task.status}>{task.status}</option>
+          {statusChanges(task.status,can).map(status=><option value={status} key={status}>{status}</option>)}
+        </select> : <Badge tone={slug(task.status)}>{task.status}</Badge>}
         <span className="task-next-action">{nextAction(task.status, can)}</span>
       </Row>)}
     </Table></section>)}</div>
 
+    {statusChange && <TaskStatusForm change={statusChange} close={()=>setStatusChange(null)} reload={reload} />}
     {creating && <TaskForm data={data} companyId={companyId} close={() => setCreating(false)} reload={reload} />}
     {detail && <TaskDetail task={detail} close={() => setDetail(null)} reload={reload} can={can}
       refresh={async () => setDetail(await api(`/tasks/${detail.id}`))} />}
   </Page>;
+}
+
+function TaskStatusForm({change:{task,status},close,reload}) {
+  const reasonRequired=['Blocked','Rejected'].includes(status);
+  return <FormModal title="Update task status" close={close} label={status==='Approved'?'Approve task':'Save status'} onSubmit={async values=>{
+    await patch(`/tasks/${task.id}`,{status,...(reasonRequired?{statusReason:values.statusReason.trim()}:{})});
+    await reload();
+  }}>
+    <p className="form-note wide"><strong>{task.title}</strong><br/>{task.status} → {status}</p>
+    {status==='Completed'&&<p className="form-note wide">This submits the work for management approval.</p>}
+    {reasonRequired&&<TextArea name="statusReason" label={status==='Blocked'?'Reason for blocking':'Corrections needed'} required/>}
+  </FormModal>;
 }
 
 function TaskForm({ data, companyId, close, reload }) {

@@ -1,4 +1,6 @@
 /* Shared presentation system, aligned with the commercial desk. No workflow changes. */
+:root{--workspace-nav-offset:104px}
+@media(max-width:1023px){:root{--workspace-nav-offset:88px}}
 main,.modal-backdrop{--workspace-ink:#102a43;--workspace-red:#ab1736;--workspace-muted:#65788b;--workspace-line:#e1e7ee}
 main .page-heading{padding:8px 0 26px;margin-bottom:0;align-items:center;gap:20px}
 main .page-heading h1{font-family:Manrope,sans-serif;font-size:30px;letter-spacing:-1.2px;color:var(--workspace-ink)}
@@ -34,11 +36,11 @@ main .page-heading p{font-size:13px;color:var(--workspace-muted);margin-top:8px;
 .finance-report-filters>button{align-self:end;min-height:38px}
 .table-row.linked-record{background:#fff7e8;box-shadow:inset 3px 0 #bc761d}
 .module-layout{display:grid;grid-template-columns:232px minmax(0,1fr);gap:28px;align-items:start}
-.module-navigation{position:sticky;top:24px;background:#fff;border:1px solid var(--workspace-line);border-radius:18px;padding:20px 10px;box-shadow:0 6px 24px #102a4305;min-width:0}
-.module-navigation{display:flex;flex-direction:column;min-height:0;max-height:calc(100vh - 48px);max-height:calc(100dvh - 48px);overflow:hidden}
+.module-navigation{position:sticky;top:var(--workspace-nav-offset);background:#fff;border:1px solid var(--workspace-line);border-radius:18px;padding:20px 10px;box-shadow:0 6px 24px #102a4305;min-width:0}
+.module-navigation{display:flex;flex-direction:column;min-height:0;max-height:calc(100vh - var(--workspace-nav-offset) - 24px);max-height:calc(100dvh - var(--workspace-nav-offset) - 24px);overflow:hidden}
 .module-navigation-label{flex:none}
 .module-navigation>.toolbar{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-width:thin}
-@media(min-width:1024px){.app:has(.module-layout,.qs-layout)>aside{position:relative}}
+
 @media(max-width:800px){.module-navigation{max-height:none;overflow:visible}.module-navigation>.toolbar{overflow:visible}}
 @media print{.module-navigation{position:static;max-height:none;overflow:visible}.module-navigation>.toolbar{overflow:visible}}
 .module-navigation-label{padding:0 12px 18px;color:#718295;font-size:10px;letter-spacing:1.3px;text-transform:uppercase;font-weight:800}

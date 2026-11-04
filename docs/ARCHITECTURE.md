@@ -175,3 +175,19 @@ one end credit; payslips use a bottom-centre @page margin credit on every printe
 with existing confidentiality/page-number margins retained. Saved financial payroll
 calculations and approved/paid records are not changed. Existing uploaded PDF files
 are not rewritten; the rule applies to system-generated documents.
+
+### Task-list status updates (2026-11-04)
+
+Tasks rows expose permitted next statuses directly in their Status column. A short
+confirmation form calls the existing PATCH /api/tasks/:id, then reloads shared data.
+Blocked/Rejected require a reason; Completed requires management for Approved/Rejected;
+Approved stays locked. Read-only users retain badges. Office and project task groups
+share the same control, persisted record, audit history and live update flow as the
+detail dialog. No route/schema or permission changes.
+
+### Navigation scroll containment (2026-11-04)
+
+Global root width containment uses overflow-x:clip so sticky desktop navigation and
+mobile/tablet header track the viewport. Module layouts no longer disable global
+navbar stickiness. A shared workspace-nav-offset clears the global bar for module
+and QS section navigation while preserving bounded section-menu scrolling.

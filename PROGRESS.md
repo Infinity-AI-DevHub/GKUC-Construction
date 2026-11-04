@@ -369,3 +369,54 @@ corrected icons and encrypted remembered-login behavior. Both platform builds
 succeeded; packaged Mac login/name/security smoke check passed 1/1. Regenerated
 SHA256SUMS for the two artifacts. Existing unsigned/Windows-runtime verification
 limits remain. No feature changes, deployment or live database writes.
+
+
+## 2026-11-04 — update task status directly from grouped Tasks list (1.0.3)
+
+User requested status changes from the Tasks list shown in their screenshot. Added
+a per-row status dropdown with a short explicit save/approval form using the existing
+PATCH /tasks/:id. Options mirror the existing detail workflow: start/resume, block,
+submit Completed, management approve/return. Blocking/returning requires a reason;
+read-only users retain badges and Approved records remain locked. Reload keeps the
+list, status filters, next action and existing shared task history in sync. No new
+backend route, permission, schema or live data change. Updated ARCHITECTURE, DESKTOP
+and release artifact references in DEPLOYMENT; bumped desktop package/lock to 1.0.3.
+
+Validation: frontend suite 39/39, production frontend build succeeded (existing chunk
+advisory). Isolated actual Electron+local-MySQL UI check passed for project and office
+tasks: Cancel preserves old status; blank reason blocks save; block/resume/complete/
+return/re-submit/approve persist; page reload retains Approved and its lock; audit
+statusHistory includes both reasons. Initial UI-check retry corrected the locator to
+include the shared form's required-field marker. Reusable local check and screenshot
+are ignored desktop/test-results/task-status-check.cjs and tasks-list-status.png.
+Temporary test database/server/profile were cleaned up. Focused Node 20 API checks
+for task role enforcement, management approval and office persistence passed 3/3.
+Packaged Mac smoke check passed 1/1. Mac arm64 ZIP and Windows x64 installer rebuilt
+as 1.0.3 and SHA256SUMS regenerated. Windows runtime/signing remain unverified;
+artifacts are unsigned. `git diff --check` passed. No deployment or live DB write.
+
+
+## 2026-11-04 — pin global navbar during page scrolling (1.0.4)
+
+User requested the navbar remain stationary when scrolling pages. Replaced root
+overflow-x:hidden with clip so root ancestors no longer intercept sticky positioning.
+Removed the module/QS-page rule that changed the global desktop navbar to relative.
+Added shared section-menu clearance (104px desktop, 88px tablet) and corresponding
+viewport-height limits for module/QS navigation to avoid hiding it under the global
+bar. Existing mobile drawers and narrow QS horizontal section navigation retain
+their behavior. No API/schema/business-rule changes. Updated ARCHITECTURE/DESKTOP
+and current release filenames in DEPLOYMENT; desktop package/lock now 1.0.4.
+
+Validation: frontend suite 39/39 and production build passed (existing chunk advisory).
+Actual Electron + isolated local backend scroll check passed all 16 combinations:
+Tasks, Finance, QS, People at 1440x950, 1920x1080, 900x800 and 390x844. Checked actual
+page scrolling, pinned visible bar coordinates, account-menu usability after scrolling
+and section-menu clearance wherever those menus use sticky positioning. Checked
+desktop/mobile screenshots. Initial QA iterations corrected smooth-scroll timing
+and the expected static QS tab strip below its existing 900px breakpoint; tablet
+clearance was increased after measuring the 72px global header. QA script/evidence
+are ignored desktop/test-results/navbar-check.cjs and navbar-sticky-{desktop,mobile}.png.
+Disposable database/server/profile were cleaned up. Packaged Mac smoke passed 1/1.
+Both 1.0.4 platform builds completed; SHA256SUMS regenerated. No deployment or live
+DB writes. Windows runtime/signing remain unverified; packages remain unsigned.
+`git diff --check` passed.
