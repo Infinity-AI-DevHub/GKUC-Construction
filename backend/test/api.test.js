@@ -5950,3 +5950,58 @@ test('remembered device login has a revocable 30-day session while ordinary logi
     assert.equal((await call(token,'GET','/bootstrap')).status,401);
   }
 });
+
+
+test('management can reopen approved tasks with a reason and a fresh approval trail',async()=>{
+ const owner=await login(),site=await login('supervisor@gkuc.lk');
+ const created=await call(owner,'POST','/tasks',{title:'Approved task correction QA',companyId:1,projectId:null,assigneeEmployeeIds:[2],due:'Today',priority:'Medium'});
+ assert.equal(created.status,201);const id=created.body.id;
+ for(const status of ['In progress','Completed','Approved'])assert.equal((await call(owner,'PATCH',`/tasks/${id}`,{status})).status,200);
+ assert.equal((await call(site,'PATCH',`/tasks/${id}`,{status:'In progress',statusReason:'Need corrections'})).status,403);
+ assert.equal((await call(owner,'PATCH',`/tasks/${id}`,{status:'In progress'})).status,400);
+ for(const status of ['Not started','In progress','Blocked','Completed','Rejected']){
+  const changed=await call(owner,'PATCH',`/tasks/${id}`,{status,statusReason:'Management correction'});
+  assert.equal(changed.status,200);assert.equal(changed.body.approvedBy,null);
+  const detail=(await call(owner,'GET',`/tasks/${id}`)).body;
+  assert.ok(detail.statusHistory.some(row=>row.before==='Approved'&&row.after===status&&row.reason==='Management correction'));
+  if(status!=='Completed')assert.equal((await call(owner,'PATCH',`/tasks/${id}`,{status:'Completed'})).status,200);
+  assert.equal((await call(owner,'PATCH',`/tasks/${id}`,{status:'Approved'})).status,200);
+ }
+});
+
+
+test('per-document print options persist shared quotation numbers and invoice choices without financial changes',async()=>{
+ const owner=await login(),store=await login('store@gkuc.lk');
+ const html=async path=>{const response=await fetch(`${base}${path}`,{headers:{authorization:`Bearer ${owner}`}});assert.equal(response.status,200);return response.text();};
+ const client=await call(owner,'POST','/clients',{type:'Private',name:'Print options customer'});assert.equal(client.status,201);const clientId=client.body.id;
+ const body={companyId:1,clientId,title:'Same work alternatives',quoteDate:today(),markupPercent:0,vatPercent:0,lines:[{category:'Work',description:'Shared work line',unit:'Litres',quantity:2,rate:887}]};
+ const ids=[];
+ for(let i=0;i<2;i++){
+  const created=await call(owner,'POST','/qs/quotations/manual',body);assert.equal(created.status,201,JSON.stringify(created.body));ids.push(created.body.id);
+  const path=`/qs/quotations/${created.body.id}/print-options`;
+  assert.equal((await call(store,'PUT',path,{totals:false})).status,403);
+  assert.equal((await call(owner,'PUT',path,{printedReference:'SAME-WORK/42',totals:false,lineAmounts:false,rate:false,footer:false})).status,204);
+  const opts=await call(owner,'GET',path);assert.equal(opts.body.totals,false);assert.equal(opts.body.printedReference,'SAME-WORK/42');
+  const document={body:await html(`/qs/quotations/${created.body.id}/document`)};assert.match(document.body,/SAME-WORK\/42/);assert.doesNotMatch(document.body,/<tfoot>|Amount in words:|class="amount num"|class="rate num"/);assert.match(document.body,/Developed by Infinity AI/);
+  const saved=(await call(owner,'GET',`/qs/quotations/${created.body.id}`)).body;assert.equal(Number(saved.total),1774);assert.equal(saved.reference,created.body.reference);
+ }
+ assert.notEqual(ids[0],ids[1]);
+ const visibility={company:Object.fromEntries(['logo','name','address','telephone','email','registrationNumber','tin','vatNumber','svatNumber','bankDetails'].map(key=>[key,true])),client:Object.fromEntries(['name','billingAddress','siteAddress','contactPerson','phone','alternatePhone','email','city','district','province','country','registrationNumber','tin','vatNumber','project'].map(key=>[key,true]))};
+ const revision=await call(owner,'POST',`/qs/quotations/${ids[0]}/revisions`,{...body,visibility,calculationMode:'Combined Total'});assert.equal(revision.status,201,JSON.stringify(revision.body));
+ const revisionPrint=(await call(owner,'GET',`/qs/quotations/${revision.body.id}/print-options`)).body;assert.equal(revisionPrint.totals,false);assert.equal(revisionPrint.printedReference,'SAME-WORK/42');
+
+ const invoice=await call(owner,'POST','/receivables/invoices',{companyId:1,projectId:null,kind:'Other',title:'Presentation invoice QA',invoiceDate:today(),taxTreatment:'Exempt',items:[{description:'Saved financial line',unit:'Litres',quantity:2,rate:887}]});
+ assert.equal(invoice.status,201,JSON.stringify(invoice.body));const id=invoice.body.id;
+ const before=(await call(owner,'GET',`/receivables/invoices/${id}`)).body;
+ const path=`/receivables/invoices/${id}/print-options`;
+ assert.equal((await call(owner,'PUT',path,{printedReference:'duplicate-invoice'})).status,400);
+ assert.equal((await call(owner,'PUT',path,{totals:'false'})).status,400);
+ assert.equal((await call(store,'PUT',path,{totals:false})).status,403);
+ assert.equal((await call(owner,'PUT',path,{totals:false,lineAmounts:false,rate:false,quantity:true,companyDetails:false})).status,204);
+ const after=(await call(owner,'GET',`/receivables/invoices/${id}`)).body;
+ for(const key of ['gross','net_payable','paid_amount','status','reference'])assert.equal(after[key],before[key]);
+ const invoiceHtml=await html(`/receivables/invoices/${id}/document`);assert.doesNotMatch(invoiceHtml,/<tfoot>|Total amount in words|class="amount num"|class="rate num"/);assert.match(invoiceHtml,/class="qty num"/);
+ assert.equal((await call(owner,'PUT',`/receivables/invoices/${id}/columns`,{unit:false,quantity:false,rate:true})).status,204);
+ assert.equal((await call(owner,'GET',path)).body.rate,true,'older columns endpoint stays in sync');
+ const [[audit]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.audit_logs WHERE action='PRINT_OPTIONS' AND entity='quotation' AND entity_id=?`,[String(ids[0])]);assert.equal(Number(audit.n),1);
+});

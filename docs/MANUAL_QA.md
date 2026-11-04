@@ -154,3 +154,16 @@ run: 333 passed, zero failed, two optional skips; frontend: 39 passed. An initia
 after local midnight exposed UTC-based test fixtures disagreeing with the API's local
 date; fixed the fixtures, not financial calculations, and reran successfully. Windows
 installation/runtime, signing and production deployment remain unverified.
+
+## 2026-11-04 — quotation/invoice print-choice follow-up
+
+Actual Electron UI automation against isolated local MySQL created two independent
+quotations for the same work, saved the same printed quotation number, disabled
+totals/rates/line amounts, and verified choices after reload. Finance invoice options
+saved with quantities shown and total/line amounts hidden. Generated both PDFs and
+visually inspected the quotation and options form; output retains a complete table
+layout and mandatory developer credit. PDF text tests confirm hidden amounts are
+absent, not merely relabelled. Backend API checks cover permissions, audits, original
+financial values, revision inheritance and old invoice-column endpoint compatibility.
+Backend full run: 338 passed, zero failed, two optional skips; frontend 39 passed.
+QA database/server/profile cleaned up. No production deployment or live data write.

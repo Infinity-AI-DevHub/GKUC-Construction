@@ -1,3 +1,4 @@
+import DocumentPrintOptions,{printedQuotationNumber} from '../DocumentPrintOptions.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, FileText, Plus, Trash2, Upload, ChartNoAxesCombined, Calculator, ClipboardList, ShieldCheck, Users, ChevronRight, Layers } from 'lucide-react';
 import { api, fetchDownload, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
@@ -90,6 +91,7 @@ function Quotations({ can, reload, companyId }) {
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState('');
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [printDocument,setPrintDocument]=useState(null);
   const openedFromLink = useRef(false);
   const load = () => api(`/qs/quotations?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
   useLiveList(load);
@@ -131,7 +133,7 @@ function Quotations({ can, reload, companyId }) {
       title="Client quotations" tools={can.templates ? <button className="secondary" onClick={() => setTemplatesOpen(true)}>Quotation templates</button> : null}
       empty="No quotations yet. Create one from a BOQ or enter it manually.">
       {rows.map(row => <Row template={QUOTE_TEMPLATE} key={row.id}>
-        <div><strong>{row.reference}</strong><small>{row.boqReference || 'Manual'} · Rev {row.revisionNumber || 0}</small></div>
+        <div><strong>{printedQuotationNumber(row)}</strong>{printedQuotationNumber(row)!==row.reference&&<small>Record: {row.reference}</small>}<small>{row.boqReference || 'Manual'} · Rev {row.revisionNumber || 0}</small></div>
         <span>{row.title}</span>
         <span>{row.client}</span>
         <strong>{rupees(row.total)}</strong>
@@ -142,6 +144,7 @@ function Quotations({ can, reload, companyId }) {
             onClick={() => openDocument(`/qs/quotations/${row.id}/document`)}>
             <FileText size={13} />PDF
           </button>
+          {can.quotation && <button className="status-button" onClick={()=>setPrintDocument(row)}>Print options</button>}
           {can.quotationRevise && (
             <button className="status-button" title="Create a traceable revision without changing this version"
               onClick={() => reviseQuotation(row.id)}>Revise</button>
@@ -157,6 +160,7 @@ function Quotations({ can, reload, companyId }) {
     </Table>
     {detail && <QuotationDetail quotation={detail} close={() => setDetail(null)} />}
     {editing && <QuotationWording quotation={editing} close={() => setEditing(null)} reload={async () => { await load(); await reload(); }} />}
+    {printDocument&&<DocumentPrintOptions kind="quotation" id={printDocument.id} reference={printDocument.reference} close={()=>setPrintDocument(null)} reload={load}/>}
     {templatesOpen && <QuotationTemplates close={() => setTemplatesOpen(false)} />}
   </>;
 }

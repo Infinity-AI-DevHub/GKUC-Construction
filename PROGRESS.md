@@ -420,3 +420,66 @@ Disposable database/server/profile were cleaned up. Packaged Mac smoke passed 1/
 Both 1.0.4 platform builds completed; SHA256SUMS regenerated. No deployment or live
 DB writes. Windows runtime/signing remain unverified; packages remain unsigned.
 `git diff --check` passed.
+
+
+## 2026-11-04 — allow management to change approved task status (1.0.5)
+
+User explicitly requested status changes for Approved tasks too. Superseded the
+previous task-only lock. The Tasks list offers all non-Approved statuses to users
+with site.tasks and projects.manage, with a mandatory reason. Detail also provides
+Reopen task (In progress). Other staff remain unable to reopen approved work. API
+clears approved_by, saves a reason comment and retains previous approval/change
+audit history. Reapproval still requires Completed. Conditional UPDATE matches the
+read status and returns 409 if it changed meanwhile, protecting against stale status
+writes. No schema change, payroll-lock change or live records modified.
+
+Validation: frontend 39/39 and production build pass (existing chunk advisory).
+Focused Node 20 tests 3/3 include all five target statuses, missing reason, denied
+supervisor access, cleared approver, retained reason history and reapproval. Full
+backend: 334 passed, zero failed, two optional skips (336 including nested tests).
+Actual isolated Electron+local-backend list check passed: blank reason preserves
+Approved; reasoned reopen saves, clears approver and survives reload with history.
+Temporary QA database/server/profile cleaned up. Packaged Mac smoke 1/1 pass.
+Both 1.0.5 platform builds succeeded; SHA256SUMS regenerated. Updated ARCHITECTURE,
+DECISIONS, DESKTOP and DEPLOYMENT. Deploy updated backend/frontend before the new
+client; no deployment or live database write performed here. Windows runtime and
+signing remain unverified; builds are unsigned. `git diff --check` passed.
+
+
+## 2026-11-04 — per-document quote/invoice visibility and shared printed quote numbers (1.0.6)
+
+User needs multiple quotations for the same work with the same quotation number and
+optional totals, plus choices of printed content in QS/Finance. Added Print options
+actions on QS quotations and Finance client invoices, persisted via authenticated
+GET/PUT print-options routes and guarded nullable print_options JSON columns.
+Writers require qs.quotation or finance.invoice; changes are transactionally audited
+as PRINT_OPTIONS. Internal record references/IDs and financial amounts remain intact.
+Independent quotations can share printedReference, shown in PDF and QS list (record
+reference retained as secondary text). Invoice reference overrides are rejected.
+Existing revisions already share system numbers; revisions now copy print options.
+
+Shared renderer filters letterhead fields, unit/quantity/rate/line amounts and
+client/work/notes/methods/terms/bank/signatures/footer sections. Disabling totals
+removes summary/category totals and words together. Dynamic spans keep table layout
+valid. Mandatory developer credit remains outside configurable company footer.
+Legacy NULL settings retain old output/identity/column choices. Invoice columns
+API is synchronized with the new options while cumulative invoice snapshots remain
+intact. Progress-claim invoice rendering reads these settings too. No budget, VAT
+ledger, payroll, payment or issued invoice amount recalculation.
+
+Validation: frontend 39/39, production frontend build pass (existing chunk advisory).
+New rendering/PDF tests 3/3; actual PDF text confirms hidden values/words are absent.
+API coverage verifies two independent quotations with one printed number, unchanged
+system references/totals, saved options, access rejection, validation, auditing,
+revision inheritance, unchanged invoice finances and old-column endpoint sync.
+Full Node 20 backend: 338 passed, zero failed, two optional skips (340 incl nested).
+Actual Electron+isolated local backend QS/Finance UI check 1/1: choices persist after
+reload, both quotation list numbers match, invoice quantity choice saves, and both
+PDFs generate. Visually inspected options form and resulting quotation PDF. Evidence
+is ignored desktop/test-results/print-options-check.cjs, invoice-print-options-ui.png
+and {quotation,invoice}-selected-options.pdf. QA database/server/profile cleaned up.
+Packaged Mac smoke 1/1 pass. Both 1.0.6 installers rebuilt; SHA256SUMS regenerated.
+Updated README, ARCHITECTURE, DECISIONS, DESKTOP, DEPLOYMENT and MANUAL_QA.
+`git diff --check` passed. Deploy backend/migrations and frontend before new desktop;
+no deployment or live database write performed. Windows runtime/signing remain
+unverified; builds are unsigned.

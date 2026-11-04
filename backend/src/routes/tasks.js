@@ -157,16 +157,17 @@ router.patch('/:id', auth, permit('site.tasks'), validate(taskPatch), wrap(async
     return res.status(403).json({ error: 'Only management can approve completed work' });
   }
   const nextStatus = req.body.status;
+  const reopening=before.status==='Approved'&&nextStatus&&nextStatus!=='Approved';
+  if(reopening&&!can(req,'projects.manage'))return res.status(403).json({error:'Only project management can change approved tasks.'});
+  if(reopening&&!req.body.statusReason?.trim())return res.status(400).json({error:'Explain why the approved task needs a status change.'});
   if (nextStatus === 'Approved' && before.status !== 'Completed')
     return res.status(400).json({ error: 'Submit this task for approval before approving it.' });
   if (nextStatus === 'Rejected' && !can(req, 'projects.manage'))
     return res.status(403).json({ error: 'Only project management can return completed work for correction.' });
-  if (nextStatus === 'Rejected' && before.status !== 'Completed')
+  if (nextStatus === 'Rejected' && !['Completed','Approved'].includes(before.status))
     return res.status(400).json({ error: 'Only work submitted for approval can be returned for correction.' });
   if ((nextStatus === 'Rejected' || nextStatus === 'Blocked') && !req.body.statusReason?.trim())
     return res.status(400).json({ error: `Explain why this task is ${nextStatus === 'Rejected' ? 'being returned' : 'blocked'} so the assigned team knows what to correct.` });
-  if (before.status === 'Approved' && nextStatus && nextStatus !== 'Approved')
-    return res.status(400).json({ error: 'Approved work cannot be changed back to an earlier status. Contact a project manager to review the record.' });
   const columns = { companyId: 'company_id', projectId: 'project_id', assigneeEmployeeId: 'assignee_employee_id', dueDate: 'due_date' };
   const body = { ...req.body };
   if ('projectId' in body || 'companyId' in body) body.companyId = await taskCompany({
@@ -182,9 +183,11 @@ router.patch('/:id', auth, permit('site.tasks'), validate(taskPatch), wrap(async
   if (entries.length || changingAssignees) {
     const assignments = entries.map(([key]) => `${columns[key] || key}=?`);
     const values = entries.map(([, value]) => value);
+    if(reopening)assignments.push('approved_by=NULL');
     if (req.body.status === 'Approved') { assignments.push('approved_by=?'); values.push(req.user.id); }
     await transaction(async connection => {
-      await connection.execute(`UPDATE tasks SET ${assignments.join(',')} WHERE id=?`, [...values, req.params.id]);
+      const [updated]=await connection.execute(`UPDATE tasks SET ${assignments.join(',')} WHERE id=? AND status=?`, [...values, req.params.id,before.status]);
+      if(!updated.affectedRows)throw Object.assign(new Error('This task changed while you were editing it. Refresh and try again.'),{status:409});
       if (changingAssignees) {
         await connection.execute('DELETE FROM task_assignees WHERE task_id=?', [req.params.id]);
         for (const employeeId of assignees.ids) await connection.execute(
@@ -192,7 +195,7 @@ router.patch('/:id', auth, permit('site.tasks'), validate(taskPatch), wrap(async
       }
       if (nextStatus && nextStatus !== before.status && req.body.statusReason?.trim())
         await connection.execute('INSERT INTO task_comments (task_id,user_id,comment) VALUES (?,?,?)',
-          [req.params.id, req.user.id, `${nextStatus === 'Rejected' ? 'Returned for correction' : 'Blocked'}: ${req.body.statusReason.trim()}`]);
+          [req.params.id, req.user.id, `${reopening ? `Approved task changed to ${nextStatus}` : nextStatus === 'Rejected' ? 'Returned for correction' : 'Blocked'}: ${req.body.statusReason.trim()}`]);
     });
   }
   const after = await withProject(req.params.id);

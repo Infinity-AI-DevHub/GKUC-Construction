@@ -181,7 +181,7 @@ are not rewritten; the rule applies to system-generated documents.
 Tasks rows expose permitted next statuses directly in their Status column. A short
 confirmation form calls the existing PATCH /api/tasks/:id, then reloads shared data.
 Blocked/Rejected require a reason; Completed requires management for Approved/Rejected;
-Approved stays locked. Read-only users retain badges. Office and project task groups
+Approved status changes require management and a reason (2026-11-04 clarification). Read-only users retain badges. Office and project task groups
 share the same control, persisted record, audit history and live update flow as the
 detail dialog. No route/schema or permission changes.
 
@@ -191,3 +191,36 @@ Global root width containment uses overflow-x:clip so sticky desktop navigation 
 mobile/tablet header track the viewport. Module layouts no longer disable global
 navbar stickiness. A shared workspace-nav-offset clears the global bar for module
 and QS section navigation while preserving bounded section-menu scrolling.
+
+### Approved task corrections (2026-11-04)
+
+Management with site.tasks and projects.manage may change Approved tasks to any
+non-Approved status through the list or reopen from detail. A reason is mandatory.
+PATCH clears approved_by, adds a reason comment and preserves prior approval/change
+audit history. Reapproval still requires Completed. Updates compare the previously
+read status and reject stale status changes with 409. Other users cannot reopen
+approved tasks. This supersedes the earlier Approved-task lock only; payroll approval
+locks and financial records are unaffected.
+
+### Per-document quotation/invoice print options (2026-11-04)
+
+Guarded additive JSON print_options columns on quotations_client and client_invoices
+store per-record presentation. Shared GET/PUT /api/qs/quotations/:id/print-options
+(qs.view/qs.quotation) and /api/receivables/invoices/:id/print-options
+(finance.view/finance.invoice) expose authenticated options; writes require the
+respective create/edit permission and are transactionally audited as PRINT_OPTIONS.
+No prices, totals, payment history or business status is changed.
+
+Quotations may share printedReference across separate work alternatives; original
+system references/IDs remain available for record tracing and finance links. The
+QS list shows the printed reference plus the record reference when they differ.
+Existing quotation revisions already share their system reference; new revisions
+also copy print options. Invoice printed-reference overrides are rejected.
+
+Shared rendering removes selected cells/sections, corrects column spans and hides
+all total summaries/category totals/amount-in-words when totals are off. Choices
+include letterhead fields, unit/quantity/rate/line amounts, parties/work details,
+notes/methods/terms/bank/signatures/company footer. Mandatory developer credit is
+independent. Existing NULL settings retain legacy output/identity/column choices.
+Invoice options and the older columns endpoint are synchronized; previous-invoice
+credit snapshots are preserved. Progress-claim invoice PDFs read the same options.

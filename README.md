@@ -423,3 +423,9 @@ Desktop 1.0.2 remembers sign-in using OS-encrypted device storage and revocable
 30-day sessions; browser sessions retain 12 hours. Generated documents end with the
 Infinity AI developer credit, repeated on every payslip page. Deploy the updated API
 before distributing the new desktop build. See docs/DESKTOP.md and docs/DEPLOYMENT.md.
+
+QS quotations and Finance client invoices have per-document **Print options** for
+columns, amounts/totals, letterhead and sections. Related quotations may share a
+printed number; saved records remain traceable. Print choices do not change recorded
+financial amounts. See docs/ARCHITECTURE.md and docs/DEPLOYMENT.md for persistence
+and upgrade details.

@@ -1,3 +1,4 @@
+import {installPrintOptions} from './document-print-options.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, spendSql, today, transaction } from '../db.js';
@@ -14,6 +15,7 @@ import { projectAwardState } from '../lib/project-award.js';
 import { calculateQuotation, CALCULATION_MODES } from '../lib/quotation-calculations.js';
 
 const router = Router();
+installPrintOptions(router,{base:'/quotations',table:'quotations_client',permission:'qs.quotation',readPermission:'qs.view',quotation:true});
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const calculationMode = z.enum(CALCULATION_MODES);
 const preparedByFields = {
@@ -82,7 +84,7 @@ async function quotationPresentation(companyId, clientId, projectName, bankAccou
 
 /* ------------------------------------------------------------------ Quotations */
 
-const quoteSelect = `SELECT q.id,q.reference,q.title,q.client_name client,q.client_id clientId,q.location,q.contact,q.engagement,q.main_contractor mainContractor,q.quote_date quoteDate,q.valid_until validUntil,
+const quoteSelect = `SELECT q.id,q.reference,q.print_options printOptions,q.title,q.client_name client,q.client_id clientId,q.location,q.contact,q.engagement,q.main_contractor mainContractor,q.quote_date quoteDate,q.valid_until validUntil,
   q.subtotal,q.markup_percent markupPercent,q.vat_percent vatPercent,q.total,q.status,q.notes,q.terms,
   q.payment_terms paymentTerms,q.additional_notes additionalNotes,q.bank_account_id bankAccountId,q.presentation,
   q.calculation_mode calculationMode,q.revision_number revisionNumber,q.root_quotation_id rootQuotationId,
@@ -617,6 +619,7 @@ router.post('/quotations/:id/revisions', auth, permit('qs.quotationRevise'), val
       client.location || original.location, client.contactPerson || original.contact, presentation, req.user.id,
       req.body.calculationMode, revisionNumber, rootId, original.id, req.user.id,
       preparer.userId, preparer.name, preparer.designation]);
+    if(original.print_options)await connection.execute('UPDATE quotations_client SET print_options=? WHERE id=?',[typeof original.print_options==='string'?original.print_options:JSON.stringify(original.print_options),result.insertId]);
     for (const line of calculated.lines) await connection.execute(`INSERT INTO quotation_items
       (quotation_id,method_id,category,area,description,method_statement,unit,quantity,rate,amount)
       VALUES (?,?,?,?,?,?,?,?,?,?)`, [result.insertId, line.methodId || null, line.category,

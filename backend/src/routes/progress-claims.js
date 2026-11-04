@@ -249,7 +249,7 @@ router.get('/:id/document',read,wrap(async(req,res)=>{
 
   if(type==='invoice'){
     if(!claim.invoice_reference)throw fail(409,'Issue the optional invoice first.');
-    const invoice=await getOne(`SELECT reference,client,title,invoice_date invoiceDate,due_date dueDate,gross,tax_treatment taxTreatment,vat_rate vatRate,
+    const invoice=await getOne(`SELECT reference,print_options printOptions,invoice_options invoiceOptions,client,title,invoice_date invoiceDate,due_date dueDate,gross,tax_treatment taxTreatment,vat_rate vatRate,
       buyer_tin buyerTin,buyer_vat_number buyerVatNumber,buyer_address buyerAddress,buyer_phone buyerPhone,notes,
       vat_amount vatAmount,retention_amount retentionAmount,advance_recovery advanceRecovery,other_deductions otherDeductions,net_payable netPayable FROM client_invoices WHERE id=?`,[claim.invoice_id]);
     const items=await query('SELECT description,unit,quantity,rate,amount FROM client_invoice_items WHERE invoice_id=?',[claim.invoice_id]);
