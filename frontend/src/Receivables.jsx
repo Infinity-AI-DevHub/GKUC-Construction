@@ -1,3 +1,4 @@
+import BondImport from './BondImport.jsx';
 import DocumentPrintOptions from './DocumentPrintOptions.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Landmark, TriangleAlert, Wallet, PencilLine, Trash2 } from 'lucide-react';
@@ -548,6 +549,7 @@ const BOND_COLUMNS = ['Reference / project','Kind','In favour of','Bank / FD or 
 const BOND_TEMPLATE = 'minmax(120px,1fr) 140px minmax(160px,1.2fr) minmax(130px,1fr) 130px 130px 140px 110px 190px';
 
 export function Bonds({ data, can, companyId }) {
+  const [importing,setImporting]=useState(false);
   const [bonds, setBonds] = useState([]);
   const [search,setSearch]=useState('');
   const [statusFilter,setStatusFilter]=useState('');
@@ -577,7 +579,7 @@ export function Bonds({ data, can, companyId }) {
     <Table columns={BOND_COLUMNS} template={BOND_TEMPLATE} title="Bank guarantees"
       empty="No bonds recorded."
       tools={can.invoice
-        ? <button className="secondary" onClick={() => setRecording(true)}>Record a bond</button>
+        ? <div className="row-actions"><button className="secondary" onClick={() => setRecording(true)}>Record a bond</button><button className="secondary" onClick={()=>setImporting(true)}>Import / update Excel</button></div>
         : null}>
       {bonds.filter(bond=>(!statusFilter||bond.status===statusFilter)&&(!kindFilter||bond.kind===kindFilter)&&
         [bond.reference,bond.bond_number,bond.project,bond.project_description,bond.beneficiary,bond.bank,bond.fd_reference,bond.process_notes].some(value=>String(value||'').toLowerCase().includes(search.trim().toLowerCase()))).map(bond => <Row template={BOND_TEMPLATE} key={bond.id} id={`bond-${bond.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(bond.id) ? 'linked-record' : ''}>
@@ -605,12 +607,13 @@ export function Bonds({ data, can, companyId }) {
         </div>
         <Badge tone={tone(bond)}>{bond.status}</Badge>
         {can.invoice?<div className="row-actions">
-          <button type="button" className="icon-button" title={`Edit ${bond.reference}`} aria-label={`Edit ${bond.reference}`} onClick={()=>setEditing(bond)}><PencilLine size={16}/></button>
+          <button type="button" className="secondary" title={`Edit ${bond.reference}`} aria-label={`Edit ${bond.reference}`} onClick={()=>setEditing(bond)}><PencilLine size={16}/> Edit details</button>
           <button type="button" className="icon-button" title={`Delete ${bond.reference}`} aria-label={`Delete ${bond.reference}`} onClick={()=>{setError('');setDeleting(bond);}}><Trash2 size={16}/></button>
           {bond.status==='Live'&&<button className="status-button" onClick={()=>setExtending(bond)}>Extend</button>}
         </div>:<span>—</span>}
       </Row>)}
     </Table>
+    {importing&&<BondImport key={companyId} companyId={companyId} data={data} close={()=>setImporting(false)} reload={load}/>}
     {recording && <BondForm data={data} companyId={companyId} close={() => setRecording(false)} reload={load} />}
     {editing&&<BondForm bond={editing} data={data} companyId={companyId} close={()=>setEditing(null)} reload={load}/>}
     {deleting&&<Modal title={`Delete ${deleting.reference}?`} close={()=>{if(!busy)setDeleting(null);}}>
@@ -640,7 +643,7 @@ function BondForm({ data, companyId, close, reload, bond=null }) {
       releasedDate:values.releasedDate||null,
       beneficiary: values.beneficiary,
       bank: values.bank,
-      bondNumber: values.bondNumber || undefined,
+      bondNumber: values.bondNumber?.trim() || '',
       amount: Number(values.amount),
       marginHeld: Number(values.marginHeld) || 0,
       commission: Number(values.commission) || 0,
@@ -663,7 +666,8 @@ function BondForm({ data, companyId, close, reload, bond=null }) {
     <Field name="projectDescription" label="Project / tender description (if not linked above)" wide required={false} maxLength={1000} defaultValue={bond?.project_description||''}/>
     <Field name="bank" label="Issuing bank" defaultValue={bond?.bank}/>
     <Field name="fdReference" label="FD number(s) / credit facility" required={false} maxLength={180} defaultValue={bond?.fd_reference||''}/>
-    <Field name="bondNumber" label="Bond number (optional)" required={false} defaultValue={bond?.bond_number||''}/>
+    <Field name="bondNumber" label="Bond number (optional)" required={false} placeholder="Leave blank and add later" defaultValue={bond?.bond_number||''}/>
+    <p className="form-note wide">You can save without a bond number. Use Edit details later to add the number or correct this record, including after release or expiry.</p>
     <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" defaultValue={bond?.amount}/>
     <Field name="marginHeld" label="Margin held by the bank" type="number" step="any" min="0" required={false} defaultValue={bond?.margin_held}/>
     <Field name="commission" label="Commission paid" type="number" step="any" min="0" required={false} defaultValue={bond?.commission}/>
@@ -758,7 +762,7 @@ function FloatForm({ data, companyId, close, reload, float=null }) {
     <SelectField name="projectId" label="Project (optional)" required={false} defaultValue={float?.projectId||''}
       options={[["",'Not project specific'],...data.projects.filter(project=>Number(project.companyId)===Number(companyId)).map(project=>[project.id,project.name])]}/>
     <Field name="ceiling" label="Planned float amount (LKR)" type="number" step="0.01" min="0" defaultValue={float?.ceiling||0}/>
-    <Field name="lowAt" label="Low-balance warning at (LKR)" type="number" step="0.01" min="0" defaultValue={float?.lowAt||0}/>
+    <Field name="lowAt" label="Low-balance warning at (LKR, optional)" required={false} type="number" step="0.01" min="0" placeholder="Optional" defaultValue={float?.lowAt||''}/>
     {!float&&<><Field name="openingBalance" label="Opening cash balance (LKR)" type="number" step="0.01" min="0" defaultValue="0"/><Field name="openingDate" label="Opening balance date" type="date" defaultValue={todayInput()}/></>}
     <p className="form-note wide">{float?`Current cash balance is ${rupees(float.balance)}. Editing the planned amount does not change cash in hand. Use Record a movement to top up, return cash or record an adjustment.`:'Opening cash is recorded as an opening top-up in this account’s ledger. The planned amount is a target, not the cash balance. You can create multiple accounts in each category.'}</p>
   </FormModal>;
@@ -768,7 +772,7 @@ const ENTRY_TEMPLATE = '110px minmax(180px,1.6fr) 110px minmax(130px,1fr) 130px'
 
 function FloatLedger({ float, data, can, close, reload }) {
   const [entries, setEntries] = useState([]);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState('');
   const [editing,setEditing]=useState(false);
   const load = () => api(`/receivables/petty-cash/${float.id}/entries`).then(setEntries).catch(() => setEntries([]));
   useLiveList(load);
@@ -780,7 +784,7 @@ function FloatLedger({ float, data, can, close, reload }) {
         : 'This balance is maintained independently from the other petty-cash accounts.'}</span></div>
     <Table columns={['Date', 'Description', 'Kind', 'Recorded by', 'Amount']} template={ENTRY_TEMPLATE}
       empty="Nothing has moved through this float yet."
-      tools={can.finance ? <div className="row-actions"><button className="secondary" onClick={()=>setEditing(true)}>Edit account</button><button className="secondary" onClick={() => setAdding(true)}>Record a movement</button></div> : null}>
+      tools={can.finance ? <div className="row-actions"><button className="secondary" onClick={()=>setEditing(true)}>Edit account</button><button className="secondary" onClick={() => setAdding('Top up')}>Add money / Top up</button><button className="secondary" onClick={() => setAdding(float.accountType === 'Fuel' ? 'Top up' : 'Spend')}>Record a movement</button></div> : null}>
       {entries.map(entry => <Row template={ENTRY_TEMPLATE} key={entry.id}>
         <span>{shortDate(entry.entryDate)}</span>
         <div><strong>{entry.description}</strong><small>{entry.vehicle
@@ -794,14 +798,14 @@ function FloatLedger({ float, data, can, close, reload }) {
       </Row>)}
     </Table>
     {editing&&<FloatForm float={float} data={data} companyId={float.companyId} close={()=>setEditing(false)} reload={reload}/>}
-    {adding && <EntryForm float={float} employees={data.employees} close={() => setAdding(false)}
+    {adding && <EntryForm key={adding} initialKind={adding} float={float} employees={data.employees} close={() => setAdding('')}
       reload={async () => { await load(); await reload(); }} />}
   </Modal>;
 }
 
-function EntryForm({ float, employees, close, reload }) {
-  const [kind, setKind] = useState(float.accountType === 'Fuel' ? 'Top up' : 'Spend');
-  return <FormModal title={`Movement on ${float.name}`} close={close} label="Record it" onSubmit={async values => {
+function EntryForm({ float, employees, close, reload, initialKind }) {
+  const [kind, setKind] = useState(initialKind || (float.accountType === 'Fuel' ? 'Top up' : 'Spend'));
+  return <FormModal title={kind === 'Top up' ? `Add money — ${float.name}` : `Movement on ${float.name}`} close={close} label="Record it" onSubmit={async values => {
     await post(`/receivables/petty-cash/${float.id}/entries`, {
       kind: values.kind,
       amount: Number(values.amount),
@@ -823,7 +827,8 @@ function EntryForm({ float, employees, close, reload }) {
       options={employees.filter(employee => employee.status !== 'Left').map(employee => [employee.id, `${employee.name} — ${employee.code}`])} />}
     <Field name="category" label="Category" required={false} placeholder="Fuel, refreshments, courier" />
     {kind === 'Spend' && <Field name="payee" label="Paid to" required={false} placeholder="Supplier, shop or person" />}
-    <Field name="description" label="Description" wide placeholder="Diesel for the site generator" />
+    <Field name="description" label="Description" wide placeholder={kind === 'Top up' ? 'Funding received / source or reference' : 'What this movement was for'} />
+    {kind === 'Top up' && <p className="form-note wide">This adds money to this account and saves a dated top-up in its ledger. Funding is not recorded as income or an expense.</p>}
     {float.accountType === 'Salary advance' && <p className="form-note wide">For daily-rate workers and site labourers, the total advanced on one day cannot exceed their daily salary rate. LKR 500 or 1,000 are common amounts, not required amounts. Advances are recovered from the employee's next available payroll, with any unpaid balance carried forward.</p>}
     {float.accountType === 'Fuel' && <p className="form-note wide">For fuel purchased for a vehicle, go to Fleet → Fuel & service → Record fuel. The float will be reduced automatically.</p>}
   </FormModal>;

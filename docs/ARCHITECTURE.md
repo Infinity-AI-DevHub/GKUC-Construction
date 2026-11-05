@@ -224,3 +224,81 @@ notes/methods/terms/bank/signatures/company footer. Mandatory developer credit i
 independent. Existing NULL settings retain legacy output/identity/column choices.
 Invoice options and the older columns endpoint are synchronized; previous-invoice
 credit snapshots are preserved. Progress-claim invoice PDFs read the same options.
+
+### Fleet vehicle details editing (2026-11-05)
+
+Fleet vehicle cards expose View / edit details. Transport managers can use Edit vehicle
+details to update name, registration/asset ID, status, make, model, year, engine code
+and manual/service notes through the existing audited `PATCH /fleet/:id` route.
+Vehicle names and registrations are trimmed and validated; duplicate registrations
+return 409 without saving other edits. Driver/site assignments, odometer readings
+and renewal dates retain their dated, history-preserving workflows. No schema change.
+
+### Petty cash funding affordance (2026-11-05)
+
+Account create/edit no longer requires the warning threshold in the browser; blank
+maps to the existing lowAt=0 API default. Account ledgers expose Add money / Top up,
+preselecting the existing Top up movement kind. The same persisted entries endpoint
+and ledger-derived balance are used for all account categories; no schema, permission
+or accounting rule change.
+
+### Reviewed bond workbook import (2026-11-05)
+
+Finance Bonds uses `GET /receivables/bonds/import/template`, multipart `POST
+/receivables/bonds/import/preview` and `POST /receivables/bonds/import/:id/submit`.
+All require finance.invoice. The additive bond_import_batches table stores uploader,
+company, source checksum, review JSON and completion status. Preview changes no bonds;
+submit validates reviewed rows and saves all register changes/audit entries atomically.
+Uploader ownership, company/project checks, snapshot conflicts, duplicate target/number
+checks and completed-batch/checksum checks prevent stale and repeated imports. Existing
+reference and extension history are preserved. See [bond import](BOND_IMPORT.md).
+
+### Linked historical workbook imports (2026-11-05)
+
+Import centre detects controlled Clients/Contacts, Projects/Project Team and BOQ
+Headers/Items .xlsx workbooks before the generic/free-layout import path. Source IDs
+resolve through historical_import_links across files; child rows have composite source
+keys. Review mode linked-workbook supports corrections, explicit existing client/project
+links and source employee mapping through PATCH /import-centre/batches/:id/linked-review.
+Confirmation rechecks under transactional batch/dependency locks, persists parent/child
+records, source_json and audits atomically, and skips already imported source keys.
+BOQs stay Draft and never implicitly change approved budgets. Contact records persist
+in client_contact_people and are returned by the client detail API/profile. Guarded
+column widening preserves long project/BOQ names and descriptions. See
+[Historical imports](HISTORICAL_IMPORTS.md) for validation, ordering and source caveats.
+
+### Project deadlines and extension request letters (2026-11-05)
+
+Project creation/editing accepts a nullable end date. Optional dates can be added later;
+later changes to an existing end date use the audited extension workflow. Guarded
+project_extensions and projects.extension_count persist repeat extensions and immutable
+letter HTML. Project view/manage routes expose history and saved letter/PDF, with explicit
+PDF-ticket path authorization. POST extension locks/checks the current date and atomically
+saves dates, letter and audits. Company changes are blocked once extensions exist.
+Project cards/workspace derive Completed > Extended > Current and offer search/status/
+manager/date filters. The existing scheduler/bootstrap run a calendar-month deadline
+scan for all active users; delivery keys dedupe per project/end-date/user/day and stop
+for Completed/inactive records. Recurring reminders create no escalation cases. See
+[Project deadlines](PROJECT_DEADLINES.md) for operational and client-request semantics.
+
+### Editable PO documents and commercial revisions (2026-11-05)
+
+Existing purchasing orders now support manual/generated editable numbers, per-document
+presentation and multi-line calculated/manual amounts. PUT /purchasing/orders/:id saves
+reasoned optimistic revisions transactionally; /check and /revisions support review/history.
+Existing receive/invoice/payment endpoints remain the financial owners. Receipt unit rates
+and cumulative received value prevent retroactive valuation when current PO prices change;
+supplier invoices retain approved-PO snapshots for their original obligations. Supplier
+statements and payment matching read these values. Commercial revisions reset approvals,
+including preventing self-approval by the revision author. Guarded schema additions and
+append-only revision records preserve auditability; received quantity/identity and linked
+supplier/project accounts remain protected. PO PDF tickets and Materials deep links are
+explicitly supported. See [Purchase orders](PURCHASE_ORDERS.md).
+
+### Existing vehicle record actions (2026-11-05)
+
+Fleet vehicle cards expose direct Edit details and Add renewal actions. The detail
+modal places editing, driver, odometer, fuel, service/repair, schedule and renewal
+controls before its summaries and history. These use the existing authorized,
+persistent Fleet endpoints for both existing and newly created vehicles. Identity
+edits remain separate from dated operational and renewal history.

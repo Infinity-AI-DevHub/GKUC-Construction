@@ -40,7 +40,7 @@ async function recalculateBudget(connection, projectId) {
 
 const itemSchema = z.object({
   category: z.string().trim().max(60).nullable().optional(),
-  description: z.string().min(2).max(300),
+  description: z.string().min(2).max(2000),
   unit: z.string().min(1).max(30),
   quantity: z.number().positive(),
   rate: z.number().nonnegative(),
@@ -708,7 +708,7 @@ router.get('/:id', auth, permit('qs.view','qs.boq'), wrap(async (req, res) => {
 
 router.post('/', auth, permit('qs.boq'), validate(z.object({
   projectId: z.number().int().positive(),
-  title: z.string().min(3).max(180),
+  title: z.string().min(3).max(1000),
   notes: z.string().max(1000).optional(),
   items: z.array(itemSchema).min(1)
 })), checkItemCategories, wrap(async (req, res) => {
@@ -762,7 +762,7 @@ router.post('/:id/items', auth, permit('qs.boq'), validate(itemSchema),
  * approved the wording is fixed, since the document has become the agreed record.
  */
 router.patch('/:id/wording', auth, permit('qs.boq'), validate(z.object({
-  title: z.string().min(3).max(180).optional(),
+  title: z.string().min(3).max(1000).optional(),
   notes: z.string().max(1000).nullable().optional(),
   terms: z.string().max(2000).nullable().optional()
 }).refine(value => Object.keys(value).length > 0, { message: 'Nothing to change' })),

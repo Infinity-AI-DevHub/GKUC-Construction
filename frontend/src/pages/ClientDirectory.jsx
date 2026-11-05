@@ -60,6 +60,7 @@ export default function ClientDirectory({ canManage, companyId }) {
           <span>Registration: {empty(detail.registrationNumber)}</span><span>TIN: {empty(detail.tin || detail.taxNumber)}</span><span>VAT registration: {empty(detail.vatNumber)}</span></div>
         {detail.notes && <p>{detail.notes}</p>}
       </section>
+      {detail.contacts?.length>0&&<ClientHistory title="Client contacts" columns={['Name','Role','Phone','Email','Primary']} rows={detail.contacts.map(contact=>[contact.name,contact.jobTitle||'—',contact.phone||'—',contact.email||'—',contact.isPrimary?'Yes':'No'])}/>}
       {detail.consultantAgencyName && <section className="client-contact-card"><h3>Consultation agency</h3>
         <p>Usual communication: <strong>{detail.preferredContact === 'Agency' ? 'Agency' : detail.preferredContact === 'Both' ? 'Client and agency' : 'Client'}</strong>. The client remains the contracting and billing party.</p>
         <div><span><Building2 size={15} /> {detail.consultantAgencyName}</span>

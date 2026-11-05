@@ -1,3 +1,4 @@
+import {projectDeliveryStatus} from '../ProjectDeadlines.jsx';
 import React, { useEffect, useState } from 'react';
 import { Archive, BriefcaseBusiness, Building2, Check, FileText, RotateCcw } from 'lucide-react';
 import { api, del, money, openDocument, patch, post, rupees, rupeesExact, shortDate, slug, todayInput } from '../api.js';
@@ -88,7 +89,7 @@ function DeletedProjects({ rows, error, onRecover }) {
     {error && <p className="form-error">{error}</p>}
     {!error && !rows.length && <div className="empty-state"><Archive size={24} /><strong>No deleted projects</strong><span>Projects deleted from this company will appear here.</span></div>}
     <div className="deleted-project-list">{rows.map(project => <article key={project.id}>
-      <div><Badge tone="watch">Deleted</Badge><h3>{project.name}</h3><p>{project.client} · {project.site}</p></div>
+      <div><Badge tone="watch">Deleted</Badge><Badge tone={projectDeliveryStatus(project)==='Completed'?'completed':projectDeliveryStatus(project)==='Extended'?'watch':'on-track'}>{projectDeliveryStatus(project)}</Badge><h3>{project.name}</h3><p>End date: {project.end_date?shortDate(project.end_date):'Not set'}</p><p>{project.client} · {project.site}</p></div>
       <div className="deleted-project-counts">
         <span><strong>{project.taskCount}</strong> tasks</span>
         <span><strong>{project.boqCount}</strong> BOQs</span>
@@ -103,9 +104,17 @@ function DeletedProjects({ rows, error, onRecover }) {
 }
 
 function ProjectCards({ data, onOpen, onOpenClient }) {
+  const [search,setSearch]=useState(''),[status,setStatus]=useState(''),[manager,setManager]=useState(''),[deadline,setDeadline]=useState('');
+  const visible=data.projects.filter(p=>(!search||[p.name,p.client,p.site,p.manager].some(v=>String(v||'').toLowerCase().includes(search.toLowerCase())))&&(!status||projectDeliveryStatus(p)===status)&&(!manager||p.manager===manager)&&(!deadline||(deadline==='none'?!p.end_date:deadline==='overdue'?p.end_date&&p.end_date<todayInput()&&projectDeliveryStatus(p)!=='Completed':p.end_date&&p.end_date>=todayInput()&&p.end_date<=new Date(Date.now()+31*86400000).toISOString().slice(0,10)&&projectDeliveryStatus(p)!=='Completed')));
   const finance = Object.fromEntries(data.finance.map(row => [row.projectId, row]));
-  return <div className="project-cards">
-    {data.projects.map(project => {
+  return <><div className="toolbar" style={{width:'100%',flexWrap:'wrap',gap:12}}>
+    <label>Search projects<input type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Project, client, location or manager"/></label>
+    <label>Delivery status<select value={status} onChange={e=>setStatus(e.target.value)}><option value="">All statuses</option>{['Current','Extended','Completed'].map(s=><option key={s}>{s}</option>)}</select></label>
+    <label>Project manager filter<select value={manager} onChange={e=>setManager(e.target.value)}><option value="">All managers</option>{[...new Set(data.projects.map(p=>p.manager))].map(m=><option key={m}>{m}</option>)}</select></label>
+    <label>End date filter<select value={deadline} onChange={e=>setDeadline(e.target.value)}><option value="">All dates</option><option value="none">No end date</option><option value="soon">Due in next 31 days</option><option value="overdue">Overdue</option></select></label>
+    <button className="secondary" onClick={()=>{setSearch('');setStatus('');setManager('');setDeadline('');}}>Clear filters</button><span>{visible.length} projects</span>
+  </div><div className="project-cards">
+    {visible.map(project => {
       const spend = Number(finance[project.id]?.expenses || project.actual);
       return <article className="project-card" key={project.id} onClick={() => onOpen(project.id)} style={{ cursor: 'pointer' }}>
         <div className="card-top">
@@ -128,7 +137,8 @@ function ProjectCards({ data, onOpen, onOpenClient }) {
         </div>
       </article>;
     })}
-  </div>;
+    {!visible.length&&<p>No projects match these filters.</p>}
+  </div></>;
 }
 
 const MILESTONE_COLUMNS = ['Milestone', 'Project', 'Due date', 'Status', ''];
@@ -421,6 +431,7 @@ function ProjectForm({ companyId, companies, setCompanyId, employees, close, rel
       site: values.site,
       stage: values.stage,
       startDate: values.startDate,
+      endDate: values.endDate || null,
       ...(stage === 'Not started' ? {
         reminderDate: values.reminderDate,
         reminderFrequency: values.reminderFrequency,
@@ -462,6 +473,7 @@ function ProjectForm({ companyId, companies, setCompanyId, employees, close, rel
       </fieldset>
     </>}
     <Field name="startDate" label="Start date" type="date" defaultValue={todayInput()} />
+    <Field name="endDate" label="End date (optional)" type="date" required={false}/><p className="form-note wide">Add now or later. Daily completion reminders begin one calendar month before the saved end date.</p>
   </FormModal>;
 }
 

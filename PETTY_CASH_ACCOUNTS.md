@@ -7,3 +7,13 @@ Open an account card → Edit account updates its details, planned amount and wa
 Company switches remount the account workspace so open forms, account selections and responses cannot leak into the other company view. Failed account loading is displayed rather than silently represented as an empty register. A movement rechecks category/project settings after obtaining the float lock; concurrent settings changes require refreshing before retrying.
 
 Both creation and editing require finance.manage. No database migration is needed. Tests cover opening funding, ledger preservation, independent planned amount, multiple accounts, permissions, invalid company/project/date rejection, category history protection and prevention of direct balance/company rewriting. Browser verification exercises creation, opening funding, project filtering and ledger-based editing.
+
+## 2026-11-05 — optional warning and visible funding action
+
+The low-balance warning field is optional on create and edit. Leaving it blank uses
+zero, matching the existing API default; it does not block account creation.
+Open an account → Add money / Top up opens the existing movement form with Top up
+selected. Record the amount, date and funding description; each addition appears as
+a positive dated ledger entry and increases that account’s balance. Record a movement
+continues to handle spending, returns and adjustments. Funding creates neither income
+nor an expense. The same top-up action is available for all three account categories.

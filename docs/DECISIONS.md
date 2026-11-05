@@ -143,3 +143,44 @@ per document in QS/Finance. Hiding totals also suppresses words/category summari
 hiding printed values never changes saved calculations, budgets, VAT ledgers or
 payments. Keep Infinity AI attribution mandatory. Revisions inherit presentation
 choices but remain independently reviewable snapshots.
+
+## 2026-11-05 — reviewed bond Excel imports
+
+Bond imports can create and update within one selected company. Match existing records
+by internal system reference, falling back to bond number plus bank only when no
+reference is supplied; ambiguous/missing references require a manual target decision.
+Never guess from amount, project or beneficiary. Upload stores a review draft only.
+Require per-row verification; editing clears it. Final submit revalidates in one
+transaction with snapshot/duplicate checks. Imported updates preserve reference and
+extension history, and do not create extension events or accounting entries.
+See [Bond import](BOND_IMPORT.md) for workflow and supported workbook contract.
+
+## 2026-11-05 — source-key relationships in historical templates
+
+Treat supplied client/project/BOQ IDs as external source keys, never native SQL IDs.
+Import parent registers before dependent workbooks and persist audited key-to-record
+links. Include Contacts and Project Team instead of rejecting populated related sheets.
+Source employee codes require exact/manual matching, and source key mismatches require
+explicit correction. Financial line/header discrepancies block confirmation. Imported
+BOQs remain Draft; original approval/version/reference metadata is retained separately.
+Repeat keys skip and do not overwrite live records. See HISTORICAL_IMPORTS.md.
+
+## 2026-11-05 — optional end dates, recurring deadline cycles and extensions
+
+Keep end dates optional and mutable through controlled date entry. A later end date
+requires a reasoned, append-only extension and saved printable request letter. Saving
+an extension updates the internal target immediately; it does not assert client approval.
+Notify every active account daily from one calendar month before the latest target,
+including overdue days, until completion/inactivity or a revised reminder window.
+Reminders are deliveries rather than escalation cases. Keep historical letters intact;
+show Completed ahead of Extended and keep normal operational stage/health independent.
+See PROJECT_DEADLINES.md.
+
+## 2026-11-05 — editable PO, recognition after goods/invoice confirmation
+
+User confirmed that saving the PO is not an expense/debt trigger. Keep purchase commitments
+separate from actual receipts, invoices and payments. Permit explicit manual line amounts
+and editable printed fields/numbers, with reasoned revision history. Preserve recorded
+receipt valuation and original invoice approval snapshots; a revised PO never silently
+changes posted expenses/payments/outstanding. Retain approval/role/risk controls for new
+commitments and physical quantity/history constraints. See PURCHASE_ORDERS.md.

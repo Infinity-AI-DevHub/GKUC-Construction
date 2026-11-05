@@ -1,5 +1,7 @@
 /** Only approved generated-document routes may use a temporary browser download ticket. */
 const documentPaths = [
+  /^\/purchasing\/orders\/\d+\/document$/,
+  /^\/projects\/\d+\/extensions\/\d+\/letter$/,
   /^\/payroll\/\d+\/payslips\/\d+\/document$/,
   /^\/qs\/quotations\/\d+\/document$/,
   /^\/boq\/\d+\/document$/,

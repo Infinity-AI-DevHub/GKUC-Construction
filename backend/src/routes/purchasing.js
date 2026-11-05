@@ -1,8 +1,10 @@
+import {installPurchaseOrderEdit} from './purchase-order-edit.js';
+import {poItem,poPresentation,orderTotal,receiptRate,poDate} from '../lib/purchase-order-edit.js';
 import { allocateCheque } from '../lib/cheque-allocations.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
-import { auth, can, permit, validate, wrap, fromOptions } from '../lib/http.js';
+import { auth, can, permit, validate, wrap, fromOptions,fail } from '../lib/http.js';
 import { notify } from '../alerts.js';
 import { controlNumber, invoiceWarnings, orderWarnings, paymentMatch } from '../lib/procurement-controls.js';
 import { raise as raiseFinding } from '../lib/integrity.js';
@@ -10,6 +12,7 @@ import { documentContext, purchaseOrderDocument } from '../lib/documents.js';
 import { sendDocument } from '../lib/document-pdf.js';
 
 const router = Router();
+installPurchaseOrderEdit(router);
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 /* Suppliers */
@@ -33,7 +36,7 @@ router.get('/suppliers/:id/statement', auth, permit('finance.supplierStatements'
   if (!supplier) return res.status(404).json({ error: 'Supplier not found' });
 
   const deliveries = await query(`SELECT gri.id,DATE(gr.created_at) date,po.reference orderReference,
-    poi.description material,poi.unit,gri.quantity,poi.rate,(gri.quantity*poi.rate) deliveryValue,
+    poi.description material,poi.unit,gri.quantity,COALESCE(gri.unit_rate,poi.rate) rate,(gri.quantity*COALESCE(gri.unit_rate,poi.rate)) deliveryValue,
     p.name project,p.site destination,
     GROUP_CONCAT(DISTINCT si.invoice_no ORDER BY si.invoice_date SEPARATOR ', ') invoiceNo
     FROM goods_receipt_items gri JOIN goods_receipts gr ON gr.id=gri.receipt_id
@@ -41,7 +44,7 @@ router.get('/suppliers/:id/statement', auth, permit('finance.supplierStatements'
     JOIN purchase_orders po ON po.id=poi.order_id JOIN projects p ON p.id=po.project_id
     LEFT JOIN supplier_invoices si ON si.order_id=po.id
     WHERE po.supplier_id=? AND p.company_id=?
-    GROUP BY gri.id,gr.created_at,po.reference,poi.description,poi.unit,gri.quantity,poi.rate,p.name,p.site
+    GROUP BY gri.id,gr.created_at,po.reference,poi.description,poi.unit,gri.quantity,poi.rate,gri.unit_rate,p.name,p.site
     ORDER BY gr.created_at,gri.id`, [supplier.id, companyId]);
 
   /* Older receipts pre-date receipt-line tracking. Preserve their cumulative quantity as
@@ -50,7 +53,7 @@ router.get('/suppliers/:id/statement', auth, permit('finance.supplierStatements'
     COALESCE((SELECT DATE(MAX(gr.created_at)) FROM goods_receipts gr WHERE gr.order_id=po.id),po.order_date) date,
     po.reference orderReference,poi.description material,poi.unit,
     GREATEST(0,poi.received_quantity-COALESCE((SELECT SUM(gri.quantity) FROM goods_receipt_items gri WHERE gri.order_item_id=poi.id),0)) quantity,poi.rate,
-    GREATEST(0,poi.received_quantity-COALESCE((SELECT SUM(gri.quantity) FROM goods_receipt_items gri WHERE gri.order_item_id=poi.id),0))*poi.rate deliveryValue,
+    GREATEST(0,COALESCE(poi.received_value,poi.received_quantity*poi.rate)-COALESCE((SELECT SUM(gri.quantity*COALESCE(gri.unit_rate,poi.rate)) FROM goods_receipt_items gri WHERE gri.order_item_id=poi.id),0)) deliveryValue,
     p.name project,p.site destination,
     (SELECT GROUP_CONCAT(si.invoice_no ORDER BY si.invoice_date SEPARATOR ', ') FROM supplier_invoices si WHERE si.order_id=po.id) invoiceNo
     FROM purchase_order_items poi JOIN purchase_orders po ON po.id=poi.order_id JOIN projects p ON p.id=po.project_id
@@ -247,7 +250,7 @@ router.post('/requests/:id/quotations', auth, permit('store.manage', 'finance.pa
 const orderList = `SELECT o.id,o.reference,o.status,o.order_date orderDate,o.total,o.project_id projectId,o.procurement_route procurementRoute,
   p.company_id companyId,p.name project,p.site,s.name supplier,s.id supplierId,s.address supplierAddress,s.phone supplierPhone,u.name issuedBy,
   o.issued_by issuedById,o.first_approved_by firstApprovedBy,o.second_approved_by secondApprovedBy,
-  o.request_id requestId
+  o.request_id requestId,o.presentation,o.revision
   FROM purchase_orders o JOIN projects p ON p.id=o.project_id JOIN suppliers s ON s.id=o.supplier_id JOIN users u ON u.id=o.issued_by`;
 
 router.get('/orders', auth, permit('store.view','store.manage','finance.pay'), wrap(async (req, res) => {
@@ -259,7 +262,7 @@ router.get('/orders/:id', auth, permit('store.view','store.manage','finance.pay'
   const order = await getOne(`${orderList} WHERE o.id=?`, [req.params.id]);
   if (!order) return res.status(404).json({ error: 'Purchase order not found' });
   const [items, invoices, receipts] = await Promise.all([
-    query(`SELECT i.id,i.description,i.unit,i.quantity,i.rate,i.received_quantity receivedQuantity,i.material_id materialId
+    query(`SELECT i.id,i.description,i.unit,i.quantity,i.rate,i.received_quantity receivedQuantity,i.material_id materialId,i.item_no itemNo,i.amount_override amount,i.received_value receivedValue
       FROM purchase_order_items i WHERE i.order_id=?`, [order.id]),
     query('SELECT id,invoice_no invoiceNo,amount,paid_amount paidAmount,invoice_date invoiceDate,due_date dueDate,status,verified_at verifiedAt FROM supplier_invoices WHERE order_id=?', [order.id]),
     query('SELECT id,created_at createdAt FROM goods_receipts WHERE order_id=? ORDER BY id DESC', [order.id])
@@ -271,7 +274,7 @@ router.get('/orders/:id/document',auth,permit('store.view','store.manage','finan
   const order=await getOne(`${orderList} WHERE o.id=?`,[req.params.id]);
   if(!order)return res.status(404).json({error:'Purchase order not found'});
   const [items,context]=await Promise.all([
-    query('SELECT description,unit,quantity,rate FROM purchase_order_items WHERE order_id=? ORDER BY id',[order.id]),
+    query('SELECT description,unit,quantity,rate,item_no itemNo,amount_override amount FROM purchase_order_items WHERE order_id=? ORDER BY id',[order.id]),
     documentContext(getOne,order.companyId)
   ]);
   await sendDocument(req,res,purchaseOrderDocument({...context,order,items}),`${order.reference}.pdf`);
@@ -281,27 +284,25 @@ const orderSchema=z.object({
   requestId: z.number().int().positive().optional(),
   supplierId: z.number().int().positive(),
   projectId: z.number().int().positive(),
-  orderDate: isoDate,
-  items: z.array(z.object({
-    materialId: z.number().int().positive().optional(),
-    description: z.string().min(2).max(300),
-    unit: z.string().min(1).max(30),
-    quantity: z.number().positive(),
-    rate: z.number().nonnegative()
-  })).min(1),riskAccepted:z.boolean().default(false),riskReason:z.string().trim().max(500).optional()
+  orderDate: poDate,
+  reference:z.string().trim().min(1).max(60).optional(),presentation:poPresentation.optional(),items:z.array(poItem).min(1).max(200),riskAccepted:z.boolean().default(false),riskReason:z.string().trim().max(500).optional()
 });
 router.post('/orders/check',auth,permit('store.manage','finance.pay'),validate(orderSchema),wrap(async(req,res)=>{
-  res.json({warnings:await orderWarnings(req.body),total:req.body.items.reduce((sum,item)=>sum+item.quantity*item.rate,0)});
+  res.json({warnings:await orderWarnings(req.body),total:orderTotal(req.body.items)});
 }));
 router.post('/orders', auth, permit('store.manage', 'finance.pay'), validate(orderSchema), wrap(async (req, res) => {
   const body = req.body;
+  if(body.reference&&await getOne('SELECT id FROM purchase_orders WHERE reference=?',[body.reference]))throw fail(409,'That PO number is already recorded.');
+  if(!await getOne('SELECT id FROM projects WHERE id=? AND active=1',[body.projectId])||!await getOne('SELECT id FROM suppliers WHERE id=? AND active=1',[body.supplierId]))throw fail(400,'Choose an active project and supplier.');
   const materialIds=[...new Set(body.items.map(item=>item.materialId).filter(Boolean))];
   const materials=materialIds.length?await query(`SELECT id,name,category,procurement_route procurementRoute FROM materials WHERE id IN (${materialIds.map(()=>'?').join(',')})`,materialIds):[];
+  if(materials.length!==materialIds.length)throw fail(400,'One of the selected materials no longer exists.');
   const routes=new Set(materials.map(material=>material.procurementRoute==='Direct delivery'||String(material.category).toLowerCase()==='concrete'||/concrete/i.test(material.name)?'Direct delivery':'Purchase order'));
   if(routes.size>1)return res.status(409).json({error:'Concrete direct deliveries and purchase-order materials must be recorded separately.'});
   const procurementRoute=routes.has('Direct delivery')?'Direct delivery':'Purchase order';
-  const reference = await nextReference(procurementRoute==='Direct delivery'?'DD':'PO', 'purchase_orders');
-  const total = body.items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
+  const reference = body.reference || await nextReference(procurementRoute==='Direct delivery'?'DD':'PO', 'purchase_orders');
+  const total = orderTotal(body.items);
+  if(!Number.isFinite(total)||total<=0||total>9999999999999.99)return res.status(400).json({error:'Enter a positive order total within the supported amount range.'});
   const warnings=await orderWarnings(body);
   if(warnings.length&&(!body.riskAccepted||!body.riskReason||body.riskReason.length<10))
     return res.status(409).json({error:'Review these purchase risks and enter a reason before issuing the order.',warnings});
@@ -311,17 +312,17 @@ router.post('/orders', auth, permit('store.manage', 'finance.pay'), validate(ord
   const dual=procurementRoute==='Purchase order'&&total>=await controlNumber('approval.two.person.threshold',1000000);
   const status=procurementRoute==='Direct delivery'?'Issued':request&&!dual?'Issued':'Pending approval';
   const id = await transaction(async connection => {
-    const [result] = await connection.execute(`INSERT INTO purchase_orders (reference,request_id,supplier_id,project_id,order_date,total,issued_by,status,procurement_route)
-      VALUES (?,?,?,?,?,?,?,?,?)`, [reference, body.requestId || null, body.supplierId, body.projectId, body.orderDate, total, req.user.id,status,procurementRoute]);
+    const [result] = await connection.execute(`INSERT INTO purchase_orders (reference,request_id,supplier_id,project_id,order_date,total,issued_by,status,procurement_route,presentation)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`, [reference, body.requestId || null, body.supplierId, body.projectId, body.orderDate, total, req.user.id,status,procurementRoute,JSON.stringify(body.presentation||{})]);
     for (const item of body.items) {
-      await connection.execute('INSERT INTO purchase_order_items (order_id,material_id,description,unit,quantity,rate) VALUES (?,?,?,?,?,?)',
-        [result.insertId, item.materialId || null, item.description, item.unit, item.quantity, item.rate]);
+      await connection.execute('INSERT INTO purchase_order_items (order_id,material_id,description,unit,quantity,rate,amount_override,item_no,received_value) VALUES (?,?,?,?,?,?,?,?,0)',
+        [result.insertId, item.materialId || null, item.description, item.unit, item.quantity, item.rate,item.amount??null,item.itemNo||null]);
     }
     if (body.requestId) await connection.execute("UPDATE purchase_requests SET status='Ordered' WHERE id=?", [body.requestId]);
     await audit(connection, req.user.id, 'CREATE', 'purchase_order', result.insertId, null,
       {reference,total,status,procurementRoute,warnings,riskReason:body.riskReason||null,...body},req.ip);
     return result.insertId;
-  });
+  }).catch(error=>{if(error.code==='ER_DUP_ENTRY')throw fail(409,'That PO number is already recorded.');throw error;});
   for(const warning of warnings)await raiseFinding({rule:`precommit_${warning.code}`,category:'Control',severity:'High',
     entity:'purchase_order',entityId:id,projectId:body.projectId,subjectUserId:req.user.id,amount:total,
     title:`Purchase order ${reference} needs investigation`,detail:warning.message,
@@ -335,14 +336,18 @@ router.post('/orders/:id/approve',auth,permit('projects.manage'),wrap(async(req,
     const order=rows[0];
     if(!order)return {error:'Purchase order not found',status:404};
     if(order.status!=='Pending approval')return {error:'This order is not awaiting approval',status:409};
-    if(Number(order.issued_by)===Number(req.user.id)||Number(order.first_approved_by)===Number(req.user.id))
+    if(Number(order.issued_by)===Number(req.user.id)||Number(order.last_revised_by)===Number(req.user.id)||Number(order.first_approved_by)===Number(req.user.id))
       return {error:'A creator or first approver cannot approve this order again.',status:403};
     const dual=Number(order.total)>=await controlNumber('approval.two.person.threshold',1000000);
     if(dual&&!order.first_approved_by){
       await connection.execute('UPDATE purchase_orders SET first_approved_by=?,first_approved_at=NOW() WHERE id=?',[req.user.id,order.id]);
-    }else await connection.execute(`UPDATE purchase_orders SET status='Issued',
+    }else {
+      const [[receipt]]=await connection.execute('SELECT SUM(quantity-received_quantity) outstanding,SUM(received_quantity) received FROM purchase_order_items WHERE order_id=?',[order.id]);
+      const status=Number(receipt.outstanding)<=.0001?'Received':Number(receipt.received)>0?'Partially received':'Issued';
+      await connection.execute(`UPDATE purchase_orders SET status=?,
       ${dual?'second_approved_by=?,second_approved_at=NOW()':'first_approved_by=?,first_approved_at=NOW()'} WHERE id=?`,
-      [req.user.id,order.id]);
+      [status,req.user.id,order.id]);
+    }
     await audit(connection,req.user.id,'APPROVE','purchase_order',order.id,order,
       {stage:dual&&!order.first_approved_by?'First approval':'Final approval'},req.ip);
     return {id:order.id};
@@ -380,11 +385,12 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
         if (!item) throw Object.assign(new Error('Order line not found'), { status: 404 });
         const outstanding = Number(item.quantity) - Number(item.received_quantity);
         if (line.quantity > outstanding) throw Object.assign(new Error(`Cannot receive more than the ${outstanding} ${item.unit} outstanding on "${item.description}"`), { status: 409 });
-        await connection.execute('UPDATE purchase_order_items SET received_quantity=received_quantity+? WHERE id=?', [line.quantity, item.id]);
-        receiptLines.push({ itemId:item.id, quantity:line.quantity });
-        if (!item.material_id) receivedValue += line.quantity * Number(item.rate);
+        const unitRate=receiptRate(item);
+        await connection.execute('UPDATE purchase_order_items SET received_value=COALESCE(received_value,received_quantity*rate)+?,received_quantity=received_quantity+? WHERE id=?',[line.quantity*unitRate,line.quantity,item.id]);
+        receiptLines.push({ itemId:item.id, quantity:line.quantity,unitRate });
+        if (!item.material_id) receivedValue += line.quantity * unitRate;
         if (item.material_id) {
-          await connection.execute('UPDATE materials SET stock=stock+?, unit_cost=? WHERE id=?', [line.quantity, item.rate, item.material_id]);
+          await connection.execute('UPDATE materials SET stock=stock+?, unit_cost=? WHERE id=?', [line.quantity, unitRate, item.material_id]);
           await connection.execute(`INSERT INTO stock_movements (material_id,movement_type,quantity,reference,notes,project_id,user_id,origin_type)
             VALUES (?,'Receipt',?,?,?,?,?,'Purchase order')`, [item.material_id, line.quantity, current.reference, req.body.notes || 'Goods received', current.project_id, req.user.id]);
         }
@@ -395,8 +401,8 @@ router.post('/orders/:id/receive', auth, permit('store.manage'), validate(z.obje
       await connection.execute('UPDATE purchase_orders SET status=? WHERE id=?', [status, current.id]);
       const [receipt] = await connection.execute('INSERT INTO goods_receipts (order_id,received_by,notes) VALUES (?,?,?)', [current.id, req.user.id, req.body.notes || null]);
       for(const line of receiptLines) await connection.execute(
-        'INSERT INTO goods_receipt_items (receipt_id,order_item_id,quantity) VALUES (?,?,?)',
-        [receipt.insertId,line.itemId,line.quantity]);
+        'INSERT INTO goods_receipt_items (receipt_id,order_item_id,quantity,unit_rate) VALUES (?,?,?,?)',
+        [receipt.insertId,line.itemId,line.quantity,line.unitRate]);
       if (receivedValue > 0) {
         await connection.execute(`INSERT INTO expenses (project_id,source,description,amount,expense_date,reference,origin_type,origin_id,created_by)
           VALUES (?,'Material',?,?,CURDATE(),?, 'purchase_order', ?, ?)`,
@@ -510,11 +516,17 @@ router.post('/invoices', auth, permit('finance.pay'), validate(supplierInvoiceSc
       const [users]=await connection.execute(`SELECT id FROM users WHERE active=1 AND id IN (${recipients.map(()=>'?').join(',')}) FOR UPDATE`,recipients);
       if(users.length!==recipients.length)throw Object.assign(new Error('Choose active reminder recipients.'),{status:400});
     }
+    let poSnapshot=null;
+    if(body.orderId){
+      const [[locked]]=await connection.execute('SELECT o.*,p.company_id FROM purchase_orders o JOIN projects p ON p.id=o.project_id WHERE o.id=? FOR UPDATE',[body.orderId]);
+      if(!locked||Number(locked.company_id)!==body.companyId||Number(locked.supplier_id)!==body.supplierId||!['Issued','Received','Partially received'].includes(locked.status))throw fail(409,'The purchase order changed or is not approved. Reload it before recording the invoice.');
+      poSnapshot=JSON.stringify({id:locked.id,supplier_id:locked.supplier_id,total:locked.total,status:locked.status,revision:locked.revision});
+    }
     const [result] = await connection.execute(`INSERT INTO supplier_invoices
-      (company_id,order_id,supplier_id,invoice_no,amount,net_amount,tax_treatment,vat_rate,vat_amount,invoice_date,due_date,recorded_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      (company_id,order_id,supplier_id,invoice_no,amount,net_amount,tax_treatment,vat_rate,vat_amount,invoice_date,due_date,recorded_by,po_snapshot)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [body.companyId,body.orderId||null,body.supplierId,body.invoiceNo,total,net,body.taxTreatment,
-        body.taxTreatment==='Standard'?body.vatRate:0,vat,body.invoiceDate,body.dueDate||null,req.user.id]);
+        body.taxTreatment==='Standard'?body.vatRate:0,vat,body.invoiceDate,body.dueDate||null,req.user.id,poSnapshot]);
     const [rows]=await connection.execute('SELECT * FROM supplier_invoices WHERE id=?',[result.insertId]);
     const row=rows[0];
     if(body.creditReminder){

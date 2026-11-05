@@ -1,19 +1,21 @@
+import {installProjectDeadlines,projectDate} from './project-deadlines.js';
 import { projectCompletion } from '../lib/project-completion.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, spendSql, today, transaction } from '../db.js';
-import { auth, permit, validate, wrap } from '../lib/http.js';
+import { auth, permit, validate, wrap, fail } from '../lib/http.js';
 import { listAttachments } from './uploads.js';
 import { resolveProjectManager } from '../lib/project-manager.js';
 import { withTaskAssignees } from '../lib/task-assignees.js';
 import { projectAwardState } from '../lib/project-award.js';
 
 const router = Router();
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const isoDate = projectDate;
+installProjectDeadlines(router);
 
 const projectShape = z.object({
   companyId: z.number().int().positive().default(1),
-  name: z.string().min(3).max(180),
+  name: z.string().min(3).max(1000),
   client: z.string().min(2).max(180).optional(),
   clientId: z.number().int().positive().optional(),
   manager: z.string().min(2).max(120).optional(),
@@ -24,7 +26,7 @@ const projectShape = z.object({
   progress: z.number().int().min(0).max(100).default(0),
   health: z.enum(['On track', 'Watch', 'At risk', 'Completed']).default('On track'),
   startDate: isoDate.optional(),
-  endDate: isoDate.optional(),
+  endDate: isoDate.nullable().optional(),
   reminderDate: isoDate.optional(),
   reminderFrequency: z.enum(['Daily', 'Weekly', 'Monthly']).optional(),
   reminderUserIds: z.array(z.number().int().positive()).max(100).optional()
@@ -303,7 +305,7 @@ router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wr
       'subcontractor_bills', 'subcontractor_project_rates', 'subcontractor_quotations',
       'variation_orders', 'quotation_billing_plans', 'petty_cash_entries',
       'fuel_records',
-      'project_awards', 'project_work_authorisations'];
+      'project_awards', 'project_work_authorisations','project_extensions'];
     for (const table of committedTables) {
       if (await getOne(`SELECT 1 AS found FROM ${table} WHERE project_id=? LIMIT 1`, [before.id]))
         return res.status(409).json({ error: 'This project already has commercial or financial records. Its operating company cannot be changed without moving those records. Other project details can still be edited.' });
@@ -313,11 +315,14 @@ router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wr
   /* Only one end of the range may be in the request, so the other comes from the record. */
   const asDate = value => (value instanceof Date ? value.toISOString().slice(0, 10) : value);
   const startDate = req.body.startDate ?? asDate(before.start_date);
-  const endDate = req.body.endDate ?? asDate(before.end_date);
+  const endDate = req.body.endDate === undefined ? asDate(before.end_date) : req.body.endDate;
+  if (before.end_date && req.body.endDate && req.body.endDate > asDate(before.end_date))
+    return res.status(409).json({error:'Use Extend project to record the reason and client request letter for a later end date.'});
   if (startDate && endDate && endDate < startDate) {
     return res.status(400).json({ error: 'Invalid data', issues: { formErrors: [], fieldErrors: { endDate: [backwards.message] } } });
   }
 
+  if(Number(before.extension_count)>0 && req.body.endDate===null) return res.status(409).json({error:'An extended project must retain its completion date and extension history.'});
   const body = projectCompletion({ ...req.body }, before);
   delete body.reminderDate; delete body.reminderFrequency; delete body.reminderUserIds;
   if (body.companyId && !await getOne('SELECT id FROM companies WHERE id=? AND active=1', [body.companyId]))
@@ -330,6 +335,9 @@ router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wr
   const { fields, values } = toRow(body);
   if (!fields.length) return res.json(before);
   await transaction(async connection => {
+    const [[current]]=await connection.execute('SELECT end_date,start_date FROM projects WHERE id=? AND active=1 FOR UPDATE',[before.id]);
+    if(!current)throw fail(404,'Project not found.');
+    if(('endDate' in body||'startDate' in body)&&(asDate(current.end_date)!==asDate(before.end_date)||asDate(current.start_date)!==asDate(before.start_date)))throw fail(409,'Project dates changed. Reload before saving.');
     await connection.execute(`UPDATE projects SET ${fields.map(key => `${key}=?`).join(',')} WHERE id=?`, [...values, req.params.id]);
     if (body.stage === 'Mid-way' || body.stage === 'Completed') await connection.execute(
       'UPDATE project_start_reminders SET active=0 WHERE project_id=?', [before.id]);

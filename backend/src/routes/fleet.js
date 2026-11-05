@@ -21,8 +21,8 @@ const select = `SELECT f.id,f.vehicle,f.registration reg,CASE WHEN f.driver_empl
   LEFT JOIN vehicle_documents primary_doc ON primary_doc.vehicle_id=f.id AND primary_doc.doc_type=f.renewal_type`;
 
 const fleetSchema = z.object({
-  vehicle: z.string().min(2).max(180),
-  registration: z.string().min(2).max(60),
+  vehicle: z.string().trim().min(2).max(180),
+  registration: z.string().trim().min(2).max(60),
   make: z.string().trim().max(100).nullable().optional(),
   model: z.string().trim().max(100).nullable().optional(),
   modelYear: z.number().int().min(1900).max(2100).nullable().optional(),
@@ -276,8 +276,13 @@ router.patch('/:id', auth, permit('transport.manage'), validate(fleetSchema.part
   };
   const entries = Object.entries(req.body);
   if (entries.length) {
-    await query(`UPDATE fleet SET ${entries.map(([key]) => `${columns[key] || key}=?`).join(',')} WHERE id=?`,
-      [...entries.map(([, value]) => value), req.params.id]);
+    try {
+      await query(`UPDATE fleet SET ${entries.map(([key]) => `${columns[key] || key}=?`).join(',')} WHERE id=?`,
+        [...entries.map(([, value]) => value), req.params.id]);
+    } catch (error) {
+      if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({error:'That registration is already recorded'});
+      throw error;
+    }
   }
   const after = await getOne(`${select} WHERE f.id=?`, [req.params.id]);
   await audit(pool, req.user.id, 'UPDATE', 'fleet', after.id, before, after, req.ip);

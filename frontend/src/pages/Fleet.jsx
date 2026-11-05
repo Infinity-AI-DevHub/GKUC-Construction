@@ -77,6 +77,11 @@ function FleetPulse({vehicles}){
 
 function Vehicles({ data, can, reload }) {
   const [detail, setDetail] = useState(null);
+  const [initialAction, setInitialAction] = useState('');
+  const openVehicle = async (id, action = '') => {
+    setInitialAction(action);
+    await openRecord(`/fleet/${id}`, setDetail);
+  };
   useEffect(() => {
     const id=Number(new URLSearchParams(window.location.search).get('record'));
     if(id&&data.fleet.some(vehicle=>Number(vehicle.id)===id))
@@ -84,9 +89,13 @@ function Vehicles({ data, can, reload }) {
   }, []);
   return <>
     <div className="fleet-grid">
-      {data.fleet.map(vehicle => <article className="fleet-card" key={vehicle.id} onClick={() => openRecord(`/fleet/${vehicle.id}`, setDetail)}>
+      {data.fleet.map(vehicle => <article className="fleet-card" key={vehicle.id} onClick={() => openVehicle(vehicle.id)}>
         <div className="fleet-visual"><Truck size={34} /><Badge tone={slug(vehicle.status)}>{vehicle.status}</Badge></div>
         <h3>{vehicle.vehicle}</h3>
+        {can.transport && <div className="row-actions">
+          <button className="secondary" onClick={event=>{event.stopPropagation();openVehicle(vehicle.id,'details');}}>Edit details</button>
+          <button className="secondary" onClick={event=>{event.stopPropagation();openVehicle(vehicle.id,'document');}}>Add renewal</button>
+        </div>}
         <p>{vehicle.reg}</p>
         <dl>
           <div><dt>Assigned driver</dt><dd>{vehicle.driverName || vehicle.driver || 'Unassigned'}</dd></div>
@@ -101,16 +110,17 @@ function Vehicles({ data, can, reload }) {
         </dl>
       </article>)}
     </div>
-    {detail && <VehicleDetail vehicle={detail} data={data} close={() => setDetail(null)} can={can}
+    {detail && <VehicleDetail vehicle={detail} initialAction={initialAction} data={data} close={() => setDetail(null)} can={can}
       refresh={async () => {setDetail(await api(`/fleet/${detail.id}`));await reload();}} />}
   </>;
 }
 
-function VehicleDetail({ vehicle, data, close, can, refresh }) {
-  const [action,setAction]=useState('');
+function VehicleDetail({ vehicle, initialAction = '', data, close, can, refresh }) {
+  const [action,setAction]=useState(initialAction);
   const fuelMax=Math.max(1,...vehicle.fuel.slice(0,8).map(row=>Number(row.cost)));
   return <Modal title={`${vehicle.vehicle} — ${vehicle.reg}`} close={close} wide>
     <div className="report-form">
+      {can?.transport&&<div className="wide row-actions"><button className="secondary" onClick={()=>setAction('details')}>Edit vehicle details</button><button className="secondary" onClick={()=>setAction('driver')}><Users size={15}/> Change driver</button><button className="secondary" onClick={()=>setAction('odometer')}><Gauge size={15}/> Add odometer reading</button><button className="secondary" onClick={()=>setAction('fuel')}><Fuel size={15}/> Record fuel</button><button className="secondary" onClick={()=>setAction('work')}><Wrench size={15}/> Service or repair</button><button className="secondary" onClick={()=>setAction('schedule')}><CalendarDays size={15}/> Service schedule</button><button className="secondary" onClick={()=>setAction('document')}><CalendarDays size={15}/> Add renewal</button></div>}
       <WorkflowChecklist title="Insurance renewal" steps={vehicleRenewalSteps(vehicle)} />
       {vehicle.documents.some(document=>document.docType==='Insurance')&&<p className="form-note wide">Vehicle insurance is one shared record. Renew it here; the same current policy appears in People → Insurance.{can?.has('hr.insurance')&&<> <a href="/people/insurance">Open HR insurance details and reminders</a>.</>}</p>}
       <div className="project-stats wide">
@@ -134,7 +144,6 @@ function VehicleDetail({ vehicle, data, close, can, refresh }) {
         <p>{[vehicle.make,vehicle.model,vehicle.modelYear].filter(Boolean).join(' · ') || 'Make, model and year can be entered later.'}</p>
         <p>Engine code: {vehicle.engineCode || 'Not recorded'}</p>
         {vehicle.manufacturerNotes && <p style={{whiteSpace:'pre-wrap'}}>{vehicle.manufacturerNotes}</p>}
-        {can?.transport && <button className="secondary" onClick={()=>setAction('details')}>Edit machine details</button>}
       </section>
       <section className="wide workspace-surface"><h3>Maintenance reminders</h3>
         {(vehicle.maintenanceSchedules || []).length ? vehicle.maintenanceSchedules.map(schedule => <div className="fleet-maintenance-reminder" key={schedule.id}>
@@ -142,7 +151,7 @@ function VehicleDetail({ vehicle, data, close, can, refresh }) {
           <Badge tone={!schedule.active ? 'inactive' : schedule.overdue ? 'at-risk' : schedule.dueSoon ? 'watch' : 'on-track'}>{!schedule.active ? 'Paused' : schedule.kmRemaining < 0 ? `${Math.abs(schedule.kmRemaining)} km overdue` : schedule.kmRemaining === 0 ? 'Due now' : `${schedule.kmRemaining} km remaining`}</Badge>
         </div>) : <p className="form-note">No individual maintenance reminders. Add engine oil, brake oil or another item from the Maintenance tab.</p>}
       </section>
-      {can?.transport&&<div className="wide row-actions"><button className="secondary" onClick={()=>setAction('driver')}><Users size={15}/> Change driver</button><button className="secondary" onClick={()=>setAction('odometer')}><Gauge size={15}/> Odometer</button><button className="secondary" onClick={()=>setAction('fuel')}><Fuel size={15}/> Fuel</button><button className="secondary" onClick={()=>setAction('work')}><Wrench size={15}/> Service or repair</button><button className="secondary" onClick={()=>setAction('schedule')}><CalendarDays size={15}/> Service schedule</button><button className="secondary" onClick={()=>setAction('document')}><CalendarDays size={15}/> Renewal</button></div>}
+
       {vehicle.fuel.length>1&&<section className="workspace-surface wide"><div className="workspace-section-heading"><div><span className="section-kicker">Operating trend</span><h2>Recent fuel spend</h2></div></div><div className="cost-bars">{vehicle.fuel.slice(0,8).reverse().map(row=><div key={row.id}><span>{shortDate(row.fuelDate)}</span><i><b style={{width:`${Number(row.cost)/fuelMax*100}%`}}/></i><strong>{rupees(row.cost)}</strong></div>)}</div></section>}
       <div className="wide">
         <Table columns={['Document', 'Reference', 'Expiry', 'Status']} template="150px minmax(140px,1fr) 130px 140px"
@@ -269,9 +278,15 @@ const machineDetailsPayload = values => ({make:values.make?.trim()||null,model:v
   modelYear:values.modelYear ? Number(values.modelYear) : null,engineCode:values.engineCode?.trim()||null,
   manufacturerNotes:values.manufacturerNotes?.trim()||null});
 function MachineDetailsForm({vehicle,close,reload}) {
-  return <FormModal title={`Machine details — ${vehicle.reg}`} close={close} label="Save details" onSubmit={async values=>{
-    await patch(`/fleet/${vehicle.id}`,machineDetailsPayload(values)); await reload();
-  }}><MachineDetailFields vehicle={vehicle}/></FormModal>;
+  return <FormModal title={`Edit vehicle details — ${vehicle.reg}`} close={close} label="Save details" onSubmit={async values=>{
+    await patch(`/fleet/${vehicle.id}`,{...machineDetailsPayload(values),vehicle:values.vehicle.trim(),registration:values.registration.trim(),status:values.status}); await reload();
+  }}>
+    <Field name="vehicle" label="Vehicle / equipment" defaultValue={vehicle.vehicle} minLength={2} maxLength={180}/>
+    <Field name="registration" label="Registration / asset ID" defaultValue={vehicle.reg} minLength={2} maxLength={60}/>
+    <SelectField name="status" label="Status" options={['Available','Assigned','Repair','Inactive']} defaultValue={vehicle.status}/>
+    <MachineDetailFields vehicle={vehicle}/>
+    <p className="form-note wide">Use Change driver, Odometer and Renewal in the vehicle record to update assignments, readings and compliance dates with their history.</p>
+  </FormModal>;
 }
 
 function DriverForm({vehicle,data,close,reload}){

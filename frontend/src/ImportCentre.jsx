@@ -1,3 +1,4 @@
+import LinkedImportReview from './LinkedImportReview.jsx';
 import React, { useEffect, useState } from 'react';
 import { api } from './api.js';
 
@@ -35,12 +36,21 @@ export default function ImportCentre() {
       setReview(next); if (next.mode === 'document-review' && !context) setContext(await api('/import-centre/review-context')); }
     catch (failure) { setError(failure.message); }
   };
+  const saveLinked = async () => {
+    setBusy(true);setError('');
+    try {const saved=await api(`/import-centre/batches/${review.id}/linked-review`,{method:'PATCH',body:JSON.stringify({rows:review.rows,employeeMap:review.employeeMap})});setReview(saved);await refresh();}
+    catch(failure){setError(failure.message);}finally{setBusy(false);}
+  };
   const confirm = async () => {
-    if (!window.confirm(review.mode === 'document-review'
+    if (!window.confirm(review.mode === 'linked-workbook' ? 'Create and link these reviewed records? Source keys will connect the imported registers.' : review.mode === 'document-review'
       ? 'Create this BOQ and any new client or project shown in the review? This action changes live records.'
       : `Create ${review.counts.create} ${labels[review.kind]?.toLowerCase()}? Existing records will be skipped. This action changes live records.`)) return;
     setBusy(true); setError('');
     try {
+      if (review.mode === 'linked-workbook') {
+        const saved=await api(`/import-centre/batches/${review.id}/linked-review`,{method:'PATCH',body:JSON.stringify({rows:review.rows,employeeMap:review.employeeMap})});
+        setReview(saved);if(saved.counts.blocked)throw new Error('Correct every highlighted relationship or value before importing.');
+      }
       if (review.mode === 'document-review') {
         const saved = await api(`/import-centre/batches/${review.id}/review`, { method: 'PATCH',
           body: JSON.stringify({ document: review.document, rows: review.rows }) });
@@ -63,12 +73,13 @@ export default function ImportCentre() {
         <div className="form-field"><label htmlFor="import-file">{kind === 'boqs' ? 'Excel workbook or PDF' : 'Completed Excel workbook'}</label><input id="import-file" type="file" accept={kind === 'boqs' ? '.xlsx,.pdf' : '.xlsx'} required onChange={event => setFile(event.target.files?.[0] || null)} /></div>
         <div className="form-actions"><button className="primary" type="submit" disabled={!file || !kind || busy}>{busy ? 'Checking…' : 'Run dry check'}</button></div>
       </form>
-      <p className="form-note">Uploading only creates a review. For BOQs, SiteOps detects unfamiliar layouts and scanned PDFs, then lets you verify dependencies and every priced line. Other bulk registers continue to use their controlled templates.</p>
+      <p className="form-note">Uploading only creates a review. For BOQs, SiteOps detects unfamiliar layouts and scanned PDFs, then lets you verify dependencies and every priced line. The linked Clients/Contacts, Projects/Project Team and BOQ Headers/Items templates preserve source-key relationships. Import clients first, then projects, then BOQs.</p>
     </section>
     {error && <p className="form-error" role="alert">{error}</p>}
     {review?.mode === 'document-review' && <DocumentReview review={review} setReview={setReview} context={context}
       busy={busy} onConfirm={confirm} />}
-    {review && review.mode !== 'document-review' && <section className="table-panel" style={{ padding: 24, marginTop: 20 }}>
+    {review?.mode === 'linked-workbook' && <LinkedImportReview key={review.id} review={review} setReview={setReview} busy={busy} onSave={saveLinked} onConfirm={confirm}/>}
+    {review && !['document-review','linked-workbook'].includes(review.mode) && <section className="table-panel" style={{ padding: 24, marginTop: 20 }}>
       <div className="table-tools"><div><h2>{labels[review.kind]} · dry-check report</h2><p>Sheets found: {review.sheets?.join(', ')}</p></div></div>
       <div className="toolbar"><span><strong>{review.counts.create}</strong> to create</span><span><strong>{review.counts.skip}</strong> already imported</span><span><strong>{review.counts.blocked}</strong> need correction</span></div>
       {review.sourceTotal > 0 && <p>Workbook amount: LKR {Number(review.sourceTotal).toLocaleString('en-LK', { minimumFractionDigits: 2 })}. Check this against the original Excel totals before confirming.</p>}

@@ -429,3 +429,14 @@ columns, amounts/totals, letterhead and sections. Related quotations may share a
 printed number; saved records remain traceable. Print choices do not change recorded
 financial amounts. See docs/ARCHITECTURE.md and docs/DEPLOYMENT.md for persistence
 and upgrade details.
+
+Finance bond workbook imports support reviewed creation and updates; see [Bond Excel import](docs/BOND_IMPORT.md).
+
+Administration historical imports support linked Clients/Contacts, Projects/Team and
+BOQ Headers/Items workbooks; see [Historical Excel imports](docs/HISTORICAL_IMPORTS.md).
+
+Projects support optional end dates, daily deadline reminders, repeat extensions with
+printable client request letters, and list filters. See [Project deadlines](docs/PROJECT_DEADLINES.md).
+
+Multi-item purchase orders support editable numbers/printed fields and audited commercial
+revisions, with accounting after actual goods/invoice confirmation. See [Purchase orders](docs/PURCHASE_ORDERS.md).

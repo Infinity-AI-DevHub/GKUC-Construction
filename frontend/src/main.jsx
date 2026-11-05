@@ -460,7 +460,7 @@ function App() {
     const base = pathFor(activePage, activePage === 'Administration' ? adminTab : null);
     // Keep record/section deep links intact. The parent navigation still verifies that
     // the user may open the workspace before any child can read its record identifier.
-    const wanted = ['Finance', 'Quantity Surveying', 'People', 'Projects'].includes(activePage)
+    const wanted = ['Finance', 'Quantity Surveying', 'People', 'Projects', 'Materials'].includes(activePage)
       && window.location.pathname.startsWith(`${pathFor(activePage)}/`)
       ? window.location.pathname : base;
     if (window.location.pathname !== wanted) window.history.replaceState({}, '', wanted);

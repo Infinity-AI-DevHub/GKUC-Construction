@@ -1,3 +1,4 @@
+import PurchaseOrderForm from '../PurchaseOrderForm.jsx';
 import React, { useEffect, useState } from 'react';
 import { Check, FileText, PackageCheck } from 'lucide-react';
 import { api, openDocument, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
@@ -28,13 +29,13 @@ export default function Materials({ data, reload, can, companyId, company }) {
     {tab === 'Stock' && <Stock data={data} reload={reload} can={can} />}
     {tab === 'Movements' && <Movements data={data} reload={reload} can={can} />}
     {tab === 'Purchase requests' && <Requests reload={reload} can={can} companyId={companyId} />}
-    {tab === 'Orders' && <Orders reload={reload} can={can} companyId={companyId} />}
+    {tab === 'Orders' && <Orders data={data} reload={reload} can={can} companyId={companyId} />}
     {tab === 'Suppliers' && <Suppliers can={can} />}
 
     {open === 'Stock' && <MaterialForm close={() => setOpen('')} reload={reload} />}
     {open === 'Movements' && <MovementForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Purchase requests' && <RequestForm data={data} close={() => setOpen('')} reload={reload} />}
-    {open === 'Orders' && <OrderForm data={data} close={() => setOpen('')} reload={reload} />}
+    {open === 'Orders' && <PurchaseOrderForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Suppliers' && <SupplierForm close={() => setOpen('')} reload={reload} />}
   </Page></RecordScopeProvider>;
 }
@@ -199,7 +200,7 @@ function QuotationForm({ requestId, close, reload }) {
 const ORDER_COLUMNS = ['Reference', 'Supplier', 'Project', 'Order date', 'Total', 'Status', ''];
 const ORDER_TEMPLATE = 'minmax(130px,.9fr) minmax(160px,1.1fr) minmax(140px,1fr) 120px 130px 130px 110px';
 
-function Orders({ reload, can, companyId }) {
+function Orders({ data,reload, can, companyId }) {
   const [rows, setRows] = useState([]);
   const [detail, setDetail] = useState(null);
   const load = () => api(`/purchasing/orders?companyId=${companyId}`).then(setRows).catch(() => setRows([]));
@@ -218,13 +219,15 @@ function Orders({ reload, can, companyId }) {
         <button className="status-button" onClick={() => openRecord(`/purchasing/orders/${row.id}`, setDetail)}>Open</button>
       </Row>)}
     </Table>
-    {detail && <OrderDetail order={detail} can={can} close={() => setDetail(null)}
+    {detail && <OrderDetail data={data} order={detail} can={can} close={() => setDetail(null)}
       done={async () => { setDetail(null); await load(); await reload(); }} />}
   </>;
 }
 
 /** Receiving goods is where stock, the order and the project cost all move together. */
-function OrderDetail({ order, close, done, can }) {
+function OrderDetail({ data,order, close, done, can }) {
+  const [editing,setEditing]=useState(false),[revisions,setRevisions]=useState([]);
+  useEffect(()=>{api(`/purchasing/orders/${order.id}/revisions`).then(setRevisions).catch(()=>{});},[order.id]);
   const [quantities, setQuantities] = useState(() =>
     Object.fromEntries(order.items.map(item => [item.id, Number(item.quantity) - Number(item.receivedQuantity)])));
   const [error, setError] = useState('');
@@ -274,6 +277,7 @@ function OrderDetail({ order, close, done, can }) {
       </div>
       {error && <p className="form-error">{error}</p>}
       <div className="form-actions">
+        {can.purchasing&&order.status!=='Cancelled'&&<button type="button" className="secondary" onClick={()=>setEditing(true)}>Edit PO details & items</button>}
         <button type="button" className="secondary" onClick={close}>Close</button>
         <button type="button" className="secondary" onClick={()=>openDocument(`/purchasing/orders/${order.id}/document`)}><FileText size={16}/>Print / PDF</button>
         {can.projects && order.status === 'Pending approval' && (
@@ -285,7 +289,9 @@ function OrderDetail({ order, close, done, can }) {
           </button>
         )}
       </div>
+      {revisions.length>0&&<section className="wide"><h3>Revision history</h3>{revisions.map(r=><p key={r.id}>Revision {r.revision} · {shortDate(r.createdAt)} · {r.reason}</p>)}</section>}
     </div>
+    {editing&&<PurchaseOrderForm data={data} order={order} close={()=>setEditing(false)} reload={done}/>}
   </Modal>;
 }
 
@@ -401,50 +407,6 @@ function RequestForm({ data, close, reload }) {
     <Field name="estimatedRate" label="Estimated rate (LKR)" type="number" step="any" min="0"
       defaultValue={selected?.unit_cost || 0} required={false} />
     <TextArea name="notes" label="Justification" required={false} placeholder="Optional" />
-  </FormModal>;
-}
-
-function OrderForm({ data, close, reload }) {
-  const [suppliers, setSuppliers] = useState([]);
-  const [material, setMaterial] = useState(data.materials[0]?.id || '');
-  useEffect(() => { api('/purchasing/suppliers').then(setSuppliers).catch(() => setSuppliers([])); }, []);
-  const selected = data.materials.find(row => String(row.id) === String(material));
-  const direct=(selected?.procurementRoute||selected?.procurement_route)==='Direct delivery'||String(selected?.category||'').toLowerCase()==='concrete'||/concrete/i.test(selected?.name||'');
-
-  return <FormModal title={direct?'Create direct delivery instruction':'Create purchase order'} close={close} label={direct?'Issue delivery instruction':'Issue order'} onSubmit={async values => {
-    const payload = {
-      supplierId: Number(values.supplierId),
-      projectId: Number(values.projectId),
-      orderDate: values.orderDate,
-      items: [{
-        materialId: Number(values.materialId),
-        description: selected?.name || 'Ordered item',
-        unit: selected?.unit || 'item',
-        quantity: Number(values.quantity),
-        rate: Number(values.rate)
-      }]
-    };
-    const check = await post('/purchasing/orders/check', payload);
-    if (check.warnings.length) {
-      const reason = await askText(`Purchase risk review:\n${check.warnings.map(item => `• ${item.message}`).join('\n')}\n\nExplain why this order should proceed:`);
-      if (!reason || reason.trim().length < 10) throw new Error('Enter at least 10 characters explaining the purchase risk before saving.');
-      payload.riskAccepted = true;
-      payload.riskReason = reason.trim();
-    }
-    await post('/purchasing/orders', payload);
-    await reload();
-  }}>
-    <SelectField name="supplierId" label="Supplier" options={suppliers.map(supplier => [supplier.id, supplier.name])} />
-    <SelectField name="projectId" label="Project" options={data.projects.map(project => [project.id, project.name])} />
-    <Field name="orderDate" label="Order date" type="date" defaultValue={todayInput()} />
-    <label>Material
-      <select name="materialId" value={material} onChange={event => setMaterial(event.target.value)}>
-        {data.materials.map(row => <option value={row.id} key={row.id}>{row.name}</option>)}
-      </select>
-    </label>
-    <p className="form-note wide"><strong>{direct?'Direct delivery route':'Purchase order route'}</strong><br/>{direct?'Concrete is delivered to the selected project site. The site must record the quantity received and Finance must link and verify the supplier invoice.':'This material follows the purchase-order approval workflow before it can be received.'}</p>
-    <Field name="quantity" label={`Quantity${selected ? ` (${selected.unit})` : ''}`} type="number" step="any" min="0" />
-    <Field name="rate" label="Agreed rate (LKR)" type="number" step="any" min="0" defaultValue={selected?.unit_cost || 0} />
   </FormModal>;
 }
 

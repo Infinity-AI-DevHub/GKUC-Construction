@@ -1,3 +1,4 @@
+import {projectDeadline} from './lib/project-deadlines.js';
 import { maintenanceReminder } from './lib/vehicle-maintenance.js';
 import { pool, query, spendSql, today, transaction } from './db.js';
 import { dispatchQueued, dispatch } from './lib/channels.js';
@@ -519,6 +520,7 @@ export async function runEmployeeLetterReminderScan(stamp = today()) {
 
 /** Scans every tracked deadline and threshold and queues notifications for anything at risk. */
 export async function runAlertScan() {
+  await runProjectDeadlineScan();
   await runTaskReminderScan();
   await runBirthdayReminderScan();
   await runEmployeeLetterReminderScan();
@@ -782,4 +784,24 @@ export async function runTaskReminderScan() {
       }
     }
   });
+}
+
+
+/** Daily end-date reminder, independent of the separate project-start reminder frequency. */
+export async function runProjectDeadlineScan(stamp=today()){
+ const projects=await query("SELECT id,name,company_id,end_date,stage,health,site_status,active FROM projects WHERE active=1 AND end_date IS NOT NULL");
+ const users=await query('SELECT id FROM users WHERE active=1');let count=0;
+ for(const project of projects){const due=projectDeadline(project,stamp);if(!due)continue;
+  for(const user of users){
+   const severity=due.remaining<0?'Warning':'Info';
+   const title=`Project ${due.remaining<0?'overdue':'completion reminder'} — ${project.name}`;
+   const message=`${project.name} is scheduled to finish on ${due.end}. ${due.remaining<0?`${Math.abs(due.remaining)} day(s) overdue.`:`${due.remaining} day(s) remaining.`} Review progress, complete the project or record an extension if needed.`;
+   // Recurring programme reminders are deliveries, not unresolved escalation cases.
+   const result=await query(`INSERT IGNORE INTO notifications
+    (user_id,channel,severity,title,message,status,reference_type,reference_id,dedupe_key)
+    VALUES (?,'In-app',?,?,?,'Queued','project',?,?)`,
+    [user.id,severity,title,message,String(project.id),`project-end:${project.id}:${due.end}:${user.id}:${stamp}`]);
+   if(result.insertId){count++;publish('notification',{id:result.insertId,severity,title,message,referenceType:'project',referenceId:project.id,createdAt:new Date().toISOString()},{userId:user.id});}
+  }
+ }return count;
 }
