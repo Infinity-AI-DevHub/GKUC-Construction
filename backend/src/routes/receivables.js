@@ -1,3 +1,4 @@
+import {installBondImport} from './bond-import.js';
 import {installPrintOptions} from './document-print-options.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -703,6 +704,8 @@ const bondFields=z.object({
     notes: z.string().trim().max(600).optional()
   }).refine(value=>value.expiryDate>=value.issuedDate,{message:'Expiry must not precede the issue date',path:['expiryDate']})
     .refine(value=>!value.startDate||value.expiryDate>=value.startDate,{message:'Closing date must not precede the starting date',path:['startDate']});
+
+installBondImport(router,bondFields);
 
 router.put('/receivables/bonds/:id',auth,permit('finance.invoice'),validate(bondFields),async(req,res,next)=>{
   try{

@@ -3498,6 +3498,14 @@ export async function migrate() {
   await addIndex('site_material_counts','uq_sitecount_client_ref','UNIQUE KEY uq_sitecount_client_ref(client_ref)');
   await addColumn('site_material_consumption','client_ref','VARCHAR(120) NULL');
   await addIndex('site_material_consumption','uq_siteuse_client_ref','UNIQUE KEY uq_siteuse_client_ref(client_ref)');
+  await query(`CREATE TABLE IF NOT EXISTS bond_import_batches (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, company_id TINYINT UNSIGNED NOT NULL,
+    filename VARCHAR(190) NOT NULL, checksum CHAR(64) NOT NULL,
+    status ENUM('Review','Imported') NOT NULL DEFAULT 'Review', preview_json LONGTEXT NOT NULL,
+    uploaded_by BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    confirmed_at DATETIME NULL, FOREIGN KEY(company_id) REFERENCES companies(id),
+    FOREIGN KEY(uploaded_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS historical_import_batches (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     kind VARCHAR(40) NOT NULL, filename VARCHAR(190) NOT NULL, checksum CHAR(64) NOT NULL,
@@ -3512,6 +3520,40 @@ export async function migrate() {
     target_id BIGINT UNSIGNED NOT NULL, batch_id BIGINT UNSIGNED NOT NULL,
     PRIMARY KEY(kind,source_code), FOREIGN KEY(batch_id) REFERENCES historical_import_batches(id)
   ) ENGINE=InnoDB`);
+  await addColumn('purchase_orders','presentation','JSON NULL');
+  await addColumn('purchase_orders','revision','INT UNSIGNED NOT NULL DEFAULT 0');
+  await addColumn('purchase_orders','last_revised_by','BIGINT UNSIGNED NULL');
+  await addColumn('purchase_order_items','amount_override','DECIMAL(15,2) NULL');
+  await addColumn('purchase_order_items','item_no','VARCHAR(40) NULL');
+  await addColumn('purchase_order_items','received_value','DECIMAL(20,6) NULL');
+  await addColumn('goods_receipt_items','unit_rate','DECIMAL(20,8) NULL');
+  await addColumn('supplier_invoices','po_snapshot','JSON NULL');
+  if(await columnType('purchase_order_items','description')==='varchar(300)')await modifyColumn('purchase_order_items','description','VARCHAR(1000) NOT NULL');
+  await query(`CREATE TABLE IF NOT EXISTS purchase_order_revisions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,order_id BIGINT UNSIGNED NOT NULL,revision INT UNSIGNED NOT NULL,
+    reason VARCHAR(1000) NOT NULL,before_json JSON NOT NULL,after_json JSON NOT NULL,created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY uq_po_revision(order_id,revision),
+    FOREIGN KEY(order_id) REFERENCES purchase_orders(id),FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('projects','extension_count','INT UNSIGNED NOT NULL DEFAULT 0');
+  await query(`CREATE TABLE IF NOT EXISTS project_extensions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,project_id BIGINT UNSIGNED NOT NULL,
+    reference VARCHAR(100) NOT NULL UNIQUE,previous_end_date DATE NOT NULL,new_end_date DATE NOT NULL,
+    reason TEXT NOT NULL,request_date DATE NOT NULL,letter_html LONGTEXT NOT NULL,
+    created_by BIGINT UNSIGNED NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(project_id) REFERENCES projects(id),FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('historical_import_links','source_json','JSON NULL');
+  await query(`CREATE TABLE IF NOT EXISTS client_contact_people (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, client_id BIGINT UNSIGNED NOT NULL,
+    name VARCHAR(120) NOT NULL,job_title VARCHAR(180) NULL,phone VARCHAR(40) NULL,email VARCHAR(190) NULL,
+    is_primary BOOLEAN NOT NULL DEFAULT FALSE,notes TEXT NULL,
+    FOREIGN KEY(client_id) REFERENCES clients(id), INDEX idx_client_contacts(client_id)
+  ) ENGINE=InnoDB`);
+  if (await columnType('projects','name')==='varchar(180)') await modifyColumn('projects','name','VARCHAR(1000) NOT NULL');
+  if (await columnType('boqs','title')==='varchar(180)') await modifyColumn('boqs','title','VARCHAR(1000) NOT NULL');
+  if (await columnType('boq_items','description')==='varchar(300)') await modifyColumn('boq_items','description','VARCHAR(2000) NOT NULL');
+  if (await columnType('boq_items','notes')==='varchar(600)') await modifyColumn('boq_items','notes','TEXT NULL');
   await query(`CREATE TABLE IF NOT EXISTS company_compliance_records (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     company_id TINYINT UNSIGNED NOT NULL,

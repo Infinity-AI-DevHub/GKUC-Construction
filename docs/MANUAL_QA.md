@@ -167,3 +167,31 @@ absent, not merely relabelled. Backend API checks cover permissions, audits, ori
 financial values, revision inheritance and old invoice-column endpoint compatibility.
 Backend full run: 338 passed, zero failed, two optional skips; frontend 39 passed.
 QA database/server/profile cleaned up. No production deployment or live data write.
+
+## 2026-11-05 — linked historical workbook review
+
+Local Electron + disposable MySQL check passed through Clients/Contacts → Projects/Team
+→ BOQ Headers/Items. Exercised explicit contact phone correction, source employee mapping,
+exact BOQ source-key replacement, line/header total correction and final creation; verified
+saved client/project relationship. Wide review columns scroll inside the table and sheet
+buttons remain in view after fixing min-content overflow. Separate backend checks read the
+three supplied files without dropping any of their 360 source rows, and surface their
+source inconsistencies without writing live records. See HISTORICAL_IMPORTS.md.
+
+## 2026-11-05 — project deadline / extension workflow
+
+Isolated Electron + MySQL UI check passed optional later end-date entry, two reasoned
+extensions with request letter PDF, Completed stage, project search/status filters and
+clear filters. Saved letters reprint from history. Actual PDF rendered/text-extracted and
+visually inspected for letterhead/body/signature/credit layout. Backend final suite
+351 pass / 0 fail / 2 optional skips; frontend 39/39 and production build passed.
+See PROJECT_DEADLINES.md. No production deployment or external provider proof.
+
+## 2026-11-05 — editable purchase orders
+
+Local Electron + disposable MySQL check passed multi-line creation, manual amount,
+editable PO number/details/items, persisted revision and generated PDF. Visually verified
+sample-style metadata/table/Sub Amount/three signoff lines/developer credit. Backend
+checks prove no cost on save and preserved receipt valuation, supplier invoice balance
+and payment after later PO changes. Final backend 354/0/2 (pass/fail/optional skip),
+frontend 39/39, production build and diff check pass. See PURCHASE_ORDERS.md.

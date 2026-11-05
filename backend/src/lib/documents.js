@@ -569,26 +569,20 @@ export function receiptDocument({ company, receipt, settings: given, design: giv
 
 export function purchaseOrderDocument({ company, order, items, settings: given, design: givenDesign }) {
   const settings=settingsFor(given),design=normaliseDesign(givenDesign);
-  const direct=order.procurementRoute==='Direct delivery';
-  const rows=items.map((item,index)=>`<tr><td class="ref">${index+1}</td><td>${escape(item.description)}</td>
-    <td class="unit">${escape(item.unit)}</td><td class="qty num">${quantity(item.quantity)}</td>
-    <td class="rate num">${money(item.rate)}</td><td class="amount num">${money(Number(item.quantity)*Number(item.rate))}</td></tr>`).join('');
+  const p=typeof order.presentation==='string'?JSON.parse(order.presentation||'{}'):order.presentation||{};
+  const issuer={...company,name:p.companyName??company.name,address:p.companyAddress??company.address,email:p.companyEmail??company.email,telephone:p.companyTelephone??company.telephone};
+  const poDesign={...design,header:{...design.header,elements:design.header.elements.map(e=>['reference','docDate'].includes(e.id)?{...e,show:false}:e)}};
+  const title=p.documentTitle||(order.procurementRoute==='Direct delivery'?'Direct Delivery Instruction':'Purchase Order');
+  const rows=items.map((item,index)=>`<tr><td class="ref">${escape(item.itemNo||index+1)}</td><td>${escape(item.description)}</td><td class="unit">${escape(item.unit)}</td><td class="qty num">${quantity(item.quantity)}</td><td class="rate num">${money(item.rate)}</td><td class="amount num">${money(item.amount??Number(item.quantity)*Number(item.rate))}</td></tr>`).join('');
   const blocks={
-    letterhead:letterhead(company,direct?'Direct Delivery Instruction':'Purchase Order',order.reference,order.orderDate,design),
-    parties:`<div class="parties" data-block="parties"><div class="party"><h3>Supplier</h3><strong>${escape(order.supplier)}</strong>
-      ${order.supplierAddress?`<p>${lines(order.supplierAddress).join('<br>')}</p>`:''}${order.supplierPhone?`<p>Telephone: ${escape(order.supplierPhone)}</p>`:''}</div>
-      <div class="party"><h3>Deliver to</h3><strong>${escape(order.project)}</strong><p>${escape(order.site||'Project site')}</p>
-      <p><strong>Route:</strong> ${escape(order.procurementRoute)}</p><p><strong>Status:</strong> ${escape(order.status)}</p></div></div>`,
-    subject:`<p class="subject" data-block="subject"><strong>${direct?'Direct site delivery':'Approved material purchase'}</strong><br>
-      ${direct?'Deliver the listed material directly to the named project site. The site must record the actual quantity received before Finance verifies the invoice.':'Supply the following materials against this approved purchase order.'}</p>`,
-    items:`<table data-block="items"><thead><tr><th>#</th><th>Description</th><th>Unit</th><th class="num">Quantity</th><th class="num">Rate (LKR)</th><th class="num">Amount (LKR)</th></tr></thead><tbody>${rows}</tbody>
-      <tfoot><tr class="grand"><td colspan="5" class="num">Total</td><td class="num">${money(order.total)}</td></tr></tfoot></table>`,
-    notes:`<div class="notes" data-block="notes"><h3>Control trail</h3><p>Prepared by: ${escape(order.issuedBy||'—')}</p>
-      <p>Approval: ${direct?'Direct-delivery route — quantity receipt and invoice verification remain mandatory':order.status==='Pending approval'?'Awaiting approval':'Approved for issue'}</p></div>`,
-    signatures:settings.showSignatures?`<div class="signatures" data-block="signatures"><div><span>Prepared by</span></div><div><span>${direct?'Site acknowledgement':'Authorised by'}</span></div></div>`:'',
-    footer:`<div class="footer" data-block="footer">${escape(settings.footerNote||'')}</div>`
+    letterhead:letterhead(issuer,title,order.reference,order.orderDate,poDesign),
+    parties:`<div class="parties"><div class="party"><p><strong>Attention:</strong> ${escape(p.attention??order.supplier)}</p><p><strong>Site:</strong> ${escape(p.site??order.site??order.project)}</p><p><strong>Cash / Credit / Cheque No:</strong> ${escape(p.paymentText||'')}</p></div><div class="party"><p><strong>No:</strong> ${escape(order.reference)}</p><p><strong>Date:</strong> ${escape(longDate(order.orderDate))}</p><p><strong>Vehicle No:</strong> ${escape(p.vehicleNumber||'')}</p></div></div>`,
+    table:`<table><thead><tr>${['Item No','Description','Unit','Qty','Unit Price','Amount'].map(h=>`<th style="background:#151515;color:white">${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody><tfoot><tr class="grand"><td colspan="5" class="num" style="background:white;color:#111">Sub Amount</td><td class="num" style="background:white;color:#111">${money(order.total)}</td></tr></tfoot></table>`,
+    notes:`<div class="notes"><p style="white-space:pre-wrap">${escape(p.closing??'Thank you for your cooperation.\n\nYours sincerely,')}</p>${order.procurementRoute==='Direct delivery'?'<p>Direct site delivery — record actual quantities received and link the supplier invoice before payment.</p>':''}<p style="font-size:10px;color:#64748b">System status: ${escape(order.status)} · ${escape(order.procurementRoute||'Purchase order')}</p></div>`,
+    signatures:`<div class="sign">${[['Prepared By',p.preparedBy??order.issuedBy??''],['Checked By',p.checkedBy||''],['Approved By',p.approvedBy||'']].map(([label,name])=>`<div style="border-top:0;text-align:center"><p style="min-height:26px">${escape(name)}</p><span style="display:block;border-top:1px dotted #555;padding-top:6px">${label}</span></div>`).join('')}</div>`,
+    footer:footer(issuer,order.reference,settings)
   };
-  return page({design,company,title:order.reference,heading:direct?'Direct Delivery Instruction':'Purchase Order',reference:order.reference,date:order.orderDate,blocks,settings});
+  return page({design:{...design,blocks:DEFAULT_DESIGN.blocks},company:issuer,title:order.reference,heading:title,reference:order.reference,date:order.orderDate,blocks,settings});
 }
 
 export function boqDocument({ company, boq, items, variations = [], settings: given, design: givenDesign }) {
@@ -845,4 +839,20 @@ export async function documentContext(getOne, companyId = 1) {
       showBankDetails: Boolean(settings.showBankDetails)
     }
   };
+}
+
+/** A saved extension is an internal programme change; this letter requests client consent. */
+export function projectExtensionDocument({company,project,extension,settings:given,design:givenDesign}){
+ const settings=settingsFor(given),design=normaliseDesign(givenDesign);
+ const body=`<section style="line-height:1.7"><p><strong>To:</strong><br>${escape(extension.recipientName)}<br>${escape(extension.recipientAddress).replaceAll('\n','<br>')}</p>
+ <p>Dear Sir / Madam,</p><h2 style="font-size:16px">Request for extension of time — ${escape(project.name)}</h2>
+ <p>We respectfully request an extension of the completion date for the above project at ${escape(project.site)}.</p>
+ <p><strong>Current completion date:</strong> ${escape(extension.previousEndDate)}<br><strong>Requested revised completion date:</strong> ${escape(extension.newEndDate)}</p>
+ <p><strong>Reasons / conditions:</strong><br>${escape(extension.reason).replaceAll('\n','<br>')}</p>
+ <p>In view of the above circumstances, please consider our request and provide your written approval of the revised completion date. This letter is a request and does not represent client approval.</p>
+ <p>Yours faithfully,<br><br>____________________________<br>${escape(extension.signatoryName)}<br>${escape(extension.signatoryTitle)}<br>For ${escape(company.name)}</p></section>`;
+ // Keep required request wording together regardless of optional quotation block settings.
+ const fixed={...design,blocks:DEFAULT_DESIGN.blocks};
+ return page({design:fixed,company,title:extension.reference,heading:'Extension Request',reference:extension.reference,date:extension.requestDate,settings,
+  blocks:{letterhead:letterhead(company,'Extension Request',extension.reference,extension.requestDate,design),notes:body,footer:footer(company,extension.reference,settings)}});
 }

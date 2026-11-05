@@ -1,3 +1,4 @@
+import ProjectDeadlines,{projectDeliveryStatus} from '../ProjectDeadlines.jsx';
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, Building2, CalendarDays, CheckCircle2, CircleDollarSign,
@@ -46,6 +47,7 @@ export default function ProjectDetail({ projectId, data, close, reload, can, com
     <RecordScopeBadge />
     <ProjectHero project={project} close={close} onEdit={can.projects ? () => setAdding('edit-project') : null}
       onDelete={can.projects ? removeProject : null} />
+    <ProjectDeadlines project={project} can={can} refresh={refresh}/>
     <ProjectMetrics project={project} onEditBudget={can.projects ? () => setAdding('budget') : null} />
     <div className="project-workspace-tabs"><Tabs tabs={TABS} active={tab} onChange={setTab} groups={TAB_GROUPS} /></div>
     {tab === 'Command centre' && <CommandCentre project={project} can={can} onSection={setTab} navigate={navigate} onAuthorise={() => setAuthorising(true)} />}
@@ -125,7 +127,7 @@ function ProjectHero({ project, close, onEdit, onDelete }) {
     </div>}
     <div className="project-hero-content">
       <div className="project-kicker"><Badge tone={project.health === 'Completed' ? 'completed' : project.health === 'On track' ? 'on-track' : project.health === 'At risk' ? 'at-risk' : 'watch'}>{project.health}</Badge><span>{project.company} · {project.stage}</span></div>
-      <h1>{project.name}</h1><p><MapPin size={16} />{project.site}<span /><Building2 size={16} />{project.client}</p>
+      <Badge tone={projectDeliveryStatus(project)==='Completed'?'completed':'watch'}>{projectDeliveryStatus(project)}</Badge><h1>{project.name}</h1><p><MapPin size={16} />{project.site}<span /><Building2 size={16} />{project.client}</p>
     </div>
     <div className="project-hero-progress"><span>Overall delivery</span><strong>{project.progress}%</strong><Progress value={project.progress} /></div>
   </section>;
@@ -144,7 +146,7 @@ function EditProjectForm({ project, companies, employees, close, reload, setComp
       companyId, name: values.name.trim(), clientId: Number(values.clientId),
       managerEmployeeId: Number(values.managerEmployeeId), site: values.site.trim(),
       stage: values.stage, startDate: values.startDate || undefined,
-      endDate: values.endDate || undefined, progress: Number(values.progress), health: values.health, budget: Number(values.budget)
+      endDate: values.endDate || null, progress: Number(values.progress), health: values.health, budget: Number(values.budget)
     });
     setCompanyId(companyId);
     await reload();
@@ -161,7 +163,7 @@ function EditProjectForm({ project, companies, employees, close, reload, setComp
       else if (health === 'Completed') setHealth('On track');
     }}>{[project.stage, 'Not started', 'Mid-way', 'Completed'].filter((value,index,all) => all.indexOf(value) === index).map(value => <option key={value}>{value}</option>)}</select></label>
     <Field name="startDate" label="Start date" type="date" required={false} defaultValue={dateValue(project.start_date)} />
-    <Field name="endDate" label="Target completion" type="date" required={false} defaultValue={dateValue(project.end_date)} />
+    <Field name="endDate" label="End date (optional)" type="date" required={false} defaultValue={dateValue(project.end_date)} />
     <Field name="budget" label="Approved budget (LKR)" type="number" min="0" step="0.01" defaultValue={project.finance?.budget ?? project.budget ?? 0} />
     <p className="form-note wide">Future BOQ or variation approvals can recalculate the approved budget.</p>
     <label>Progress (%) *<input name="progress" required type="number" min="0" max="100" value={stage === 'Completed' ? '100' : progress} readOnly={stage === 'Completed'} onChange={event => setProgress(event.target.value)} /></label>

@@ -74,7 +74,7 @@ router.get('/:id', auth, permit('clients.view'), wrap(async (req, res) => {
       ORDER BY cm.happened_at DESC,cm.id DESC LIMIT 500`,
       companyId ? [client.id, companyId, client.id, companyId] : [client.id, client.id]) : []
   ]);
-  res.json({ ...client, companyId, projects, inquiries, quotations, tenders, invoices, payments, communications, financialVisible, quotationsVisible, activityVisible,
+  res.json({ ...client, contacts:await query('SELECT id,name,job_title jobTitle,phone,email,is_primary isPrimary,notes FROM client_contact_people WHERE client_id=? ORDER BY is_primary DESC,id',[client.id]), companyId, projects, inquiries, quotations, tenders, invoices, payments, communications, financialVisible, quotationsVisible, activityVisible,
     summary: { projects: projects.length, quotations: quotations.length, invoices: invoices.length,
       billed: invoices.reduce((sum, row) => sum + Number(row.netPayable), 0),
       received: payments.reduce((sum, row) => sum + Number(row.amount), 0) } });

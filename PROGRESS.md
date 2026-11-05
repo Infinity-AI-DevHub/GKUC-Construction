@@ -483,3 +483,269 @@ Updated README, ARCHITECTURE, DECISIONS, DESKTOP, DEPLOYMENT and MANUAL_QA.
 `git diff --check` passed. Deploy backend/migrations and frontend before new desktop;
 no deployment or live database write performed. Windows runtime/signing remain
 unverified; builds are unsigned.
+
+
+## 2026-11-04 — Desktop 1.0.6 release rebuild
+
+- Rebuilt the current frontend and both desktop release packages at the user’s request: Windows x64 NSIS installer and macOS Apple Silicon ZIP. Regenerated `desktop/release/SHA256SUMS`. No application behavior or version change.
+- Validation: frontend production build passed (existing chunk-size advisory); desktop core tests 4/4 passed; packaged macOS launch test 1/1 passed; both packaging commands completed successfully. Windows runtime was not tested; packages remain unsigned.
+- No deployment, PM2 restart, or live database write performed.
+
+## 2026-11-05 — edit fleet vehicle details
+
+User reported vehicle details could not be edited. Existing UI only exposed machine
+specifications. Added a clear View / edit details action on vehicle cards and expanded
+the detail editor to vehicle name, registration/asset ID and status alongside existing
+make/model/year/engine/manual fields. Uses the existing transport.manage API permission
+and audited persistence; dated driver/site, reading and renewal workflows remain intact.
+Trimmed name/registration validation and mapped duplicate registration errors to a clear
+409 response; a rejected duplicate saves none of the submitted fields. No migration.
+
+Validation: Node 20 focused API tests 2/2 passed (167 unrelated tests filtered out),
+covering persisted fields/list reload, unchanged reading/documents, duplicate rollback,
+invalid values, unauthorized writes and existing optional specifications. Frontend
+production build passed with the existing chunk-size advisory. No manual GUI check,
+desktop installer rebuild, deployment, PM2 action or live database write performed.
+
+## 2026-11-05 — optional petty-cash warning and direct top-up action
+
+Removed required browser validation from the low-balance warning on account creation
+and editing. Blank maps to zero, already supported by the API. Added Add money / Top up
+in the account ledger, opening the existing movement form preselected to Top up with
+funding-specific description guidance. Subsequent funding remains positive dated
+ledger entries, independently increases each account’s cash balance and creates no
+income/expense. Existing spend/return/adjustment and Fuel spending workflows remain.
+Updated PETTY_CASH_ACCOUNTS.md and ARCHITECTURE.md. No backend behavior/schema change.
+
+Validation: focused Node 20 API tests 2/2 passed (168 unrelated filtered out), including
+omitted warning, repeated top-ups and persisted balances/history for Office expenses,
+Salary advance and Fuel, plus existing creation/edit controls. Frontend production
+build passed (existing chunk-size advisory); git diff --check passed. No manual GUI
+verification or desktop rebuild this turn. No deployment, PM2 action or live DB write.
+
+## 2026-11-05 — reviewed Excel creation and updates for bonds
+
+Added Finance → Bonds → Import / update Excel with downloadable current-company
+workbook/template, .xlsx upload, editable per-row review, existing/new target selection,
+saved-record comparison, per-row verification and final Submit verified bonds. Any edit
+clears row verification. Matches system reference or bond number+bank; ambiguous/unknown
+references require explicit target choice. Blank cells preserve matched existing values;
+users can correct/clear values in review. Supports all manual bond fields, company project
+selection, Excel serial/ISO dates, comma-separated amounts and up to 300 rows.
+
+Added guarded additive bond_import_batches table and authenticated finance.invoice
+routes for template, preview and submit. Preview stores only the review draft/audit;
+upload scratch files are discarded. Submit checks uploader, company/project, row count,
+verification, duplicate targets/numbers, saved snapshots and prior successful checksum,
+then saves every bond/audit/completion atomically. Existing system references, creator
+and extension history remain; no accounting entry or extension event is generated.
+Updated README, ARCHITECTURE, DECISIONS and new docs/BOND_IMPORT.md.
+
+Validation: focused Node 20 bond/parser/API tests 6/6 passed, 167 unrelated filtered out.
+Includes template roundtrip, number/reference matching, upload without register writes,
+new+update persistence, invalid-row rollback, unverified rejection, repeat submit/file
+rejection, permission/ownership/company checks, stale-record conflict and auditing;
+existing edit/delete/extension scenarios also passed. Fixed initial local migration
+company-ID type mismatch and sparse 1-indexed workbook-row handling before successful
+rerun. Frontend production build passed (existing large-chunk advisory). Actual Electron
++ disposable local MySQL UI test 1/1 passed: upload two rows, disabled submit before
+verification, edit clears verification, submit and reload retain updated and new bonds.
+Visually inspected review screenshot. QA script/evidence are ignored desktop/test-results/
+bond-import-check.cjs and bond-import-review.png; temporary DB/server/profile cleaned up.
+No full backend suite or installer rebuild this turn. Updated desktop source UI bundle
+for local verification only; existing release installers do not contain this feature.
+No deployment, PM2 restart, production .env edit or live database write performed.
+
+## 2026-11-05 — linked historical Clients, Projects and BOQs templates
+
+User supplied three completed .xlsx templates whose codes express client → project →
+BOQ relationships. Added linked-workbook detection before generic/free-layout BOQ
+parsing. Supports Clients + Contacts, Projects + Project Team and BOQ Headers + BOQ
+Items, retaining all 22/22/316 rows from the supplied files (11 clients, 11 contacts,
+11 projects, 11 team rows, 11 headers and 305 items). Source codes map through persistent
+historical_import_links; native IDs/references are generated independently. Child keys
+use parent code plus contact name, employee code or source line number.
+
+Added editable sheet review, explicit existing client/project linking without overwrite,
+source employee matching, exact code replacement, explicit phone relocation and financial
+recalculation helpers. Save review revalidates; reviewer acknowledgement precedes confirm.
+Missing parents, duplicate keys, invalid values, unmatched staff, category/precision and
+line/header financial mismatches block confirmation. Company spelling GKUC Ready mix
+normalizes to GKUC Readymix. Supplied contact PRIMARY_CONTACT phone values, employee-code
+differences, BOQ-2026/2024 key mismatch and financial discrepancies remain visible for
+manual correction; original supplied files were not changed or imported to production.
+
+Confirmation locks the batch and serializes dependency resolution, then atomically saves
+parent/child records, source links/metadata, completion and audits. Repeats skip linked
+keys; duplicate confirmation, stale/deleted targets, wrong project/client/company and
+primary-contact conflicts cannot silently overwrite records. New lines cannot be appended
+to an already imported BOQ through this flow. BOQs stay Draft; original approval status,
+version/reference/dates remain source history and existing project budgets are unchanged.
+Original extracted rows are preserved in sourceRows, and review corrections have audited
+before/after rows. Native primary contact changes are separately audited.
+
+Schema: guarded nullable historical_import_links.source_json, client_contact_people and
+non-destructive capacity widening for project name, BOQ title and item description/notes.
+Updated normal project/BOQ validation capacities so long imported names/lines remain
+editable. Client profiles return/display imported contacts. Source project contract values,
+notes and other non-native fields remain in the import history; award reference/date and
+team membership dates populate their existing native records. Updated README,
+ARCHITECTURE, DECISIONS and new docs/HISTORICAL_IMPORTS.md.
+
+Validation: full Node 20 backend suite 347 passed, zero failed, two optional skips
+(349 incl nested) with supplied-template fixtures enabled. Focused linked/parser/API
+checks reran 6/6 after final whitespace/source-provenance assertions. These include actual
+supplied workbook parsing/dry checks, complete source-key chain, manual corrections,
+long text, exact totals, Draft/budget preservation, linked repeat skip, primary-contact
+conflict rollback, permissions and original-row retention. Existing foreign/PDF-layout
+BOQ review tests still pass. Frontend 39/39 and production build pass (existing chunk
+advisory). Actual Electron + isolated local MySQL UI 1/1 passed across all three workbook
+stages, including contact-phone action, employee mapping, key correction, amount/header
+total corrections, final submission and persisted links. Fixed table min-content overflow
+and employee-selector accessible labels exposed by initial UI retries; final screenshot
+visually inspected. Evidence/script ignored under desktop/test-results/linked-import-*;
+disposable DB/server/profile cleaned up. git diff --check passed.
+
+No production deployment, PM2 operation, production .env edit or live database write.
+Desktop UI bundle was prepared for local verification; release installers were not rebuilt.
+
+## 2026-11-05 — make saved bond editing and pending numbers explicit
+
+User reiterated that saved bond details must remain editable and numbers may be added
+later. Existing finance.invoice PUT already permits all bond statuses and optional
+numbers. Replaced the small pencil-only action with a visible Edit details button for
+every status; added explicit optional-number guidance/placeholder. Blank numbers are
+submitted as an explicit empty string so saving/clearing pending values is deliberate.
+Existing audited updates, fixed company/reference and extension history remain unchanged.
+Updated docs/BOND_IMPORT.md. No backend behavior or schema change was needed.
+
+Validation: focused Node 20 API tests 2/2 passed (172 unrelated filtered out), covering
+pending → entered → cleared numbers and detail edits in Live/Expired/Released/Called,
+plus existing permissions, company/date validation and retained extension history.
+Actual Electron + disposable local MySQL UI 1/1 passed: edit a Released bond with no
+number, add number/change bank, reload, reopen and clear number; saved status retained.
+Temporary DB/server/profile cleaned up. Frontend production build and git diff --check
+passed (existing chunk-size advisory). Local desktop UI bundle prepared for testing;
+release installers not rebuilt. No deployment, PM2 action or live database write.
+
+## 2026-11-05 — optional project end dates, daily reminders and repeat extensions
+
+User requested optional completion dates, daily reminders beginning one month before
+end, repeat extensions with printable client request letters, Completed/Extended display
+and Projects search/filters. Added End date (optional) to normal creation and a workspace
+Completion date & extensions panel for later entry, extension and history. Generic later
+date changes route through Extend project; stale date edits are rejected. Valid calendar
+and start/end ordering checks apply. Completed stage retains the existing health/site
+completion/100% behavior and prevents extension until explicitly reopened.
+
+Added guarded projects.extension_count and append-only project_extensions with old/new
+dates, reason, request date, author and saved request HTML. Extension transaction locks
+and checks the previous date, saves revised target/history/letter/audits atomically and
+blocks company changes once history exists. Internal target changes immediately; letter
+requests client consent and does not claim it was granted. Saved letter text remains
+stable across future project/client/company edits. Existing company letterhead and
+mandatory developer credit are used; added the exact extension letter route to the
+short-lived PDF-ticket allowlist. History has Print request letter for reprints/popup
+fallback. No automatic client email action.
+
+Added calendar-month daily deadline scan to existing scheduler/bootstrap: all active
+accounts, per-project/end-date/user/business-date unique delivery keys, day counts and
+overdue continuation. Completed/health/site-completed and inactive/no-date projects are
+excluded. Revised dates restart the reminder window. These recurring notifications do
+not create unresolved alert/escalation cases; existing notification history stays intact.
+Projects cards/workspace show Completed before Extended before Current, with independent
+operational stage/health. List search covers name/client/site/manager; combined filters
+cover status, manager and end-date state plus existing operating company scope.
+
+Validation: final full Node 20 backend 351 passed, zero failed, two optional skips (353
+incl nested), including all prior work and supplied historical workbook fixtures. Focused
+new checks initially 3/3 passed: calendar-month/end-of-month/leap-compatible date window,
+completed/no-date/inactive stopping, escaped letter fields/credit, nullable/date ordering,
+all-user reminder count, same-day dedupe, changed-date cycle, repeated extension, stale
+rejection, permissions, immutable letter HTML/PDF ticket, company/history and completion.
+Frontend 39/39 and production build passed (existing chunk-size advisory). Actual Electron
++ disposable local MySQL UI 1/1 passed: add end date after creation, two extensions, PDF
+creation/open, mark Completed, search/status/clear filters and persisted server state.
+Rendered real generated extension PDF with Poppler and visually inspected one-page
+letterhead, body, dates, reason, signature and credit; PDF text matches stored request.
+Evidence/script ignored in desktop/test-results/project-deadline-check.cjs,
+project-extension-request.pdf and project-deadline-filters.png. Temporary QA database,
+server and profile cleaned up; git diff --check passed.
+
+Updated README, ARCHITECTURE, DECISIONS and docs/PROJECT_DEADLINES.md. No deployment,
+PM2 action, production .env edit, external client message or live database write.
+Local desktop UI was prepared for QA; release installers were not rebuilt this turn.
+
+## 2026-11-05 — editable sample-style multi-item purchase orders
+
+User requested a printable PO matching the supplied sample with every printed field,
+number, lines, quantities and amounts editable later. Explicit clarification: expenses/
+outstanding follow Goods/invoice confirmation, not PO saving. Expanded the existing
+Materials → Orders flow rather than creating a separate mock/document ledger. New
+multi-line form supports optional auto/manual PO number, document title, Attention,
+Site, Cash/Credit/Cheque text, vehicle, closing, three signoff names, optional per-PO
+company letterhead text and free/non-stock or material-linked lines. Quantity×rate or
+explicit manual line amounts are supported. Supplier/project changes update printed
+defaults. Removed the replaced single-item form.
+
+Added reasoned PUT order revisions and revision/check endpoints with stale-version,
+role, company/request/receipt identity, duplicate number and risk validation. Commercial
+changes require fresh approval and revision authors cannot self-approve. Reapproval
+preserves partial/full receipt state. Received quantities cannot be reduced/removed;
+received material/unit meaning and linked supplier/project accounts remain protected.
+Unreceived additions/reductions and rate/amount changes remain possible. Printed
+Attention/Site/number remain independently editable; actual transaction IDs stay linked.
+
+Guarded columns persist presentation, revision/author, item number/manual amount,
+cumulative receipt value, per-receipt unit valuation and trusted invoice PO snapshot;
+added purchase_order_revisions with before/after JSON. Receipt/invoice costs and debt
+are not rewritten by a PO revision. Legacy valuations/approval snapshots freeze before
+editing; new receipts/invoices capture theirs at confirmation. Supplier statements and
+payment matching use stored values. Manual amounts value partial receipts proportionately;
+price-risk warnings use effective amount/quantity instead of only printed unit price.
+Saving/revising creates no expense/debt/payment: native receipt/stock-issue, invoice,
+verification and payment/cheque workflows retain ownership and avoid double counting.
+
+Reworked printable PO into sample-style Attention/Site/payment/vehicle metadata, black
+six-column multi-item table, Sub Amount and Prepared/Checked/Approved lines. Actual
+approval status is shown and typed names do not confer approval. Existing logo/letterhead
+and mandatory developer credit retained. Fixed the legacy table block name so rows are
+actually rendered; retained direct-site-delivery wording. Added PO route to PDF-ticket
+allowlist. Materials section URLs now survive bootstrap/reload instead of resetting to
+Stock, as exposed by the first UI check.
+
+Validation: final full Node 20 backend 354 passed, zero failed, two optional skips (356
+incl nested), with supplied historical fixtures enabled. Focused new checks 3/3 passed,
+including explicit manual valuation, PDF fields, no cost on save, partial receipt cost,
+changed prices/quantities, old invoice/payment/debt preservation, supplier statement
+valuation, immutable receipt quantities/identity, stale revision, independent revision-
+author approval rejection, reapproval and PDF tickets. Frontend 39/39 and production build
+pass (existing chunk-size advisory). Actual Electron + disposable local MySQL UI 1/1
+passed create multi-item/manual amount PO, edit number/quantity/amount, reload/history,
+and actual PDF generation. Initial UI retries fixed the section-link reset and required-
+field locator; final checks pass. First full run found missing legacy direct-delivery
+wording in the redesigned print; restored it and reran the full suite successfully.
+
+Rendered final PDF with Poppler; text and visual inspection confirm metadata, real rows,
+manual amounts, total, three signoff columns and credit with no overlap. Evidence/script
+ignored in desktop/test-results/purchase-order-check.cjs and editable-purchase-order.pdf.
+Disposable DB/server/profile cleaned up. Updated README, ARCHITECTURE, DECISIONS and new
+docs/PURCHASE_ORDERS.md. git diff --check passed. No production deployment, PM2 action,
+production .env edit, client message/payment or live DB write. Desktop UI prepared for
+local QA only; release installers were not rebuilt.
+
+## 2026-11-05 — accessible editing and new records on existing vehicles
+
+User reiterated that existing vehicles must support edits and further records/renewals.
+Confirmed the existing detail PATCH and dated driver/odometer/fuel/service/renewal APIs
+already persist these workflows. Added direct Edit details and Add renewal buttons on
+each writable vehicle card and moved all operational actions to the top of vehicle
+details. Card actions load the saved vehicle before opening the selected form; existing
+history and permissions remain intact. Updated ARCHITECTURE.
+
+Validation: focused Node 20 Fleet integration tests 4 passed, zero failed (172 unrelated
+skipped): detail edits/duplicate rejection/authorization, optional machine details,
+multiple renewals, and dated driver/odometer/fuel/repair/service/renewal histories.
+Frontend production build passed with the existing chunk-size advisory; git diff --check
+passed. No manual UI run in this change. No deployment, live DB write or desktop
+installer rebuild; tests used the local disposable integration database.

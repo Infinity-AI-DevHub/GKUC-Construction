@@ -6005,3 +6005,234 @@ test('per-document print options persist shared quotation numbers and invoice ch
  assert.equal((await call(owner,'GET',path)).body.rate,true,'older columns endpoint stays in sync');
  const [[audit]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.audit_logs WHERE action='PRINT_OPTIONS' AND entity='quotation' AND entity_id=?`,[String(ids[0])]);assert.equal(Number(audit.n),1);
 });
+
+test('fleet vehicle details edits persist and reject duplicate registrations and unauthorized writes',async()=>{
+  const owner=await login(),stamp=Date.now();
+  const create=registration=>call(owner,'POST','/fleet',{vehicle:'Original vehicle',registration,status:'Available',renewal:'Insurance',dueDate:today(),odometer:1234});
+  const first=await create(`EDIT-${stamp}`),second=await create(`OTHER-${stamp}`);
+  assert.equal(first.status,201);assert.equal(second.status,201);
+  const id=first.body.id,newReg=`NEW-${stamp}`;
+  const changed=await call(owner,'PATCH',`/fleet/${id}`,{vehicle:' Updated truck ',registration:` ${newReg} `,status:'Repair',make:'Isuzu',model:'Elf',modelYear:2005,engineCode:'ABC',manufacturerNotes:'Manual'});
+  assert.equal(changed.status,200,JSON.stringify(changed.body));
+  const detail=(await call(owner,'GET',`/fleet/${id}`)).body;
+  assert.equal(detail.vehicle,'Updated truck');assert.equal(detail.reg,newReg);assert.equal(detail.status,'Repair');
+  assert.equal(detail.make,'Isuzu');assert.equal(detail.odometer,1234);assert.equal(detail.documents.length,1);
+  assert.equal((await call(owner,'GET','/fleet')).body.find(row=>row.id===id).reg,newReg);
+  assert.equal((await call(owner,'PATCH',`/fleet/${id}`,{registration:second.body.reg,vehicle:'Must not save'})).status,409);
+  assert.equal((await call(owner,'GET',`/fleet/${id}`)).body.vehicle,'Updated truck');
+  assert.equal((await call(owner,'PATCH',`/fleet/${id}`,{vehicle:'  '})).status,400);
+  assert.equal((await call(owner,'PATCH',`/fleet/${id}`,{status:'Maintenance'})).status,400);
+  const store=await login('store@gkuc.lk');
+  assert.equal((await call(store,'PATCH',`/fleet/${id}`,{vehicle:'Forbidden'})).status,403);
+});
+
+
+test('petty cash warning is optional and subsequent top-ups remain dated funding in each account',async()=>{
+  const owner=await login();
+  for(const accountType of ['Office expenses','Salary advance','Fuel']){
+    const created=await call(owner,'POST','/receivables/petty-cash',{companyId:2,name:`Optional warning ${accountType} ${Date.now()}`,accountType,holderName:'Finance cashier'});
+    assert.equal(created.status,201,JSON.stringify(created.body));
+    const id=created.body.id;
+    const payload={kind:'Top up',amount:2500,entryDate:'2026-11-05',description:'Additional funding from office'};
+    assert.equal((await call(owner,'POST',`/receivables/petty-cash/${id}/entries`,payload)).status,201);
+    assert.equal((await call(owner,'POST',`/receivables/petty-cash/${id}/entries`,{...payload,amount:500,description:'Second funding'})).status,201);
+    const row=(await call(owner,'GET','/receivables/petty-cash?companyId=2')).body.find(row=>row.id===id);
+    assert.equal(Number(row.lowAt),0);assert.equal(Number(row.balance),3000);assert.equal(Number(row.transactionCount),2);
+    const entries=(await call(owner,'GET',`/receivables/petty-cash/${id}/entries`)).body;
+    assert.equal(entries.length,2);assert.ok(entries.every(entry=>entry.kind==='Top up'&&entry.entryDate==='2026-11-05'&&Number(entry.amount)>0));
+  }
+});
+
+test('bond Excel import previews without register writes and atomically submits verified new and existing records',async()=>{
+ const owner=await login(),stamp=Date.now();
+ const original=await call(owner,'POST','/receivables/bonds',{companyId:2,kind:'Performance',beneficiary:'Import beneficiary',bank:'Import bank',bondNumber:`OLD-${stamp}`,amount:1000,issuedDate:'2026-01-01',expiryDate:'2026-12-31',processNotes:'Keep this note'});
+ assert.equal(original.status,201,JSON.stringify(original.body));
+ const preview=async(bytes,token=owner)=>{
+   const form=new FormData();form.append('companyId','2');form.append('file',new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'bonds.xlsx');
+   const response=await fetch(`${base}/receivables/bonds/import/preview`,{method:'POST',headers:{authorization:`Bearer ${token}`},body:form});return {status:response.status,body:await response.json()};
+ };
+ const templateResponse=await fetch(`${base}/receivables/bonds/import/template?companyId=2`,{headers:{authorization:`Bearer ${owner}`}});
+ assert.equal(templateResponse.status,200);
+ const {parseBondWorkbook}=await import('../src/lib/bond-import.js');
+ assert.ok(parseBondWorkbook(Buffer.from(await templateResponse.arrayBuffer())).some(row=>row.data.reference===original.body.reference));
+ const bytes=writeWorkbook([{name:'Bonds',rows:[['System reference','Kind','In favour of','Issuing bank','Bond number','Amount (LKR)','Issued on','Expires on'],[original.body.reference,'Performance','Updated beneficiary','Import bank',`OLD-${stamp}`,2000,'2026-01-01','2027-01-01'],['','Bid','New beneficiary','Import bank',`NEW-${stamp}`,500,'2026-01-01','2027-01-01']]}]);
+ const numberMatch=await preview(writeWorkbook([{name:'Bonds',rows:[['Bond number','Bank','Amount'],[`OLD-${stamp}`,'Import bank',1500]]}]));
+ assert.equal(numberMatch.body.rows[0].targetId,original.body.id);
+ const staged=await preview(bytes);assert.equal(staged.status,201,JSON.stringify(staged.body));
+ assert.equal(staged.body.rows.length,2);assert.equal(staged.body.rows[0].targetId,original.body.id);
+ const list=async()=> (await call(owner,'GET','/receivables/bonds?companyId=2')).body;
+ assert.equal(Number((await list()).find(b=>b.id===original.body.id).amount),1000);
+ assert.ok(!(await list()).some(b=>b.bond_number===`NEW-${stamp}`));
+ const rows=staged.body.rows.map(row=>({targetId:row.targetId,data:row.data,verified:true}));
+ assert.equal(rows[0].data.processNotes,'Keep this note');
+ assert.equal((await call(owner,'POST',`/receivables/bonds/import/${staged.body.id}/submit`,{rows:rows.map(r=>({...r,verified:false}))})).status,400);
+ const invalid=structuredClone(rows);invalid[1].data.amount=-1;
+ assert.equal((await call(owner,'POST',`/receivables/bonds/import/${staged.body.id}/submit`,{rows:invalid})).status,400);
+ assert.equal(Number((await list()).find(b=>b.id===original.body.id).amount),1000);
+ const result=await call(owner,'POST',`/receivables/bonds/import/${staged.body.id}/submit`,{rows});
+ assert.equal(result.status,200,JSON.stringify(result.body));assert.deepEqual(result.body,{created:1,updated:1});
+ assert.equal(Number((await list()).find(b=>b.id===original.body.id).amount),2000);
+ assert.ok((await list()).some(b=>b.bond_number===`NEW-${stamp}`));
+ assert.equal((await call(owner,'POST',`/receivables/bonds/import/${staged.body.id}/submit`,{rows})).status,409);
+ const repeated=await preview(bytes);
+ assert.equal((await call(owner,'POST',`/receivables/bonds/import/${repeated.body.id}/submit`,{rows:repeated.body.rows.map(r=>({targetId:r.targetId,data:r.data,verified:true}))})).status,409);
+ const store=await login('store@gkuc.lk');assert.equal((await preview(bytes,store)).status,403);
+ const other=await login('finance@gkuc.lk');assert.equal((await call(other,'POST',`/receivables/bonds/import/${staged.body.id}/submit`,{rows})).status,404);
+ const [[audits]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.audit_logs WHERE entity='bank_bond' AND entity_id=? AND action='IMPORT_UPDATE'`,[original.body.id]);assert.equal(Number(audits.count),1);
+ // A fresh preview cannot overwrite a record changed after upload.
+ const staleBytes=writeWorkbook([{name:'Bonds',rows:[['System reference','Amount'],[original.body.reference,2500]]}]);
+ const stale=await preview(staleBytes);assert.equal(stale.status,201,JSON.stringify(stale.body));
+ assert.equal((await call(owner,'PATCH',`/receivables/bonds/${original.body.id}`,{status:'Called'})).status,204);
+ assert.equal((await call(owner,'POST',`/receivables/bonds/import/${stale.body.id}/submit`,{rows:stale.body.rows.map(r=>({targetId:r.targetId,data:r.data,verified:true}))})).status,409);
+ // Reference mismatch requires an explicit target choice; cross-company targets are rejected.
+ const cross=await call(owner,'POST','/receivables/bonds',{companyId:1,kind:'Bid',beneficiary:'Other company',bank:'Other bank',amount:100,issuedDate:'2026-01-01',expiryDate:'2026-12-31'});
+ const mismatch=await preview(writeWorkbook([{name:'Bonds',rows:[['System reference','Amount'],[cross.body.reference,700]]}]));
+ assert.equal(mismatch.body.rows[0].needsMatch,true);
+ assert.equal((await call(owner,'POST',`/receivables/bonds/import/${mismatch.body.id}/submit`,{rows:[{targetId:cross.body.id,data:rows[1].data,verified:true}]})).status,409);
+});
+
+test('linked historical templates connect clients contacts projects team and BOQs by source codes',async()=>{
+ const owner=await login(),stamp=Date.now();
+ const {specs}=await import('../src/lib/linked-historical-import.js');
+ const workbook=(sheets)=>writeWorkbook(sheets.map(([type,records])=>({name:specs[type].sheet,rows:[['Historical records'],[],specs[type].fields.map(f=>'* '+f),...records.map(d=>specs[type].fields.map(f=>d[f]??''))]})));
+ const check=async(kind,bytes)=>{const form=new FormData();form.append('kind',kind);form.append('file',new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'linked.xlsx');const response=await fetch(`${base}/import-centre/dry-check`,{method:'POST',headers:{authorization:`Bearer ${owner}`},body:form});const body=await response.json();assert.equal(response.status,201,JSON.stringify(body));return body;};
+ const confirm=review=>call(owner,'POST',`/import-centre/batches/${review.id}/confirm`,{});
+ const edit=review=>call(owner,'PATCH',`/import-centre/batches/${review.id}/linked-review`,{rows:review.rows,employeeMap:review.employeeMap||{}});
+ const clientCode=`LC-${stamp}`,projectCode=`LP-${stamp}`,boqCode=`LB-${stamp}`;
+ const clientsBytes=workbook([['clients',[{CLIENT_CODE:clientCode,CLIENT_TYPE:'Organisation',CLIENT_NAME:`Linked client ${stamp}`,BILLING_ADDRESS:'Historical address',ACTIVE:' Yes '}]],['contacts',[{CLIENT_CODE:clientCode,CONTACT_NAME:'Contact person',PRIMARY_CONTACT:711234567,JOB_TITLE:'Officer'}]]]);
+ let clients=await check('clients',clientsBytes);assert.equal(clients.mode,'linked-workbook');assert.equal(clients.counts.blocked,1);
+ assert.equal((await confirm(clients)).status,409);
+ const contact=clients.rows.find(r=>r.type==='contacts');contact.data.PHONE=String(contact.data.PRIMARY_CONTACT);contact.data.PRIMARY_CONTACT='Yes';
+ clients=(await edit(clients)).body;assert.equal(clients.sourceRows.find(r=>r.type==='contacts').data.PRIMARY_CONTACT,711234567);assert.equal(clients.counts.blocked,0,JSON.stringify(clients.rows));assert.equal((await confirm(clients)).status,200);
+ const [[clientLink]]=await admin.query(`SELECT target_id id FROM ${testDatabase}.historical_import_links WHERE kind='clients' AND source_code=?`,[clientCode]);
+ const profile=await call(owner,'GET',`/clients/${clientLink.id}`);assert.equal(Number(profile.body.active),1);assert.equal(profile.body.contacts.length,1);assert.equal(profile.body.contacts[0].phone,'711234567');
+ // Repeated source keys skip; linking another source key must roll back if a child conflicts.
+ const repeatedClients=await check('clients',clientsBytes);repeatedClients.rows.find(r=>r.type==='contacts').data.PRIMARY_CONTACT='Yes';repeatedClients.rows.find(r=>r.type==='contacts').data.PHONE='711234567';
+ const repeatClientsSaved=(await edit(repeatedClients)).body;assert.equal(repeatClientsSaved.counts.skip,2);assert.equal((await confirm(repeatClientsSaved)).status,200);
+ const aliasCode=clientCode+'-alias';
+ let conflict=await check('clients',workbook([['clients',[{CLIENT_CODE:aliasCode,CLIENT_TYPE:'Organisation',CLIENT_NAME:`Linked client ${stamp}`,BILLING_ADDRESS:'Do not overwrite',ACTIVE:'Yes'}]],['contacts',[{CLIENT_CODE:aliasCode,CONTACT_NAME:'Conflicting primary',PRIMARY_CONTACT:'Yes'}]]]));
+ conflict.rows.find(r=>r.type==='clients').targetId=Number(clientLink.id);conflict=(await edit(conflict)).body;assert.equal(conflict.counts.blocked,0);
+ assert.equal((await confirm(conflict)).status,409);
+ const [[noLink]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.historical_import_links WHERE kind='clients' AND source_code=?`,[aliasCode]);assert.equal(Number(noLink.count),0);
+ assert.equal((await call(owner,'GET',`/clients/${clientLink.id}`)).body.contacts.length,1);
+ const employees=(await call(owner,'GET','/employees')).body;const employee=employees[0];assert.ok(employee.id);
+ const projectsBytes=workbook([['projects',[{PROJECT_CODE:projectCode,COMPANY:'GKUC Ready mix',PROJECT_NAME:'Historical project '+('long name '.repeat(24))+stamp,CLIENT_CODE:clientCode,SITE_ADDRESS:'Historical site',PROJECT_MANAGER_EMPLOYEE_CODE:'SOURCE-MANAGER',STAGE:'Completed',STATUS:'Completed',HEALTH:'On track',PROGRESS_PERCENT:100,START_DATE:'2024-01-01',END_DATE:'2024-12-31',CURRENT_BUDGET_LKR:777,CONTRACT_VALUE_LKR:2500,AWARD_REFERENCE:'Historical award',AWARD_DATE:'2024-01-01',NOTES:'Preserve this source note'}]],['team',[{PROJECT_CODE:projectCode,EMPLOYEE_CODE:'SOURCE-TEAM',PROJECT_ROLE:'MD',ASSIGNED_DATE:'2024-01-01',RELEASED_DATE:'2024-12-31'}]]]);
+ let projects=await check('projects',projectsBytes);assert.ok(projects.counts.blocked>0);
+ projects.employeeMap={'SOURCE-MANAGER':employee.id,'SOURCE-TEAM':employee.id};projects=(await edit(projects)).body;
+ assert.equal(projects.counts.blocked,0,JSON.stringify(projects.rows));assert.equal((await confirm(projects)).status,200);
+ const [[project]]=await admin.query(`SELECT p.* FROM ${testDatabase}.projects p JOIN ${testDatabase}.historical_import_links l ON l.target_id=p.id AND l.kind='projects' WHERE l.source_code=?`,[projectCode]);
+ assert.equal(Number(project.client_id),Number(clientLink.id));assert.equal(Number(project.company_id),2);assert.equal(project.health,'Completed');assert.equal(Number(project.budget),777);
+ const [[team]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.project_team WHERE project_id=? AND employee_id=?`,[project.id,employee.id]);assert.equal(Number(team.count),1);
+ const boqsBytes=workbook([['boqs',[{BOQ_CODE:boqCode,PROJECT_CODE:projectCode,ORIGINAL_REFERENCE:'Old/reference',TITLE:'Historical BOQ '+('long title '.repeat(24)),VERSION:'Rev 01',STATUS:'Approved',DOCUMENT_DATE:'2024-01-01',APPROVED_DATE:'2024-01-02',DECLARED_TOTAL_LKR:999,SOURCE_FILENAME:'source.pdf',TERMS:'Source terms'}]],['items',[{BOQ_CODE:'WRONG-KEY',LINE_NO:'1.1',CATEGORY:'Material',AREA_SECTION:'Area A',DESCRIPTION:'Long work '+('work detail '.repeat(35)),UNIT:'m3',QUANTITY:2,RATE_LKR:100,AMOUNT_LKR:200,METHOD_STATEMENT:'Method'}]]]);
+ let boqs=await check('boqs',boqsBytes);assert.equal(boqs.mode,'linked-workbook');assert.equal(boqs.counts.blocked,2);
+ assert.equal((await confirm(boqs)).status,409);
+ boqs.rows.find(r=>r.type==='items').data.BOQ_CODE=boqCode;boqs.rows.find(r=>r.type==='boqs').data.DECLARED_TOTAL_LKR=200;
+ boqs=(await edit(boqs)).body;assert.equal(boqs.counts.blocked,0,JSON.stringify(boqs.rows));
+ const saved=await confirm(boqs);assert.equal(saved.status,200,JSON.stringify(saved.body));
+ const [[boq]]=await admin.query(`SELECT b.* FROM ${testDatabase}.boqs b JOIN ${testDatabase}.historical_import_links l ON l.target_id=b.id AND l.kind='boqs' WHERE l.source_code=?`,[boqCode]);
+ assert.equal(Number(boq.project_id),Number(project.id));assert.equal(boq.status,'Draft');assert.equal(Number(boq.total),200);
+ assert.equal(Number((await call(owner,'GET',`/projects/${project.id}`)).body.budget),777);
+ const [[item]]=await admin.query(`SELECT * FROM ${testDatabase}.boq_items WHERE boq_id=?`,[boq.id]);assert.equal(Number(item.amount),200);assert.match(item.notes,/Area A/);assert.ok(item.description.length>300);
+ assert.equal((await confirm(boqs)).status,409);
+ const repeat=await check('boqs',boqsBytes);repeat.rows.find(r=>r.type==='items').data.BOQ_CODE=boqCode;repeat.rows.find(r=>r.type==='boqs').data.DECLARED_TOTAL_LKR=200;
+ const repeatSaved=(await edit(repeat)).body;assert.equal(repeatSaved.counts.skip,2);assert.equal((await confirm(repeatSaved)).status,200);
+ const [[count]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.boq_items WHERE boq_id=?`,[boq.id]);assert.equal(Number(count.count),1);
+ const [[source]]=await admin.query(`SELECT source_json FROM ${testDatabase}.historical_import_links WHERE kind='boqs' AND source_code=?`,[boqCode]);
+ const metadata=typeof source.source_json==='string'?JSON.parse(source.source_json):source.source_json;assert.equal(metadata.STATUS,'Approved');assert.equal(metadata.VERSION,'Rev 01');
+ const store=await login('store@gkuc.lk');assert.equal((await call(store,'POST',`/import-centre/batches/${boqs.id}/confirm`,{})).status,403);
+});
+
+
+test('supplied 2024 client project and BOQ files receive linked dry-check reports',{skip:!process.env.GKUC_LINKED_TEMPLATE_DIR},async()=>{
+ const owner=await login();
+ for(const [kind,name,count] of [['clients','01_GKUC_Clients_Import_Template.xlsx',22],['projects','02_GKUC_Projects_Import_Template.xlsx',22],['boqs','03_GKUC_BOQs_Import_Template.xlsx',316]]){
+  const bytes=await readFile(path.join(process.env.GKUC_LINKED_TEMPLATE_DIR,name)),form=new FormData();
+  form.append('kind',kind);form.append('file',new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),name);
+  const response=await fetch(`${base}/import-centre/dry-check`,{method:'POST',headers:{authorization:`Bearer ${owner}`},body:form}),body=await response.json();
+  assert.equal(response.status,201,JSON.stringify(body));assert.equal(body.mode,'linked-workbook');assert.equal(body.rows.length,count);
+  if(kind==='clients')assert.ok(body.rows.some(r=>r.errors.some(e=>e.includes('PRIMARY_CONTACT'))));
+  if(kind==='boqs')assert.ok(body.rows.some(r=>r.errors.some(e=>e.includes('total')||e.includes('quantity'))));
+  const [[written]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.historical_import_links WHERE batch_id=?`,[body.id]);assert.equal(Number(written.count),0);
+ }
+});
+
+test('bond details and pending numbers remain editable in every status',async()=>{
+ const owner=await login(),stamp=Date.now();
+ for(const status of ['Live','Expired','Released','Called']){
+  const body={companyId:1,kind:'Performance',beneficiary:'Editable beneficiary',bank:'Editable bank',amount:1000,issuedDate:'2026-01-01',expiryDate:'2026-12-31',status};
+  const created=await call(owner,'POST','/receivables/bonds',body);assert.equal(created.status,201);
+  const id=created.body.id;
+  const list=async()=> (await call(owner,'GET','/receivables/bonds?companyId=1')).body.find(b=>b.id===id);
+  assert.equal((await list()).bond_number,null);
+  assert.equal((await call(owner,'PUT',`/receivables/bonds/${id}`,{...body,bondNumber:`LATER-${status}-${stamp}`,bank:'Corrected bank',amount:1500})).status,204);
+  let saved=await list();assert.equal(saved.bond_number,`LATER-${status}-${stamp}`);assert.equal(saved.status,status);assert.equal(saved.bank,'Corrected bank');assert.equal(Number(saved.amount),1500);
+  assert.equal((await call(owner,'PUT',`/receivables/bonds/${id}`,{...body,bondNumber:''})).status,204);
+  saved=await list();assert.equal(saved.bond_number,null);assert.equal(saved.status,status);assert.equal(saved.reference,created.body.reference);
+ }
+});
+
+test('project end dates are optional and repeat extensions keep immutable request letters and daily reminders',async()=>{
+ const owner=await login(),site=await login('supervisor@gkuc.lk'),stamp=Date.now();
+ const body={companyId:1,name:`Deadline project ${stamp}`,client:`Deadline client ${stamp}`,manager:'Project manager',site:'Deadline site',stage:'Mid-way',startDate:shift(-100),endDate:null};
+ const created=await call(owner,'POST','/projects',body);assert.equal(created.status,201,JSON.stringify(created.body));const id=created.body.id;
+ assert.equal(created.body.end_date,null);
+ assert.equal((await call(owner,'PATCH',`/projects/${id}`,{endDate:'2026-02-30'})).status,400);
+ assert.equal((await call(owner,'PATCH',`/projects/${id}`,{endDate:today()})).status,200);
+ const scan=()=>call(owner,'POST','/notifications/scan',{});
+ const reminders=async()=>{const [[r]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.notifications WHERE dedupe_key LIKE ?`,[`project-end:${id}:%`]);return Number(r.count);};
+ const [[users]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.users WHERE active=1`);
+ assert.equal((await scan()).status,200);const first=await reminders();assert.equal(first,Number(users.count));await scan();assert.equal(await reminders(),first);
+ const extension={previousEndDate:today(),newEndDate:shift(1),requestDate:today(),reason:'Heavy rain delayed asphalt works',recipientName:'Client office',recipientAddress:'Client address',signatoryName:'Project manager',signatoryTitle:'Project Manager'};
+ assert.equal((await call(site,'POST',`/projects/${id}/extensions`,extension)).status,403);
+ assert.equal((await call(owner,'POST',`/projects/${id}/extensions`,{...extension,reason:''})).status,400);
+ assert.equal((await call(owner,'POST',`/projects/${id}/extensions`,{...extension,newEndDate:today()})).status,400);
+ const saved=await call(owner,'POST',`/projects/${id}/extensions`,extension);assert.equal(saved.status,201,JSON.stringify(saved.body));
+ const path=`/projects/${id}/extensions/${saved.body.id}/letter`;
+ const letter=await fetch(base+path,{headers:{authorization:`Bearer ${owner}`}});assert.equal(letter.status,200);const html=await letter.text();assert.match(html,/Heavy rain delayed asphalt works/);assert.match(html,/Client office/);
+ await scan();assert.equal(await reminders(),first*2);await scan();assert.equal(await reminders(),first*2);
+ assert.equal((await call(owner,'POST',`/projects/${id}/extensions`,extension)).status,409);
+ assert.equal((await call(owner,'PATCH',`/projects/${id}`,{endDate:shift(50)})).status,409);
+ const second=await call(owner,'POST',`/projects/${id}/extensions`,{...extension,previousEndDate:shift(1),newEndDate:shift(70),reason:'Client access restrictions'});assert.equal(second.status,201);
+ await scan();assert.equal(await reminders(),first*2);
+ const history=await call(owner,'GET',`/projects/${id}/extensions`);assert.equal(history.body.length,2);
+ assert.equal((await call(owner,'PATCH',`/projects/${id}`,{endDate:null})).status,409);
+ assert.equal((await call(owner,'POST','/document-download-tickets',{path:path+'?preview=pdf'})).status,200);
+ const again=await fetch(base+path,{headers:{authorization:`Bearer ${owner}`}});assert.equal(await again.text(),html);
+ const current=await call(owner,'GET',`/projects/${id}`);assert.equal(current.body.end_date,shift(70));assert.equal(current.body.extension_count,2);
+ assert.equal((await call(owner,'PATCH',`/projects/${id}`,{stage:'Completed'})).status,200);
+ assert.equal((await call(owner,'POST',`/projects/${id}/extensions`,{...extension,previousEndDate:shift(70),newEndDate:shift(90)})).status,409);
+ const done=await call(owner,'GET',`/projects/${id}`);assert.equal(done.body.health,'Completed');assert.equal(Number(done.body.progress),100);
+ const [[audit]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.audit_logs WHERE entity='project' AND entity_id=? AND action='EXTEND'`,[id]);assert.equal(Number(audit.count),2);
+});
+
+test('editable purchase orders retain receipt costs and invoice debt through revisions',async()=>{
+ const owner=await login(),store=await login('store@gkuc.lk'),finance=await login('finance@gkuc.lk'),stamp=Date.now();
+ const supplier=await call(owner,'POST','/purchasing/suppliers',{name:`Editable PO supplier ${stamp}`});assert.equal(supplier.status,201);
+ const project=await call(owner,'POST','/projects',{companyId:1,name:`Editable PO project ${stamp}`,client:`PO client ${stamp}`,manager:'PO manager',site:'PO site',stage:'Mid-way'});assert.equal(project.status,201);
+ const body={reference:`CUSTOM-PO-${stamp}`,supplierId:supplier.body.id,projectId:project.body.id,orderDate:today(),presentation:{documentTitle:'Purchase Order',attention:'Attention name',site:'Printed site',paymentText:'Credit',vehicleNumber:'Vehicle 123',checkedBy:'Checker',approvedBy:'Printed approver'},items:[{itemNo:'A',description:'Concrete service',unit:'m3',quantity:4,rate:14850,amount:29700},{itemNo:'B',description:'Transport',unit:'Trip',quantity:1,rate:100}]};
+ const created=await call(store,'POST','/purchasing/orders',body);assert.equal(created.status,201,JSON.stringify(created.body));const id=created.body.id;
+ assert.equal(Number(created.body.total),29800);assert.equal(created.body.reference,body.reference);
+ const expense=async()=>{const [[r]]=await admin.query(`SELECT COALESCE(SUM(amount),0) amount FROM ${testDatabase}.expenses WHERE origin_type='purchase_order' AND origin_id=?`,[String(id)]);return Number(r.amount);};
+ assert.equal(await expense(),0);
+ assert.equal((await call(owner,'POST',`/purchasing/orders/${id}/approve`,{})).status,200);
+ let detail=(await call(owner,'GET',`/purchasing/orders/${id}`)).body;const first=detail.items[0];
+ assert.equal((await call(store,'POST',`/purchasing/orders/${id}/receive`,{lines:[{itemId:first.id,quantity:2}]})).status,200);assert.equal(await expense(),14850);
+ const invoice=await call(owner,'POST','/purchasing/invoices',{companyId:1,orderId:id,supplierId:supplier.body.id,invoiceNo:`INV-EDIT-${stamp}`,amount:14850,taxTreatment:'Exempt',invoiceDate:today(),dueDate:shift(30)});assert.equal(invoice.status,201,JSON.stringify(invoice.body));
+ const revised={...body,reference:`REVISED-PO-${stamp}`,items:[{id:first.id,itemNo:'1',description:'Concrete service revised',unit:'m3',quantity:6,rate:1000,amount:null},{itemNo:'2',description:'Extra transport',unit:'Trip',quantity:1,rate:1000}],revision:0,reason:'Revised quantities and negotiated rates'};
+ assert.equal((await call(owner,'PUT',`/purchasing/orders/${id}`,revised)).status,200);
+ detail=(await call(owner,'GET',`/purchasing/orders/${id}`)).body;assert.equal(detail.revision,1);assert.equal(Number(detail.total),7000);assert.equal(detail.status,'Pending approval');assert.equal(Number(detail.items[0].receivedValue),14850);assert.equal(await expense(),14850);
+ assert.equal((await call(store,'POST',`/purchasing/orders/${id}/approve`,{})).status,403);
+ assert.equal((await call(owner,'POST',`/purchasing/orders/${id}/approve`,{})).status,403);
+ assert.equal((await call(store,'PUT',`/purchasing/orders/${id}`,revised)).status,409);
+ assert.equal((await call(store,'PUT',`/purchasing/orders/${id}`,{...revised,revision:1,items:[{...revised.items[0],quantity:1}]})).status,409);
+ assert.equal((await call(store,'PUT',`/purchasing/orders/${id}`,{...revised,revision:1,supplierId:999999})).status,409);
+ assert.equal((await call(finance,'POST',`/purchasing/invoices/${invoice.body.id}/verify`,{})).status,200);
+ assert.equal((await call(finance,'POST',`/purchasing/invoices/${invoice.body.id}/payments`,{amount:1000,paidDate:today(),method:'Cash',reference:'Part payment'})).status,201);
+ const [[savedInvoice]]=await admin.query(`SELECT amount,paid_amount FROM ${testDatabase}.supplier_invoices WHERE id=?`,[invoice.body.id]);assert.equal(Number(savedInvoice.amount),14850);assert.equal(Number(savedInvoice.paid_amount),1000);
+ const manager=await login('manager@gkuc.lk');assert.equal((await call(manager,'POST',`/purchasing/orders/${id}/approve`,{})).status,200);
+ assert.equal((await call(store,'POST',`/purchasing/orders/${id}/receive`,{lines:[{itemId:first.id,quantity:1}]})).status,200);assert.equal(await expense(),15850);
+ const statement=await call(owner,'GET',`/purchasing/suppliers/${supplier.body.id}/statement?companyId=1`);assert.equal(statement.status,200,JSON.stringify(statement.body));assert.equal(Number(statement.body.summary.outstanding),13850);assert.equal(Number(statement.body.rows.find(r=>r.type==='Delivery').deliveryValue),14850);
+ const history=await call(owner,'GET',`/purchasing/orders/${id}/revisions`);assert.equal(history.body.length,1);
+ const raw=await fetch(`${base}/purchasing/orders/${id}/document`,{headers:{authorization:`Bearer ${owner}`}});assert.equal(raw.status,200);const html=await raw.text();assert.match(html,/REVISED-PO/);assert.match(html,/Extra transport/);assert.match(html,/7,000.00/);
+ assert.equal((await call(owner,'POST','/document-download-tickets',{path:`/purchasing/orders/${id}/document?preview=pdf`})).status,200);
+});

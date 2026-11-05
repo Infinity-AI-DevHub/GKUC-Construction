@@ -1,3 +1,5 @@
+import {isLinkedWorkbook,readLinkedWorkbook,inspectLinked} from '../lib/linked-historical-import.js';
+import {saveLinked} from '../lib/linked-historical-save.js';
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
@@ -23,7 +25,7 @@ const supported = new Set(['clients', 'subcontractors', 'projects']);
 const clean = value => String(value ?? '').trim();
 const asDate = value => typeof value === 'number' ? serialToDate(value) : clean(value).slice(0, 10);
 const validDate = value => { const date = asDate(value); return /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(`${date}T00:00:00Z`)); };
-const canImport = (req, kind) => req.user.permissions.includes(definitions[kind].permission);
+const canImport = (req, kind) => Boolean(definitions[kind] && req.user.permissions.includes(definitions[kind].permission));
 const issue = (sheet, row, message) => ({ sheet, row, message });
 
 const boqProblems = row => {
@@ -168,6 +170,18 @@ router.post('/dry-check', auth, wrap(async (req, res) => {
     const kind = clean(fields.kind);
     if (!definitions[kind]) return res.status(400).json({ error: 'Choose one of the seven GKUC historical templates.' });
     if (!canImport(req, kind)) return res.status(403).json({ error: 'You do not have access to import this register.' });
+    if (['clients','projects','boqs'].includes(kind) && /\.xlsx$/i.test(file.filename)) {
+      const source=await readUploadedFile(file.path);
+      if(source.length>15*1024*1024)throw fail(413,'Split this workbook into smaller files.');
+      if(isLinkedWorkbook(kind,source)){
+        const sourceRows=readLinkedWorkbook(kind,source);
+        const preview={...await inspectLinked(kind,sourceRows),sourceRows};
+        const checksum=crypto.createHash('sha256').update(source).digest('hex');
+        const result=await query('INSERT INTO historical_import_batches (kind,filename,checksum,preview_json,uploaded_by) VALUES (?,?,?,?,?)',[kind,file.filename.slice(0,190),checksum,JSON.stringify(preview),req.user.id]);
+        await audit(pool,req.user.id,'IMPORT_DRY_CHECK','historical_import',result.insertId,null,{kind,mode:preview.mode,counts:preview.counts},req.ip);
+        return res.status(201).json({id:result.insertId,...preview});
+      }
+    }
     if (kind === 'boqs') {
       const preview = await flexibleBoqPreview(file);
       const source = await readUploadedFile(file.path);
@@ -197,6 +211,23 @@ router.post('/dry-check', auth, wrap(async (req, res) => {
     await audit(pool, req.user.id, 'IMPORT_DRY_CHECK', 'historical_import', result.insertId, null, { kind, counts, checksum }, req.ip);
     res.status(201).json({ id: result.insertId, ...preview });
   } finally { await discard().catch(error => console.error('Could not clean up historical import upload', error)); }
+}));
+
+router.patch('/batches/:id/linked-review',auth,wrap(async(req,res)=>{
+ const result=await transaction(async connection=>{
+  const [[batch]]=await connection.execute('SELECT * FROM historical_import_batches WHERE id=? FOR UPDATE',[req.params.id]);
+  if(!batch||!canImport(req,batch.kind))throw fail(404,'Import review not found.');
+  if(batch.status!=='Review')throw fail(409,'This workbook is already imported.');
+  const current=JSON.parse(batch.preview_json);if(current.mode!=='linked-workbook')throw fail(400,'This is not a linked template review.');
+  if(!Array.isArray(req.body.rows)||req.body.rows.length!==current.rows.length)throw fail(400,'Keep every source row in this review.');
+  const employeeMap=req.body.employeeMap||{};
+  if(typeof employeeMap!=='object'||Array.isArray(employeeMap)||Object.values(employeeMap).some(id=>!Number.isInteger(Number(id))||Number(id)<1))throw fail(400,'Choose valid employee mappings.');
+  const rows=current.rows.map((row,index)=>({...row,data:req.body.rows[index]?.data||{},targetId:req.body.rows[index]?.targetId||null}));
+  const preview={...await inspectLinked(batch.kind,rows,{employeeMap},async(sql,params=[])=> (await connection.execute(sql,params))[0]),sourceRows:current.sourceRows||current.rows};
+  await connection.execute('UPDATE historical_import_batches SET preview_json=? WHERE id=?',[JSON.stringify(preview),batch.id]);
+  await audit(connection,req.user.id,'UPDATE_REVIEW','historical_import',batch.id,{rows:current.rows,employeeMap:current.employeeMap},{mode:preview.mode,rows:preview.rows,employeeMap:preview.employeeMap,counts:preview.counts},req.ip);
+  return {id:batch.id,status:batch.status,...preview};
+ });res.json(result);
 }));
 
 router.patch('/batches/:id/review', auth, permit('qs.boq'), wrap(async (req, res) => {
@@ -321,6 +352,13 @@ router.post('/batches/:id/confirm', auth, wrap(async (req, res) => {
   const preview = JSON.parse(batch.preview_json);
   if (batch.kind === 'boqs' && preview.mode === 'document-review')
     return res.json(await confirmFlexibleBoq(req, batch, preview));
+  if(preview.mode==='linked-workbook'){
+    const result=await transaction(async connection=>{
+      const [[locked]]=await connection.execute('SELECT * FROM historical_import_batches WHERE id=? FOR UPDATE',[batch.id]);
+      if(locked.status!=='Review')throw fail(409,'This workbook was already imported.');
+      return saveLinked(connection,req,locked,JSON.parse(locked.preview_json));
+    });return res.json(result);
+  }
   if (!supported.has(batch.kind)) return res.status(409).json({ error: 'This template is available for checking, but importing it is not yet safe. No records were changed.' });
   if (preview.rows.some(row => row.action === 'blocked')) return res.status(409).json({ error: 'Resolve every issue in the dry-check report and upload the corrected workbook first.' });
   const checked = await inspect(batch.kind, preview.rows.map(({ sheet, row, data }) => ({ sheet, row, data })));
