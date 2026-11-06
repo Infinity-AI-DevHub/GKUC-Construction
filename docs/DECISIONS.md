@@ -201,3 +201,11 @@ content with “Error in local machine”, “Error in windows operating system�
 asking the administrator to install separate drivers. Preserve server operation blocks
 for all roles. This copy is explicitly simulated/configured, not a technical diagnosis;
 actual restoration still requires removing the configured pause, not installing drivers.
+
+## 2026-11-06 — remove temporary restrictions and simulated errors
+
+User requested removal of all fake errors and restoration of hidden functionality.
+Delete the temporary pause layer rather than retaining dormant OS/driver copy.
+Restore the existing persistent workflows, detailed data and imports under their normal
+permissions. Preserve genuine operational errors and authorization checks. No database
+or payroll-policy changes are needed. This supersedes the temporary pause decisions above.

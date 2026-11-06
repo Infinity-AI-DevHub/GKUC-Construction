@@ -303,29 +303,12 @@ controls before its summaries and history. These use the existing authorized,
 persistent Fleet endpoints for both existing and newly created vehicles. Identity
 edits remain separate from dated operational and renewal history.
 
-### Temporary feature access pause (2026-11-06)
+### Restored feature access (2026-11-06)
 
-A pure shared pause list in backend/src/lib/temporary-features.mjs drives the built
-frontend and an API middleware before business routes/document tickets. All roles receive
-423 FEATURE_TEMPORARILY_DISABLED for the five paused workflows; detailed bootstrap/
-project/client payloads and historical BOQ import access also respect the pause. Finance,
-QS and project navigation omit paused sections and deep links render a notice. Existing
-business records and ordinary role grants remain unchanged. See TEMPORARY_FEATURE_PAUSE.md
-for precise scope, restoration, desktop bundle and deployment requirements.
-
-### Paused-page presentation revision (2026-11-06)
-
-Affected navigation remains visible and permits page entry. Finance/QS/Projects shells
-render TemporaryFeatureNotice instead of operational content/forms. Direct URLs resolve
-to the same page presentation. The manually configured machine/Windows error and driver
-solution are shared with API refusals; no OS/driver diagnosis or installation is performed.
-Server-side 423 restrictions, suppressed details and import guards remain in force.
-
-### HR pause and dashboard warning (2026-11-06)
-
-The shared pause list now includes HR: People and all employee/payroll deep links show
-the configured error without mounting HR components. The API guard covers employee,
-hiring, insurance, attendance, biometric, payroll and HR-register paths. Shared bootstrap
-summaries and scheduled background work retain existing behavior. Dashboard renders the
-configured warning before My Work Today for all roles while any feature remains paused.
-The messages do not diagnose the actual device. See TEMPORARY_FEATURE_PAUSE.md.
+Removed the temporary feature middleware, shared pause configuration, simulated OS/driver
+notices and dashboard warning. Finance, QS, Projects and People mount their normal
+operational components again. Bootstrap BOQs, project BOQ/invoice/expense/cost details,
+client invoice history and historical BOQ imports use their existing permissions and
+company scope without artificial suppression. API routes and document tickets retain
+normal authentication, authorization and validation. No schema or saved data changes.
+See TEMPORARY_FEATURE_PAUSE.md for the superseded pause history and rollout limits.

@@ -1,4 +1,3 @@
-import {PAUSED_FEATURES,DASHBOARD_PAUSE_WARNING} from '../../../backend/src/lib/temporary-features.mjs';
 import React from 'react';
 import { AlertTriangle, Boxes, CheckCircle2, ChevronRight, FileText, Truck } from 'lucide-react';
 import { Avatar, Badge, PanelTitle } from '../ui.jsx';
@@ -35,7 +34,6 @@ export default function Dashboard({ data, go, user, can, companyId, onViewAlerts
   const managementOverview = can.has('projects.view') && can.has('finance.view');
 
   return <div className="reference-dashboard">
-    {PAUSED_FEATURES.length>0&&<section className="local-computer-warning" role="alert"><AlertTriangle size={24} aria-hidden="true"/><p>{DASHBOARD_PAUSE_WARNING}</p></section>}
     <MyWorkToday user={user} can={can} go={go} data={data} companyId={companyId} />
     {managementOverview && <>
     <div className="reference-welcome">

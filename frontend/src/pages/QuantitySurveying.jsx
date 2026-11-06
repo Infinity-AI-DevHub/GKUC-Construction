@@ -1,5 +1,3 @@
-import {pausedTabFeature} from '../../../backend/src/lib/temporary-features.mjs';
-import TemporaryFeatureNotice from '../TemporaryFeatureNotice.jsx';
 import DocumentPrintOptions,{printedQuotationNumber} from '../DocumentPrintOptions.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, FileText, Plus, Trash2, Upload, ChartNoAxesCombined, Calculator, ClipboardList, ShieldCheck, Users, ChevronRight, Layers } from 'lucide-react';
@@ -63,7 +61,7 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
       <div className="qs-content" key={tab}>
         {tab !== 'Cost control' && <header className="qs-section-intro"><span>Commercial management</span><h2>{tab}</h2><p>{QS_SECTIONS[tab].description}</p></header>}
 
-    {pausedTabFeature(tab)?<TemporaryFeatureNotice feature={pausedTabFeature(tab)}/>:<>
+    <>
     {tab === 'Cost control' && <CostControl projects={data.projects} can={can} />}
     {tab === 'Progress claims' && ['qs.view','qs.boq','qs.approve'].some(key=>can.has(key)) && <ProgressClaims companyId={companyId} can={can}/>}
     {tab === 'Quotations' && <Quotations can={can} reload={reload} companyId={companyId} />}
@@ -75,7 +73,7 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
     {tab === 'Tenders' && <Tenders can={can} companyId={companyId} company={company} employees={data.employees} />}
     {tab === 'Retention' && <Retention can={can} companyId={companyId} />}
     {tab === 'Subcontractors' && <Subcontractors can={can} data={data} companyId={companyId} />}
-      </>}
+      </>
       </div>
     </div>
 

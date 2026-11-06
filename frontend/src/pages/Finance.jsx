@@ -1,5 +1,3 @@
-import {pausedTabFeature} from '../../../backend/src/lib/temporary-features.mjs';
-import TemporaryFeatureNotice from '../TemporaryFeatureNotice.jsx';
 import React, { useEffect, useState } from 'react';
 import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
 import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
@@ -82,10 +80,10 @@ export default function Finance({ data, reload, can, companyId, company }) {
   const refresh = async () => { await load(); await reload(); };
 
   return <RecordScopeProvider scope={{ kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Finance" subtitle={`Project costs, payments and profitability for ${company?.name || 'the selected company'}.`}
-    action={pausedTabFeature(tab)?null:actions[tab] || null} onAction={() => setOpen(tab)}>
+    action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={visibleTabs} active={tab} onChange={setTab} groups={visibleGroups} />
 
-    {pausedTabFeature(tab)?<TemporaryFeatureNotice feature={pausedTabFeature(tab)}/>:<>
+    <>
     {tab === 'Financial reports' && <FinanceReports projects={data.projects} companyId={companyId} company={company} />}
     {tab === 'Management accounts' && <ManagementAccounts projects={data.projects.filter(project => Number(project.companyId) === Number(companyId))} companyId={companyId} company={company} can={featureCan('finance.managementAccountsManage')} />}
     {tab === 'Cash comparison' && <CashComparison companyId={companyId} company={company} can={featureCan('finance.cashComparison')} />}
@@ -121,7 +119,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {open === 'Supplier invoices' && <InvoiceForm companyId={companyId} close={() => setOpen('')} reload={refresh} />}
     {open === 'Credit purchases' && <InvoiceForm creditOnly companyId={companyId} close={() => setOpen('')} reload={refresh} />}
     {open === 'Categories' && <CategoryForm close={() => setOpen('')} reload={refresh} />}
-    </>}
+    </>
   </Page></RecordScopeProvider>;
 }
 

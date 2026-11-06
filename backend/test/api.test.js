@@ -10,7 +10,8 @@ import {INITIAL_HR_RULES} from '../src/lib/hr-payroll-rules.js';
 import { writeWorkbook } from '../src/lib/xlsx-write.js';
 
 const port = 43971;
-const base = `http://${process.env.GKUC_TEST_HOST || '127.0.0.1'}:${port}/api`;
+const origin = `http://${process.env.GKUC_TEST_HOST || '127.0.0.1'}:${port}`;
+const base = `${origin}/api`;
 const testDatabase = 'gkuc_siteops_test';
 let server;
 let serverOutput = '';
@@ -962,7 +963,7 @@ test('company registration and HR milestone letters are issued once with immutab
     assert.doesNotMatch(issuedHtml, /DRAFT - NOT ISSUED/);
     const ticket = await call(hr, 'POST', '/document-download-tickets', { path: `${issuedPath}?download=pdf` });
     assert.equal(ticket.status, 200, JSON.stringify(ticket.body));
-    const pdf = await fetch(`http://127.0.0.1:${port}${ticket.body.url}`);
+    const pdf = await fetch(`${origin}${ticket.body.url}`);
     assert.equal(pdf.status, 200);
     assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
     assert.equal((await call(qs, 'GET', issuedPath)).status, 403);
@@ -1564,9 +1565,9 @@ test('client directory links projects, quotations, invoices and payments without
     path: `/qs/quotations/${quote.body.id}/document?download=pdf`
   });
   assert.equal(ticket.status, 200, JSON.stringify(ticket.body));
-  const tampered = await fetch(`http://127.0.0.1:${port}${ticket.body.url.replace(`/quotations/${quote.body.id}/`, '/quotations/999999/')}`);
+  const tampered = await fetch(`${origin}${ticket.body.url.replace(`/quotations/${quote.body.id}/`, '/quotations/999999/')}`);
   assert.equal(tampered.status, 401);
-  const ticketedPdfResponse = await fetch(`http://127.0.0.1:${port}${ticket.body.url}`);
+  const ticketedPdfResponse = await fetch(`${origin}${ticket.body.url}`);
   assert.equal(ticketedPdfResponse.status, 200);
   assert.match(ticketedPdfResponse.headers.get('content-type'), /^application\/pdf/);
   assert.match(ticketedPdfResponse.headers.get('content-disposition'), /^attachment;/);
@@ -1575,7 +1576,7 @@ test('client directory links projects, quotations, invoices and payments without
   assert.ok(ticketedPdf.subarray(-1024).toString().includes('startxref'));
   const inspected = spawnSync('pdfinfo', ['-'], { input: ticketedPdf });
   if (!inspected.error) assert.equal(inspected.status, 0, inspected.stderr.toString());
-  assert.equal((await fetch(`http://127.0.0.1:${port}${ticket.body.url}`)).status, 401);
+  assert.equal((await fetch(`${origin}${ticket.body.url}`)).status, 401);
   assert.equal((await call(owner, 'POST', '/document-download-tickets', {
     path: 'https://outside.example/qs/quotations/1/document?download=pdf'
   })).status, 400);
@@ -1604,7 +1605,7 @@ test('client directory links projects, quotations, invoices and payments without
     path: `/receivables/invoices/${invoice.body.id}/document?download=pdf`
   });
   assert.equal(invoiceTicket.status, 200);
-  const invoiceTicketResponse = await fetch(`http://127.0.0.1:${port}${invoiceTicket.body.url}`);
+  const invoiceTicketResponse = await fetch(`${origin}${invoiceTicket.body.url}`);
   assert.equal(invoiceTicketResponse.status, 200);
   assert.equal(Buffer.from(await invoiceTicketResponse.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
   assert.equal((await call(owner, 'POST', `/receivables/invoices/${invoice.body.id}/issue`)).status, 204);
@@ -3459,13 +3460,13 @@ test('stores uploads, enforces type and permission, and lists them on the record
    * contract and identity document one URL away from anyone at all; they now travel through
    * a route that applies the same permission as seeing the file listed.
    */
-  const byUrl = await fetch(`http://127.0.0.1:${port}${stored.body.url}`);
+  const byUrl = await fetch(`${origin}${stored.body.url}`);
   assert.equal(byUrl.status, 404, 'the old public path serves nothing');
 
-  const anonymous = await fetch(`http://127.0.0.1:${port}/api/uploads/file/${stored.body.id}`);
+  const anonymous = await fetch(`${origin}/api/uploads/file/${stored.body.id}`);
   assert.equal(anonymous.status, 401, 'and the file needs a session');
 
-  const served = await fetch(`http://127.0.0.1:${port}/api/uploads/file/${stored.body.id}`,
+  const served = await fetch(`${origin}/api/uploads/file/${stored.body.id}`,
     { headers: { authorization: `Bearer ${owner}` } });
   assert.equal(served.status, 200, 'someone who may see the record gets the file');
 
@@ -3473,7 +3474,7 @@ test('stores uploads, enforces type and permission, and lists them on the record
   assert.ok(task.body.attachments.some(file => file.id === stored.body.id));
 
   assert.equal((await call(owner, 'DELETE', `/uploads/${stored.body.id}`)).status, 204);
-  assert.equal((await fetch(`http://127.0.0.1:${port}/api/uploads/file/${stored.body.id}`,
+  assert.equal((await fetch(`${origin}/api/uploads/file/${stored.body.id}`,
     { headers: { authorization: `Bearer ${owner}` } })).status, 404, 'deleting removes the record and the object');
 });
 
@@ -5148,10 +5149,10 @@ test('progress claims freeze BOQ versions, separate certification and reuse one 
   assert.equal(doc.status,200);const html=await doc.text();assert.ok(html.includes('Internally approved'));assert.ok(html.includes('3,000.00'));
   const ticket=await call(owner,'POST','/document-download-tickets',{path:`/progress-claims/${claim.body.id}/document?type=application&download=pdf`});
   assert.equal(ticket.status,200,JSON.stringify(ticket.body));
-  assert.equal((await fetch(`http://127.0.0.1:${port}${ticket.body.url.replace('type=application','type=letter')}`)).status,401);
-  const pdf=await fetch(`http://127.0.0.1:${port}${ticket.body.url}`);assert.equal(pdf.status,200);
+  assert.equal((await fetch(`${origin}${ticket.body.url.replace('type=application','type=letter')}`)).status,401);
+  const pdf=await fetch(`${origin}${ticket.body.url}`);assert.equal(pdf.status,200);
   assert.match(pdf.headers.get('content-type'),/^application\/pdf/);assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
-  assert.equal((await fetch(`http://127.0.0.1:${port}${ticket.body.url}`)).status,401);
+  assert.equal((await fetch(`${origin}${ticket.body.url}`)).status,401);
   assert.equal((await call(owner,'POST','/progress-claims/schedules',{...scheduleBody,items:[{...scheduleBody.items[0],rate:200}]})).status,409);
   const revision=await call(owner,'POST','/progress-claims/schedules',{...scheduleBody,revisionReason:'Add new approved extra work',items:[...scheduleBody.items,{code:'V1',description:'Extra work',unit:'sum',quantity:1,rate:500}]});
   assert.equal(revision.status,201,JSON.stringify(revision.body));
@@ -6237,17 +6238,20 @@ test('editable purchase orders retain receipt costs and invoice debt through rev
  assert.equal((await call(owner,'POST','/document-download-tickets',{path:`/purchasing/orders/${id}/document?preview=pdf`})).status,200);
 });
 
-test('temporary feature pause blocks owner and finance direct APIs without changing business data',async()=>{
- await admin.query('USE `'+testDatabase+'`');
- const owner=await login();const finance=await login('finance@gkuc.lk');
- const before=await admin.query(`SELECT (SELECT COUNT(*) FROM bank_bonds) bonds,(SELECT COUNT(*) FROM boqs) boqs,(SELECT COUNT(*) FROM client_invoices) invoices,(SELECT COUNT(*) FROM expenses) expenses`);
- for(const token of [owner,finance])for(const [method,path,body]of [
-  ['GET','/employees'],['POST','/attendance',{}],['POST','/payroll',{}],['GET','/payroll/1/payslips/1/document?download=pdf'],['GET','/receivables/bonds'],['POST','/receivables/bonds',{}],['GET','/receivables/petty-cash'],['GET','/finance/expenses'],['GET','/finance/daily-expenses'],['GET','/boq'],['POST','/boq',{}],['GET','/boq/1/document?download=pdf'],['GET','/receivables/invoices'],['POST','/document-download-tickets',{path:'/receivables/invoices/1/document?download=pdf'}]
- ]){const response=await call(token,method,path,body);assert.equal(response.status,423,path);assert.equal(response.body.code,'FEATURE_TEMPORARILY_DISABLED');}
- const boot=await call(owner,'GET','/bootstrap');assert.equal(boot.status,200);assert.deepEqual(boot.body.data.boqs,[]);
- const project=await call(owner,'GET','/projects/1');assert.equal(project.status,200);assert.deepEqual(project.body.boqs,[]);assert.deepEqual(project.body.invoices,[]);assert.deepEqual(project.body.reporting.expenseLedger,[]);
- const batches=await call(owner,'GET','/import-centre/batches');assert.equal(batches.status,200);assert.ok(batches.body.every(b=>b.kind!=='boqs'));
- assert.equal((await call(owner,'GET','/qs/quotations')).status,200);assert.equal((await call(owner,'GET','/receivables/cheques')).status,200);
- const after=await admin.query(`SELECT (SELECT COUNT(*) FROM bank_bonds) bonds,(SELECT COUNT(*) FROM boqs) boqs,(SELECT COUNT(*) FROM client_invoices) invoices,(SELECT COUNT(*) FROM expenses) expenses`);
- assert.deepEqual(after[0],before[0]);
+test('restored finance, BOQ and HR endpoints return normal data and validation', async () => {
+ const owner = await login();
+ for (const path of ['/employees','/receivables/bonds','/receivables/petty-cash','/finance/expenses',`/finance/daily-expenses?companyId=1&date=${today()}`,'/boq','/receivables/invoices']) {
+  const response = await call(owner, 'GET', path);
+  assert.equal(response.status, 200, path + ': ' + JSON.stringify(response.body));
+ }
+ for (const path of ['/attendance','/payroll','/boq','/receivables/bonds']) {
+  const response = await call(owner, 'POST', path, {});
+  assert.equal(response.status, 400, path + ': normal validation must run');
+ }
+ const boot = await call(owner, 'GET', '/bootstrap');
+ assert.equal(boot.status, 200);
+ assert.ok(boot.body.data.boqs.length > 0, 'saved BOQs are visible again');
+ const project = await call(owner, 'GET', '/projects/1');
+ assert.equal(project.status, 200);
+ assert.ok(project.body.boqs.length > 0, 'project BOQs are visible again');
 });

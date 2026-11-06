@@ -5,7 +5,6 @@ import { runAlertScan } from '../alerts.js';
 import { MAX_UPLOAD_BYTES } from '../lib/storage.js';
 import { withTaskAssignees } from '../lib/task-assignees.js';
 
-import {isFeaturePaused} from '../lib/temporary-features.mjs';
 const router = Router();
 
 export const stockState = material =>
@@ -88,8 +87,8 @@ router.get('/', auth, wrap(async (req, res) => {
       (SELECT COUNT(*) FROM purchase_request_items i WHERE i.request_id=r.id) lineCount,
       (SELECT COALESCE(SUM(i.quantity*i.estimated_rate),0) FROM purchase_request_items i WHERE i.request_id=r.id) estimate
       FROM purchase_requests r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.requested_by WHERE p.active=1 ORDER BY r.id DESC`)),
-    (isFeaturePaused('boqs') ? [] : gated(['qs.view','qs.boq'], () => query(`SELECT b.id,b.reference,b.title,b.status,b.total,b.version,p.name project,p.company_id companyId,b.project_id projectId,u.name preparedBy
-      FROM boqs b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=b.prepared_by WHERE p.active=1 ORDER BY b.id DESC`))),
+    gated(['qs.view','qs.boq'], () => query(`SELECT b.id,b.reference,b.title,b.status,b.total,b.version,p.name project,p.company_id companyId,b.project_id projectId,u.name preparedBy
+      FROM boqs b JOIN projects p ON p.id=b.project_id JOIN users u ON u.id=b.prepared_by WHERE p.active=1 ORDER BY b.id DESC`)),
     gated(['projects.view'], () => query(`SELECT m.id,m.title,m.due_date dueDate,m.status,m.project_id projectId,p.company_id companyId,p.name project
       FROM project_milestones m JOIN projects p ON p.id=m.project_id WHERE p.active=1 ORDER BY m.due_date`)),
     (async () => {

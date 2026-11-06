@@ -20,7 +20,6 @@ import { captureRequestAddress } from './lib/request-address.js';
 import { publishChange } from './lib/realtime.js';
 import { getServiceAccessState, serviceAccessMiddleware } from './lib/service-access.js';
 
-import {temporaryFeatureMiddleware} from './lib/temporary-feature-middleware.js';
 import authRoutes from './routes/auth.js';
 import bootstrapRoutes from './routes/bootstrap.js';
 import dashboardQueueRoutes from './routes/dashboard-queue.js';
@@ -233,7 +232,6 @@ app.use('/api', (req, res, next) => {
   return allowed ? next() : serviceAccessMiddleware(req, res, next);
 });
 
-app.use('/api', temporaryFeatureMiddleware);
 app.use('/api/auth', authRoutes);
 app.post('/api/document-download-tickets', auth, async (req, res, next) => {
   try {

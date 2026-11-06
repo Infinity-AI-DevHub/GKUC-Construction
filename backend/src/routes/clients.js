@@ -1,4 +1,3 @@
-import {isFeaturePaused} from '../lib/temporary-features.mjs';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query } from '../db.js';
@@ -45,7 +44,7 @@ router.get('/:id', auth, permit('clients.view'), wrap(async (req, res) => {
     return res.status(400).json({ error: 'Choose a valid operating company to view this client’s history.' });
   const companyWhere = companyId ? ' AND company_id=?' : '';
   const scoped = companyId ? [client.id, companyId] : [client.id];
-  const financialVisible = !isFeaturePaused('invoices')&&(can(req, 'finance.view') || can(req, 'finance.invoice'));
+  const financialVisible = (can(req, 'finance.view') || can(req, 'finance.invoice'));
   const quotationsVisible = can(req, 'qs.view') || can(req, 'qs.quotation');
   const activityVisible = can(req, 'enquiries.manage') || can(req, 'projects.manage');
   const [projects, inquiries, quotations, tenders, invoices, payments, communications] = await Promise.all([

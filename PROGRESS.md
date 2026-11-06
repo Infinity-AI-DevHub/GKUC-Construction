@@ -819,3 +819,36 @@ Corrected user-requested dashboard wording from “Incompatability” to “inco
 Updated the shared message, current guide and local UI check expectation. No behavior
 change. Frontend build and diff whitespace check passed. No production deployment or
 live DB writes.
+
+## 2026-11-06 — remove all simulated errors and restore paused workflows
+
+User requested removal of fake errors and restoration of hidden features/content.
+Deleted the temporary feature configuration, API middleware, notice component and
+pause-specific tests. Restored People/HR, Finance Petty cash/Bonds/Expenses/Invoices,
+QS/Projects BOQs, operational forms/actions, document ticket access, historical BOQ
+imports and normal bootstrap/project/client detail responses. Removed configured
+Windows/driver/local-computer errors and dashboard warning from source and rebuilt UI.
+Existing authorization, company scope, validation, audit and genuine errors remain.
+No schema, payroll calculation/policy or Approved/Paid snapshot changes.
+
+Updated ARCHITECTURE, DECISIONS, PAYROLL and TEMPORARY_FEATURE_PAUSE to record restored
+behavior. Replaced the API pause test with restored-data/validation coverage. Made API
+test document/upload URLs consistently respect the existing GKUC_TEST_HOST option.
+This environment accepts localhost but refuses IPv4 loopback connections to the test
+listener; the initial default-address suite therefore failed its API startup hook.
+
+Validation: frontend 39/39 and production build passed (existing large-chunk advisory).
+Initial full backend run passed 175 non-API tests; API setup failures were environmental.
+With GKUC_TEST_HOST=localhost, full API run: 170 passed, 5 failed, 2 optional skips.
+Four failures were hardcoded IPv4 document/upload URLs; after the test URL correction,
+all four passed in a focused rerun. The fifth was the new restoration test omitting
+required daily-expense company/date query values; corrected the fixture and reran it:
+1/1 passed, verifying seven restored list APIs, four normal validation paths and saved
+bootstrap/project BOQs. Thus every failed API scenario passed its final focused rerun;
+a final combined full-suite rerun and manual browser/Electron UI check were not run.
+Source/built asset search found no remaining fake message or pause integration.
+Final git diff --check passed. Existing unrelated .gitignore change preserved.
+
+No deployment, PM2 restart, production configuration change, live database write or
+desktop installer rebuild. Tests used and cleaned the local disposable test database.
+Backend/browser rollout and desktop rebuild/distribution remain separate release work.

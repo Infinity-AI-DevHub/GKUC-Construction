@@ -1,5 +1,3 @@
-import TemporaryFeatureNotice from './TemporaryFeatureNotice.jsx';
-import {isFeaturePaused} from '../../backend/src/lib/temporary-features.mjs';
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Building2, Calculator, CircleDollarSign, ClipboardCheck, ClipboardList, FileText, LayoutDashboard, LogIn, Menu, Radar, ShieldCheck, Truck, Users, Warehouse, MessageSquare, HardDrive, LockKeyhole, RefreshCw, Eye, EyeOff, ArrowRight, Mail } from 'lucide-react';
@@ -520,7 +518,7 @@ function App() {
     'Quantity Surveying': <QuantitySurveying {...shared} />,
     Projects: <Projects {...shared} />,
     Tasks: <Tasks {...shared} />,
-    People: isFeaturePaused('hr') ? <TemporaryFeatureNotice feature="hr"/> : <People {...shared} employeeSearchRequest={peopleSearchRequest} />,
+    People: <People {...shared} employeeSearchRequest={peopleSearchRequest} />,
     Materials: <Materials {...shared} />,
     'Stock locations': <Inventory {...shared} />,
     Fleet: <Fleet {...shared} />,
