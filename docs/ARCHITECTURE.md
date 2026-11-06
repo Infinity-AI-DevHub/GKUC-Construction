@@ -320,3 +320,12 @@ render TemporaryFeatureNotice instead of operational content/forms. Direct URLs 
 to the same page presentation. The manually configured machine/Windows error and driver
 solution are shared with API refusals; no OS/driver diagnosis or installation is performed.
 Server-side 423 restrictions, suppressed details and import guards remain in force.
+
+### HR pause and dashboard warning (2026-11-06)
+
+The shared pause list now includes HR: People and all employee/payroll deep links show
+the configured error without mounting HR components. The API guard covers employee,
+hiring, insurance, attendance, biometric, payroll and HR-register paths. Shared bootstrap
+summaries and scheduled background work retain existing behavior. Dashboard renders the
+configured warning before My Work Today for all roles while any feature remains paused.
+The messages do not diagnose the actual device. See TEMPORARY_FEATURE_PAUSE.md.
