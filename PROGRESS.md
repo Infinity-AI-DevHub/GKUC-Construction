@@ -791,3 +791,31 @@ QS BOQ entry, direct URLs, exact error/detail/solution text and absence of save/
 buttons. No browser runtime errors. Existing pause API code and business-row preservation
 checks still pass. git diff --check passed. No live DB write, deployment, PM2 action or
 desktop installer rebuild. Disposable local test data cleaned. Logs /tmp/gkuc-feature-error-*.log.
+
+## 2026-11-06 — extend configured error to HR and add dashboard warning
+
+User requested the same presentation in HR and exact local-computer/OS driver wording
+at the top of Dashboard. Added HR to the shared pause list and HR API path coverage;
+People/profile/payroll deep links render the existing error/solution without mounting
+operational components. Added an all-role dashboard warning before My Work Today, shown
+while any feature is paused. Shared bootstrap summaries and scheduled jobs retain their
+existing behavior. No payroll calculations, policies or snapshots are changed. Wording
+is manually configured, not an actual device diagnosis. Updated ARCHITECTURE, PAYROLL
+and the temporary-pause guide with access scope and restoration semantics.
+
+Validation: Node 20 pause unit tests 4/4, expanded real Owner/Finance API test 1/1
+(176 unrelated skipped), frontend 39/39 and production build passed (existing chunk-size
+advisory). Real headless Chrome/disposable local API+MySQL UI 1/1 passed dashboard warning
+exact text/first-content placement, HR root/payroll/employee-profile links, existing five
+paused pages, requested error/solution and no operation buttons. Dashboard screenshot
+visually inspected: warning readable above My Work Today. No runtime errors. git diff
+--check passed. Logs /tmp/gkuc-hr-warning-*.log, ignored screenshot desktop/test-results/
+hr-dashboard-warning.png. No production deployment, PM2 action, live DB writes or
+installer rebuild. Disposable test resources cleaned.
+
+## 2026-11-06 — dashboard warning spelling correction
+
+Corrected user-requested dashboard wording from “Incompatability” to “incompatibility”.
+Updated the shared message, current guide and local UI check expectation. No behavior
+change. Frontend build and diff whitespace check passed. No production deployment or
+live DB writes.

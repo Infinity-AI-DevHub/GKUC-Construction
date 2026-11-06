@@ -213,3 +213,14 @@ remain, with space reserved to avoid overlaps. This is a presentation-only chang
 existing Approved/Paid payroll calculations and saved snapshots are unchanged. Actual
 five-page PDF regression checks verify one attribution per page, while a multi-page
 invoice receives one at its end.
+
+## Temporary HR access pause — 2026-11-06
+
+The user extended the temporary page/operation pause to HR. People/payroll pages show
+the configured error/driver solution and payroll/attendance/employee/biometric APIs return
+423 FEATURE_TEMPORARILY_DISABLED for every role, including saved payslip download paths.
+No policy, pay calculation, saved input, approved/paid snapshot or historical payroll is
+changed. Scheduled background jobs keep existing behavior; this is an HTTP/UI access
+restriction. Restore the `hr` feature in the shared pause configuration and deploy the
+matching build as described in TEMPORARY_FEATURE_PAUSE.md. The displayed OS message is
+manually configured; no OS/driver diagnosis or installation is performed.

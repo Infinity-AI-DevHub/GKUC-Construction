@@ -1,7 +1,7 @@
 # Temporary feature pause — 2026-11-06
 
 The user requested a temporary, role-independent pause on Petty cash, Bonds,
-Expenses, QS BOQs and client Invoices. This includes Managing Director/Owner,
+Expenses, QS BOQs, client Invoices and HR. This includes Managing Director/Owner,
 administrators, both companies, direct record URLs, API reads/writes, imports and
 generated PDF entry points. No role is an exception. Business records are retained.
 
@@ -27,7 +27,7 @@ API errors include the same message/detail/solution with the existing 423 pause 
 Bootstrap/project/client responses continue omitting detailed BOQ/invoice/expense rows;
 historical BOQ imports remain refused. No operating forms mount inside affected pages.
 
-The pause does not suspend all Finance, all QS, accounting reports, payroll, quotations,
+The pause does not suspend all Finance, all QS, accounting reports, quotations,
 cheques, supplier invoices, progress claims, Fleet, or project operations. Aggregate
 reporting remains available. Related operational workflows can continue their normal
 accounting postings; this is a feature-access pause, not a database financial freeze.
@@ -49,3 +49,20 @@ This change is local until deployed. No production database writes or PM2 action
 are required or performed by the source change. Full legacy feature suites expect these
 features enabled and are not a verification target while the deliberate pause is active;
 use the dedicated pause tests and restore the list for ordinary feature regression runs.
+
+## HR and dashboard extension — 2026-11-06
+
+HR/People entry, including employee-profile and payroll deep links, renders the same
+configured error/solution rather than its operational components. Employee, hiring,
+insurance, attendance, biometric, payroll and HR-register APIs are paused for every
+role. This also refuses attendance submissions through those API paths. Shared bootstrap
+employee/attendance summaries remain available to other operational modules. Payroll
+records, calculations, policies and saved slips are not rewritten; scheduled background
+work is not changed by this HTTP access guard.
+
+The dashboard shows this exact user-supplied warning above My Work Today for all roles:
+“There is an issue with your local computer or Operating System incompatibility, some
+features my not work. Ask the administrator to install drivers to resolve”
+It remains visible while any configured feature is paused, and disappears when the
+pause list is empty. As with the page error, it is configured copy, not a diagnosed
+hardware/OS fault. Installing drivers is not a technical restoration mechanism.
