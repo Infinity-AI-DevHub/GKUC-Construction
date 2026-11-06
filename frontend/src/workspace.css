@@ -550,7 +550,3 @@ body:has(.workflow-page) .modal-backdrop{z-index:1200}
 .po-item-fields label{display:grid;gap:6px;min-width:0}
 .po-item-fields :is(input,select){width:100%;min-width:0;max-width:100%;box-sizing:border-box}
 @media(max-width:640px){.po-item-fields{grid-template-columns:minmax(0,1fr)}}
-
-.local-computer-warning { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 12px; padding: 18px 22px; border: 1px solid #e8bd62; border-radius: 14px; background: #fff7e5; color: #66420b; }
-.local-computer-warning svg { flex-shrink: 0; margin-top: 2px; }
-.local-computer-warning p { margin: 0; line-height: 1.6; font-weight: 600; }
