@@ -19,6 +19,7 @@ docs/*
 !docs/DESKTOP.md
 !docs/MANUAL_QA.md
 !docs/DEPLOYMENT.md
+!docs/TEMPORARY_FEATURE_PAUSE.md
 
 # Generated desktop bundle, installers and test artifacts
 desktop/ui/

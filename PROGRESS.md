@@ -749,3 +749,45 @@ multiple renewals, and dated driver/odometer/fuel/repair/service/renewal histori
 Frontend production build passed with the existing chunk-size advisory; git diff --check
 passed. No manual UI run in this change. No deployment, live DB write or desktop
 installer rebuild; tests used the local disposable integration database.
+
+## 2026-11-06 — temporarily pause five finance/QS workflows for all users
+
+User requested no clicking/browsing Petty cash, Bonds, Expenses, QS BOQs or Invoices.
+Added a shared, reversible pause list; server-side 423 guard before business routes and
+document-ticket issuance; Finance/QS/Projects/shared navigation filtering; direct-link
+notices and internal-anchor interception. Bootstrap/project/client detailed rows and
+historical BOQ import permissions respect the pause. No owner/admin bypass. Existing
+records, grants, aggregate reports and unrelated workflows remain intact. Scope and
+restoration documented in TEMPORARY_FEATURE_PAUSE.md, ARCHITECTURE and DECISIONS.
+
+Validation: dedicated Node 20 pause unit tests 4/4 passed, focused real API test 1/1
+passed (176 unrelated skipped), frontend tests 39/39 passed and production build passed
+(existing chunk-size advisory). Actual headless Chrome + disposable local API/MySQL UI
+check 1/1 passed Finance navigation, QS BOQ navigation and all five direct URLs with no
+browser runtime errors. API checks cover Owner/Finance roles, reads/writes, PDF/ticket
+paths, bootstrap/project suppression, import listings, unchanged business-row counts and
+available quotations/cheques. Initial verification caught and fixed an accidental array-
+destructuring edit, an incorrect notice import and test-connection database selection;
+final runs pass. git diff --check passed. Evidence logs /tmp/gkuc-feature-pause-*.log;
+ignored UI script/screenshot in desktop/test-results/temporary-feature-pause-*. No live
+DB writes, production deployment, PM2 restart or installer rebuild. Disposable data cleaned.
+
+## 2026-11-06 — paused pages stay navigable and show requested error/solution
+
+User revised prior hiding/navigation restriction. Restored Finance, QS and Projects
+section buttons/pickers and removed global anchor interception. Affected page shells
+remain accessible, while their operational components/forms/actions do not mount.
+Direct URLs show the same content. Added shared configured local-machine/Windows error
+copy and administrator/separate-drivers solution to frontend and API 423 responses.
+The error is manually configured, not an actual OS diagnosis; driver installation does
+not restore the server feature pause. No OS changes or driver installation performed.
+Server guards, imports and detailed-data suppression remain intact. Updated architecture,
+decisions and the temporary-pause operational guide to distinguish copy from enforcement.
+
+Validation: pause unit tests 4/4; focused Owner/Finance API pause test 1/1 (176 unrelated
+skipped); frontend tests 39/39; final production build pass (existing chunk advisory).
+Real headless Chrome/disposable local API+MySQL UI 1/1 passed clicking Finance sections,
+QS BOQ entry, direct URLs, exact error/detail/solution text and absence of save/operation
+buttons. No browser runtime errors. Existing pause API code and business-row preservation
+checks still pass. git diff --check passed. No live DB write, deployment, PM2 action or
+desktop installer rebuild. Disposable local test data cleaned. Logs /tmp/gkuc-feature-error-*.log.

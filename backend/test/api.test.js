@@ -6236,3 +6236,18 @@ test('editable purchase orders retain receipt costs and invoice debt through rev
  const raw=await fetch(`${base}/purchasing/orders/${id}/document`,{headers:{authorization:`Bearer ${owner}`}});assert.equal(raw.status,200);const html=await raw.text();assert.match(html,/REVISED-PO/);assert.match(html,/Extra transport/);assert.match(html,/7,000.00/);
  assert.equal((await call(owner,'POST','/document-download-tickets',{path:`/purchasing/orders/${id}/document?preview=pdf`})).status,200);
 });
+
+test('temporary feature pause blocks owner and finance direct APIs without changing business data',async()=>{
+ await admin.query('USE `'+testDatabase+'`');
+ const owner=await login();const finance=await login('finance@gkuc.lk');
+ const before=await admin.query(`SELECT (SELECT COUNT(*) FROM bank_bonds) bonds,(SELECT COUNT(*) FROM boqs) boqs,(SELECT COUNT(*) FROM client_invoices) invoices,(SELECT COUNT(*) FROM expenses) expenses`);
+ for(const token of [owner,finance])for(const [method,path,body]of [
+  ['GET','/receivables/bonds'],['POST','/receivables/bonds',{}],['GET','/receivables/petty-cash'],['GET','/finance/expenses'],['GET','/finance/daily-expenses'],['GET','/boq'],['POST','/boq',{}],['GET','/boq/1/document?download=pdf'],['GET','/receivables/invoices'],['POST','/document-download-tickets',{path:'/receivables/invoices/1/document?download=pdf'}]
+ ]){const response=await call(token,method,path,body);assert.equal(response.status,423,path);assert.equal(response.body.code,'FEATURE_TEMPORARILY_DISABLED');}
+ const boot=await call(owner,'GET','/bootstrap');assert.equal(boot.status,200);assert.deepEqual(boot.body.data.boqs,[]);
+ const project=await call(owner,'GET','/projects/1');assert.equal(project.status,200);assert.deepEqual(project.body.boqs,[]);assert.deepEqual(project.body.invoices,[]);assert.deepEqual(project.body.reporting.expenseLedger,[]);
+ const batches=await call(owner,'GET','/import-centre/batches');assert.equal(batches.status,200);assert.ok(batches.body.every(b=>b.kind!=='boqs'));
+ assert.equal((await call(owner,'GET','/qs/quotations')).status,200);assert.equal((await call(owner,'GET','/receivables/cheques')).status,200);
+ const after=await admin.query(`SELECT (SELECT COUNT(*) FROM bank_bonds) bonds,(SELECT COUNT(*) FROM boqs) boqs,(SELECT COUNT(*) FROM client_invoices) invoices,(SELECT COUNT(*) FROM expenses) expenses`);
+ assert.deepEqual(after[0],before[0]);
+});

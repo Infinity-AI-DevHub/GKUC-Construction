@@ -1,3 +1,4 @@
+import {isFeaturePaused} from '../lib/temporary-features.mjs';
 import {isLinkedWorkbook,readLinkedWorkbook,inspectLinked} from '../lib/linked-historical-import.js';
 import {saveLinked} from '../lib/linked-historical-save.js';
 import { Router } from 'express';
@@ -25,7 +26,7 @@ const supported = new Set(['clients', 'subcontractors', 'projects']);
 const clean = value => String(value ?? '').trim();
 const asDate = value => typeof value === 'number' ? serialToDate(value) : clean(value).slice(0, 10);
 const validDate = value => { const date = asDate(value); return /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(`${date}T00:00:00Z`)); };
-const canImport = (req, kind) => Boolean(definitions[kind] && req.user.permissions.includes(definitions[kind].permission));
+const canImport = (req, kind) => !(kind==='boqs'&&isFeaturePaused('boqs')) && Boolean(definitions[kind] && req.user.permissions.includes(definitions[kind].permission));
 const issue = (sheet, row, message) => ({ sheet, row, message });
 
 const boqProblems = row => {

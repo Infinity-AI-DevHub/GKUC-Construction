@@ -302,3 +302,21 @@ modal places editing, driver, odometer, fuel, service/repair, schedule and renew
 controls before its summaries and history. These use the existing authorized,
 persistent Fleet endpoints for both existing and newly created vehicles. Identity
 edits remain separate from dated operational and renewal history.
+
+### Temporary feature access pause (2026-11-06)
+
+A pure shared pause list in backend/src/lib/temporary-features.mjs drives the built
+frontend and an API middleware before business routes/document tickets. All roles receive
+423 FEATURE_TEMPORARILY_DISABLED for the five paused workflows; detailed bootstrap/
+project/client payloads and historical BOQ import access also respect the pause. Finance,
+QS and project navigation omit paused sections and deep links render a notice. Existing
+business records and ordinary role grants remain unchanged. See TEMPORARY_FEATURE_PAUSE.md
+for precise scope, restoration, desktop bundle and deployment requirements.
+
+### Paused-page presentation revision (2026-11-06)
+
+Affected navigation remains visible and permits page entry. Finance/QS/Projects shells
+render TemporaryFeatureNotice instead of operational content/forms. Direct URLs resolve
+to the same page presentation. The manually configured machine/Windows error and driver
+solution are shared with API refusals; no OS/driver diagnosis or installation is performed.
+Server-side 423 restrictions, suppressed details and import guards remain in force.

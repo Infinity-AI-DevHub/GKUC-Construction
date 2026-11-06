@@ -1,3 +1,4 @@
+import {isFeaturePaused} from '../lib/temporary-features.mjs';
 import {installProjectDeadlines,projectDate} from './project-deadlines.js';
 import { projectCompletion } from '../lib/project-completion.js';
 import { Router } from 'express';
@@ -229,13 +230,13 @@ router.get('/:id', auth, permit('projects.view'), wrap(async (req, res) => {
     tasks,
     updates,
     subcontractRates,
-    boqs,
+    boqs: isFeaturePaused('boqs')?[]:boqs,
     reports,
     quotations,
-    invoices,
+    invoices:isFeaturePaused('invoices')?[]:invoices,
     purchaseOrders,
     costBreakdown,
-    reporting: { expenseLedger, incomeLedger, attendanceLedger, materialUsage, equipmentUsage, supplierInvoices, costItems, variationLedger },
+    reporting: { expenseLedger:isFeaturePaused('expenses')?[]:expenseLedger, incomeLedger, attendanceLedger, materialUsage, equipmentUsage, supplierInvoices, costItems:isFeaturePaused('boqs')?[]:costItems, variationLedger },
     finance: { expenses: expenses[0].total, income: incomes[0].total, budget: project.budget }
   });
 }));
