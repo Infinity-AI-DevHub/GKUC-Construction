@@ -1,3 +1,5 @@
+import TemporaryFeatureNotice from '../TemporaryFeatureNotice.jsx';
+import {pausedTabFeature} from '../../../backend/src/lib/temporary-features.mjs';
 import {projectDeliveryStatus} from '../ProjectDeadlines.jsx';
 import React, { useEffect, useState } from 'react';
 import { Archive, BriefcaseBusiness, Building2, Check, FileText, RotateCcw } from 'lucide-react';
@@ -15,7 +17,7 @@ const healthTone = health => (health === 'Completed' ? 'completed' : health === 
 /** PID 2.4 / 2.5 — projects, their milestones, and the estimates the budget comes from. */
 export default function Projects({ data, reload, can, companyId, company, companies, setCompanyId, navigate }) {
   const tabs=TABS.filter(section=>section!=='Clients'||can.has('clients.view'));
-  const [selectedTab, setTab] = useState(window.location.pathname.startsWith('/projects/clients/') ? 'Clients' : TABS[0]);
+  const [selectedTab, setTab] = useState(window.location.pathname.startsWith('/projects/clients/') ? 'Clients' : TABS.find(section=>slug(section)===decodeURIComponent(window.location.pathname.split('/')[2]||'')) || TABS[0]);
   const tab=tabs.includes(selectedTab)?selectedTab:tabs[0];
   const [open, setOpen] = useState('');
   const [showDeleted, setShowDeleted] = useState(false);
@@ -50,7 +52,7 @@ export default function Projects({ data, reload, can, companyId, company, compan
   if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} companies={companies} setCompanyId={setCompanyId} reload={reload} close={closeProject} navigate={navigate} />;
 
   return <RecordScopeProvider scope={tab === 'Clients' ? { kind: 'shared' } : { kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Projects" subtitle={`Monitor progress, cost, and site health for ${company?.name || 'the selected company'}.`}
-    action={!showDeleted && can.projects ? actionFor : null} onAction={() => setOpen(tab)}
+    action={!showDeleted && can.projects && !pausedTabFeature(tab) ? actionFor : null} onAction={() => setOpen(tab)}
     secondaryAction={can.projects ? (showDeleted ? 'Back to active projects' : 'Deleted projects') : null}
     secondaryIcon={showDeleted ? RotateCcw : Archive} onSecondaryAction={() => setShowDeleted(value => !value)}>
     {showDeleted ? <DeletedProjects rows={deleted} error={deletedError} onRecover={async project => {
@@ -69,7 +71,7 @@ export default function Projects({ data, reload, can, companyId, company, compan
     }} />}
     {tab === 'Clients' && <ClientDirectory canManage={can.has('clients.manage')} companyId={companyId} />}
     {tab === 'Milestones' && <Milestones data={data} reload={reload} can={can} />}
-    {tab === 'BOQ & estimates' && <BoqList data={data} reload={reload} can={can} />}
+    {tab === 'BOQ & estimates' && (pausedTabFeature(tab)?<TemporaryFeatureNotice feature={pausedTabFeature(tab)}/>:<BoqList data={data} reload={reload} can={can} />)}
     {tab === 'Variations' && <Variations can={can} reload={reload} />}
     {tab === 'Inquiries' && <Inquiries data={data} can={can} reload={reload} />}
 

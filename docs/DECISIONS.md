@@ -184,3 +184,20 @@ and editable printed fields/numbers, with reasoned revision history. Preserve re
 receipt valuation and original invoice approval snapshots; a revised PO never silently
 changes posted expenses/payments/outstanding. Retain approval/role/risk controls for new
 commitments and physical quantity/history constraints. See PURCHASE_ORDERS.md.
+
+## 2026-11-06 — role-independent temporary feature pause
+
+Temporarily disable Petty cash, Bonds, Expenses, QS BOQs and client Invoices for every
+user, including owners and administrators. Enforce access before the business routes,
+including record/PDF/import paths; hiding navigation alone is insufficient. Preserve
+records and grants. Keep unrelated modules and aggregate reporting available. Restore
+through the shared pause list and matching frontend/backend deployment, without DB edits.
+See TEMPORARY_FEATURE_PAUSE.md.
+
+## 2026-11-06 — allow paused page entry with configured error copy
+
+User revised the temporary pause presentation: keep pages clickable, replace operational
+content with “Error in local machine”, “Error in windows operating system” and a solution
+asking the administrator to install separate drivers. Preserve server operation blocks
+for all roles. This copy is explicitly simulated/configured, not a technical diagnosis;
+actual restoration still requires removing the configured pause, not installing drivers.
