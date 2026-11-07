@@ -852,3 +852,35 @@ Final git diff --check passed. Existing unrelated .gitignore change preserved.
 No deployment, PM2 restart, production configuration change, live database write or
 desktop installer rebuild. Tests used and cleaned the local disposable test database.
 Backend/browser rollout and desktop rebuild/distribution remain separate release work.
+
+## 2026-11-07 — rebuild missing desktop release files
+
+User reported an empty desktop/release and requested rebuilding. Rebuilt existing
+version 1.0.6 Windows x64 NSIS and Mac arm64 ZIP from current source, including the
+restored UI without simulated OS/driver errors. Regenerated SHA256SUMS. Updated
+DESKTOP.md. No application/business behavior changed in this build-only task.
+Validation: Node 22.22.3 frontend production build and 39 frontend tests; desktop
+core/encrypted-store 4/4; packaged Mac login/isolation smoke 1/1 passed. Inspected
+both ASARs: all 47 UI files match prepared assets; no backend/.env included. Windows
+installation/runtime and signing not verified; builds remain unsigned. Existing chunk
+advisory remains. No production deployment, PM2 operation or live database writes.
+Cross-company cheque workflow remains a proposal and is not part of these binaries.
+
+## 2026-11-07 — 2025 workbook SQL import preparation stopped pending clarification
+
+User supplied three Excel workbooks under Downloads/2025 and requested an additive
+production SQL import script to run themselves. Read-only inspection found 6 clients,
+6 contacts, 12 projects, 12 team rows, 12 BOQ headers and 676 items. Prepared an exact
+source-issue review and read-only production preflight under Desktop/GKUC-2025-SQL.
+No INSERT script finalized and no source workbook modified. Source problems include
+company/name ambiguity (0012/0016/0017), EMP-001 versus EMP-0001, numeric phone-like
+PRIMARY_CONTACT fields, BOQ header 2024-0016 versus items 2025-0016, duplicate distinct
+1.1 lines, 22 oversized category values, C-24 amount discrepancy and 0.01 total variance.
+User explicitly requested stopping this work until they obtain source confirmation.
+Do not infer those corrections or resume import preparation without their follow-up.
+
+Read-only preflight tested successfully against a new disposable local schema:
+10 query result sets, unchanged client/project/BOQ/source-link row counts; initial
+collation conflict corrected with explicit literal collation. Test DB cleaned. No
+production queries/writes, import, upload, schema change or external messages occurred.
+The preflight/review are preparation only, not an approved executable import package.
