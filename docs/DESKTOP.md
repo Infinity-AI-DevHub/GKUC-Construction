@@ -205,3 +205,14 @@ startup migrations and frontend before distributing this bundled UI update.
 frontend suite 39/39; actual Electron/local-MySQL QS and Finance print-settings save,
 shared printed numbers, reload and PDF generation passed. PDF text/visual checks
 confirmed selected prices/totals/words are absent and developer credit remains.
+
+## Recreated release outputs — 2026-11-07
+
+Rebuilt the missing 1.0.6 Windows x64 NSIS and Mac arm64 ZIP outputs from the current
+frontend, including removal of simulated errors and restored page content. SHA256SUMS
+was regenerated. Frontend 39/39, desktop core/store 4/4, frontend production build and
+packaged Mac login/security smoke 1/1 passed. Both packaged ASARs match all 47 prepared
+UI assets and contain no backend/.env. Windows runtime/signing remain unverified;
+these are unsigned artifacts. This client rebuild does not deploy the backend removal
+of temporary feature restrictions. Cross-company cheque settlement was discussed only
+and is not implemented by this release.
