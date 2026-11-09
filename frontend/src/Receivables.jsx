@@ -545,7 +545,7 @@ function CertificateForm({ data, companyId, close, reload }) {
 
 /* ---- bank guarantees ------------------------------------------------------ */
 
-const BOND_COLUMNS = ['Reference / project','Kind','In favour of','Bank / FD or facility','Amount','Margin held','Dates / process','Status',''];
+const BOND_COLUMNS = ['Project / bond number','Kind','In favour of','Bank / FD or facility','Amount','Margin held','Dates / process','Status',''];
 const BOND_TEMPLATE = 'minmax(120px,1fr) 140px minmax(160px,1.2fr) minmax(130px,1fr) 130px 130px 140px 110px 190px';
 
 export function Bonds({ data, can, companyId }) {
@@ -583,7 +583,7 @@ export function Bonds({ data, can, companyId }) {
         : null}>
       {bonds.filter(bond=>(!statusFilter||bond.status===statusFilter)&&(!kindFilter||bond.kind===kindFilter)&&
         [bond.reference,bond.bond_number,bond.project,bond.project_description,bond.beneficiary,bond.bank,bond.fd_reference,bond.process_notes].some(value=>String(value||'').toLowerCase().includes(search.trim().toLowerCase()))).map(bond => <Row template={BOND_TEMPLATE} key={bond.id} id={`bond-${bond.id}`} className={Number(new URLSearchParams(window.location.search).get('record')) === Number(bond.id) ? 'linked-record' : ''}>
-        <div><strong>{bond.reference}</strong><small>{bond.bond_number || 'Bond number pending'}</small>{(bond.project||bond.project_description)&&<small>{bond.project||bond.project_description}</small>}</div>
+        <div><strong>{bond.project||bond.project_description||'Company / office'}</strong><small>{bond.bond_number || 'Bond number pending'}</small></div>
         <span>{bond.kind}</span>
         <span>{bond.beneficiary}</span>
         <div><span>{bond.bank}</span>{bond.fd_reference&&<small>FD / facility: {bond.fd_reference}</small>}</div>
@@ -661,7 +661,7 @@ function BondForm({ data, companyId, close, reload, bond=null }) {
       options={['Advance payment', 'Performance', 'ESHS performance', 'Retention', 'Bid', 'Cash', 'Other']} />
     <SelectField name="projectId" label="Project" required={false}
       defaultValue={bond?.project_id||''}
-      options={[['', 'Not project specific'], ...data.projects.filter(project=>Number(project.companyId)===Number(companyId)||Number(project.id)===Number(bond?.project_id)).map(project => [project.id, project.name])]} />
+      options={[['', 'Not project specific'], ...data.projects.filter(project=>Number(project.companyId??project.company_id)===Number(companyId)||Number(project.id)===Number(bond?.project_id)).map(project => [project.id, project.name])]} />
     <Field name="beneficiary" label="In favour of" wide placeholder="Road Development Authority" defaultValue={bond?.beneficiary}/>
     <Field name="projectDescription" label="Project / tender description (if not linked above)" wide required={false} maxLength={1000} defaultValue={bond?.project_description||''}/>
     <Field name="bank" label="Issuing bank" defaultValue={bond?.bank}/>

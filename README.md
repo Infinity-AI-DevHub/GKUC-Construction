@@ -458,3 +458,9 @@ attendance mark. Standby still needs attendance; operator dates without attendan
 Machine work are absent in payroll. This supplies payroll evidence only and does not
 create attendance records. Explicitly regenerate Draft payroll to apply it; Approved/
 Paid figures remain unchanged. See [payroll rules](docs/PAYROLL.md).
+
+Expected outflows is a planning-only worksheet: select From/To, save a manual bank
+balance for that exact company/period, enter multiple cash-outflow rows, and export PDF
+for printing. Receivables and supplier/bill Outstanding are read automatically by due
+date in that range. Planning amounts do not post real expenses, income or payments.
+Bond lists now emphasize project names and retain bank bond numbers below them.

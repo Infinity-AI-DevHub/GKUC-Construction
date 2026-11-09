@@ -1003,3 +1003,60 @@ No deployment, PM2 restart, production .env edit, live database write, live atte
 marking/payroll regeneration or desktop installer rebuild. Tests used disposable local
 records only. Deploy updated backend/UI and explicitly regenerate the relevant Draft
 to apply this behavior; existing Approved/Paid payroll stays unchanged.
+
+## 2026-11-09 — planning-only outflow worksheet, bulk entry and PDF export
+
+User requested a printable planning page isolated from real finance calculations.
+Replaced Expected outflows UI with company/From/To controls; manually saved Bank
+balance; Cash outflow, Receivables and Outstanding summaries; manual cash-outflow
+schedule and automatic receivable/payable schedules. Bank balance persists per exact
+company/date range in additive outflow_worksheet_periods, not a bank ledger or cash
+comparison input. Existing standalone open plans are retained. Linked automatic
+obligations remain in the legacy forecast API but do not populate the new manual table.
+Bulk form accepts up to 100 rows with payee, purpose, amount, project/office, company/
+office text, expected date and confidence. Batch validation/transaction/audits are atomic.
+Existing planning-row edits and reversible archive are exposed. Additive company_office
+stores display text. No planning action writes expenses, income, invoices or payments.
+
+Receivables means issued client invoice balance; Outstanding means supplier invoices
+plus operating bills. Select by due date inside range (invoice/bill date fallback),
+with payments through To deducted; earlier overdue due dates are excluded. These sums
+are separate from manual outflow, not automatic additional cash-out rows. Current
+cancellations remain authoritative; this is a live planning view, not a historical
+closed snapshot. PDF includes company, dates, manually entered bank balance, all three
+schedules, totals, basis and mandatory credit. Added exact worksheet PDF-ticket path
+and From/To validation; shared existing preview/download/print flow is reused.
+
+Validation: focused API 4 passed, zero failed (176 filtered out). New checks cover
+bulk save/rollback, unchanged expense/income/payment counts, bank range/company
+isolation, invalid dates, supplier/client automatic schedules, later payment cutoff,
+separate manual total, archive, document HTML/ticket and project bootstrap alias.
+Initial new test used bootstrap.projects instead of bootstrap.data.projects; corrected
+fixture and final focused/full runs pass. Final full Node 20 backend: 361 passed,
+zero failed, 4 skipped (365 incl nested), using GKUC_TEST_HOST=localhost. Frontend
+39/39 and final production build passed (existing chunk advisory). Chrome fixture
+checks pass bank save, two-row save, project selection and export control. Rendered
+the shared PDF generator's two-page synthetic worksheet, inspected both pages with
+Poppler: readable tables, summary, dates and one end credit without overlap. Visually
+inspected final styled UI screenshot. UI fixtures and real MySQL API tests were separate.
+Temporary UI harness/server cleaned; scripts/screenshots/PDF are ignored under desktop/
+test-results. Updated README, ARCHITECTURE and DECISIONS; diff whitespace check passed.
+No deployment, PM2 restart, production .env edit, live DB write, real financial posting,
+external message or desktop installer rebuild. Tests used disposable local data only.
+
+## 2026-11-09 — bond project emphasis and empty project picker fix
+
+User requested hiding system/import reference titles and highlighting project names,
+plus fixing an empty Project dropdown. Bond lists now show linked project name or saved
+project/tender description in strong text and actual bank bond number beneath; stored
+reference remains unchanged/searchable for import/audit/history. Root cause: full
+bootstrap project rows exposed company_id while form filtered only companyId. Added
+companyId alias, compatible form fallback and minimal project choices for finance.invoice
+writers lacking projects.view. Retained company scope and saved project selection.
+
+Validation: existing bond import/edit API scenarios passed in focused run; full backend
+361/0/4 and frontend 39/39/build passed as above. Chrome fixture check confirms old
+reference title absent, project name present and Project One selectable from snake-case
+project data while another company's project is excluded. No bond number/reference,
+amount, status, historical project link or live record was altered. Updated architecture,
+decisions and README. No deployment or live DB write; desktop releases not rebuilt.

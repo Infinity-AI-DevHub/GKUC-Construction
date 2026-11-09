@@ -3337,6 +3337,14 @@ export async function migrate() {
     UNIQUE KEY uq_outflow_source(company_id,source_type,source_id),
     INDEX idx_outflow_date(company_id,expected_date,status)
   ) ENGINE=InnoDB`);
+  await addColumn('cash_outflow_plans','company_office','VARCHAR(180) NULL');
+  await query(`CREATE TABLE IF NOT EXISTS outflow_worksheet_periods (
+    company_id TINYINT UNSIGNED NOT NULL,from_date DATE NOT NULL,to_date DATE NOT NULL,
+    bank_balance DECIMAL(15,2) NULL,updated_by BIGINT UNSIGNED NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY(company_id,from_date,to_date),FOREIGN KEY(company_id) REFERENCES companies(id),
+    FOREIGN KEY(updated_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await query(`CREATE TABLE IF NOT EXISTS cash_comparison_periods (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     company_id TINYINT UNSIGNED NOT NULL, period CHAR(7) NOT NULL,
