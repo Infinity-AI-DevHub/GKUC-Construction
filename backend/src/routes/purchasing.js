@@ -424,7 +424,7 @@ router.get('/credit-reminder-users',auth,permit('finance.pay'),wrap(async(_req,r
 }));
 router.get('/invoices', auth, permit('finance.view','finance.pay'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId || 0);
-  res.json(await query(`SELECT i.id,i.company_id companyId,i.supplier_id supplierId,i.invoice_no invoiceNo,i.amount,i.paid_amount paidAmount,
+  res.json(await query(`SELECT i.id,i.company_id companyId,ic.name company,i.supplier_id supplierId,i.invoice_no invoiceNo,i.amount,i.paid_amount paidAmount,
     COALESCE((SELECT SUM(a.allocated_amount) FROM issued_cheque_invoices a JOIN issued_cheques c ON c.id=a.cheque_id
       WHERE a.invoice_id=i.id AND c.status IN ('Prepared','Issued')),0) pendingChequeAmount,
     GREATEST(0,i.amount-i.paid_amount-COALESCE((SELECT SUM(a.allocated_amount) FROM issued_cheque_invoices a JOIN issued_cheques c ON c.id=a.cheque_id
@@ -433,7 +433,7 @@ router.get('/invoices', auth, permit('finance.view','finance.pay'), wrap(async (
     i.invoice_date invoiceDate,i.due_date dueDate,i.status,s.name supplier,o.reference orderReference,
     i.payment_exception_approved_by paymentExceptionApprovedBy,i.recorded_by recordedById,i.verified_at verifiedAt,
     cr.description creditDescription,cr.frequency reminderFrequency
-    FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN purchase_orders o ON o.id=i.order_id
+    FROM supplier_invoices i JOIN companies ic ON ic.id=i.company_id JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN purchase_orders o ON o.id=i.order_id
     LEFT JOIN supplier_credit_reminders cr ON cr.invoice_id=i.id
     ${companyId ? 'WHERE i.company_id=?' : ''} ORDER BY i.id DESC`, companyId ? [companyId] : []));
 }));
@@ -637,8 +637,8 @@ router.post('/cheques', auth, permit('finance.pay'), validate(z.object({
           invoice_date invoiceDate,amount,paid_amount paidAmount FROM supplier_invoices WHERE id IN (${ids.map(()=>'?').join(',')}) ORDER BY id FOR UPDATE`,ids);
         if(invoices.length!==ids.length)throw Object.assign(new Error('One of the selected supplier invoices was not found.'),{status:404});
         supplierId=supplierId||Number(invoices[0].supplierId);
-        if(invoices.some(row=>Number(row.companyId)!==Number(body.companyId)||Number(row.supplierId)!==Number(supplierId)))
-          throw Object.assign(new Error('All selected invoices must belong to the selected supplier and company.'),{status:400});
+        if(invoices.some(row=>Number(row.supplierId)!==Number(supplierId)))
+          throw Object.assign(new Error('All selected invoices must belong to the selected supplier.'),{status:400});
         const [held]=await connection.execute(`SELECT a.invoice_id invoiceId,SUM(a.allocated_amount) amount
           FROM issued_cheque_invoices a JOIN issued_cheques c ON c.id=a.cheque_id
           WHERE a.invoice_id IN (${ids.map(()=>'?').join(',')}) AND c.status IN ('Prepared','Issued') GROUP BY a.invoice_id`,ids);
@@ -691,14 +691,14 @@ router.patch('/cheques/:id', auth, permit('finance.pay'), validate(z.object({
       if(sum!==Math.round(Number(cheque.amount)*100))throw Object.assign(new Error('Cheque allocations do not match its amount. Review this cheque before clearing.'),{status:409});
       for(const item of allocations){
         const invoice=byId.get(Number(item.invoiceId));
-        if(!invoice||Number(invoice.company_id)!==Number(cheque.company_id)||(cheque.supplier_id&&Number(invoice.supplier_id)!==Number(cheque.supplier_id)))
-          throw Object.assign(new Error('A cheque invoice no longer belongs to this supplier and company.'),{status:409});
+        if(!invoice||(cheque.supplier_id&&Number(invoice.supplier_id)!==Number(cheque.supplier_id)))
+          throw Object.assign(new Error('A cheque invoice no longer belongs to this supplier.'),{status:409});
         if(Number(item.amount)<=0)continue;
         const paid=Math.round((Number(invoice.paid_amount)+Number(item.amount))*100)/100;
         if(paid>Number(invoice.amount)+.001)throw Object.assign(new Error(`Cheque allocation exceeds the remaining balance on invoice ${invoice.invoice_no}. Review other payments before clearing.`),{status:409});
         await connection.execute('UPDATE supplier_invoices SET paid_amount=?,status=? WHERE id=?',[paid,paid>=Number(invoice.amount)-.001?'Paid':'Partially paid',invoice.id]);
-        await connection.execute(`INSERT INTO supplier_payments(invoice_id,amount,paid_date,method,reference,created_by)
-          VALUES (?,?,CURDATE(),'Cheque',?,?)`,[invoice.id,item.amount,cheque.cheque_number,req.user.id]);
+        await connection.execute(`INSERT INTO supplier_payments(invoice_id,amount,paid_date,method,reference,created_by,payment_company_id)
+          VALUES (?,?,CURDATE(),'Cheque',?,?,?)`,[invoice.id,item.amount,cheque.cheque_number,req.user.id,cheque.company_id]);
       }
     }
     if(['Prepared','Issued'].includes(req.body.status)&&!['Prepared','Issued'].includes(cheque.status)&&allocations.length){

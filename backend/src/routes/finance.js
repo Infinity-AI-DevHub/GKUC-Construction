@@ -4,6 +4,7 @@ import { audit, getOne, pool, query, spendSql, transaction } from '../db.js';
 import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { assertUniqueManualEntry } from '../lib/ledger-duplicates.js';
 import {incomeTax,incomeTaxFields} from '../lib/income-tax.js';
+import { financialStatements } from '../lib/financial-statements.js';
 import { managementPack } from '../lib/management-accounts.js';
 import { cashOutflows } from '../lib/cash-outflows.js';
 import { cashComparison } from '../lib/cash-comparison.js';
@@ -140,7 +141,7 @@ router.post('/office-expense-payments',auth,permit('finance.dailyExpenses'),vali
 router.get('/daily-expenses',auth,permit('finance.dailyExpenses'),wrap(async(req,res)=>{
   const companyId=companyParam(req),date=String(req.query.date||'');
   if(!companyId||!isoDate.safeParse(date).success)return res.status(400).json({error:'Choose a company and a valid day.'});
-  const [company,petty,supplierPayments,bills,direct,office,unverified]=await Promise.all([
+  const [company,petty,supplierPayments,bills,direct,office,unverified,funding]=await Promise.all([
     getOne('SELECT id,name FROM companies WHERE id=?',[companyId]),
     query(`SELECT pe.id,pe.entry_date date,ABS(pe.amount) amount,pe.description,pe.category,
       pe.payee,pf.name floatName,pf.account_type accountType,COALESCE(pe.project_id,pf.project_id) projectId,
@@ -154,7 +155,7 @@ router.get('/daily-expenses',auth,permit('finance.dailyExpenses'),wrap(async(req
       FROM supplier_payments sp JOIN supplier_invoices si ON si.id=sp.invoice_id
       JOIN suppliers s ON s.id=si.supplier_id LEFT JOIN purchase_orders po ON po.id=si.order_id
       LEFT JOIN projects p ON p.id=po.project_id
-      WHERE si.company_id=? AND sp.paid_date=?`,[companyId,date]),
+      WHERE COALESCE(sp.payment_company_id,si.company_id)=? AND sp.paid_date=?`,[companyId,date]),
     query(`SELECT b.id,b.paid_date date,b.total_amount amount,b.payment_method method,
       b.payment_reference reference,b.provider payee,b.bill_type category,b.project_id projectId,p.name project
       FROM operating_bills b LEFT JOIN projects p ON p.id=b.project_id
@@ -166,7 +167,13 @@ router.get('/daily-expenses',auth,permit('finance.dailyExpenses'),wrap(async(req
     query(`SELECT id,payment_date date,amount,description,category,payee,payment_method method,reference
       FROM office_expense_payments WHERE company_id=? AND payment_date=?`,[companyId,date]),
     query(`SELECT COUNT(*) count FROM expenses e JOIN projects p ON p.id=e.project_id
-      WHERE p.company_id=? AND e.expense_date=? AND e.origin_type IS NULL AND e.payment_method IS NULL`,[companyId,date])
+      WHERE p.company_id=? AND e.expense_date=? AND e.origin_type IS NULL AND e.payment_method IS NULL`,[companyId,date]),
+    query(`SELECT pe.id,pe.entry_date date,pe.amount,pe.description,pe.category,pf.id floatId,
+      pf.name account,pf.account_type accountType,pf.holder_name holderName,
+      COALESCE(pe.project_id,pf.project_id) projectId,p.name project
+      FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
+      LEFT JOIN projects p ON p.id=COALESCE(pe.project_id,pf.project_id)
+      WHERE pf.company_id=? AND pe.entry_date=? AND pe.kind='Top up' ORDER BY pe.id`,[companyId,date])
   ]);
   if(!company)return res.status(404).json({error:'Company not found.'});
   const location=row=>({locationType:row.projectId?'Project site':'Office',projectId:row.projectId||null,
@@ -194,9 +201,25 @@ router.get('/daily-expenses',auth,permit('finance.dailyExpenses'),wrap(async(req
       paymentMethod:row.method,paymentSource:'Office payment',description:row.description,
       reference:row.reference,amount:Number(row.amount),sourceUrl:'/finance/daily-expenses'}))
   ].sort((a,b)=>a.location.localeCompare(b.location)||a.source.localeCompare(b.source)||a.sourceId-b.sourceId);
-  res.json({company,date,entries,unverifiedManualExpenses:Number(unverified[0].count),
+  const fundingEntries=funding.map(row=>({key:`petty-funding:${row.id}`,sourceId:row.id,floatId:row.floatId,
+    date:row.date,...location(row),account:row.account,accountType:row.accountType,
+    payee:row.holderName||row.account,category:row.category||row.accountType,
+    paymentMethod:'Internal transfer',description:row.description,reference:`Petty cash #${row.id}`,
+    sourceUrl:'/finance/petty-cash',amount:Number(row.amount)}));
+  res.json({company,date,entries,fundingEntries,
+    fundingTotal:Math.round(fundingEntries.reduce((sum,row)=>sum+row.amount,0)*100)/100,
+    unverifiedManualExpenses:Number(unverified[0].count),
     total:Math.round(entries.reduce((sum,row)=>sum+row.amount,0)*100)/100,
-    note:'Each recorded payment appears once. Linked Fleet fuel and project-cost rows are not counted a second time. Salary advances, float top-ups and card-statement settlements are not operating expenses. Older manual expenses without payment details are excluded until verified.'});
+    note:'Each recorded payment appears once. Linked Fleet fuel and project-cost rows are not counted a second time. Petty-cash top-ups are displayed separately from the same saved ledger records and excluded from expense totals; actual spending is counted once. Salary advances and card-statement settlements are not operating expenses. Older manual expenses without payment details are excluded until verified.'});
+}));
+
+router.get('/financial-statements', auth, permit('finance.reports'), wrap(async (req,res) => {
+  const companyId=companyParam(req), period=String(req.query.period||'');
+  if (!companyId || !accountPeriod.safeParse(period).success || period.startsWith('0000'))
+    return res.status(400).json({error:'Choose a company and a month in YYYY-MM format.'});
+  const pack=await managementPack(companyId,period,{includeExpenseSource:true});
+  if (!pack) return res.status(404).json({error:'Company not found.'});
+  res.json(financialStatements(pack));
 }));
 
 router.get('/management-accounts', auth, permit('finance.managementAccounts'), wrap(async (req,res) => {
@@ -712,7 +735,7 @@ router.get('/reporting', auth, permit('finance.view','finance.manage'), wrap(asy
   const cr = scoped('ci.project_id', 'cr.received_date', 'ci.company_id');
   const po = scoped('po.project_id', 'po.order_date');
   const si = scoped('po.project_id', 'si.invoice_date', 'si.company_id');
-  const sp = scoped('po.project_id', 'sp.paid_date', 'si.company_id');
+  const sp = scoped('po.project_id', 'sp.paid_date', 'COALESCE(sp.payment_company_id,si.company_id)');
   const pc = scoped('COALESCE(pce.project_id,pcf.project_id)', 'pce.entry_date', 'pcf.company_id');
   const rt = scoped('r.project_id', 'r.held_from');
   const bb = scoped('b.project_id', 'b.issued_date', 'b.company_id');

@@ -25,3 +25,5 @@ docs/*
 desktop/ui/
 desktop/release/
 desktop/test-results/
+
+!docs/FINANCIAL_STATEMENTS.md

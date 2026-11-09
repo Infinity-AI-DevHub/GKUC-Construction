@@ -209,3 +209,30 @@ Delete the temporary pause layer rather than retaining dormant OS/driver copy.
 Restore the existing persistent workflows, detailed data and imports under their normal
 permissions. Preserve genuine operational errors and authorization checks. No database
 or payroll-policy changes are needed. This supersedes the temporary pause decisions above.
+
+## 2026-11-09 — supplier invoices across companies in issued cheques
+
+User explicitly requested showing all supplier invoices while issuing a cheque regardless
+of the Construction/Readymix filter. Permit same-supplier allocations across both companies.
+Keep the selected company as payer and the original company on each invoice; record payer
+on cleared supplier payments for cash reporting. Preserve reservations, exact allocation,
+reasoned reductions and clear-once behavior. Do not infer an intercompany journal or alter
+other company filters from this exception.
+
+## 2026-11-09 — show petty-cash funding in Expenses without duplicate costs
+
+User requested that Add money appear automatically on Expenses with no double entry.
+Display existing Top up records in a separate funding table on that page, including all
+account types and opening funding. Funding stays an internal transfer, excluded from
+expense/profit/cash-out totals; actual spending is recognised once through existing paths.
+Do not insert a second expense row merely to display the funding.
+
+
+## 2026-11-09 — operator attendance optional only for saved Machine work
+
+User confirmed Machine operator meter entries may count as worked payroll dates without
+attendance. Apply to the dated pay method, not employee name/title. Without attendance
+or Machine input the operator is absent/unpaid; Standby still requires attendance.
+Use payroll-only evidence with source IDs, never create artificial clock records.
+Conflicting explicit absence/leave requires review. Preserve approved leave, existing
+rates/premiums/transport and immutable Approved/Paid payroll.

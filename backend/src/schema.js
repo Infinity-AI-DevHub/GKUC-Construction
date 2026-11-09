@@ -2827,6 +2827,8 @@ async function migrateExistingInstalls() {
   await addColumn('supplier_invoices', 'vat_amount', 'DECIMAL(15,2) NOT NULL DEFAULT 0');
   await query('UPDATE supplier_invoices SET net_amount=amount WHERE net_amount=0');
   await addForeignKey('supplier_invoices', 'fk_supplier_invoice_company', 'CONSTRAINT fk_supplier_invoice_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  await addColumn('supplier_payments','payment_company_id','TINYINT UNSIGNED NULL');
+  await addForeignKey('supplier_payments','fk_supplier_payment_company','CONSTRAINT fk_supplier_payment_company FOREIGN KEY(payment_company_id) REFERENCES companies(id)');
   await addColumn('issued_cheques', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
   await addForeignKey('issued_cheques', 'fk_issued_cheque_company', 'CONSTRAINT fk_issued_cheque_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await addColumn('issued_cheques','invoice_total','DECIMAL(15,2) NULL');
@@ -2870,7 +2872,7 @@ async function migrateExistingInstalls() {
   await query(`UPDATE tenders SET company_id=2 WHERE LOWER(COALESCE(bidding_entity,'')) REGEXP 'ready[ ]?mix|readymix'`);
   await query('UPDATE tenders t JOIN projects p ON p.id=t.project_id SET t.company_id=p.company_id');
   await query('UPDATE supplier_invoices si JOIN purchase_orders po ON po.id=si.order_id JOIN projects p ON p.id=po.project_id SET si.company_id=p.company_id');
-  await query('UPDATE issued_cheques c JOIN supplier_invoices si ON si.id=c.invoice_id SET c.company_id=si.company_id');
+  await query('UPDATE issued_cheques c JOIN supplier_invoices si ON si.id=c.invoice_id SET c.company_id=si.company_id WHERE c.invoice_total IS NULL');
   await query('UPDATE received_cheques c JOIN projects p ON p.id=c.project_id SET c.company_id=p.company_id');
   await query('UPDATE bank_bonds b JOIN projects p ON p.id=b.project_id SET b.company_id=p.company_id');
   await query('UPDATE petty_cash_floats f JOIN projects p ON p.id=f.project_id SET f.company_id=p.company_id');

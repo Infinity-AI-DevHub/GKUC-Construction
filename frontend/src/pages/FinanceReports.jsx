@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { BarChart3, Building2, Download, FileText, Search, TrendingDown, TrendingUp } from 'lucide-react';
 import { api, rupees, shortDate, todayInput } from '../api.js';
+import FinancialStatements from './FinancialStatements.jsx';
 import { askText } from '../ui.jsx';
 
 const n = value => Number(value || 0);
@@ -200,8 +201,13 @@ export default function FinanceReports({ projects, companyId, company }) {
   };
   const useSavedScope = name => { const item = savedScopes.find(value => value.name === name); if (!item) return;
     setScope(item.scope); setFrom(item.from); setTo(item.to); setSelectedId(item.reportId); };
-  const reports = useMemo(() => data ? buildReports(data) : [], [data]);
-  const selected = reports.find(row => row.id === selectedId) || reports[0];
+  const reports = useMemo(() => [
+    {id:'financial-position',title:'Statement of Financial Position',category:'Financial statements'},
+    {id:'income-statement',title:'Income Statement',category:'Financial statements'},
+    ...(data ? buildReports(data) : [])
+  ], [data]);
+  const isStatement = ['financial-position','income-statement'].includes(selectedId);
+  const selected = reports.find(row => row.id === selectedId) || reports.find(row => row.id === 'executive');
   const visible = reports.filter(row => `${row.title} ${row.category}`.toLowerCase().includes(query.toLowerCase()));
   const download = () => {
     if (!selected) return;
@@ -212,17 +218,18 @@ export default function FinanceReports({ projects, companyId, company }) {
   };
 
   return <>
-    <section className="finance-report-filters">
+    {!isStatement && <section className="finance-report-filters">
       <div><Building2 size={18} /><span><strong>{company?.name || 'Company'} reporting</strong><small>Every figure below is isolated to this company and then optionally one project.</small></span></div>
       <label>Scope<select aria-label="Financial report scope" value={scope} onChange={event => setScope(event.target.value)}><option value="all">All {company?.name || 'company'}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
       <label>From<input aria-label="Report from date" type="date" value={from} onChange={event => setFrom(event.target.value)} /></label>
       <label>To<input aria-label="Report to date" type="date" value={to} onChange={event => setTo(event.target.value)} /></label>
       <label>Saved views<select aria-label="Saved report views" value="" onChange={event => useSavedScope(event.target.value)}><option value="">Choose a saved view…</option>{savedScopes.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label>
       <button type="button" className="secondary" onClick={saveScope}>Save this view</button>
-    </section>
+    </section>}
     {!selected ? <p className="empty-state">Preparing reconciled financial reports…</p> : <div className="industrial-reports finance-report-centre">
       <aside className="report-library"><div className="report-library-head"><span>{reports.length} live reports</span><h2>Financial reports</h2><label><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Find a report" /></label></div><nav>{visible.map(item => <button className={selected.id === item.id ? 'active' : ''} onClick={() => setSelectedId(item.id)} key={item.id}><FileText size={15} /><span><strong>{item.title}</strong><small>{item.category}</small></span></button>)}</nav></aside>
       <section className="report-canvas">
+        {isStatement ? <FinancialStatements key={companyId} companyId={companyId} statement={selectedId} /> : <>
         <header><div><span>{selected.category} report</span><h1>{selected.title}</h1><p>{scope === 'all' ? `All ${company?.name || 'company'}` : projects.find(project => String(project.id) === scope)?.name} · live ledger data</p></div><button className="secondary" onClick={download}><Download size={15} />Export table</button></header>
         <section className="report-definition"><strong>How to read this report</strong><p>{REPORT_DEFINITIONS[selected.id]}</p><small>Date basis: {from || 'all available dates'} to {to || 'latest recorded date'}. Figures are limited to {scope === 'all' ? company?.name || 'this company' : projects.find(project => String(project.id) === scope)?.name || 'the selected project'}.</small></section>
         <article className={`report-narrative ${selected.metrics[2]?.raw < 0 ? 'loss' : 'profit'}`}><BarChart3 size={22} /><div><strong>Management interpretation</strong><p>{selected.narrative}</p></div></article>
@@ -235,6 +242,7 @@ export default function FinanceReports({ projects, companyId, company }) {
           <div><strong>Open purchase commitments</strong>{row.commitments.length ? row.commitments.map(order => <p key={order.id}><a href={`/materials/orders?record=${order.id}`}>{order.reference} · {money(order.open)} uninvoiced</a></p>) : <p>No open purchase orders in this period.</p>}</div>
           <div><strong>Posted actual costs and QS forecast</strong>{row.spend.length ? row.spend.map(expense => <p key={expense.id}><a href={`/finance/expenses?record=${expense.id}`}>{shortDate(expense.date)} · {expense.description} · {money(expense.amount)}</a></p>) : <p>No project expenses in this period.</p>}<p><a href="/quantity-surveying/cost-control">Open QS cost forecasts</a></p></div>
         </div></details>)}</section>}
+      </>}
       </section>
     </div>}
   </>;

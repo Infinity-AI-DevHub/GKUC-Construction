@@ -107,6 +107,7 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     const calendarDays=calendarAttendance.filter(day=>monthKey(day.work_date)===month)
       .sort((a,b)=>dateKey(a.work_date).localeCompare(dateKey(b.work_date))||Number(a.id)-Number(b.id));
     for(const day of calendarDays) {
+      if(!WORKED_STATES.has(day.state))continue;
       const policy=policyFor(day.work_date),rules=rulesFor(policy);
       let fraction=workedFraction(day,policy);
       if(WORKED_STATES.has(day.state)&&activeSpecialRule(employee,day.work_date)?.mode==='Machine operator'){

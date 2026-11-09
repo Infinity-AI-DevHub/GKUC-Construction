@@ -884,3 +884,122 @@ Read-only preflight tested successfully against a new disposable local schema:
 collation conflict corrected with explicit literal collation. Test DB cleaned. No
 production queries/writes, import, upload, schema change or external messages occurred.
 The preflight/review are preparation only, not an approved executable import package.
+
+## 2026-11-09 — reference-style financial position and income statement
+
+Added two Finance → Financial reports views matching the supplied statement structure:
+green/teal company/date headers, indented accounts, right-aligned LKR, signed values
+in brackets, subtotal rules and double-ruled final rows. Each uses company/month controls
+and CSV export. Added authenticated finance.reports financial-statements endpoint and
+pure statement calculations over saved management sources. Direct source classifications
+are requested optionally so existing management-close snapshot payloads stay unchanged.
+No schema or financial write workflow added; existing payroll and approvals unchanged.
+
+Income uses issued non-advance invoiced revenue before VAT and saved adjustments,
+separates direct project costs from other expenses/net bills and avoids linked bill
+cost duplication. Position shows month-end receivables and trade/bill payables with
+later payments excluded. Complete opening cash, inventory valuation, fixed assets,
+capital, loans, retained earnings and separate interest/tax are unavailable in these
+sources: explicit Not recorded rows and withheld dependent totals preserve that limit.
+No invented equity, assumed-zero unknowns, or claim of complete/statutory accounts.
+Future complete accounting inputs/mapping remain separate scope. Live statements are
+explicitly distinct from closed pack snapshots. Updated README, ARCHITECTURE and new
+FINANCIAL_STATEMENTS.md with basis, classification and coverage limits.
+
+Validation: focused Node 20 tests 3 passed, zero failed (176 unrelated filtered out),
+including actual disposable-local-MySQL API authentication, company/month validation,
+company isolation, reconciliation to existing pack and existing close/reopen history;
+pure tests cover loss, signed adjustments, bill deduplication, leap month-end and
+unknown balances. Final focused rerun passed after making source selection optional.
+Frontend production build passed (existing chunk-size advisory). Headless Chrome
+fixture UI checks passed both statements at 1280 and 390 pixels, CSV download, no
+horizontal overflow and no runtime errors; visually inspected mobile position and
+desktop income screenshots. This UI check used synthetic API fixtures; real API was
+verified separately. Final diff whitespace check passed. Full backend suite and full
+application browser navigation were not run. Temporary UI harness/server removed.
+No deployment, PM2 restart, production configuration change, live database write or
+desktop release rebuild. Integration tests used the disposable local test database.
+
+## 2026-11-09 — issue supplier cheques against invoices from both companies
+
+User requested all selected-supplier invoices in the issue-cheque picker regardless
+of Construction/Readymix selection. Removed picker company restriction and use the
+existing all-company invoice API, now returning company names. Supplier selection,
+search, reservations and amount allocation remain; company labels appear in the picker
+and preview. Backend issue/clear accepts same-supplier mixed-company invoices. Selected
+company remains cheque payer; original invoice ownership stays unchanged. Added guarded
+nullable supplier_payments.payment_company_id + FK; clearance saves payer, and cash
+comparison, daily payment reporting, financial reporting cash and management-pack cash
+follow payer while payable reconciliation follows invoice ownership. Old null-payer
+payments retain invoice-company fallback. Limited legacy cheque-company backfill to
+records lacking modern invoice-total snapshots so restart cannot reassign new single-
+invoice cross-company cheques. No automatic intercompany journal is introduced.
+
+Validation: focused API run first passed 6/6; combined funding/cheque/report run passed
+7/7. Covers mixed-company/single other-company selection in both directions, supplier
+and duplicate validation, reservations, clear once, rollback, payer cash totals and
+modern ownership backfill preservation. Final full Node 20 backend suite with
+GKUC_TEST_HOST=localhost: 357 passed, zero failed, 4 skipped (361 incl nested).
+Frontend 39/39 and production build passed (existing chunk-size advisory). Headless
+Chrome fixture UI check passed for both issuing companies, selecting both companies'
+invoices and submitting combined amount; initial check needed to await React's total
+update. Fixture browser checks and actual MySQL API checks were separate. Updated
+ARCHITECTURE, DECISIONS and README; final whitespace check passed.
+No deployment, PM2 restart, production configuration/live DB write or desktop installer
+rebuild. Integration tests used only the disposable local test database.
+
+## 2026-11-09 — display petty-cash Add money on Expenses without duplicate entries
+
+User requested automatic Expenses visibility for funding any petty-cash account, with
+no double entry. Daily Expenses API now projects saved Top up entries (including dated
+opening funding) into fundingEntries/fundingTotal for selected company/day. A separate
+Petty cash funding table on Expenses shows account, account type, location, description,
+reference and amount; shared search/location/method filters apply and data-change events
+refresh the view. Added internal-transfer method option when present and explanatory
+Add money copy. No duplicate expense/posting is inserted, and funding stays excluded
+from payment/expense totals, cash-out reporting and profit; subsequent spending is
+still counted once by existing workflows. No new funding schema or write route.
+
+Validation: actual API test covers both companies and all three account types, opening
+plus later top-ups, one row per saved entry, company/day isolation, unchanged expense-row
+count and unchanged cash totals. Existing direct/petty payment deduplication also passed.
+Combined focused run 7/7; final full backend 357 passed, zero failed, 4 skipped; frontend
+39/39 and final production build passed. Chrome fixture check passed funding visibility,
+zero expense total, search and transfer filter; initial selector retry corrected the
+wrapped-label locator. Temporary browser harnesses/server removed. Updated README,
+ARCHITECTURE and DECISIONS; git diff --check passed. Full app navigation and packaged
+Electron were not checked. No deployment, PM2 operation, production configuration edit,
+live DB write or desktop release rebuild. Tests used disposable local data only.
+
+## 2026-11-09 — optional attendance only on operator Machine work dates
+
+User confirmed that Machine operator work may be paid from saved meter entries without
+marking attendance; when neither attendance nor Machine work exists the operator must
+be absent. Added pure operatorPayrollDays preparation before payroll leave/calculation.
+Effective Machine operator rules and active Machine inputs supply payroll-only worked
+dates with no clock times or inserted attendance rows. Missing operator dates become
+payroll-only Absent from join date. Real worked attendance plus meter input counts once;
+explicit Absent/On leave conflicts block review rather than being overwritten. Standby
+still needs attendance; other roles/Standard and approved leave behavior remain intact.
+Whole opening-month evidence feeds existing 25-day premiums. Existing meter minimum,
+transport, no Machine-day OT/late, deductions and EPF/ETF rules are unchanged. Derived
+source and daily-input IDs are saved in payslip calculation snapshots. No project is
+inferred for meter-only work. The attendance register/profile counts still represent
+actual attendance, not payroll-only evidence. Updated HR-entry copy and README,
+PAYROLL, ARCHITECTURE and DECISIONS. No schema or live employee configuration change.
+
+Validation: focused Node 20 tests 10 passed, zero failed (180 unrelated filtered out).
+New pure cases cover machine-only 2.6-hour minimum + transport, absent/unpaid dates,
+actual-attendance deduplication, role/dated Standard boundaries, inactive inputs,
+explicit absence/approved-leave conflicts, Standby not substituting for attendance and
+month-to-date extra-day premiums. Real API special-pay scenario now omits a Machine
+attendance date and adds a fully missing day: correct saved basic/transport/present/
+absent totals, source provenance and zero manufactured attendance rows; Draft edit/
+regeneration and approved-snapshot protection pass. Final full backend Node 20 suite
+with GKUC_TEST_HOST=localhost: 360 passed, zero failed, 4 skipped (364 incl nested).
+Frontend 39/39 and production build passed (existing chunk-size advisory); final
+whitespace check passed. No manual browser/Electron run for this change.
+No deployment, PM2 restart, production .env edit, live database write, live attendance
+marking/payroll regeneration or desktop installer rebuild. Tests used disposable local
+records only. Deploy updated backend/UI and explicitly regenerate the relevant Draft
+to apply this behavior; existing Approved/Paid payroll stays unchanged.

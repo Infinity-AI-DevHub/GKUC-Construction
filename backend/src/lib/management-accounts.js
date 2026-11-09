@@ -9,10 +9,10 @@ export function periodBounds(period) {
   return { start: `${period}-01`, next };
 }
 
-export async function managementPack(companyId, period) {
+export async function managementPack(companyId, period, { includeExpenseSource = false } = {}) {
   const { start, next } = periodBounds(period);
   const [company, projects, invoices, receipts, incomes, expenses, supplierInvoices,
-    supplierPayments, bills, petty, payroll, adjustments] = await Promise.all([
+    supplierPayments, bills, petty, payroll, adjustments, payerSupplierPayments] = await Promise.all([
     query('SELECT id,name FROM companies WHERE id=?', [companyId]),
     query(`SELECT p.id,p.name,p.progress,p.budget,
       COALESCE((SELECT SUM(v.amount) FROM variation_orders v WHERE v.project_id=p.id AND v.status='Approved'),0) variations,
@@ -27,7 +27,7 @@ export async function managementPack(companyId, period) {
     query(`SELECT i.id,i.project_id projectId,i.amount,i.received_date date,i.description FROM incomes i
       LEFT JOIN projects p ON p.id=i.project_id WHERE COALESCE(i.company_id,p.company_id)=?
       AND i.received_date>=? AND i.received_date<?`, [companyId,start,next]),
-    query(`SELECT e.id,e.project_id projectId,e.amount,e.expense_date date,e.description,e.origin_type originType
+    query(`SELECT e.id,e.project_id projectId,e.amount,e.expense_date date,e.description,${includeExpenseSource ? 'e.source,' : ''}e.origin_type originType
       FROM expenses e JOIN projects p ON p.id=e.project_id WHERE p.company_id=? AND e.expense_date<?`, [companyId,next]),
     query(`SELECT si.id,si.order_id orderId,si.invoice_no reference,si.amount,si.net_amount netAmount,si.invoice_date date
       FROM supplier_invoices si WHERE si.company_id=? AND si.invoice_date<?`, [companyId,next]),
@@ -42,7 +42,10 @@ export async function managementPack(companyId, period) {
       AND period_end>=? AND period_end<?`, [companyId,start,next]),
     query(`SELECT a.id,a.category,a.amount,a.explanation,a.reference,a.project_id projectId,a.created_at createdAt,
       u.name createdBy FROM management_adjustments a JOIN users u ON u.id=a.created_by
-      WHERE a.company_id=? AND a.period=? ORDER BY a.id`, [companyId,period])
+      WHERE a.company_id=? AND a.period=? ORDER BY a.id`, [companyId,period]),
+    query(`SELECT sp.amount,sp.paid_date date FROM supplier_payments sp
+      JOIN supplier_invoices si ON si.id=sp.invoice_id
+      WHERE COALESCE(sp.payment_company_id,si.company_id)=? AND sp.paid_date>=? AND sp.paid_date<?`,[companyId,start,next])
   ]);
   if (!company.length) return null;
   const inMonth = row => row.date >= start && row.date < next;
@@ -63,7 +66,7 @@ export async function managementPack(companyId, period) {
     return { ...invoice, paid: rounded(paid), outstanding: rounded(Math.max(0, Number(invoice.amount) - paid)) };
   }).filter(row => row.outstanding > 0);
   const billPayables = bills.filter(row => !row.paidDate || row.paidDate >= next).map(row => ({ ...row, outstanding: Number(row.totalAmount) }));
-  const cashPaid = sum(supplierPayments.filter(inMonth), 'amount') +
+  const cashPaid = sum(payerSupplierPayments, 'amount') +
     sum(bills.filter(row => row.paidDate && row.paidDate >= start && row.paidDate < next), 'totalAmount') +
     Math.abs(sum(petty.filter(row => row.kind === 'Spend'), 'amount')) + sum(payroll, 'total');
   const projectWip = projects.map(project => {

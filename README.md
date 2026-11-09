@@ -440,3 +440,21 @@ printable client request letters, and list filters. See [Project deadlines](docs
 
 Multi-item purchase orders support editable numbers/printed fields and audited commercial
 revisions, with accounting after actual goods/invoice confirmation. See [Purchase orders](docs/PURCHASE_ORDERS.md).
+
+Finance → Financial reports now includes reference-style **Statement of Financial
+Position** and **Income Statement**, with company/month selection and CSV export.
+These are partial internal management views using saved financial records. Missing
+accounting balances display Not recorded; incomplete totals are withheld. See
+[financial statement basis and coverage](docs/FINANCIAL_STATEMENTS.md).
+
+Issued cheques can select a supplier's invoices from both companies; invoice company
+labels distinguish them and the selected company remains the payer. Petty-cash Add money
+also appears automatically in Expenses → Petty cash funding using the same ledger record,
+separately from expense totals to avoid counting funding and later spending twice.
+
+
+Machine operator payroll can use saved Machine meter records without a separate
+attendance mark. Standby still needs attendance; operator dates without attendance or
+Machine work are absent in payroll. This supplies payroll evidence only and does not
+create attendance records. Explicitly regenerate Draft payroll to apply it; Approved/
+Paid figures remain unchanged. See [payroll rules](docs/PAYROLL.md).

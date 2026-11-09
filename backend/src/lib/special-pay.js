@@ -41,3 +41,30 @@ export function specialDayPay(employee,day,multiplier,workedHours){
       formula:machine?(multiplier>1?`${rates.minimum} × ${multiplier} (extra-day payment)`:`max(${rates.minimum}, ${hours} × ${rates.meterHourly})`)
         :`${rates.minimum} / ${rates.paidHours} × ${hours} × ${multiplier}`}};
 }
+
+/** Payroll-only evidence: never inserts or changes the attendance register. */
+export function operatorPayrollDays(employee, attendance, from, to) {
+  const days=[...attendance], recorded=new Map(attendance.map(day=>[day.work_date,day]));
+  for(let at=new Date(`${from}T00:00:00Z`);at.toISOString().slice(0,10)<=to;at.setUTCDate(at.getUTCDate()+1)) {
+    const date=at.toISOString().slice(0,10);
+    if(employee.join_date&&date<String(employee.join_date).slice(0,10))continue;
+    if(activeSpecialRule(employee,date)?.mode!=='Machine operator')continue;
+    const input=(employee.special_pay_days||[]).find(row=>row.work_date===date&&row.active!==0);
+    const machine=input?.work_kind==='Machine';
+    const existing=recorded.get(date);
+    if(existing){
+      if(machine&&['Absent','On leave'].includes(existing.state))
+        throw new Error(`Machine work conflicts with ${existing.state.toLowerCase()} attendance on ${date}. Review the saved records before payroll.`);
+      continue;
+    }
+    if(machine){
+      const hours=Number(input.end_meter)-Number(input.start_meter);
+      if(!Number.isFinite(hours)||hours<=0||hours>24)throw new Error(`Review the operator hours / meter readings for ${date}.`);
+    }
+    days.push({id:null,employee_id:employee.id,work_date:date,state:machine?'Checked out':'Absent',
+      check_in:null,check_out:null,project_id:null,needs_review:0,
+      source:machine?'HR machine work':'No attendance or machine work',
+      special_pay_input_id:machine?input.id:null,payroll_only:true});
+  }
+  return days.sort((a,b)=>a.work_date.localeCompare(b.work_date));
+}

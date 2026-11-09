@@ -828,7 +828,7 @@ function EntryForm({ float, employees, close, reload, initialKind }) {
     <Field name="category" label="Category" required={false} placeholder="Fuel, refreshments, courier" />
     {kind === 'Spend' && <Field name="payee" label="Paid to" required={false} placeholder="Supplier, shop or person" />}
     <Field name="description" label="Description" wide placeholder={kind === 'Top up' ? 'Funding received / source or reference' : 'What this movement was for'} />
-    {kind === 'Top up' && <p className="form-note wide">This adds money to this account and saves a dated top-up in its ledger. Funding is not recorded as income or an expense.</p>}
+    {kind === 'Top up' && <p className="form-note wide">This adds money to this account and saves a dated top-up in its ledger. It also appears automatically under Petty cash funding on the Expenses page, using this same record. Funding stays separate from expense totals so later spending is not counted twice.</p>}
     {float.accountType === 'Salary advance' && <p className="form-note wide">For daily-rate workers and site labourers, the total advanced on one day cannot exceed their daily salary rate. LKR 500 or 1,000 are common amounts, not required amounts. Advances are recovered from the employee's next available payroll, with any unpaid balance carried forward.</p>}
     {float.accountType === 'Fuel' && <p className="form-note wide">For fuel purchased for a vehicle, go to Fleet → Fuel & service → Record fuel. The float will be reduced automatically.</p>}
   </FormModal>;

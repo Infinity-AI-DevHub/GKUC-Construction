@@ -312,3 +312,51 @@ client invoice history and historical BOQ imports use their existing permissions
 company scope without artificial suppression. API routes and document tickets retain
 normal authentication, authorization and validation. No schema or saved data changes.
 See TEMPORARY_FEATURE_PAUSE.md for the superseded pause history and rollout limits.
+
+### Financial statement views (2026-11-09)
+
+Finance → Financial reports includes Statement of Financial Position and Income Statement.
+`GET /api/finance/financial-statements?companyId=…&period=YYYY-MM` requires auth and
+`finance.reports`, validates company/month and uses company-scoped saved management
+sources. `financial-statements.js` owns presentation calculations; optional expense-source
+selection in `managementPack` leaves existing closed-pack payloads unchanged. No schema
+or write endpoint is added. These are live monthly internal views, separate from closed
+management-pack snapshots. Financial position is cumulative through month end; income
+is for that month. The statement controls deliberately use company/month, not the
+project/date filters of the other reports. CSV includes basis and unknown-value labels.
+See [FINANCIAL_STATEMENTS.md](FINANCIAL_STATEMENTS.md) for calculation/coverage limits.
+
+### Cross-company supplier cheques and funding visibility (2026-11-09)
+
+Issued-cheque selection loads the selected supplier's invoices across both operating
+companies and labels each invoice's owner. `POST /purchasing/cheques` accepts mixed-company
+invoices for one supplier; `PATCH` clearing retains the supplier, reservation, remaining
+balance, transactional rollback and idempotency checks. The cheque's company is the payer;
+invoice ownership never changes. Additive nullable `supplier_payments.payment_company_id`
+records that payer at clearance. Cash comparison, daily payments, reporting supplier cash
+and management-pack cash follow the payment company (legacy nulls use invoice company),
+while invoice/payable reconciliation follows invoice ownership. Legacy cheque ownership
+backfill only touches records without a modern invoice-total snapshot, preserving new
+single-invoice cross-company cheques across startup. Ordinary invoice lists/statements
+and cheque registers retain their company filters. No intercompany journals are created.
+
+Expenses' daily API additionally returns read-only `fundingEntries` and `fundingTotal`
+from existing dated petty-cash Top up rows, including opening funding, for every account
+type and selected company/day. The Expenses page shows a separate Petty cash funding
+table with location/search/method filters and live-change refresh. Funding is excluded
+from payment/expense totals and profitability; no duplicate expense record or posting is
+created. Subsequent spending retains existing single-cost recognition. Petty-cash form
+copy explains this visibility and links through the existing account-ledger workflow.
+
+
+### Operator Machine-day payroll evidence (2026-11-09)
+
+`operatorPayrollDays` in special-pay.js prepares payroll-only daily evidence before
+leave/attendance calculation in payroll generation. Effective Machine operator + active
+Machine meter input can supply a worked date without saved attendance. Other missing
+operator dates become payroll-only Absent from join date, with normal approved leave
+handling retained. Actual attendance takes precedence; explicit absence/leave conflicts
+with machine inputs block review. Standby cannot substitute for attendance. Calendar
+month preparation preserves extra-day premium counting. No schema or attendance write
+is introduced. Payslip source snapshots identify derived evidence and its daily-input ID;
+existing save/exports and Approved/Paid immutability apply. See PAYROLL.md.

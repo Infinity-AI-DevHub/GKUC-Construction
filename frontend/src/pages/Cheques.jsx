@@ -100,15 +100,15 @@ function ChequeForm({companyId,close,reload}) {
   const [suppliers,setSuppliers]=useState([]),[invoices,setInvoices]=useState([]),[error,setError]=useState('');
   const [supplierId,setSupplierId]=useState(''),[selectedIds,setSelectedIds]=useState([]),[search,setSearch]=useState('');
   const [amount,setAmount]=useState(''),[amountEdited,setAmountEdited]=useState(false),[overrideReason,setOverrideReason]=useState('');
-  const load=()=>{setError('');return Promise.all([api(`/purchasing/suppliers?companyId=${companyId}`).then(setSuppliers),api(`/purchasing/invoices?companyId=${companyId}`).then(setInvoices)]).catch(failure=>setError(failure.message));};
+  const load=()=>{setError('');return Promise.all([api(`/purchasing/suppliers?companyId=${companyId}`).then(setSuppliers),api(`/purchasing/invoices`).then(setInvoices)]).catch(failure=>setError(failure.message));};
   useLiveList(load);
   const selected=invoices.filter(row=>selectedIds.includes(Number(row.id))).sort((a,b)=>String(a.invoiceDate).localeCompare(String(b.invoiceDate))||Number(a.id)-Number(b.id));
   const totalCents=selected.reduce((sum,row)=>sum+Math.round(invoiceAvailable(row)*100),0);
   const overridden=selectedIds.length>0&&amount!==''&&Math.round(Number(amount)*100)!==totalCents;
   useEffect(()=>{if(!amountEdited&&selectedIds.length)setAmount((totalCents/100).toFixed(2));},[totalCents,amountEdited,selectedIds.length]);
-  const options=invoices.filter(row=>String(row.supplierId)===supplierId&&Number(row.companyId)===Number(companyId)
+  const options=invoices.filter(row=>String(row.supplierId)===supplierId
     &&(row.status!=='Paid'||selectedIds.includes(Number(row.id)))
-    &&[row.invoiceNo,row.orderReference].some(value=>String(value||'').toLowerCase().includes(search.toLowerCase())));
+    &&[row.invoiceNo,row.orderReference,row.company].some(value=>String(value||'').toLowerCase().includes(search.toLowerCase())));
   let remaining=Math.round(Number(amount||0)*100);
   const split=selected.map(row=>{const paid=Math.min(Math.max(0,remaining),Math.round(invoiceAvailable(row)*100));remaining-=paid;return {...row,allocated:paid/100};});
   return <FormModal title="Issue a future cheque" close={close} label="Record cheque" wide onSubmit={async values=>{
@@ -127,6 +127,7 @@ function ChequeForm({companyId,close,reload}) {
       setSupplierId(event.target.value);setSelectedIds([]);setAmount('');setAmountEdited(false);setOverrideReason('');setSearch('');
     }}><option value="">Not supplier-specific</option>{suppliers.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
     <fieldset className="cheque-invoice-picker wide"><legend>Supplier invoices — select one or more</legend>
+      <p className="form-note">Invoices from both companies are shown. This cheque is paid by the company selected above; each invoice keeps its own company.</p>
       {!supplierId?<p className="form-note">Choose a supplier to select their invoices. Leave invoices unselected for a payment that is not invoice-linked.</p>:<>
         <input aria-label="Search supplier invoices" placeholder="Find invoice or order reference" value={search} onChange={event=>setSearch(event.target.value)}/>
         <div className="cheque-invoice-options">{options.map(row=>{
@@ -134,7 +135,7 @@ function ChequeForm({companyId,close,reload}) {
           return <label className="cheque-invoice-option" key={row.id}><input type="checkbox" checked={chosen} disabled={!chosen&&available<=0} onChange={event=>{
             const checked=event.target.checked;setSelectedIds(current=>checked?[...new Set([...current,Number(row.id)])]:current.filter(id=>id!==Number(row.id)));
             setAmountEdited(false);setOverrideReason('');if(chosen&&selectedIds.length===1)setAmount('');
-          }}/><span><strong>{row.invoiceNo}</strong><small>{shortDate(row.invoiceDate)}{row.orderReference?` · ${row.orderReference}`:''}</small>{Number(row.pendingChequeAmount)>0&&<small>{rupeesExact(row.pendingChequeAmount)} already covered by pending cheques</small>}</span><b>{rupeesExact(available)}</b></label>;
+          }}/><span><strong>{row.invoiceNo}</strong><small>{row.company} · {shortDate(row.invoiceDate)}{row.orderReference?` · ${row.orderReference}`:''}</small>{Number(row.pendingChequeAmount)>0&&<small>{rupeesExact(row.pendingChequeAmount)} already covered by pending cheques</small>}</span><b>{rupeesExact(available)}</b></label>;
         })}</div>
         {!options.length&&<p className="form-note">No matching unpaid invoices for this supplier.</p>}
       </>}
@@ -146,7 +147,7 @@ function ChequeForm({companyId,close,reload}) {
     <Field name="payee" label="Payee"/>
     <label>Amount (LKR)<Required/><input name="amount" type="number" min="0.01" step="0.01" required max={selectedIds.length?totalCents/100:undefined} value={amount} onChange={event=>{setAmount(event.target.value);setAmountEdited(true);}}/></label>
     {overridden&&<label className="wide">Reason for changing the total<Required/><textarea name="amountOverrideReason" required minLength={3} maxLength={600} rows={2} value={overrideReason} onChange={event=>setOverrideReason(event.target.value)}/></label>}
-    {selectedIds.length>0&&<div className="cheque-allocation-preview wide"><strong>This cheque will pay</strong>{split.map(row=><div key={row.id}><span>{row.invoiceNo}</span><b>{rupeesExact(row.allocated)}</b></div>)}
+    {selectedIds.length>0&&<div className="cheque-allocation-preview wide"><strong>This cheque will pay</strong>{split.map(row=><div key={row.id}><span>{row.invoiceNo} · {row.company}</span><b>{rupeesExact(row.allocated)}</b></div>)}
       <p className="form-note">The amount fills from the selected available balances. A reduced amount pays the oldest invoice first. It cannot exceed those balances. Invoices are updated only after the cheque clears.</p>
       {amountEdited&&<button type="button" className="status-button" onClick={()=>{setAmountEdited(false);setOverrideReason('');}}>Use calculated total</button>}
     </div>}
