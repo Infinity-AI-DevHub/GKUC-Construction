@@ -236,3 +236,21 @@ or Machine input the operator is absent/unpaid; Standby still requires attendanc
 Use payroll-only evidence with source IDs, never create artificial clock records.
 Conflicting explicit absence/leave requires review. Preserve approved leave, existing
 rates/premiums/transport and immutable Approved/Paid payroll.
+
+## 2026-11-09 — manual outflow worksheet, bank amount and PDF
+
+User explicitly requires display/planning only: saving planned amounts or the manual
+bank balance never creates actual expenses, income, payments or account balances.
+Cash outflow table is manual standalone planning, supports multiple rows in one save,
+and remains separate from automatically read Receivables and Outstanding. Interpret
+Outstanding as supplier invoices plus operating bills. Period basis is due date inside
+From/To (fallback invoice/bill date), balances net of payments through To; label this
+basis on screen and PDF. Bank balance is remembered for the exact company/date range,
+not treated as verified cash. Preserve existing finance records and legacy schedules.
+
+## 2026-11-09 — bond titles and project choices
+
+Show project/tender name as the primary bond list identity, actual bank bond number
+below. Hide system/import reference from the list title while preserving it internally
+and in search/history/import contracts. Fix project-company field compatibility and
+provide minimal project choices to bond writers, without cross-company linking.

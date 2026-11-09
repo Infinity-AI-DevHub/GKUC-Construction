@@ -33,7 +33,7 @@ router.get('/', auth, wrap(async (req, res) => {
   const [companies, projects, tasks, attendance, materials, fleet, reports, employees, departments, equipment,
     suppliers, purchaseRequests, boqs, milestones, notifications, finance, inquiries, weekly] = await Promise.all([
     query('SELECT id,code,name FROM companies WHERE active=1 ORDER BY id'),
-    gated(['projects.view','site.reports','finance.reports','finance.managementAccounts','finance.dailyExpenses','finance.expectedOutflows'], () => can(req,'projects.view') ? query(`SELECT p.*,p.client_id clientId,p.manager_employee_id managerEmployeeId,
+    gated(['projects.view','site.reports','finance.reports','finance.managementAccounts','finance.dailyExpenses','finance.expectedOutflows','finance.invoice'], () => can(req,'projects.view') ? query(`SELECT p.*,p.company_id companyId,p.client_id clientId,p.manager_employee_id managerEmployeeId,
       CASE WHEN p.manager_employee_id IS NOT NULL THEN me.name ELSE p.manager END manager,COALESCE(d.name,p.client) client,c.name company,c.code companyCode FROM projects p
       JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id
       LEFT JOIN visible_employees me ON me.id=p.manager_employee_id WHERE p.active=1 ORDER BY p.id`)

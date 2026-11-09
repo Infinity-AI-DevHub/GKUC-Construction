@@ -1,3 +1,5 @@
+import {outflowWorksheet,outflowWorksheetDocument} from '../lib/outflow-worksheet.js';
+import {sendDocument} from '../lib/document-pdf.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, spendSql, transaction } from '../db.js';
@@ -50,6 +52,35 @@ router.put('/cash-comparison/period',auth,permit('finance.cashComparison'),valid
   const after=await getOne('SELECT * FROM cash_comparison_periods WHERE company_id=? AND period=?',[b.companyId,b.period]);
   await audit(pool,req.user.id,prior?'UPDATE':'CREATE','cash_comparison_period',after.id,prior,after,req.ip);
   res.json({id:after.id});
+}));
+
+const worksheetDate=isoDate.refine(value=>!Number.isNaN(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value,'Choose a real calendar date.');
+const worksheetRange=z.object({companyId:z.coerce.number().int().positive(),from:worksheetDate,to:worksheetDate}).refine(b=>b.to>=b.from,'To date must be on or after From.');
+for(const path of ['/expected-outflows/worksheet','/expected-outflows/worksheet/document'])router.get(path,auth,permit('finance.expectedOutflows'),wrap(async(req,res)=>{
+  const parsed=worksheetRange.safeParse(req.query);if(!parsed.success)return res.status(400).json({error:'Choose a company and valid From/To date range.'});
+  const {companyId,from,to}=parsed.data,data=await outflowWorksheet(companyId,from,to);
+  if(!data)return res.status(404).json({error:'Company not found.'});
+  if(path.endsWith('/document'))return sendDocument(req,res,outflowWorksheetDocument(data),`expected-outflows-${companyId}-${from}-${to}`);
+  res.json(data);
+}));
+router.put('/expected-outflows/worksheet/balance',auth,permit('finance.expectedOutflows'),validate(z.object({companyId:z.number().int().positive(),from:worksheetDate,to:worksheetDate,bankBalance:z.number().finite().multipleOf(.01).max(9999999999999.99).min(-9999999999999.99).nullable()}).refine(b=>b.to>=b.from)),wrap(async(req,res)=>{
+  const b=req.body;if(!await getOne('SELECT id FROM companies WHERE id=?',[b.companyId]))return res.status(404).json({error:'Company not found.'});
+  await transaction(async c=>{
+    const [[before]]=await c.execute('SELECT * FROM outflow_worksheet_periods WHERE company_id=? AND from_date=? AND to_date=? FOR UPDATE',[b.companyId,b.from,b.to]);
+    await c.execute(`INSERT INTO outflow_worksheet_periods(company_id,from_date,to_date,bank_balance,updated_by) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE bank_balance=VALUES(bank_balance),updated_by=VALUES(updated_by)`,[b.companyId,b.from,b.to,b.bankBalance,req.user.id]);
+    await audit(c,req.user.id,'SAVE','outflow_worksheet_balance',b.companyId,before||null,b,req.ip);
+  });res.json({saved:true});
+}));
+router.post('/expected-outflows/plans/batch',auth,permit('finance.expectedOutflows'),validate(z.object({companyId:z.number().int().positive(),rows:z.array(z.object({payee:z.string().trim().min(2).max(180),description:z.string().trim().min(2).max(400),amount:z.number().positive().max(9999999999999.99).multipleOf(.01),projectId:z.number().int().positive().nullable(),companyOffice:z.string().trim().min(2).max(180),expectedDate:worksheetDate,confidence:z.enum(['High','Medium','Low'])})).min(1).max(100)})),wrap(async(req,res)=>{
+  const b=req.body;
+  const ids=await transaction(async c=>{
+    const [[company]]=await c.execute('SELECT id FROM companies WHERE id=?',[b.companyId]);if(!company)throw Object.assign(new Error('Company not found.'),{status:404});
+    const ids=[];for(const row of b.rows){
+      if(row.projectId){const [[project]]=await c.execute('SELECT id FROM projects WHERE id=? AND company_id=?',[row.projectId,b.companyId]);if(!project)throw Object.assign(new Error('Choose a project in this company.'),{status:400});}
+      const [result]=await c.execute(`INSERT INTO cash_outflow_plans(company_id,project_id,payee,description,amount,expected_date,confidence,company_office,created_by) VALUES (?,?,?,?,?,?,?,?,?)`,[b.companyId,row.projectId,row.payee,row.description,row.amount,row.expectedDate,row.confidence,row.companyOffice,req.user.id]);
+      ids.push(result.insertId);await audit(c,req.user.id,'CREATE','cash_outflow_plan',result.insertId,null,{...row,companyId:b.companyId,planningOnly:true},req.ip);
+    }return ids;
+  });res.status(201).json({ids});
 }));
 
 router.get('/expected-outflows',auth,permit('finance.expectedOutflows'),wrap(async(req,res)=>{
@@ -106,7 +137,7 @@ router.patch('/expected-outflows/plans/:id',auth,permit('finance.expectedOutflow
 }));
 
 router.patch('/expected-outflows/plans/:id/details',auth,permit('finance.expectedOutflows'),validate(z.object({
-  companyId:z.number().int().positive(),projectId:z.number().int().positive().nullable().optional(),
+  companyOffice:z.string().trim().min(2).max(180).optional(),companyId:z.number().int().positive(),projectId:z.number().int().positive().nullable().optional(),
   payee:z.string().trim().min(2).max(180),description:z.string().trim().min(2).max(400),amount:z.number().positive(),
   expectedDate:isoDate,confidence:z.enum(['High','Medium','Low']),notes:z.string().trim().max(600).nullable().optional()
 })),wrap(async(req,res)=>{
@@ -115,8 +146,8 @@ router.patch('/expected-outflows/plans/:id/details',auth,permit('finance.expecte
   if(prior.source_type||['Paid','Cancelled'].includes(prior.status))return res.status(409).json({error:'Only open standalone planned payments can be edited here. Edit the original record or create a new plan.'});
   if(b.projectId&&!await getOne('SELECT id FROM projects WHERE id=? AND company_id=?',[b.projectId,b.companyId]))
     return res.status(400).json({error:'That project belongs to another company.'});
-  await query(`UPDATE cash_outflow_plans SET project_id=?,payee=?,description=?,amount=?,expected_date=?,confidence=?,notes=? WHERE id=?`,
-    [b.projectId||null,b.payee,b.description,b.amount,b.expectedDate,b.confidence,b.notes||null,prior.id]);
+  await query(`UPDATE cash_outflow_plans SET project_id=?,payee=?,description=?,amount=?,expected_date=?,confidence=?,notes=?,company_office=COALESCE(?,company_office) WHERE id=?`,
+    [b.projectId||null,b.payee,b.description,b.amount,b.expectedDate,b.confidence,b.notes||null,b.companyOffice||null,prior.id]);
   await audit(pool,req.user.id,'UPDATE','cash_outflow_plan',prior.id,prior,b,req.ip);
   res.json({id:prior.id});
 }));

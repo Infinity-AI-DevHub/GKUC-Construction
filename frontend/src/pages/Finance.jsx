@@ -88,7 +88,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {tab === 'Management accounts' && <ManagementAccounts projects={data.projects.filter(project => Number(project.companyId) === Number(companyId))} companyId={companyId} company={company} can={featureCan('finance.managementAccountsManage')} />}
     {tab === 'Cash comparison' && <CashComparison companyId={companyId} company={company} can={featureCan('finance.cashComparison')} />}
     {tab === 'Vehicle expenses' && <VehicleExpenseReport key={companyId} companyId={companyId} company={company} data={data} can={can} />}
-    {tab === 'Expected outflows' && <ExpectedOutflows companyId={companyId} company={company} can={featureCan('finance.expectedOutflows')} projects={data.projects} />}
+    {tab === 'Expected outflows' && <ExpectedOutflows key={companyId} companyId={companyId} company={company} can={featureCan('finance.expectedOutflows')} projects={data.projects} />}
     {tab === 'Budget monitoring' && <BudgetMonitoring summary={summary} />}
     {tab === 'Daily cost review' && <DailyCostReview companyId={companyId} can={can} />}
     {tab === 'Bills' && <Bills data={data} can={can} companyId={companyId} open={open==='Bills'} close={()=>setOpen('')} />}

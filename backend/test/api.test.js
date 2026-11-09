@@ -6334,3 +6334,28 @@ test('restored finance, BOQ and HR endpoints return normal data and validation',
  assert.equal(project.status, 200);
  assert.ok(project.body.boqs.length > 0, 'project BOQs are visible again');
 });
+
+test('outflow worksheet bulk entries and balance never create financial postings',async()=>{
+ const owner=await login(),stamp=Date.now(),from='2048-11-01',to='2048-11-30';
+ const counts=async()=>{const [r]=await admin.query(`SELECT (SELECT COUNT(*) FROM ${testDatabase}.expenses) expenses,(SELECT COUNT(*) FROM ${testDatabase}.incomes) incomes,(SELECT COUNT(*) FROM ${testDatabase}.supplier_payments) payments`);return r[0]};const before=await counts();
+ const row={payee:`Plan ${stamp}`,description:'Planning only',amount:120.25,projectId:null,companyOffice:'Head office',expectedDate:'2048-11-05',confidence:'High'};
+ const result=await call(owner,'POST','/finance/expected-outflows/plans/batch',{companyId:1,rows:[row,{...row,payee:`Second ${stamp}`,amount:200,projectId:1}]});assert.equal(result.status,201,JSON.stringify(result.body));
+ assert.equal((await call(owner,'POST','/finance/expected-outflows/plans/batch',{companyId:1,rows:[row,{...row,projectId:999999}]})).status,400);
+ assert.equal((await call(owner,'PUT','/finance/expected-outflows/worksheet/balance',{companyId:1,from,to,bankBalance:5000.5})).status,200);
+ const url=`/finance/expected-outflows/worksheet?companyId=1&from=${from}&to=${to}`;const pack=await call(owner,'GET',url);assert.equal(pack.status,200,JSON.stringify(pack.body));assert.equal(pack.body.bankBalance,5000.5);assert.equal(pack.body.entries.filter(r=>r.payee.includes(String(stamp))).length,2);
+ assert.equal(pack.body.totals.cashOutflow,320.25);assert.deepEqual(await counts(),before);
+ const other=await call(owner,'GET',url.replace('companyId=1','companyId=2'));assert.equal(other.body.bankBalance,null);assert.ok(!other.body.entries.some(r=>r.payee.includes(String(stamp))));
+ assert.equal((await call(owner,'GET',url.replace(from,'2048-11-02'))).body.bankBalance,null);
+ assert.equal((await call(owner,'GET',url.replace(to,'2048-02-30'))).status,400);
+ const path=`/finance/expected-outflows/worksheet/document?companyId=1&from=${from}&to=${to}`;
+ const doc=await fetch(`${base}${path}`,{headers:{authorization:`Bearer ${owner}`}});assert.equal(doc.status,200);const html=await doc.text();assert.match(html,/Planning only/);assert.match(html,/Receivables/);assert.match(html,/Outstanding/);assert.match(html,/Head office/);
+ assert.equal((await call(owner,'POST','/document-download-tickets',{path:path+'&preview=pdf'})).status,200);
+ const supplier=(await call(owner,'POST','/purchasing/suppliers',{name:`Worksheet supplier ${stamp}`})).body;
+ const supplierInvoice=await call(owner,'POST','/purchasing/invoices',{companyId:1,supplierId:supplier.id,invoiceNo:`WS-${stamp}`,amount:700,invoiceDate:from,dueDate:'2048-11-15'});assert.equal(supplierInvoice.status,201,JSON.stringify(supplierInvoice.body));
+ const clientInvoice=await call(owner,'POST','/receivables/invoices',{companyId:1,kind:'Interim',title:'Worksheet client invoice',invoiceDate:from,dueDate:'2048-11-16',documentType:'Invoice',taxTreatment:'Exempt',vatRate:0,items:[{description:'Work delivered',quantity:1,rate:900}]});assert.equal(clientInvoice.status,201,JSON.stringify(clientInvoice.body));
+ assert.equal((await call(owner,'POST',`/receivables/invoices/${clientInvoice.body.id}/issue`,{})).status,204);
+ await admin.query(`INSERT INTO ${testDatabase}.supplier_payments(invoice_id,amount,paid_date,method,created_by) VALUES (?,100,'2048-12-01','Cash',1)`,[supplierInvoice.body.id]);
+ const withSources=(await call(owner,'GET',url)).body;assert.equal(withSources.outstanding.find(r=>r.id===supplierInvoice.body.id&&r.source==='Supplier invoice').amount,700);assert.equal(withSources.receivables.find(r=>r.id===clientInvoice.body.id).amount,900);assert.equal(withSources.totals.cashOutflow,320.25);
+ const archive=await call(owner,'PATCH',`/finance/expected-outflows/plans/${result.body.ids[0]}`,{companyId:1,status:'Cancelled'});assert.equal(archive.status,200);assert.ok(!(await call(owner,'GET',url)).body.entries.some(r=>r.id===result.body.ids[0]));
+ const boot=await call(owner,'GET','/bootstrap');assert.ok(boot.body.data.projects.length);assert.ok(boot.body.data.projects.every(r=>r.companyId));
+});

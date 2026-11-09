@@ -360,3 +360,36 @@ with machine inputs block review. Standby cannot substitute for attendance. Cale
 month preparation preserves extra-day premium counting. No schema or attendance write
 is introduced. Payslip source snapshots identify derived evidence and its daily-input ID;
 existing save/exports and Approved/Paid immutability apply. See PAYROLL.md.
+
+### Planning-only expected-outflow worksheet and bond project selection (2026-11-09)
+
+Expected outflows now uses `/finance/expected-outflows/worksheet?companyId&from&to`.
+The display sums only saved standalone open cash_outflow_plans in the selected date
+range; linked operational forecasts remain available through the legacy endpoint but
+are not injected into the manual worksheet. Additive company_office persists each
+row's company/office description. POST `/expected-outflows/plans/batch` validates up
+to 100 rows and company/project scope and transactionally saves all rows/audits or none.
+Existing details/status endpoints support edits and reversible archive; no expense,
+income, invoice, payment or bank-ledger write occurs from planning actions.
+
+`outflow_worksheet_periods` stores a manually entered bank_balance per exact company/
+From/To range, separately from cash-comparison and real bank reconciliation. Balance
+writes are audited. The worksheet reads client receivable balances and supplier/bill
+outstanding automatically, selecting due dates within the range (invoice/bill date if
+no due date) and excluding payments after To. These separate schedules are not added
+to manually entered outflow totals. Prior overdue items outside From are excluded.
+Current cancellations remain authoritative; this is a live planning view, not a
+closed historical accounting snapshot.
+
+The worksheet document route uses shared sendDocument/PDF generation and an exact
+short-lived PDF-ticket allowlist with From/To parameters. PDF includes company, period,
+manual bank balance, all three schedules, totals, basis and mandatory developer credit.
+All routes require auth + finance.expectedOutflows. Frontend supports bulk rows, edits,
+archive and PDF preview/download/print; exports contain saved records only.
+
+Bootstrap full project rows now include companyId alongside company_id; finance.invoice
+also receives minimal active-project choices when it lacks projects.view. Bond Project
+selection accepts both field shapes for older-server compatibility and retains company
+scope/current saved selection. Bond lists emphasize linked project name or saved tender/
+project description, with actual bank bond number secondary; system references remain
+stored/searchable for audit/import linking but are not the list's displayed title.
