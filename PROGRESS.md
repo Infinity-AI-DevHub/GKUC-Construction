@@ -1194,3 +1194,10 @@ Existing focused daily-labour API compatibility tests passed after preserving th
 day-salary validation message. Frontend production build passed; `git diff --check`
 passed. No deployment, PM2 action, production configuration edit, live database write or
 payroll regeneration was performed.
+
+## 2026-11-09 — choose Finance expense categories for direct office payments
+
+The Daily Expenses “Record direct office payment” form now uses a required Expense
+category dropdown populated from Finance → Categories. It saves the selected existing
+category name on the direct office payment as before; no payment, category or existing
+expense records were changed.

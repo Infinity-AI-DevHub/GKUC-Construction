@@ -439,3 +439,9 @@ and persists each BOQ allocation's hours and calculation snapshot on `daily_cost
 The submission transaction recalculates the amount and rejects allocations beyond the
 employee's recorded hours, duplicate legacy full-day entries, payroll allocations, and
 attendance requiring HR review. Finance approval continues to post the saved line cost.
+
+### Direct office payment categories (2026-11-09)
+
+The Daily Expenses direct-office-payment form reads the existing Finance expense-category
+register and stores the selected category name on the separate office payment record.
+It does not create a project expense or alter existing category records.

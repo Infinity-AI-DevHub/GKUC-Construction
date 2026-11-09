@@ -10,12 +10,14 @@ export default function DailyExpenses({ companyId, company, can }) {
   const [method, setMethod] = useState('all');
   const [search, setSearch] = useState('');
   const [addingOffice,setAddingOffice]=useState(false);
+  const [categories,setCategories]=useState([]);
   const load=()=>api(`/finance/daily-expenses?companyId=${companyId}&date=${date}`).then(setData);
   useEffect(() => {
     setData(null); setError('');
     load().catch(failure => setError(failure.message));
   }, [companyId,date]);
   useEffect(() => onDataChanged(() => load().catch(failure => setError(failure.message))), [companyId,date]);
+  useEffect(() => { api('/finance/categories').then(setCategories).catch(() => setCategories([])); }, [addingOffice]);
   const fundingEntries = (data?.fundingEntries || []).filter(row =>
     (location === 'all' || String(row.projectId || 'office') === location) &&
     (method === 'all' || method === 'Internal transfer') &&
@@ -46,6 +48,6 @@ export default function DailyExpenses({ companyId, company, can }) {
       </section>
       <p className="daily-expenses-note">{data.note}</p>{data.unverifiedManualExpenses > 0 && <p className="daily-expenses-warning">{data.unverifiedManualExpenses} manually entered expense{data.unverifiedManualExpenses===1?' has':'s have'} no payment method recorded for this date. They are not included as paid transactions. Review their payment details in the project expense ledger.</p>}
     </>}
-    {addingOffice && <FormModal title="Record direct office payment" label="Record payment" close={()=>setAddingOffice(false)} onSubmit={async values=>{await post('/finance/office-expense-payments',{companyId,paymentDate:values.paymentDate,category:values.category,payee:values.payee,paymentMethod:values.paymentMethod,description:values.description,reference:values.reference,amount:Number(values.amount)});await load();}}><p>Use this only for a direct office payment. Bills, supplier invoices and petty cash appear automatically when paid; do not enter them again here.</p><Field name="paymentDate" label="Date paid" type="date" defaultValue={date} /><Field name="category" label="Expense category" /><Field name="payee" label="Paid to" /><SelectField name="paymentMethod" label="Payment method" options={['Bank transfer','Card','Cash','Cheque']} /><Field name="reference" label="Unique payment reference" /><Field name="amount" label="Amount (LKR)" type="number" min="0.01" step="0.01" /><Field name="description" label="What was this payment for?" wide /></FormModal>}
+    {addingOffice && <FormModal title="Record direct office payment" label="Record payment" close={()=>setAddingOffice(false)} onSubmit={async values=>{await post('/finance/office-expense-payments',{companyId,paymentDate:values.paymentDate,category:values.category,payee:values.payee,paymentMethod:values.paymentMethod,description:values.description,reference:values.reference,amount:Number(values.amount)});await load();}}><p>Use this only for a direct office payment. Bills, supplier invoices and petty cash appear automatically when paid; do not enter them again here.</p><Field name="paymentDate" label="Date paid" type="date" defaultValue={date} /><SelectField name="category" label="Expense category" options={[['','Choose an expense category…'],...categories.map(category=>[category.name,category.name])]} /><Field name="payee" label="Paid to" /><SelectField name="paymentMethod" label="Payment method" options={['Bank transfer','Card','Cash','Cheque']} /><Field name="reference" label="Unique payment reference" /><Field name="amount" label="Amount (LKR)" type="number" min="0.01" step="0.01" /><Field name="description" label="What was this payment for?" wide /></FormModal>}
   </div>;
 }
