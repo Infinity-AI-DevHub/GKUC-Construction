@@ -1,3 +1,4 @@
+import BoqAdjustments from '../BoqAdjustments.jsx';
 import {projectDeliveryStatus} from '../ProjectDeadlines.jsx';
 import React, { useEffect, useState } from 'react';
 import { Archive, BriefcaseBusiness, Building2, Check, FileText, RotateCcw } from 'lucide-react';
@@ -249,6 +250,7 @@ function BoqDetail({ boq, close, decide, can, edit }) {
         <div className="project-stats wide">
           <div><span>Estimated total</span><strong>{rupees(boq.total)}</strong></div>
           <div><span>Status</span><strong>{boq.status}</strong></div>
+          {boq.financials?.adjustments.map((row,index)=><div key={index}><span>{row.direction}: {row.label}{row.mode==='Percent'?` (${row.value}%)`:''}</span><strong>{rupees(row.amount)}</strong></div>)}
         </div>
         <div className="wide">
           <div className="boq-section-list">
@@ -539,6 +541,7 @@ export function BoqForm({ data, close, reload }) {
   const [projectId,setProjectId]=useState(data.projects[0]?.id||'');
   const [subRates,setSubRates]=useState([]);
   useEffect(()=>{if(projectId)api(`/qs/subcontractor-rates?projectId=${projectId}`).then(setSubRates).catch(()=>setSubRates([]));},[projectId]);
+  const [adjustments,setAdjustments]=useState([]);
   const [lines, setLines] = useState([{ category: '', description: '', unit: '', quantity: '', rate: '' }]);
   const update = (index, key, value) => setLines(current => current.map((line, position) => (position === index ? { ...line, [key]: value } : line)));
   const total = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.rate) || 0), 0);
@@ -554,11 +557,12 @@ export function BoqForm({ data, close, reload }) {
   const mustComplete = (line, index) => index === 0 || started(line);
   const startedGroups = groupBoqItems(lines.filter(started));
 
-  return <WorkflowForm title="Create BOQ" close={close} label="Create BOQ" summary={[["Project", data.projects.find(project => String(project.id) === String(projectId))?.name || 'Choose a project'], ["Priced lines", String(lines.filter(started).length)], ["Estimated total", rupees(total)]]} reviewContent={<><h3>Measured items by section</h3>{startedGroups.map(group=><section className="workflow-boq-section" key={group.category}><header><strong>{group.category}</strong><span>{rupees(group.subtotal)}</span></header>{group.rows.map(({item:line,index})=><div key={index}><span>{line.description}<small>{line.quantity} {line.unit} × {rupees(line.rate)}</small></span><strong>{rupees(Number(line.quantity)*Number(line.rate))}</strong></div>)}</section>)}</>} onSubmit={async values => {
+  return <WorkflowForm title="Create BOQ" close={close} label="Create BOQ" summary={[["Project", data.projects.find(project => String(project.id) === String(projectId))?.name || 'Choose a project'], ["Priced lines", String(lines.filter(started).length)], ["Work subtotal",rupees(total)],["Estimated total",rupees(total+adjustments.reduce((sum,row)=>sum+(row.direction==='Deduct'?-1:1)*(row.mode==='Percent'?total*Number(row.value)/100:Number(row.value)),0))]]} reviewContent={<><h3>Measured items by section</h3>{startedGroups.map(group=><section className="workflow-boq-section" key={group.category}><header><strong>{group.category}</strong><span>{rupees(group.subtotal)}</span></header>{group.rows.map(({item:line,index})=><div key={index}><span>{line.description}<small>{line.quantity} {line.unit} × {rupees(line.rate)}</small></span><strong>{rupees(Number(line.quantity)*Number(line.rate))}</strong></div>)}</section>)}{adjustments.length>0&&<><h3>Taxes and deductions</h3>{adjustments.map((row,index)=><p key={index}>{row.direction}: {row.label} · {row.mode==='Percent'?`${row.value}% of work subtotal`:rupees(row.value)}</p>)}</>}</>} onSubmit={async values => {
     await post('/boq', {
       projectId: Number(values.projectId),
       title: values.title,
       notes: values.notes || undefined,
+      adjustments,
       /* Only wholly blank lines are dropped. A half-filled one is caught by the form
          above rather than disappearing without a word, which is what used to happen. */
       items: lines.filter(started).map(line => ({
@@ -575,6 +579,7 @@ export function BoqForm({ data, close, reload }) {
   }}>
     <div className="qs-form-section wide"><span>01</span><div><h3>Bill identity</h3><p>Choose the project and name the bill.</p></div></div>
     <label>Project *<select name="projectId" value={projectId} onChange={event=>setProjectId(event.target.value)} required>{data.projects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+    <BoqAdjustments value={adjustments} onChange={setAdjustments} subtotal={total}/>
     <Field name="title" label="BOQ title" />
     {/* Laid out by class rather than inline, so a phone can stack what will not fit:
         the five fixed columns needed 464px inside a 303px dialog. */}
@@ -607,7 +612,7 @@ export function BoqForm({ data, close, reload }) {
     <datalist id="boq-units">{units.map(unit => <option key={unit} value={unit} />)}</datalist>
     <div className="wide" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
       <button type="button" className="secondary" onClick={() => setLines(current => [...current, { category: '', description: '', unit: '', quantity: '', rate: '' }])}>Add line</button>
-      <strong>Estimated total {rupees(total)}</strong>
+      <strong>Work subtotal {rupees(total)}</strong>
     </div>
     <div className="qs-form-section wide"><span>03</span><div><h3>Final notes</h3><p>Add any instructions to accompany this bill.</p></div></div>
     <TextArea name="notes" label="Notes" required={false} placeholder="Optional" />

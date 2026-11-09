@@ -1,3 +1,4 @@
+import {calculateBoqFinancials} from './boq-financials.js';
 import {printOptions,printBlocks,printDesign} from './document-print-options.js';
 import {withDeveloperCredit} from './developer-credit.js';
 import { invoiceOptions } from './invoice-options.js';
@@ -598,7 +599,8 @@ export function boqDocument({ company, boq, items, variations = [], settings: gi
 
   const sum = rows => rows.reduce((total, row) => total + Number(row.amount || 0), 0);
   const approved = variations.filter(variation => variation.status === 'Approved');
-  const itemsTotal = sum(items);
+  const financials=calculateBoqFinancials(sum(items),boq.financialAdjustments??boq.financial_adjustments);
+  const itemsTotal = financials.total;
   const variationsTotal = sum(approved);
   const boqTerms = lines(boq.terms || settings.boqTerms || '');
 
@@ -629,6 +631,9 @@ export function boqDocument({ company, boq, items, variations = [], settings: gi
     </tr>`).join('');
 
   const totals = `<tfoot>
+      ${financials.adjustments.length?`<tr><td colspan="5" class="num">Work subtotal</td><td class="num">${money(financials.subtotal)}</td></tr>`:''}
+      ${financials.adjustments.map(row=>`<tr><td colspan="5" class="num">${escape(row.direction)}: ${escape(row.label)}${row.mode==='Percent'?` (${row.value}% of work subtotal)`:''}</td><td class="num">${row.direction==='Deduct'?'-':''}${money(row.amount)}</td></tr>`).join('')}
+
       ${variationRows ? `<tr><td colspan="5" class="num">Bill of quantities</td>
         <td class="num">${money(itemsTotal)}</td></tr>` : ''}
       <tr class="grand"><td colspan="5" class="num">Total</td>

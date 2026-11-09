@@ -1,3 +1,4 @@
+import {detectFinancialRows,detectFinancialColumns} from './boq-financials.js';
 import { writeWorkbook, STYLE } from './xlsx-write.js';
 import { readWorkbook } from './xlsx.js';
 import { chooseSheet } from './boq-detect.js';
@@ -79,7 +80,8 @@ export function buildTemplate({ company = 'GKUC Construction', title = '', clien
 
   return writeWorkbook([
     { name: 'BOQ', rows, columns: COLUMNS.map(column => column.width), freeze: HEADER_ROW + 1 },
-    { name: 'Instructions', rows: guide, columns: [26, 14, 70] }
+    { name: 'Instructions', rows: guide, columns: [26, 14, 70] },
+    { name: 'Adjustments', rows: [[head('Label'),head('Direction'),head('Mode'),head('Value')],[note('Optional: VAT / tax / deduction label'),note('Add or Deduct'),note('Percent or Amount'),note('Enter the numeric rate or amount. Percentage uses work subtotal.')]], columns:[35,18,18,65] }
   ]);
 }
 
@@ -141,7 +143,7 @@ const matchCategory = (value, categories = CATEGORIES) => {
  * plain-English note about whatever could not — the person who filled it in is the one who
  * can fix it, and they can only do that if they are told which row and what is wrong.
  */
-export function parseBoqWorkbook(buffer, { categories = CATEGORIES } = {}) {
+function parseBoqWorkbookBase(buffer, { categories = CATEGORIES } = {}) {
   let workbook;
   try {
     workbook = readWorkbook(buffer);
@@ -474,4 +476,14 @@ function readForeignWorkbook(workbook, categories = CATEGORIES) {
       notes: found.notes
     }
   };
+}
+
+
+export function parseBoqWorkbook(buffer,options={}){
+ const parsed=parseBoqWorkbookBase(buffer,options);
+ if(!parsed.ok)return parsed;
+ const workbook=readWorkbook(buffer);
+ const adjustments=workbook.names.flatMap(name=>{const rows=workbook.sheet(name).rows.slice(1);return [...detectFinancialRows(rows,name),...detectFinancialColumns(rows,name)];});
+ if(adjustments.length>50)return {ok:false,error:'More than 50 tax/deduction candidates were found. Consolidate repeated summary or per-item tax rows into a separate BOQ summary before uploading.'};
+ return {...parsed,financialAdjustments:adjustments};
 }

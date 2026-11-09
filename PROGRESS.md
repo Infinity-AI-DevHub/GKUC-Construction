@@ -1116,3 +1116,81 @@ Electron were not rerun for this change. No deployment, PM2 restart, production 
 live DB write or desktop installer rebuild; API tests use disposable local records.
 Final verification for shared Retention: frontend tests 39/39 and git diff --check pass.
 Temporary browser harness/server removed after the passing UI check.
+
+## 2026-11-09 — BOQ tax/addition/deduction rates and fixed amounts
+
+User requested configurable taxes and arbitrary deductions on BOQ creation and
+recognition from uploaded rows, fields and sheets. Added shared BoqAdjustments editor
+for manual creation, normal upload review and flexible Import Centre document review.
+Each row saves label, Add/Deduct, Percent/Amount, entered value and optional source.
+Percentages independently use the work subtotal; fixed LKR amounts apply once. Server
+boq-financials owns cent rounding, validation and final nonnegative total. No assumed
+VAT rate or silent compounding. Detail, confirmation, PDF rows and amount in words
+show the adjusted result. BOQ pricing does not create VAT/payment/QS-retention postings.
+Normal approval uses saved final total in existing project-budget reconciliation.
+
+Added guarded nullable financial_adjustments JSON on boqs/boq_imports and reviewed flag
+on staging. Old/null BOQs retain existing behavior; no existing approved records are
+recalculated or assigned rates. Item add and approved item amendments recalculate saved
+adjustments, with item addition + total update transactional. Existing direct Approved
+edit lock remains. Saved adjustments and import financial edits are auditable.
+
+Workbook parser scans all sheets for common financial labels, explicit financial columns
+(e.g. VAT_PERCENT, Deduction amount) and structured custom Label/Direction/Mode/Value rows.
+Template adds optional Adjustments sheet. PDF text/OCR detects labelled financial lines
+separately from priced work. Original files/rows remain preserved; matching financial
+summary work rows start excluded to avoid double counting. Detected entries require
+saved human review of sign, mode, value and subtotal basis, including removal of repeated
+summaries and correction of Excel fraction percentages. Unreviewed candidates do not
+alter saved staging total. Invalid totals after work-row edits reset financial review.
+Commit locks staging status to prevent another BOQ from the same import. More than 50
+candidates require source consolidation. Unknown/ambiguous layouts are not inferred.
+Linked historical multi-BOQ workbooks with recognised financial data are blocked with a
+direction to individual BOQ review, rather than guessing which BOQ owns a summary.
+
+Validation: new real API scenario verifies 1,000 + 18% - 5% - 30 = 1,100, item-add
+recalculation to 1,213, invalid rates, upload proposals, mandatory confirmation, one
+priced work row, final adjusted import total, repeated commit rejection, approved
+budget reconciliation and Approved edit lock. Pure tests cover signed/fixed/percentage
+math, negative-total rejection, multi-sheet rows, structured custom entries, explicit
+financial columns and PDF Deduct labels. Existing parser/import/print scenarios pass.
+Initial full run passed 365; a later staging-total refinement caused three upload
+failures through a mismatched SQL placeholder/argument count. Corrected both staging
+and review updates; all three passed focused rerun. Final full Node 20 backend with
+GKUC_TEST_HOST=localhost: 366 passed, zero failed, 4 skipped (370 incl nested).
+Frontend 39/39 and final production build passed (existing chunk-size advisory).
+
+Headless Chrome fixture UI checks pass manual rate/fixed/sign input, correct live total,
+confirmation and one submit; import proposal visibility, blocked unreviewed commit,
+saved checkbox confirmation and exactly one commit. Fixture retries fixed a reserved
+Vite query name and selected the Excel project picker explicitly; no app bug was inferred
+from those harness errors. UI fixtures and real disposable-MySQL API tests were separate.
+Rendered actual generated BOQ PDF and visually inspected the one page: item subtotal,
+VAT +180, retention -50, discount -30, total 1,100, matching words and one exact developer
+credit. Re-reading that PDF recognises all three financial rows and one work item.
+Evidence/scripts ignored in desktop/test-results/boq-adjustments*. Temporary UI harness
+and server removed. Updated README, ARCHITECTURE, DECISIONS and new BOQ_FINANCIALS guide;
+final whitespace check passed. No original user workbook/PDF was supplied in this turn,
+so coverage uses synthetic/common-layout and existing repository fixtures.
+
+No deployment, PM2 action, production environment edit, live DB write, real import/rate
+assignment, external message or desktop installer rebuild. Tests used disposable local
+data only. Backend additive migrations + frontend rollout remain separate release work.
+
+## 2026-11-09 — split an employee’s earned daily labour cost across BOQ items
+
+Cost Control labour lines can now use a selected employee’s HR-attested day to allocate
+hours across multiple BOQ items. The form shows worked hours, earned daily pay, hourly
+cost, and remaining allocation. Earned pay uses the actual day calculation: basic
+earnings plus approved OT minus late deductions; it does not use the employee’s nominal
+basic/daily rate alone. Each allocation line saves hours, calculated amount and an audit
+snapshot of the HR/payroll basis. Server-side submission recalculates the amount,
+requires a BOQ item, and rejects invalid/non-worked attendance, hours over the day's
+available hours, prior incompatible full-day entries, and payroll project allocations.
+
+Validation: new focused Node 20 calculation tests passed (2/2), including the 10-hour,
+LKR 2,200 earned-pay example split as LKR 880 for four hours and LKR 1,320 for six.
+Existing focused daily-labour API compatibility tests passed after preserving the legacy
+day-salary validation message. Frontend production build passed; `git diff --check`
+passed. No deployment, PM2 action, production configuration edit, live database write or
+payroll regeneration was performed.

@@ -410,3 +410,32 @@ Read-only users cannot create/release. Bootstrap includes minimal project choice
 retention/finance managers without broader project view; forms accept both company field
 shapes and show only the selected company's projects. Existing records/IDs and releases
 are shared across entry points, not migrated or duplicated. No schema change.
+
+### BOQ financial adjustments and import review (2026-11-09)
+
+`boq-financials.js` validates/calculates independent subtotal percentages and fixed LKR
+Add/Deduct rows. Nullable guarded boqs.financial_adjustments persists entered values;
+boq_imports.financial_adjustments and adjustments_reviewed persist staged proposals and
+confirmation. Create, detail, document, item-add and approved item-change paths share the
+calculation, preserving existing approval/budget behavior and direct-edit locks. Item
+addition recalculates in one transaction. Existing BOQs with no adjustments are unchanged.
+
+The workbook parser scans all sheets, including the new optional template Adjustments
+sheet; PDF text/OCR parser detects common labelled tax/deduction lines separately from
+priced work. Staging retains source references, excludes matching summary work rows,
+requires saved financial review and locks import status at commit to avoid a second BOQ.
+Metadata/review edits are audited. Flexible Import Centre document review reuses the
+editor, validation and BOQ storage. Linked historical multi-BOQ identity/declared-total
+imports remain a separate contract. No automatic VAT/retention/payment posting is added.
+See [BOQ financial adjustments](BOQ_FINANCIALS.md) for bases, examples and parser limits.
+
+### HR-earned labour allocation to BOQ items (2026-11-09)
+
+Cost Control can allocate one employee's worked day across multiple BOQ items. The
+server reads saved HR attendance and the effective payroll rules for the work date, or
+the immutable Approved/Paid payslip detail where it exists. It derives earned daily pay
+as basic earnings plus approved OT minus late deductions, divides that by worked hours,
+and persists each BOQ allocation's hours and calculation snapshot on `daily_cost_lines`.
+The submission transaction recalculates the amount and rejects allocations beyond the
+employee's recorded hours, duplicate legacy full-day entries, payroll allocations, and
+attendance requiring HR review. Finance approval continues to post the saved line cost.

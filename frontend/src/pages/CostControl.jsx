@@ -16,7 +16,7 @@ function Money({ value, signed = false }) {
 }
 
 function CostAmountField({ line, index, update }) {
-  const locked = line.source === 'Fuel' && (line.fuelOrigin === 'Reserve' || line.stationMode === 'Existing');
+  const locked = (line.source === 'Fuel' && (line.fuelOrigin === 'Reserve' || line.stationMode === 'Existing')) || (line.source === 'Labour' && line.employeeId && line.labourHours !== '');
   const suggestion = locked ? null : suggestedCost(line.quantity, line.unitRate);
   const usingSuggestion = suggestion !== null && Number(line.amount) === suggestion;
   return <div className="cost-amount-field">
@@ -100,9 +100,11 @@ export function ExpenseForm({ projectId, items, initial, close, reload, onImport
   const [options, setOptions] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [taskEditor, setTaskEditor] = useState(null);
+  const [workDate,setWorkDate] = useState(initial?.work_date || todayInput());
+  const [labourDays,setLabourDays] = useState({});
   const [lines, setLines] = useState(initial?.lines?.map(line => ({source:line.source,costType:line.cost_type,
     taskIds:(line.taskIds || [line.task_id]).map(Number),boqItemId:line.boq_item_id || '',description:line.description,quantity:line.quantity || '',
-    unit:line.unit || '',unitRate:line.unit_rate ?? '',amount:line.amount,employeeId:line.employee_id || '',
+    unit:line.unit || '',unitRate:line.unit_rate ?? '',amount:line.amount,employeeId:line.employee_id || '',labourHours:line.labour_hours ?? '',
     vehicleId:line.vehicle_id || '',fuelOrigin:line.fuel_origin || '',fuelRecordId:line.fuel_record_id || '',
     fuelFloatId:line.fuel_float_id || '',odometer:line.odometer || '',stationMode:line.fuel_record_id?'Existing':'New',
     reserveMaterialId:line.reserve_material_id || '',quotationItemId:line.quotation_item_id || '',
@@ -110,6 +112,13 @@ export function ExpenseForm({ projectId, items, initial, close, reload, onImport
     [{ source:'Material', costType:'Expected', taskIds:[], description:'', amount:'' }]);
   const loadOptions = () => api(`/boq/cost-control/options?projectId=${projectId}`).then(setOptions).catch(error => setLoadError(error.message));
   useEffect(() => { loadOptions(); }, [projectId]);
+  useEffect(() => {
+    const selected=[...new Set(lines.filter(line=>line.source==='Labour'&&line.employeeId).map(line=>line.employeeId))];
+    let active=true;
+    Promise.all(selected.map(employeeId=>api(`/boq/cost-control/labour-day?employeeId=${employeeId}&workDate=${workDate}`)
+      .then(value=>[employeeId,{value}]).catch(error=>[employeeId,{error:error.message}]))).then(rows=>{ if(active)setLabourDays(Object.fromEntries(rows)); });
+    return ()=>{active=false;};
+  },[workDate,lines.map(line=>`${line.source}:${line.employeeId}`).join('|')]);
   const update = (index, changes) => setLines(previous => previous.map((line, at) => at === index ? { ...line, ...changes } : line));
   const id = value => value ? Number(value) : null;
   return <><FormModal title="Submit daily project costs" close={close} label="Send to Finance for review" wide onSubmit={async values => {
@@ -120,7 +129,7 @@ export function ExpenseForm({ projectId, items, initial, close, reload, onImport
       lines: lines.map(line => ({ taskIds:line.taskIds, boqItemId:id(line.boqItemId), source:line.source,
         costType:line.costType, description:line.description.trim(), quantity:line.quantity ? Number(line.quantity) : null,
         unit:line.unit || null, unitRate:line.unitRate === '' || line.unitRate == null ? null : Number(line.unitRate),
-        amount:Number(line.amount), employeeId:id(line.employeeId), vehicleId:id(line.vehicleId),
+        amount:Number(line.amount), employeeId:id(line.employeeId), labourHours:line.labourHours === '' || line.labourHours == null ? null : Number(line.labourHours), vehicleId:id(line.vehicleId),
         fuelOrigin:line.source === 'Fuel' ? line.fuelOrigin || null : null,
         fuelRecordId:id(line.fuelRecordId), fuelFloatId:id(line.fuelFloatId),odometer:id(line.odometer),
         reserveMaterialId:id(line.reserveMaterialId),
@@ -128,9 +137,9 @@ export function ExpenseForm({ projectId, items, initial, close, reload, onImport
         reference:line.reference || null })) }); await reload();
   }}>
     {!initial && <div className="cost-import-callout wide"><FileSpreadsheet size={22} /><div><strong>Adding work already kept in Excel?</strong><span>Upload the existing workbook, review every detected line, correct it, and only then send it to Finance.</span></div><button className="secondary" type="button" onClick={onImport}>Import existing Excel</button></div>}
-    <p className="form-note wide">Use one line per cost and select all completed work tasks it belongs to. The cost is counted once, regardless of how many tasks are linked. If the work is not listed, record it here and assign everyone who worked on it. SiteOps creates one shared task that is immediately visible in <a href="/tasks">Tasks</a>. Finance reviews this sheet before costs are posted. Fleet-recorded station fuel is linked, not charged again; see <a href="/fleet?section=fuel">Fleet fuel records</a>. For labour, you may select an employee or enter an unassigned cost; either way, enter the actual amount. These lines allocate project cost and do not create a salary payment. For a new station purchase, Finance deducts the approved amount from the selected fuel float.</p>
+    <p className="form-note wide">For employee labour, enter allocation hours to split that day’s saved earned pay across BOQ items. The cost is calculated from HR attendance, approved OT and late deductions. Finance reviews this sheet before costs are posted.</p>
     {loadError && <p className="form-error wide">{loadError}</p>}
-    <Field name="workDate" label="Work date" type="date" defaultValue={initial?.work_date || todayInput()} />
+    <label>Work date *<input name="workDate" type="date" required value={workDate} onChange={event=>setWorkDate(event.target.value)} /></label>
     <Field name="notes" label="Daily notes" required={false} defaultValue={initial?.notes || ''} />
     <div className="daily-cost-editor wide">{lines.map((line, index) => <div className="daily-cost-line" key={index}>
       <div className="daily-cost-line-title"><strong>Cost line {index + 1}</strong>{lines.length > 1 && <button type="button" className="status-button" onClick={() => setLines(old => old.filter((_, at) => at !== index))}><Trash2 size={14} /> Remove</button>}</div>
@@ -148,7 +157,8 @@ export function ExpenseForm({ projectId, items, initial, close, reload, onImport
       <label>Category *<select value={line.source} onChange={event => update(index,{source:event.target.value,employeeId:'',vehicleId:'',fuelOrigin:'',fuelRecordId:'',fuelFloatId:'',odometer:'',reserveMaterialId:'',amount:''})}>{SOURCES.map(source => <option key={source}>{source}</option>)}</select></label>
       <label>Cost classification<select value={line.costType} onChange={event => update(index,{costType:event.target.value,boqItemId:'',quotationItemId:'',quotedRecovery:''})}>{['Expected','Variation','Unexpected'].map(type => <option key={type}>{type}</option>)}</select></label>
       <label>What was used or paid for *<input value={line.description} required minLength={2} onChange={event => update(index,{description:event.target.value})} /></label>
-      {line.source === 'Labour' && <label>Employee (optional)<select value={line.employeeId || ''} onChange={event => { const employee=options.employees.find(person => String(person.id) === event.target.value); update(index,{employeeId:event.target.value,amount:line.amount || employee?.dailyRate || ''}); }}><option value="">Unassigned labour cost</option>{options?.employees.map(person => <option key={person.id} value={person.id}>{person.name}{number(person.dailyRate)>0 ? ` · ${rupees(person.dailyRate)} per day` : ''}</option>)}</select></label>}
+      {line.source === 'Labour' && <><label>Employee (optional)<select value={line.employeeId || ''} onChange={event => update(index,{employeeId:event.target.value,labourHours:'',amount:''})}><option value="">Unassigned labour cost</option>{options?.employees.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
+        {line.employeeId && <LabourAllocation line={line} day={labourDays[line.employeeId]} update={changes=>update(index,changes)} />}</>}
       {line.source === 'Fuel' && <><label>Fuel source *<select required value={line.fuelOrigin || ''} onChange={event => update(index,{fuelOrigin:event.target.value,fuelRecordId:'',fuelFloatId:'',reserveMaterialId:'',amount:'',quantity:'',vehicleId:''})}><option value="">Choose source…</option><option>Station</option><option>Reserve</option></select></label>
         {line.fuelOrigin === 'Station' && <><label>Station record<select value={line.stationMode || 'New'} onChange={event => update(index,{stationMode:event.target.value,fuelRecordId:'',fuelFloatId:'',vehicleId:'',amount:'',quantity:'',odometer:''})}><option value="New">New purchase — Finance will post it</option><option value="Existing">Already recorded in Fleet</option></select></label>
           {line.stationMode === 'Existing' ? <label>Fleet fuel record *<select required value={line.fuelRecordId || ''} onChange={event => { const fuel=options.fuel.find(item => String(item.id) === event.target.value); update(index,{fuelRecordId:event.target.value,vehicleId:fuel?.vehicleId || '',quantity:fuel?.litres || '',unit:'litres',amount:fuel?.cost || ''}); }}><option value="">Choose recorded fuel…</option>{options?.fuel.map(fuel => <option key={fuel.id} value={fuel.id}>{shortDate(fuel.fuelDate)} · {fuel.registration} · {fuel.litres} L · {rupees(fuel.cost)}</option>)}</select></label> : <><label>Vehicle *<select required value={line.vehicleId || ''} onChange={event => update(index,{vehicleId:event.target.value})}><option value="">Choose vehicle…</option>{options?.vehicles.map(vehicle => <option key={vehicle.id} value={vehicle.id}>{vehicle.vehicle} · {vehicle.registration}</option>)}</select></label><label>Fuel float *<select required value={line.fuelFloatId || ''} onChange={event => update(index,{fuelFloatId:event.target.value})}><option value="">Choose funded fuel float…</option>{options?.fuelFloats.map(floating => <option key={floating.id} value={floating.id}>{floating.name} · {rupees(floating.balance)} available</option>)}</select></label>{options && !options.fuelFloats.length && <p className="form-note">Finance must create and top up a Fuel petty-cash float before QS can submit a new station purchase.</p>}<label>Vehicle odometer (km) *<input required type="number" min="1" step="1" value={line.odometer || ''} onChange={event => update(index,{odometer:event.target.value})} /></label></>}
@@ -164,6 +174,23 @@ export function ExpenseForm({ projectId, items, initial, close, reload, onImport
   </FormModal>{taskEditor && options && <CompletedTaskForm projectId={projectId} employees={options.employees}
     task={taskEditor.task} defaultDate={initial?.work_date || todayInput()} close={() => setTaskEditor(null)}
     saved={async task => { await loadOptions(); setLines(previous => previous.map((line,index) => index === taskEditor.lineIndex ? {...line,taskIds:[...new Set([...line.taskIds,Number(task.id)])]} : line)); setTaskEditor(null); }} />}</>;
+}
+
+function LabourAllocation({ line, day, update }) {
+  if (!day) return <p className="form-note">Reading HR attendance and payroll basis…</p>;
+  if (day.error) return <p className="form-error">{day.error}</p>;
+  const basis=day.value;
+  const applyHours=value=>{
+    const labourHours=value === '' ? '' : Number(value);
+    const amount=Number.isFinite(labourHours) ? Math.round(labourHours * Number(basis.hourlyCost) * 100) / 100 : '';
+    update({labourHours,amount,quantity:labourHours,unit:'hour',unitRate:Number(basis.hourlyCost).toFixed(2)});
+  };
+  return <section className="form-note wide"><strong>HR labour basis</strong><br />
+    Worked {basis.workedHours} h · earned pay {rupees(basis.dailyPay)} · {rupees(basis.hourlyCost)} / hour<br />
+    <small>Basic {rupees(basis.basic)} + OT {rupees(basis.overtime)} − late deduction {rupees(basis.lateDeduction)}. Remaining unallocated: {basis.remainingHours} h / {rupees(basis.remainingAmount)}.</small>
+    <label>Hours for this BOQ item *<input type="number" required min="0.001" max={basis.remainingHours} step="0.001" value={line.labourHours} onChange={event=>applyHours(event.target.value)} /></label>
+    <small>Cost for this line: {line.labourHours ? rupees(line.amount) : 'Enter hours'}.</small>
+  </section>;
 }
 
 function CompletedTaskForm({ projectId, employees, task, defaultDate, close, saved }) {

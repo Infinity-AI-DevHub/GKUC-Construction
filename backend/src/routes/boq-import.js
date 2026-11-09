@@ -1,3 +1,4 @@
+import {boqAdjustmentsSchema,calculateBoqFinancials,refreshBoqFinancials,parseAdjustments} from '../lib/boq-financials.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { pool, query, getOne, transaction, audit, nextReference } from '../db.js';
@@ -60,6 +61,14 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
     const isPdf = file.mime === 'application/pdf' || /\.pdf$/i.test(file.filename || '');
     const parsed = isPdf ? await parseBoqPdf(file.path) : parseBoqWorkbook(buffer, { categories: await optionsFor('boq.category') });
     if (!parsed.ok) throw fail(422, parsed.error);
+    const detected=parsed.financialAdjustments||[];
+    if(detected.length>50)throw fail(422,'More than 50 tax/deduction candidates were found. Consolidate repeated summary rows before uploading.');
+    const adjustments=detected;
+    for(const item of parsed.items){
+      item.financialSummary=adjustments.some(row=>row.label.trim().toLowerCase()===String(item.description||'').trim().toLowerCase());
+      if(item.financialSummary)item.notices.push('Tax/deduction summary: excluded from priced work to avoid double counting. Review the financial adjustments.');
+    }
+
 
     const problemCount = parsed.items.filter(item => item.problems.length).length;
     const total = parsed.items.reduce((sum, item) => sum + (item.amount || 0), 0);
@@ -87,6 +96,7 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
           parsed.layout?.documentDate || null, parsed.layout?.notes?.join(' ') || null,
           parsed.items.length, problemCount, total, req.user.id]);
 
+      await connection.execute('UPDATE boq_imports SET financial_adjustments=?,adjustments_reviewed=? WHERE id=?',[JSON.stringify(adjustments),adjustments.length?0:1,created.insertId]);
       for (const item of parsed.items) {
         await connection.execute(
           `INSERT INTO boq_import_items
@@ -95,7 +105,7 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
           [created.insertId, item.sourceRow, item.category, item.description, item.unit,
             item.quantity, item.rate, item.amount, item.method, item.notes,
             JSON.stringify(item.raw), item.problems.join(' · ').slice(0, 600) || null,
-            item.notices.join(' · ').slice(0, 600) || null, 1]);
+            item.notices.join(' · ').slice(0, 600) || null, item.financialSummary?0:1]);
       }
       return created.insertId;
     });
@@ -104,6 +114,7 @@ router.post('/boq/import', auth, permit('qs.boq'), async (req, res, next) => {
     await audit(pool, req.user.id, 'IMPORT', 'boq_import', importId, null,
       { filename: file.filename, rows: parsed.items.length, problems: problemCount }, req.ip);
 
+    await refreshTotals(importId);
     res.status(201).json(await detail(importId));
   } catch (error) {
     if (stored && !committed) await remove(stored.key).catch(cleanupError => {
@@ -121,7 +132,7 @@ const detail = async importId => {
     COALESCE(c.name,p.client) projectClient,
     i.status,i.row_count rowCount,i.problem_count problemCount,i.total,i.created_at createdAt,
     i.source,i.layout_json layout,i.file_size fileSize,i.checksum,i.document_reference documentReference,
-    i.location,i.document_date documentDate,i.notes,
+    i.location,i.document_date documentDate,i.notes,i.financial_adjustments financialAdjustments,i.adjustments_reviewed adjustmentsReviewed,
     u.name uploadedBy,p.name project
     FROM boq_imports i JOIN users u ON u.id=i.uploaded_by
     LEFT JOIN projects p ON p.id=i.project_id LEFT JOIN clients c ON c.id=p.client_id
@@ -136,6 +147,7 @@ const detail = async importId => {
     return { ...visible, sourceSheet: raw?.sheet || null, sheetRow: raw?.row || null,
       problems: relevantProblems(item.problems) };
   });
+  record.financialAdjustments=parseAdjustments(record.financialAdjustments);
   record.problemCount = record.items.filter(item => item.include && item.problems).length;
   record.categories = await optionsFor('boq.category');
   if (typeof record.layout === 'string') {
@@ -147,7 +159,7 @@ const detail = async importId => {
     const prelim = priced(record.layout.sheets[2]);
     const measured = priced(record.layout.sheets[3]);
     record.layout.checks = record.layout.checks.map(check => {
-      const imported = check.label === 'Preliminaries' ? prelim : check.label === 'Measured works' ? measured : prelim + measured;
+      const imported = check.label === 'Preliminaries' ? prelim : check.label === 'Measured works' ? measured : record.adjustmentsReviewed?calculateBoqFinancials(prelim+measured,record.financialAdjustments).total:prelim+measured;
       return { ...check, imported, matches: Math.abs(Number(check.source) - imported) < 0.02 };
     });
   }
@@ -183,6 +195,8 @@ router.get('/boq/imports/:id', auth, permit('qs.boq', 'qs.view'), async (req, re
 /* Source document details remain correctable, but the client never comes from an uploaded
    file. The selected project's client relationship is authoritative. */
 const documentSchema = z.object({
+  adjustments:boqAdjustmentsSchema.optional(),
+  adjustmentsReviewed:z.boolean().optional(),
   title: z.string().trim().max(180).nullable().optional(),
   documentReference: z.string().trim().max(120).nullable().optional(),
   location: z.string().trim().max(500).nullable().optional(),
@@ -196,10 +210,16 @@ router.patch('/boq/imports/:id', auth, permit('qs.boq'), validate(documentSchema
       const record = await getOne('SELECT status FROM boq_imports WHERE id=?', [req.params.id]);
       if (!record) return res.status(404).json({ error: 'That import was not found' });
       if (record.status !== 'Review') return res.status(409).json({ error: 'This import has already been dealt with' });
-      const existing = await getOne('SELECT title,document_reference documentReference,location,document_date documentDate,notes FROM boq_imports WHERE id=?', [req.params.id]);
+      const existing = await getOne('SELECT title,document_reference documentReference,location,document_date documentDate,notes,financial_adjustments adjustments,adjustments_reviewed adjustmentsReviewed FROM boq_imports WHERE id=?', [req.params.id]);
       const value = key => req.body[key] === undefined ? existing[key] : (req.body[key] || null);
-      await query(`UPDATE boq_imports SET title=?,document_reference=?,location=?,document_date=?,notes=? WHERE id=?`,
-        [value('title'), value('documentReference'), value('location'), value('documentDate'), value('notes'), req.params.id]);
+      const nextAdjustments=req.body.adjustments??parseAdjustments(existing.adjustments);
+      const reviewed=req.body.adjustmentsReviewed===true?1:req.body.adjustments!==undefined?0:existing.adjustmentsReviewed;
+      const sum=await getOne('SELECT COALESCE(SUM(amount),0) subtotal FROM boq_import_items WHERE import_id=? AND include=1',[req.params.id]);
+      const nextTotal=reviewed?calculateBoqFinancials(Number(sum.subtotal),nextAdjustments).total:Number(sum.subtotal);
+
+      await query(`UPDATE boq_imports SET title=?,document_reference=?,location=?,document_date=?,notes=?,financial_adjustments=?,adjustments_reviewed=?,total=? WHERE id=?`,
+        [value('title'), value('documentReference'), value('location'), value('documentDate'), value('notes'),JSON.stringify(nextAdjustments),reviewed,nextTotal, req.params.id]);
+      await audit(pool,req.user.id,'UPDATE_REVIEW','boq_import',req.params.id,existing,req.body,req.ip);
       res.json(await detail(req.params.id));
     } catch (error) { next(error); }
   });
@@ -314,8 +334,11 @@ async function refreshTotals(importId) {
     `SELECT COUNT(*) staged, SUM(problems IS NOT NULL AND include=1) problems,
             COALESCE(SUM(CASE WHEN include=1 THEN amount ELSE 0 END),0) total
      FROM boq_import_items WHERE import_id=?`, [importId]);
-  await query('UPDATE boq_imports SET row_count=?, problem_count=?, total=? WHERE id=?',
-    [sums.staged, Number(sums.problems || 0), sums.total, importId]);
+  const record=await getOne('SELECT financial_adjustments,adjustments_reviewed FROM boq_imports WHERE id=?',[importId]);
+  let total=Number(sums.total),reviewed=record.adjustments_reviewed;
+  if(reviewed){try{total=calculateBoqFinancials(total,record.financial_adjustments).total;}catch(error){if(error.status!==400)throw error;reviewed=0;}}
+  await query('UPDATE boq_imports SET row_count=?,problem_count=?,total=?,adjustments_reviewed=? WHERE id=?',
+    [sums.staged,Number(sums.problems||0),total,reviewed,importId]);
 }
 
 /**
@@ -355,7 +378,9 @@ router.post('/boq/imports/:id/commit', auth, permit('qs.boq'),
       }
 
       const reference = await nextReference('BOQ', 'boqs');
-      const total = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      if(!record.adjustments_reviewed)return res.status(409).json({error:'Review the detected taxes/deductions and save their confirmation before creating this BOQ.'});
+      const adjustments=parseAdjustments(record.financial_adjustments);
+      const total = calculateBoqFinancials(items.reduce((sum,item)=>sum+Number(item.amount||0),0),adjustments).total;
       const layout = (await detail(record.id)).layout;
       const sourceChecks = (layout?.checks || []).map(check =>
         `${check.label}: source LKR ${Number(check.source).toFixed(2)}, imported LKR ${Number(check.imported).toFixed(2)}`).join('; ');
@@ -368,11 +393,14 @@ router.post('/boq/imports/:id/commit', auth, permit('qs.boq'),
       ].filter(Boolean).join('\n').slice(0, 1000) || null;
 
       const boqId = await transaction(async connection => {
+        const [[locked]]=await connection.execute('SELECT status,financial_adjustments,adjustments_reviewed FROM boq_imports WHERE id=? FOR UPDATE',[record.id]);
+        if(locked.status!=='Review')throw fail(409,'This import has already been committed.');
+        if(!locked.adjustments_reviewed||JSON.stringify(parseAdjustments(locked.financial_adjustments))!==JSON.stringify(adjustments))throw fail(409,'The financial review changed. Reload and confirm the latest values.');
         const [created] = await connection.execute(
-          `INSERT INTO boqs (project_id,reference,title,status,total,prepared_by,notes)
-           VALUES (?,?,?,'Draft',?,?,?)`,
+          `INSERT INTO boqs (project_id,reference,title,status,total,prepared_by,notes,financial_adjustments)
+           VALUES (?,?,?,'Draft',?,?,?,?)`,
           [project.id, reference, record.title || `${project.name} — Bill of Quantities`,
-            total, req.user.id, sourceNotes]);
+            total, req.user.id, sourceNotes,JSON.stringify(adjustments)]);
 
         for (const item of items) {
           await connection.execute(
@@ -526,9 +554,7 @@ router.patch('/boq/changes/:id', auth, permit('qs.boqAmend'),
                 amount, merged.method || null, merged.notes || null, request.item_id]);
           }
           /* The bill's own total has to follow its lines, or every figure built on it drifts. */
-          await connection.execute(
-            'UPDATE boqs SET total=(SELECT COALESCE(SUM(amount),0) FROM boq_items WHERE boq_id=?) WHERE id=?',
-            [request.boq_id, request.boq_id]);
+          await refreshBoqFinancials(connection,request.boq_id);
         });
       }
 

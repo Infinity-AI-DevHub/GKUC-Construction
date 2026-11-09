@@ -572,6 +572,7 @@ async function createBoqTables() {
     CONSTRAINT fk_boq_preparer FOREIGN KEY(prepared_by) REFERENCES users(id),
     CONSTRAINT fk_boq_approver FOREIGN KEY(approved_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await addColumn('boqs','financial_adjustments','JSON NULL');
   await query(`CREATE TABLE IF NOT EXISTS boq_items (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, boq_id BIGINT UNSIGNED NOT NULL,
     category VARCHAR(60) NULL DEFAULT NULL, description VARCHAR(300) NOT NULL,
@@ -648,6 +649,8 @@ async function createDailyCostTables() {
     CONSTRAINT fk_cost_task_line FOREIGN KEY(line_id) REFERENCES daily_cost_lines(id) ON DELETE CASCADE,
     CONSTRAINT fk_cost_task_task FOREIGN KEY(task_id) REFERENCES tasks(id)
   ) ENGINE=InnoDB`);
+  await addColumn('daily_cost_lines','labour_hours','DECIMAL(8,3) NULL');
+  await addColumn('daily_cost_lines','labour_snapshot','JSON NULL');
   await addColumn('daily_cost_lines','fuel_float_id','BIGINT UNSIGNED NULL');
   await addColumn('daily_cost_lines','odometer','INT UNSIGNED NULL');
   await addForeignKey('daily_cost_lines','fk_daily_line_float',
@@ -2396,6 +2399,8 @@ async function createBoqImportTables() {
     INDEX idx_boqimport_status(status, id)
   ) ENGINE=InnoDB`);
 
+  await addColumn('boq_imports','financial_adjustments','JSON NULL');
+  await addColumn('boq_imports','adjustments_reviewed','TINYINT NOT NULL DEFAULT 1');
   await query(`CREATE TABLE IF NOT EXISTS boq_import_items (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     import_id BIGINT UNSIGNED NOT NULL,

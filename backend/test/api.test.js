@@ -6389,3 +6389,24 @@ test('Finance and QS share one retention register and Finance manages it without
   const [[saved]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.retentions WHERE description=?`,[description]);assert.equal(Number(saved.n),1);
  }finally{if(prior.length)await admin.query(`INSERT IGNORE INTO ${testDatabase}.role_permissions(role_id,permission_key) VALUES (?,'qs.retention')`,[user.role_id]);}
 });
+
+test('BOQ tax and deduction rates/amounts persist, recalculate with lines and require upload review',async()=>{
+ const owner=await login(),qs=await login('qs@gkuc.lk');const projectId=(await call(owner,'GET','/projects')).body[0].id;
+ const adjustments=[{label:'VAT',direction:'Add',mode:'Percent',value:18},{label:'Retention',direction:'Deduct',mode:'Percent',value:5},{label:'Discount',direction:'Deduct',mode:'Amount',value:30}];
+ const created=await call(qs,'POST','/boq',{projectId,title:'BOQ adjusted financials',adjustments,items:[{description:'Concrete works',unit:'m3',quantity:2,rate:500}]});assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(Number(created.body.total),1100);
+ let detail=(await call(qs,'GET',`/boq/${created.body.id}`)).body;assert.equal(detail.financials.subtotal,1000);assert.equal(detail.financials.adjustments.length,3);
+ const added=await call(qs,'POST',`/boq/${created.body.id}/items`,{description:'Extra material',unit:'item',quantity:1,rate:100});assert.equal(added.status,201,JSON.stringify(added.body));assert.equal(Number(added.body.total),1213);
+ const document=await fetch(`${base}/boq/${created.body.id}/document`,{headers:{authorization:`Bearer ${qs}`}});assert.equal(document.status,200);assert.match(await document.text(),/Work subtotal/);
+ assert.equal((await call(qs,'POST','/boq',{projectId,title:'Invalid tax percent',adjustments:[{...adjustments[0],value:101}],items:[{description:'Works',unit:'item',quantity:1,rate:1000}]})).status,400);
+ const xlsx=writeWorkbook([{name:'BOQ',rows:[['Category','Description of work','Unit','Quantity','Rate (LKR)','Amount (LKR)'],['','Imported works','item',1,1000,1000]]},{name:'Financial summary',rows:[['VAT rate',18],['Other deductions',30]]}]);
+ const form=new FormData();form.append('file',new Blob([xlsx],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'boq-tax.xlsx');form.append('projectId',String(projectId));
+ const uploaded=await fetch(`${base}/boq/import`,{method:'POST',headers:{authorization:`Bearer ${qs}`},body:form});const staged=await uploaded.json();assert.equal(uploaded.status,201,JSON.stringify(staged)+' '+serverOutput.slice(-2200));assert.equal(staged.financialAdjustments.length,2);assert.equal(Number(staged.adjustmentsReviewed),0);
+ assert.equal((await call(qs,'POST',`/boq/imports/${staged.id}/commit`,{projectId})).status,409);
+ assert.equal((await call(qs,'PATCH',`/boq/imports/${staged.id}`,{adjustments:staged.financialAdjustments,adjustmentsReviewed:true})).status,200);
+ const saved=await call(qs,'POST',`/boq/imports/${staged.id}/commit`,{projectId});assert.equal(saved.status,201,JSON.stringify(saved.body));
+ const imported=(await call(qs,'GET',`/boq/${saved.body.boqId||saved.body.id}`)).body;assert.equal(Number(imported.total),1150);assert.equal(imported.items.length,1,'tax summary is not another priced work line');
+ assert.equal((await call(qs,'POST',`/boq/imports/${staged.id}/commit`,{projectId})).status,409);
+ assert.equal((await call(owner,'PATCH',`/boq/${created.body.id}`,{status:'Approved'})).status,200);
+ const [[budget]]=await admin.query(`SELECT p.budget,(SELECT COALESCE(SUM(b.total),0) FROM ${testDatabase}.boqs b WHERE b.project_id=p.id AND b.status='Approved')+(SELECT COALESCE(SUM(v.amount),0) FROM ${testDatabase}.variation_orders v WHERE v.project_id=p.id AND v.status='Approved') expected FROM ${testDatabase}.projects p WHERE p.id=?`,[projectId]);assert.equal(Number(budget.budget),Number(budget.expected));
+ assert.equal((await call(qs,'POST',`/boq/${created.body.id}/items`,{description:'Blocked edit',unit:'item',quantity:1,rate:100})).status,409);
+});

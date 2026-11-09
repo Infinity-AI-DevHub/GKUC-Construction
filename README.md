@@ -468,3 +468,9 @@ Bond lists now emphasize project names and retain bank bond numbers below them.
 Finance → Retention and QS → Retention open the same shared workspace and records.
 Finance managers or users with QS retention permission can add/release there; viewers
 remain read-only. One saved retention appears in both views without a duplicate copy.
+
+BOQ creation supports labelled tax/addition/deduction rows as a percentage of work
+subtotal or fixed LKR amount. Excel/PDF uploads propose recognised financial rows for
+mandatory review; the template includes an optional Adjustments sheet. Saved details
+and printed BOQs show the calculation breakdown. See [BOQ tax/deduction rules and
+import coverage](docs/BOQ_FINANCIALS.md).

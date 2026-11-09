@@ -1,3 +1,4 @@
+import {boqAdjustmentsSchema,calculateBoqFinancials,refreshBoqFinancials} from '../lib/boq-financials.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, nextReference, pool, query, transaction } from '../db.js';
@@ -11,13 +12,14 @@ import { publishChange } from '../lib/realtime.js';
 import { readUpload, readUploadedFile } from '../lib/storage.js';
 import { parseDailyCostWorkbook } from '../lib/daily-cost-workbook.js';
 import { withTaskAssignees } from '../lib/task-assignees.js';
+import { labourReservations, readLabourDay, splitLabourCost } from '../lib/labour-day-cost.js';
 
 const router = Router();
 /* Kept only as the fallback grouping for the cost comparison below; the values people
    may choose come from the option list, which the company maintains itself. */
 const CATEGORIES = ['Material', 'Labour', 'Equipment', 'Subcontract', 'Overhead'];
 
-const select = `SELECT b.id,b.reference,b.title,b.status,b.version,b.total,b.notes,b.terms,b.project_id projectId,p.name project,p.client_id clientId,COALESCE(d.name,p.client) client,
+const select = `SELECT b.id,b.reference,b.title,b.status,b.version,b.total,b.financial_adjustments financialAdjustments,b.notes,b.terms,b.project_id projectId,p.name project,p.client_id clientId,COALESCE(d.name,p.client) client,
   p.company_id companyId,c.name company,
   u.name preparedBy,a.name approvedBy,b.approved_at approvedAt,b.created_at createdAt
   FROM boqs b JOIN projects p ON p.id=b.project_id JOIN companies c ON c.id=p.company_id LEFT JOIN clients d ON d.id=p.client_id
@@ -184,6 +186,7 @@ const dailyLineSchema = z.object({
   quantity: z.number().positive().nullable().optional(), unit: z.string().trim().max(30).nullable().optional(),
   unitRate: z.number().nonnegative().nullable().optional(), amount: z.number().positive(),
   employeeId: z.number().int().positive().nullable().optional(), vehicleId: z.number().int().positive().nullable().optional(),
+  labourHours: z.number().positive().max(999.999).nullable().optional(),
   fuelOrigin: z.enum(['Station','Reserve']).nullable().optional(),
   fuelRecordId: z.number().int().positive().nullable().optional(),
   fuelFloatId: z.number().int().positive().nullable().optional(), odometer: z.number().int().positive().nullable().optional(),
@@ -309,6 +312,16 @@ router.get('/cost-control/options', auth, permit('qs.view','qs.boq','qs.costCont
   res.json({ tasks, employees, vehicles, reserves, fuel, quotationItems, fuelFloats });
 }));
 
+router.get('/cost-control/labour-day', auth, permit('qs.view','qs.boq','qs.costControl','finance.view','finance.manage'), wrap(async (req, res) => {
+  const employeeId = Number(req.query.employeeId), workDate = String(req.query.workDate || '');
+  if (!Number.isInteger(employeeId) || employeeId <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(workDate))
+    throw costError('Choose an employee and a valid work date.');
+  const basis = await readLabourDay(pool, employeeId, workDate);
+  const reserved = await labourReservations(pool, employeeId, workDate, basis);
+  res.json({ ...basis, ...reserved, remainingHours: Math.max(0, basis.workedHours - reserved.reservedHours),
+    remainingAmount: Math.max(0, Math.round((basis.dailyPay - reserved.reservedAmount) * 100) / 100) });
+}));
+
 const completedTaskSchema = z.object({
   projectId: z.number().int().positive(),
   title: z.string().trim().min(3).max(220),
@@ -417,6 +430,7 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
     if (!project) throw costError('Choose an active project site.');
     const fuelRecordsOnSheet = new Set();
     const labourersOnSheet = new Set();
+    const labourAllocation = new Map();
     for (const line of lines) {
       const taskIds = [...new Set(line.taskIds || (line.taskId ? [line.taskId] : []))];
       if (!taskIds.length) throw costError('Select at least one completed work task for every cost line.');
@@ -446,15 +460,36 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
       if (line.source === 'Labour' && line.employeeId) {
         const [[allocated]]=await connection.execute("SELECT id FROM payroll_project_allocations WHERE employee_id=? AND work_date=? AND source_type='Attendance'",[line.employeeId||0,workDate]);
         if(allocated)throw costError('This employee/day is already allocated from payroll. Use the payroll allocation instead of recording a second labour cost.',409);
-        if (labourersOnSheet.has(line.employeeId)) throw costError('A labourer day salary can be charged only once on this sheet.');
+        if (line.labourHours == null && labourersOnSheet.has(line.employeeId)) throw costError('A labourer day salary can be charged only once on this sheet. Use hours allocation to split the day across BOQ items.');
         labourersOnSheet.add(line.employeeId);
         const [[employee]] = await connection.execute('SELECT id FROM visible_employees WHERE id=? AND status<>\'Left\'', [line.employeeId]);
         if (!employee) throw costError('The selected employee is not active. Choose another employee or leave the cost unassigned.');
         const [[already]] = await connection.execute(`SELECT l.id FROM daily_cost_lines l
           JOIN daily_cost_sheets s ON s.id=l.sheet_id
-          WHERE l.employee_id=? AND s.work_date=? AND s.status IN ('Submitted','Approved') LIMIT 1`,
+          WHERE l.employee_id=? AND s.work_date=? AND s.status IN ('Submitted','Approved') AND l.labour_hours IS NULL LIMIT 1`,
           [line.employeeId,workDate]);
         if (already) throw costError('This labourer already has a day-salary cost submitted for that date. Review the earlier sheet before adding another.',409);
+        if (line.labourHours != null) {
+          if (!line.boqItemId) throw costError('Choose a BOQ item for each labour-hours allocation.');
+          let allocation = labourAllocation.get(line.employeeId);
+          if (!allocation) {
+            const basis = await readLabourDay(connection, line.employeeId, workDate);
+            const reserved = await labourReservations(connection, line.employeeId, workDate, basis);
+            if (reserved.blockedReason) throw costError(reserved.blockedReason, 409);
+            allocation = { basis, reservedHours: reserved.reservedHours, reservedAmount: reserved.reservedAmount };
+            labourAllocation.set(line.employeeId, allocation);
+          }
+          const [split] = splitLabourCost(allocation.basis, [{ hours: line.labourHours }], allocation.reservedHours, allocation.reservedAmount);
+          allocation.reservedHours += split.hours;
+          allocation.reservedAmount = Math.round((allocation.reservedAmount + split.amount) * 100) / 100;
+          line.amount = split.amount;
+          line.quantity = split.hours;
+          line.unit = 'hour';
+          line.unitRate = Math.round(allocation.basis.hourlyCost * 100) / 100;
+          line.labourSnapshot = allocation.basis;
+        }
+      } else if (line.labourHours != null) {
+        throw costError('Labour allocation hours require a selected employee on a Labour line.');
       }
       if (line.source === 'Fuel') {
         if (!line.vehicleId || !line.fuelOrigin) throw costError('Fuel needs a vehicle and a source: station or company reserve.');
@@ -498,11 +533,11 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
     for (const line of lines) {
       const [createdLine] = await connection.execute(`INSERT INTO daily_cost_lines
       (sheet_id,task_id,boq_item_id,source,cost_type,description,quantity,unit,unit_rate,amount,
-       employee_id,vehicle_id,fuel_origin,fuel_record_id,fuel_float_id,odometer,reserve_material_id,reference,quotation_item_id,quoted_recovery)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       employee_id,labour_hours,labour_snapshot,vehicle_id,fuel_origin,fuel_record_id,fuel_float_id,odometer,reserve_material_id,reference,quotation_item_id,quoted_recovery)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [created.insertId,line.taskId,line.boqItemId || null,line.source,line.costType,line.description,
         line.quantity || null,line.unit || null,line.unitRate ?? null,line.amount,line.employeeId || null,
-        line.vehicleId || null,line.fuelOrigin || null,line.fuelRecordId || null,line.fuelFloatId || null,line.odometer || null,line.reserveMaterialId || null,
+        line.labourHours ?? null,line.labourSnapshot ? JSON.stringify(line.labourSnapshot) : null,line.vehicleId || null,line.fuelOrigin || null,line.fuelRecordId || null,line.fuelFloatId || null,line.odometer || null,line.reserveMaterialId || null,
         line.reference || null,line.quotationItemId || null,line.quotedRecovery]);
       for (const taskId of line.taskIds) await connection.execute(
         'INSERT INTO daily_cost_line_tasks (line_id,task_id) VALUES (?,?)', [createdLine.insertId,taskId]);
@@ -703,13 +738,14 @@ router.get('/:id', auth, permit('qs.view','qs.boq'), wrap(async (req, res) => {
     const sourceKey = { Subcontract: 'Subcontractor', Overhead: 'Overhead' }[category] || category;
     return { category, estimated, actual: spentBySource[sourceKey] || 0 };
   });
-  res.json({ ...boq, items, variations, comparison });
+  res.json({ ...boq, financials:calculateBoqFinancials(items.reduce((sum,item)=>sum+Number(item.amount),0),boq.financialAdjustments), items, variations, comparison });
 }));
 
 router.post('/', auth, permit('qs.boq'), validate(z.object({
   projectId: z.number().int().positive(),
   title: z.string().min(3).max(1000),
   notes: z.string().max(1000).optional(),
+  adjustments:boqAdjustmentsSchema.optional(),
   items: z.array(itemSchema).min(1)
 })), checkItemCategories, wrap(async (req, res) => {
   const body = req.body;
@@ -724,15 +760,16 @@ router.post('/', auth, permit('qs.boq'), validate(z.object({
     }else priced.push(item);
   }
   const reference = await nextReference('BOQ', 'boqs');
-  const total = priced.reduce((sum, item) => sum + item.quantity * item.rate, 0);
+  const financials=calculateBoqFinancials(priced.reduce((sum,item)=>sum+Math.round(item.quantity*item.rate*100)/100,0),body.adjustments||[]);
+  const total=financials.total;
   const id = await transaction(async connection => {
-    const [result] = await connection.execute('INSERT INTO boqs (project_id,reference,title,total,prepared_by,notes) VALUES (?,?,?,?,?,?)',
-      [body.projectId, reference, body.title, total, req.user.id, body.notes || null]);
+    const [result] = await connection.execute('INSERT INTO boqs (project_id,reference,title,total,prepared_by,notes,financial_adjustments) VALUES (?,?,?,?,?,?,?)',
+      [body.projectId, reference, body.title, total, req.user.id, body.notes || null,JSON.stringify(body.adjustments||[])]);
     for (const item of priced) {
       await connection.execute('INSERT INTO boq_items (boq_id,category,description,unit,quantity,rate,amount,material_id,subcontract_rate_id) VALUES (?,?,?,?,?,?,?,?,?)',
         [result.insertId, item.category || null, item.description, item.unit, item.quantity, item.rate, item.quantity * item.rate, item.materialId || null,item.subcontractRateId||null]);
     }
-    await audit(connection, req.user.id, 'CREATE', 'boq', result.insertId, null, { reference, total }, req.ip);
+    await audit(connection, req.user.id, 'CREATE', 'boq', result.insertId, null, { reference, total,financialAdjustments:body.adjustments||[] }, req.ip);
     return result.insertId;
   });
   res.status(201).json(await getOne(`${select} WHERE b.id=?`, [id]));
@@ -744,9 +781,13 @@ router.post('/:id/items', auth, permit('qs.boq'), validate(itemSchema),
   if (!boq) return res.status(404).json({ error: 'BOQ not found' });
   if (boq.status === 'Approved') return res.status(409).json({ error: 'An approved BOQ cannot be edited — raise a variation order instead' });
   const item = req.body;
-  await query('INSERT INTO boq_items (boq_id,category,description,unit,quantity,rate,amount,material_id) VALUES (?,?,?,?,?,?,?,?)',
-    [boq.id, item.category || null, item.description, item.unit, item.quantity, item.rate, item.quantity * item.rate, item.materialId || null]);
-  await query('UPDATE boqs SET total=(SELECT COALESCE(SUM(amount),0) FROM boq_items WHERE boq_id=?) WHERE id=?', [boq.id, boq.id]);
+  await transaction(async connection=>{
+    const [[locked]]=await connection.execute('SELECT status FROM boqs WHERE id=? FOR UPDATE',[boq.id]);
+    if(locked.status==='Approved')throw Object.assign(new Error('An approved BOQ cannot be edited.'),{status:409});
+    await connection.execute('INSERT INTO boq_items (boq_id,category,description,unit,quantity,rate,amount,material_id) VALUES (?,?,?,?,?,?,?,?)',
+      [boq.id,item.category||null,item.description,item.unit,item.quantity,item.rate,item.quantity*item.rate,item.materialId||null]);
+    await refreshBoqFinancials(connection,boq.id);
+  });
   res.status(201).json(await getOne(`${select} WHERE b.id=?`, [boq.id]));
 }));
 

@@ -263,3 +263,13 @@ User requires the same page, operations, view and records in both modules. Reuse
 shared component and the existing QS retention API/table. Finance managers may add and
 release through that same workflow; Finance viewers remain read-only. Never mirror,
 copy or automatically insert a second retention merely because it is viewed in Finance.
+
+## 2026-11-09 — BOQ taxes and other deductions
+
+User requested tax rates and arbitrary deduction rates/fixed amounts during BOQ creation
+and recognition from uploaded rows/fields/sheets. Persist labelled Add/Deduct entries,
+Percent or Amount, with all percentages explicitly based on work subtotal. Do not assume
+VAT or cascade taxes silently. Recognised source rows are editable proposals requiring
+saved confirmation; preserve originals and prevent counting a summary as priced work too.
+Existing approval remains the budget update event; BOQ pricing does not create a second
+VAT, payment or retention ledger entry. Keep legacy/no-adjustment BOQs unchanged.
