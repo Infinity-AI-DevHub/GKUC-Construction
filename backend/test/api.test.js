@@ -1581,7 +1581,7 @@ test('client directory links projects, quotations, invoices and payments without
     path: 'https://outside.example/qs/quotations/1/document?download=pdf'
   })).status, 400);
   const invoiceBody = { projectId: project.body.id, clientId, kind: 'Interim', title: 'Client-linked invoice',
-    invoiceDate: today(), deliveryDate: today(), placeOfSupply: 'Project Site Road', paymentMode: 'Cheque',
+    invoiceDate: today(), deliveryDate: today(), placeOfSupply: 'Project Site Road', paymentMode: 'Cheque', bankDetails:'Invoice bank snapshot 123',
     taxTreatment: 'Exempt', retentionPercent: 0, advanceRecovery: 0,
     otherDeductions: 0, items: [{ description: 'Construction labour', quantity: 2, rate: 1000 }] };
   const wrong = await call(owner, 'POST', '/receivables/invoices', { ...invoiceBody, clientId: clientId + 99999 });
@@ -1591,6 +1591,7 @@ test('client directory links projects, quotations, invoices and payments without
   const invoicePage = await fetch(`${base}/receivables/invoices/${invoice.body.id}/document`, { headers: { authorization: `Bearer ${owner}` } });
   assert.equal(invoicePage.status, 200);
   const invoiceHtml = await invoicePage.text();
+  assert.match(invoiceHtml,/Invoice bank snapshot 123/);
   const invoiceText = invoiceHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').toLowerCase();
   for (const detail of ['TIN-12345', 'VAT-98765', 'Project Site Road', 'Mode of payment: Cheque', 'Total amount in words']) {
     assert.ok(invoiceText.includes(detail.toLowerCase()), `${detail} should appear on the invoice`);
@@ -1677,7 +1678,12 @@ test('Finance invoices support approved BOQ lines, standalone work and several c
   const source = await call(owner, 'GET', `/receivables/boq-lines?projectId=${project.body.id}`);
   assert.equal(source.status, 200);
   const item = source.body.find(row => row.description === 'Measured labour');
-  assert.ok(item);
+  assert.ok(item);assert.equal(Number(item.boqId),Number(boq.body.id));
+  const quote=await call(owner,'POST','/qs/quotations',{boqId:boq.body.id,markupPercent:10,vatPercent:0});assert.equal(quote.status,201,JSON.stringify(quote.body));
+  assert.equal((await call(owner,'PATCH',`/qs/quotations/${quote.body.id}`,{status:'Sent'})).status,200);
+  const issuedLines=await call(owner,'GET',`/receivables/quote-lines?projectId=${project.body.id}`);assert.equal(issuedLines.status,200);assert.ok(issuedLines.body.some(row=>Number(row.quotationId)===Number(quote.body.id)&&row.status==='Sent'));
+  const sentLine=issuedLines.body.find(row=>Number(row.quotationId)===Number(quote.body.id));
+  const sentInvoice=await call(owner,'POST','/receivables/invoices',{companyId:1,projectId:project.body.id,clientId:client.body.id,title:'Issued quotation work',invoiceDate:today(),documentType:'Invoice',taxTreatment:'Exempt',items:[{quotationItemId:sentLine.id,description:sentLine.description,unit:sentLine.unit,quantity:1,rate:1}]});assert.equal(sentInvoice.status,201,JSON.stringify(sentInvoice.body));assert.equal(Number(sentInvoice.body.gross),1100);
   const taxInvoice = await call(owner, 'POST', '/receivables/invoices', {
     companyId: 1, projectId: project.body.id, clientId: client.body.id, kind: 'Interim',
     documentType: 'Tax Invoice', taxTreatment: 'Standard', vatRate: 18,
@@ -1725,7 +1731,7 @@ test('Finance invoices support approved BOQ lines, standalone work and several c
   const listing = await call(owner, 'GET', '/receivables/invoices?companyId=1');
   assert.equal(listing.body.find(row => row.id === standard.body.id).project, 'No project');
   const profile = await call(owner, 'GET', `/clients/${client.body.id}`);
-  assert.equal(profile.body.invoices.length, 2);
+  assert.equal(profile.body.invoices.length, 3);
   assert.equal(profile.body.payments.length, 2);
   const reporting = await call(owner, 'GET', '/finance/reporting?companyId=1');
   assert.equal(reporting.status, 200);
@@ -3109,6 +3115,11 @@ test('monthly management pack separates companies and preserves versioned close 
   assert.equal(statements.body.financialPosition.find(row=>row.label==='Accounts receivable').amount,initial.body.workingCapital.receivables);
   assert.equal(statements.body.incomeStatement.find(row=>row.label==='Operating Profit / (Loss) — recorded sources').amount,initial.body.accrual.result);
   assert.equal(statements.body.financialPosition.find(row=>row.label==='Total Assets').amount,null);
+  const ranged=await call(owner,'GET',`/finance/financial-statements?companyId=1&from=${period}-02&to=${period}-15`);
+  assert.equal(ranged.status,200,JSON.stringify(ranged.body));assert.equal(ranged.body.asAt,`${period}-15`);assert.equal(ranged.body.from,`${period}-02`);
+  for(const dates of ['from=2026-02-30&to=2026-03-01','from=2026-11-10&to=2026-11-01','from=2026-11-01'])assert.equal((await call(owner,'GET',`/finance/financial-statements?companyId=1&${dates}`)).status,400);
+  const doc=await fetch(`${base}/finance/financial-statements/document?companyId=1&from=${period}-02&to=${period}-15`,{headers:{authorization:`Bearer ${owner}`}});
+  assert.equal(doc.status,200);assert.match(await doc.text(),/Developed by Infinity AI/);
   const otherStatement=await call(owner,'GET',statementsUrl(2));
   assert.equal(otherStatement.body.company.id,2);
   const change = await call(owner, 'POST', '/finance/management-accounts/adjustments', {
@@ -5318,8 +5329,8 @@ test('invoices can be saved, issued and paid without a named client',async()=>{
   assert.equal(Number(detail.company_id),1);
   const html=await (await fetch(`${base}/receivables/invoices/${saved.body.id}/document`,{
     headers:{authorization:`Bearer ${finance}`}})).text();
-  assert.match(html,/Purchaser's Name:<\/strong> <span class="write-in">\.{20,}/);
-  assert.match(html,/Purchaser's TIN:<\/strong> <span class="write-in">\.{20,}/);
+  assert.match(html,/Invoice for/);
+  assert.doesNotMatch(html,/Purchaser TIN:/);
   assert.equal((await call(finance,'POST',`/receivables/invoices/${saved.body.id}/issue`)).status,204);
   assert.equal((await call(finance,'POST',`/receivables/invoices/${saved.body.id}/receipts`,{
     amount:1180,receivedDate:today(),method:'Cash'})).status,201);
@@ -6388,4 +6399,121 @@ test('Finance and QS share one retention register and Finance manages it without
   assert.equal((await call(finance,'POST',`/qs/retentions/${created.body.id}/release`,{amount:1})).status,409);
   const [[saved]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.retentions WHERE description=?`,[description]);assert.equal(Number(saved.n),1);
  }finally{if(prior.length)await admin.query(`INSERT IGNORE INTO ${testDatabase}.role_permissions(role_id,permission_key) VALUES (?,'qs.retention')`,[user.role_id]);}
+});
+
+test('BOQ tax and deduction rates/amounts persist, recalculate with lines and require upload review',async()=>{
+ const owner=await login(),qs=await login('qs@gkuc.lk');const projectId=(await call(owner,'GET','/projects')).body[0].id;
+ const adjustments=[{label:'VAT',direction:'Add',mode:'Percent',value:18},{label:'Retention',direction:'Deduct',mode:'Percent',value:5},{label:'Discount',direction:'Deduct',mode:'Amount',value:30}];
+ const created=await call(qs,'POST','/boq',{projectId,title:'BOQ adjusted financials',adjustments,items:[{description:'Concrete works',unit:'m3',quantity:2,rate:500}]});assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(Number(created.body.total),1100);
+ let detail=(await call(qs,'GET',`/boq/${created.body.id}`)).body;assert.equal(detail.financials.subtotal,1000);assert.equal(detail.financials.adjustments.length,3);
+ const added=await call(qs,'POST',`/boq/${created.body.id}/items`,{description:'Extra material',unit:'item',quantity:1,rate:100});assert.equal(added.status,201,JSON.stringify(added.body));assert.equal(Number(added.body.total),1213);
+ const document=await fetch(`${base}/boq/${created.body.id}/document`,{headers:{authorization:`Bearer ${qs}`}});assert.equal(document.status,200);assert.match(await document.text(),/Work subtotal/);
+ assert.equal((await call(qs,'POST','/boq',{projectId,title:'Invalid tax percent',adjustments:[{...adjustments[0],value:101}],items:[{description:'Works',unit:'item',quantity:1,rate:1000}]})).status,400);
+ const xlsx=writeWorkbook([{name:'BOQ',rows:[['Category','Description of work','Unit','Quantity','Rate (LKR)','Amount (LKR)'],['','Imported works','item',1,1000,1000]]},{name:'Financial summary',rows:[['VAT rate',18],['Other deductions',30]]}]);
+ const form=new FormData();form.append('file',new Blob([xlsx],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),'boq-tax.xlsx');form.append('projectId',String(projectId));
+ const uploaded=await fetch(`${base}/boq/import`,{method:'POST',headers:{authorization:`Bearer ${qs}`},body:form});const staged=await uploaded.json();assert.equal(uploaded.status,201,JSON.stringify(staged)+' '+serverOutput.slice(-2200));assert.equal(staged.financialAdjustments.length,2);assert.equal(Number(staged.adjustmentsReviewed),0);
+ assert.equal((await call(qs,'POST',`/boq/imports/${staged.id}/commit`,{projectId})).status,409);
+ assert.equal((await call(qs,'PATCH',`/boq/imports/${staged.id}`,{adjustments:staged.financialAdjustments,adjustmentsReviewed:true})).status,200);
+ const saved=await call(qs,'POST',`/boq/imports/${staged.id}/commit`,{projectId});assert.equal(saved.status,201,JSON.stringify(saved.body));
+ const imported=(await call(qs,'GET',`/boq/${saved.body.boqId||saved.body.id}`)).body;assert.equal(Number(imported.total),1150);assert.equal(imported.items.length,1,'tax summary is not another priced work line');
+ assert.equal((await call(qs,'POST',`/boq/imports/${staged.id}/commit`,{projectId})).status,409);
+ assert.equal((await call(owner,'PATCH',`/boq/${created.body.id}`,{status:'Approved'})).status,200);
+ const [[budget]]=await admin.query(`SELECT p.budget,(SELECT COALESCE(SUM(b.total),0) FROM ${testDatabase}.boqs b WHERE b.project_id=p.id AND b.status='Approved')+(SELECT COALESCE(SUM(v.amount),0) FROM ${testDatabase}.variation_orders v WHERE v.project_id=p.id AND v.status='Approved') expected FROM ${testDatabase}.projects p WHERE p.id=?`,[projectId]);assert.equal(Number(budget.budget),Number(budget.expected));
+ assert.equal((await call(qs,'POST',`/boq/${created.body.id}/items`,{description:'Blocked edit',unit:'item',quantity:1,rate:100})).status,409);
+});
+
+test('statement date ranges filter earned revenue and retain balances through end date',async()=>{
+ const owner=await login();
+ const baseBody={companyId:1,title:'Range boundary work',documentType:'Invoice',taxTreatment:'Exempt',items:[{description:'Boundary work',quantity:1,rate:100}]};
+ for(const date of ['2049-01-31','2049-02-01','2049-02-15','2049-02-16']){
+  const result=await call(owner,'POST','/receivables/invoices',{...baseBody,invoiceDate:date});assert.equal(result.status,201,JSON.stringify(result.body));
+  assert.equal((await call(owner,'POST',`/receivables/invoices/${result.body.id}/issue`,{})).status,204);
+ }
+ const report=await call(owner,'GET','/finance/financial-statements?companyId=1&from=2049-02-01&to=2049-02-15');assert.equal(report.status,200,JSON.stringify(report.body));
+ assert.equal(report.body.incomeStatement.find(row=>row.label==='Sales / work revenue').amount,200);
+ const narrower=await call(owner,'GET','/finance/financial-statements?companyId=1&from=2049-02-15&to=2049-02-15');
+ assert.equal(narrower.body.incomeStatement.find(row=>row.label==='Sales / work revenue').amount,100);
+ assert.equal(narrower.body.financialPosition.find(row=>row.label==='Accounts receivable').amount,report.body.financialPosition.find(row=>row.label==='Accounts receivable').amount);
+ const response=await fetch(`${base}/finance/financial-statements/document?companyId=1&from=2049-02-01&to=2049-02-15&download=pdf`,{headers:{authorization:`Bearer ${owner}`}});assert.equal(response.status,200);assert.equal(Buffer.from(await response.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
+});
+
+
+test('invoice quotation-style details and creator signatory are saved independently of printing user',async()=>{
+ const owner=await login(),finance=await login('finance@gkuc.lk');
+ const [[user]]=await admin.query(`SELECT u.id,u.name,r.name role FROM ${testDatabase}.users u JOIN ${testDatabase}.roles r ON r.id=u.role_id WHERE u.email='finance@gkuc.lk'`);
+ const identity=await call(finance,'GET','/receivables/invoice-identity?companyId=1');assert.equal(identity.status,200,JSON.stringify(identity.body));
+ for(const endpoint of ['/company-bank-accounts?companyId=1','/qs/quotation-note-templates','/qs/methods'])assert.equal((await call(finance,'GET',endpoint)).status,200,endpoint);
+ const bank=await call(owner,'POST','/company-bank-accounts',{companyId:1,label:'Invoice test bank',bankName:'Sample Bank',accountName:'Company Account',accountNumber:'12345678'});assert.equal(bank.status,201,JSON.stringify(bank.body));
+ const body={companyId:1,title:'Creator signature test',documentType:'Invoice',taxTreatment:'Exempt',invoiceDate:today(),bankAccountId:bank.body.id,notes:'Only entered invoice notes',paymentTerms:'Pay on completion',additionalNotes:'Invoice additional note',terms:'Agreed invoice terms',preparedByName:'Spoofed Name',preparedByDesignation:'Spoofed Role',items:[{description:'Work item',category:'Concrete',area:'C-1',methodStatement:'Clean area then place concrete',quantity:1,rate:1200}]};
+ const saved=await call(finance,'POST','/receivables/invoices',body);assert.equal(saved.status,201,JSON.stringify(saved.body));
+ const detail=(await call(finance,'GET',`/receivables/invoices/${saved.body.id}`)).body;const options=typeof detail.invoice_options==='string'?JSON.parse(detail.invoice_options):detail.invoice_options;
+ assert.equal(options.creator.name,user.name);assert.equal(options.creator.role,user.role);assert.equal(Number(options.creator.userId),Number(user.id));assert.equal(options.presentation.bank.accountNumber,'12345678');
+ await admin.query(`UPDATE ${testDatabase}.users SET name='Later profile name' WHERE id=?`,[user.id]);
+ try{
+  const response=await fetch(`${base}/receivables/invoices/${saved.body.id}/document`,{headers:{authorization:`Bearer ${owner}`}});assert.equal(response.status,200);const html=await response.text();
+  for(const text of [user.name,user.role,'Prepared by:','Pay on completion','Invoice additional note','Agreed invoice terms','Clean area then place concrete','12345678','Invoice for'])assert.ok(html.includes(text),text);
+  assert.doesNotMatch(html,/Spoofed Name|Spoofed Role|Later profile name|Quotation for/);
+ }finally{await admin.query(`UPDATE ${testDatabase}.users SET name=? WHERE id=?`,[user.name,user.id]);}
+ assert.equal((await call(finance,'POST','/receivables/invoices',{...body,companyId:2})).status,400,'bank account must belong to invoice company');
+});
+
+test('project company moves linked commercial records and repairs an older mismatch',async()=>{
+ const owner=await login(),stamp=Date.now();
+ const project=await call(owner,'POST','/projects',{companyId:1,name:`Move QA ${stamp}`,client:`Move client ${stamp}`,manager:'Project Manager',site:'Move site',stage:'Mid-way'});assert.equal(project.status,201,JSON.stringify(project.body));const pid=project.body.id;
+ const boq=await call(owner,'POST','/boq',{projectId:pid,title:'Move work',items:[{category:'Labour',description:'Work',unit:'sum',quantity:1,rate:1000}]});assert.equal(boq.status,201);assert.equal((await call(owner,'PATCH',`/boq/${boq.body.id}`,{status:'Approved'})).status,200);
+ const quote=await call(owner,'POST','/qs/quotations',{boqId:boq.body.id,markupPercent:0,vatPercent:0});assert.equal(quote.status,201,JSON.stringify(quote.body));
+ const invoice=await call(owner,'POST','/receivables/invoices',{companyId:1,projectId:pid,title:'Move invoice',invoiceDate:today(),documentType:'Invoice',taxTreatment:'Exempt',bankDetails:'Original bank',items:[{description:'Work',quantity:1,rate:1000}]});assert.equal(invoice.status,201,JSON.stringify(invoice.body));
+ const bond=await call(owner,'POST','/receivables/bonds',{companyId:1,projectId:pid,kind:'Performance',beneficiary:'Client',bank:'Bank',amount:500,issuedDate:today(),expiryDate:shift(100)});assert.equal(bond.status,201,JSON.stringify(bond.body));
+ const supplier=await call(owner,'POST','/purchasing/suppliers',{name:`Move supplier ${stamp}`});assert.equal(supplier.status,201);
+ const po=await call(owner,'POST','/purchasing/orders',{supplierId:supplier.body.id,projectId:pid,orderDate:today(),items:[{description:'Work',unit:'sum',quantity:1,rate:1000}]});assert.equal(po.status,201,JSON.stringify(po.body));
+ await admin.query(`UPDATE ${testDatabase}.purchase_orders SET status='Issued' WHERE id=?`,[po.body.id]);
+ const si=await call(owner,'POST','/purchasing/invoices',{companyId:1,orderId:po.body.id,supplierId:supplier.body.id,invoiceNo:`MOVE-${stamp}`,amount:1000,taxTreatment:'Exempt',invoiceDate:today()});assert.equal(si.status,201,JSON.stringify(si.body));
+ await admin.query(`INSERT INTO ${testDatabase}.supplier_payments(invoice_id,amount,paid_date,method,created_by) VALUES (?,100,?,'Cash',1)`,[si.body.id,today()]);
+ const moved=await call(owner,'PATCH',`/projects/${pid}`,{companyId:2});assert.equal(moved.status,200,JSON.stringify(moved.body));
+ for(const [table,id] of [['quotations_client',quote.body.id],['client_invoices',invoice.body.id],['bank_bonds',bond.body.id],['supplier_invoices',si.body.id]]){const [[row]]=await admin.query(`SELECT company_id FROM ${testDatabase}.${table} WHERE id=?`,[id]);assert.equal(Number(row.company_id),2,table);}
+ const [[payment]]=await admin.query(`SELECT payment_company_id FROM ${testDatabase}.supplier_payments WHERE invoice_id=?`,[si.body.id]);assert.equal(Number(payment.payment_company_id),1);
+ assert.ok((await call(owner,'GET','/qs/quotations?companyId=2')).body.some(row=>row.id===quote.body.id));
+ assert.ok(!(await call(owner,'GET','/qs/quotations?companyId=1')).body.some(row=>row.id===quote.body.id));
+ const detail=(await call(owner,'GET',`/receivables/invoices/${invoice.body.id}`)).body;assert.equal(Number(detail.net_payable),1000);const opts=typeof detail.invoice_options==='string'?JSON.parse(detail.invoice_options):detail.invoice_options;assert.equal(opts.bankDetails,'');assert.match(opts.presentation.company.name,/Readymix/i);assert.ok(opts.creator.name);
+ await admin.query(`UPDATE ${testDatabase}.bank_bonds SET company_id=1 WHERE id=?`,[bond.body.id]);assert.equal((await call(owner,'PATCH',`/projects/${pid}`,{companyId:2})).status,200);const [[fixed]]=await admin.query(`SELECT company_id FROM ${testDatabase}.bank_bonds WHERE id=?`,[bond.body.id]);assert.equal(Number(fixed.company_id),2);
+ assert.equal((await call(owner,'PATCH',`/projects/${pid}`,{companyId:1})).status,200);
+ const [[back]]=await admin.query(`SELECT company_id,net_payable FROM ${testDatabase}.client_invoices WHERE id=?`,[invoice.body.id]);assert.equal(Number(back.company_id),1);assert.equal(Number(back.net_payable),1000);
+ const collisionRef=`MOVE-COLLISION-${stamp}`;
+ for(const companyId of [1,2])await admin.query(`INSERT INTO ${testDatabase}.operating_bills(company_id,project_id,bill_type,provider,reference,bill_date,due_date,net_amount,tax_treatment,total_amount,created_by) VALUES (?,?,'Other','Same provider',?,?,?,100,'Exempt',100,1)`,[companyId,companyId===1?pid:null,collisionRef,today(),today()]);
+ const blocked=await call(owner,'PATCH',`/projects/${pid}`,{companyId:2});assert.equal(blocked.status,409,JSON.stringify(blocked.body));
+ const [[unchanged]]=await admin.query(`SELECT company_id FROM ${testDatabase}.projects WHERE id=?`,[pid]);assert.equal(Number(unchanged.company_id),1);
+ const [[unchangedQuote]]=await admin.query(`SELECT company_id FROM ${testDatabase}.quotations_client WHERE id=?`,[quote.body.id]);assert.equal(Number(unchangedQuote.company_id),1,'duplicate rolls back the full transfer');
+
+});
+
+test('supplier batch payments settle selected credits through direct or petty cash once',async()=>{
+ const owner=await login(),finance=await login('finance@gkuc.lk'),stamp=Date.now();
+ const supplier=await call(owner,'POST','/purchasing/suppliers',{name:`Batch credit supplier ${stamp}`});assert.equal(supplier.status,201);
+ const invoices=[];
+ for(let i=0;i<3;i++){
+  const saved=await call(finance,'POST','/purchasing/invoices',{companyId:1,supplierId:supplier.body.id,invoiceNo:`BATCH-${stamp}-${i}`,amount:1000+i*10,invoiceDate:today(),dueDate:shift(10),creditReminder:{description:'Credit work',startDate:today(),frequency:'Once',userIds:[1]}});assert.equal(saved.status,201,JSON.stringify(saved.body));invoices.push(saved.body.id);
+  assert.equal((await call(owner,'POST',`/purchasing/invoices/${saved.body.id}/payment-exception`,{reason:'Independent review of supplier credit evidence'})).status,204);
+ }
+ const float=await call(owner,'POST','/receivables/petty-cash',{companyId:1,name:`Batch petty ${stamp}`,accountType:'Office expenses',holderName:'Cashier',openingBalance:500,openingDate:today()});assert.equal(float.status,201,JSON.stringify(float.body));
+ const cashBefore=(await call(finance,'GET',`/finance/cash-comparison?companyId=1&period=${today().slice(0,7)}`)).body.current.payments;
+ const payload={companyId:1,supplierId:supplier.body.id,clientRef:`batch-${stamp}-direct`,source:'Direct',paidDate:today(),method:'Cash',items:[{invoiceId:invoices[0],amount:100},{invoiceId:invoices[1],amount:200}]};
+ const direct=await call(finance,'POST','/purchasing/supplier-payments/batch',payload);assert.equal(direct.status,201,JSON.stringify(direct.body));assert.equal(direct.body.payments.length,2);
+ const replay=await call(finance,'POST','/purchasing/supplier-payments/batch',payload);assert.equal(replay.status,200);assert.equal(replay.body.id,direct.body.id);
+ assert.equal((await call(finance,'POST','/purchasing/supplier-payments/batch',{...payload,items:[{invoiceId:invoices[0],amount:1}]})).status,409);
+ const petty={...payload,clientRef:`batch-${stamp}-petty`,source:'Petty cash',floatId:float.body.id,items:[{invoiceId:invoices[0],amount:150},{invoiceId:invoices[2],amount:250}]};
+ const paid=await call(finance,'POST','/purchasing/supplier-payments/batch',petty);assert.equal(paid.status,201,JSON.stringify(paid.body));assert.equal((await call(finance,'POST','/purchasing/supplier-payments/batch',petty)).status,200);
+ const floats=(await call(owner,'GET','/receivables/petty-cash?companyId=1')).body;assert.equal(Number(floats.find(row=>row.id===float.body.id).balance),100);
+ const [[count]]=await admin.query(`SELECT COUNT(*) n,SUM(amount) amount FROM ${testDatabase}.supplier_payments WHERE invoice_id IN (?,?,?)`,invoices);assert.equal(Number(count.n),4);assert.equal(Number(count.amount),700);
+ const [[entries]]=await admin.query(`SELECT COUNT(*) n,SUM(amount) amount FROM ${testDatabase}.petty_cash_entries WHERE float_id=? AND kind='Spend'`,[float.body.id]);assert.equal(Number(entries.n),2);assert.equal(Number(entries.amount),-400);
+ const daily=(await call(finance,'GET',`/finance/daily-expenses?companyId=1&date=${today()}`)).body;const related=daily.entries.filter(row=>row.payee===`Batch credit supplier ${stamp}`);assert.equal(related.length,4);assert.equal(related.reduce((sum,row)=>sum+row.amount,0),700,'petty-linked supplier payments appear only once');
+ const cashAfter=(await call(finance,'GET',`/finance/cash-comparison?companyId=1&period=${today().slice(0,7)}`)).body.current.payments;assert.equal(cashAfter-cashBefore,700,'cash comparison excludes duplicate linked supplier payments');
+ const failed=await call(finance,'POST','/purchasing/supplier-payments/batch',{...petty,clientRef:`batch-${stamp}-failure`,items:[{invoiceId:invoices[0],amount:101}]});assert.equal(failed.status,409);
+ const rollback=await call(finance,'POST','/purchasing/supplier-payments/batch',{...payload,clientRef:`batch-${stamp}-rollback`,items:[{invoiceId:invoices[0],amount:1},{invoiceId:invoices[1],amount:99999}]});assert.equal(rollback.status,409);
+ const [[balance]]=await admin.query(`SELECT paid_amount FROM ${testDatabase}.supplier_invoices WHERE id=?`,[invoices[0]]);assert.equal(Number(balance.paid_amount),250,'failed batch rolls all rows back');
+ assert.equal((await call(finance,'POST','/purchasing/supplier-payments/batch',{...payload,clientRef:`batch-${stamp}-scope`,companyId:2})).status,400);
+ const store=await login('store@gkuc.lk');assert.equal((await call(store,'POST','/purchasing/supplier-payments/batch',{...payload,clientRef:`batch-${stamp}-deny`})).status,403);
+ assert.equal((await call(finance,'POST','/purchasing/supplier-payments/batch',{...payload,clientRef:`batch-${stamp}-duplicate`,items:[payload.items[0],payload.items[0]]})).status,400);
+ const cheque=await call(finance,'POST','/purchasing/cheques',{companyId:1,supplierId:supplier.body.id,invoiceIds:[invoices[2]],chequeNumber:`RESERVE-${stamp}`,bank:'QA bank',payee:'Supplier',purpose:'Reserved payment',amount:770,issueDate:today(),chequeDate:today()});assert.equal(cheque.status,201,JSON.stringify(cheque.body));
+ assert.equal((await call(finance,'POST','/purchasing/supplier-payments/batch',{...payload,clientRef:`batch-${stamp}-reserved`,items:[{invoiceId:invoices[2],amount:1}]})).status,409);
+
 });

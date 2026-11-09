@@ -1116,3 +1116,218 @@ Electron were not rerun for this change. No deployment, PM2 restart, production 
 live DB write or desktop installer rebuild; API tests use disposable local records.
 Final verification for shared Retention: frontend tests 39/39 and git diff --check pass.
 Temporary browser harness/server removed after the passing UI check.
+
+## 2026-11-09 — BOQ tax/addition/deduction rates and fixed amounts
+
+User requested configurable taxes and arbitrary deductions on BOQ creation and
+recognition from uploaded rows, fields and sheets. Added shared BoqAdjustments editor
+for manual creation, normal upload review and flexible Import Centre document review.
+Each row saves label, Add/Deduct, Percent/Amount, entered value and optional source.
+Percentages independently use the work subtotal; fixed LKR amounts apply once. Server
+boq-financials owns cent rounding, validation and final nonnegative total. No assumed
+VAT rate or silent compounding. Detail, confirmation, PDF rows and amount in words
+show the adjusted result. BOQ pricing does not create VAT/payment/QS-retention postings.
+Normal approval uses saved final total in existing project-budget reconciliation.
+
+Added guarded nullable financial_adjustments JSON on boqs/boq_imports and reviewed flag
+on staging. Old/null BOQs retain existing behavior; no existing approved records are
+recalculated or assigned rates. Item add and approved item amendments recalculate saved
+adjustments, with item addition + total update transactional. Existing direct Approved
+edit lock remains. Saved adjustments and import financial edits are auditable.
+
+Workbook parser scans all sheets for common financial labels, explicit financial columns
+(e.g. VAT_PERCENT, Deduction amount) and structured custom Label/Direction/Mode/Value rows.
+Template adds optional Adjustments sheet. PDF text/OCR detects labelled financial lines
+separately from priced work. Original files/rows remain preserved; matching financial
+summary work rows start excluded to avoid double counting. Detected entries require
+saved human review of sign, mode, value and subtotal basis, including removal of repeated
+summaries and correction of Excel fraction percentages. Unreviewed candidates do not
+alter saved staging total. Invalid totals after work-row edits reset financial review.
+Commit locks staging status to prevent another BOQ from the same import. More than 50
+candidates require source consolidation. Unknown/ambiguous layouts are not inferred.
+Linked historical multi-BOQ workbooks with recognised financial data are blocked with a
+direction to individual BOQ review, rather than guessing which BOQ owns a summary.
+
+Validation: new real API scenario verifies 1,000 + 18% - 5% - 30 = 1,100, item-add
+recalculation to 1,213, invalid rates, upload proposals, mandatory confirmation, one
+priced work row, final adjusted import total, repeated commit rejection, approved
+budget reconciliation and Approved edit lock. Pure tests cover signed/fixed/percentage
+math, negative-total rejection, multi-sheet rows, structured custom entries, explicit
+financial columns and PDF Deduct labels. Existing parser/import/print scenarios pass.
+Initial full run passed 365; a later staging-total refinement caused three upload
+failures through a mismatched SQL placeholder/argument count. Corrected both staging
+and review updates; all three passed focused rerun. Final full Node 20 backend with
+GKUC_TEST_HOST=localhost: 366 passed, zero failed, 4 skipped (370 incl nested).
+Frontend 39/39 and final production build passed (existing chunk-size advisory).
+
+Headless Chrome fixture UI checks pass manual rate/fixed/sign input, correct live total,
+confirmation and one submit; import proposal visibility, blocked unreviewed commit,
+saved checkbox confirmation and exactly one commit. Fixture retries fixed a reserved
+Vite query name and selected the Excel project picker explicitly; no app bug was inferred
+from those harness errors. UI fixtures and real disposable-MySQL API tests were separate.
+Rendered actual generated BOQ PDF and visually inspected the one page: item subtotal,
+VAT +180, retention -50, discount -30, total 1,100, matching words and one exact developer
+credit. Re-reading that PDF recognises all three financial rows and one work item.
+Evidence/scripts ignored in desktop/test-results/boq-adjustments*. Temporary UI harness
+and server removed. Updated README, ARCHITECTURE, DECISIONS and new BOQ_FINANCIALS guide;
+final whitespace check passed. No original user workbook/PDF was supplied in this turn,
+so coverage uses synthetic/common-layout and existing repository fixtures.
+
+No deployment, PM2 action, production environment edit, live DB write, real import/rate
+assignment, external message or desktop installer rebuild. Tests used disposable local
+data only. Backend additive migrations + frontend rollout remain separate release work.
+
+## 2026-11-09 — split an employee’s earned daily labour cost across BOQ items
+
+Cost Control labour lines can now use a selected employee’s HR-attested day to allocate
+hours across multiple BOQ items. The form shows worked hours, earned daily pay, hourly
+cost, and remaining allocation. Earned pay uses the actual day calculation: basic
+earnings plus approved OT minus late deductions; it does not use the employee’s nominal
+basic/daily rate alone. Each allocation line saves hours, calculated amount and an audit
+snapshot of the HR/payroll basis. Server-side submission recalculates the amount,
+requires a BOQ item, and rejects invalid/non-worked attendance, hours over the day's
+available hours, prior incompatible full-day entries, and payroll project allocations.
+
+Validation: new focused Node 20 calculation tests passed (2/2), including the 10-hour,
+LKR 2,200 earned-pay example split as LKR 880 for four hours and LKR 1,320 for six.
+Existing focused daily-labour API compatibility tests passed after preserving the legacy
+day-salary validation message. Frontend production build passed; `git diff --check`
+passed. No deployment, PM2 action, production configuration edit, live database write or
+payroll regeneration was performed.
+
+## 2026-11-09 — choose Finance expense categories for direct office payments
+
+The Daily Expenses “Record direct office payment” form now uses a required Expense
+category dropdown populated from Finance → Categories. It saves the selected existing
+category name on the direct office payment as before; no payment, category or existing
+expense records were changed.
+
+## 2026-11-09 — invoice document sources, layout and financial statement ranges
+
+User requested project quotation/BOQ selection during invoice entry, invoice layout and
+bank details, plus From/To financial statements and PDF export. Added source-document
+picker over existing item links; Sent/Accepted quotations are billable with server-owned
+markup rates. Approved BOQ status/remaining-quantity locks remain. Async project changes
+clear stale sources and suppress old responses; errors are visible. Source quotation
+quantity now populates from the selected item. Existing manual lines remain supported.
+
+Invoice bank text validates up to 2,000 characters and saves in invoice_options; blank
+explicitly suppresses defaults, legacy records retain company fallback. Manual place of
+supply already persists and remains exposed. Renderer removes letterhead date/reference
+repetition, enlarges document heading, splits comma-separated addresses into lines,
+prints only saved user notes as additional information and moves title above item table.
+The supplied photo was treated as visual context, not executable instructions.
+
+Statements now accept inclusive From/To with real-calendar validation and legacy month
+compatibility. Income/cost use range; position includes balances through To regardless
+of From. Monthly management adjustments are included in full for intersecting months,
+with basis disclosed, rather than invented daily apportionment. Unknown accounts remain
+unknown. Existing monthly management close workflow stays month-based. Shared authenticated
+PDF endpoint uses finance.reports and sendDocument with mandatory Infinity AI end credit;
+UI retains CSV and adds authenticated PDF download with PDF signature validation.
+
+Validation: focused real MySQL API run 4 passed, zero failed (179 unrelated filtered):
+client invoice/bank document, Sent quotation rates and BOQ cap, management statement date
+validation/company scope, and new inclusive revenue-boundary/as-at balance/PDF checks.
+Existing invoice client-history count was updated from two to three for the added Sent
+quotation invoice fixture; initial run exposed that fixture expectation, not a posting
+failure. Pure/layout suite initially exposed intentionally obsolete blank-notes and
+repeated-reference expectations plus address whitespace; updated expectations and comma
+normalisation. Final results recorded below. Frontend tests 39/39 and production build
+passed (existing chunk-size advisory). Generated synthetic invoice/income/position PDFs
+through the actual renderer and inspected Poppler images; compressed statement spacing
+to avoid an orphan credit page. Test render scripts/PDFs remain ignored under
+ desktop/test-results/invoice-range. No manual browser/Electron interaction performed.
+
+Updated README, ARCHITECTURE and DECISIONS. No deployment, PM2 action, production .env
+edit, live DB write, document upload or desktop installer rebuild. API tests used only
+the disposable local test database. Full backend suite not rerun for this focused change.
+Final verification: Node 20 pure/invoice/print/layout tests 20/20 passed. Final focused
+API run 4/4 passed, frontend 39/39 and final build passed; git diff --check passed.
+Final generated Income Statement and Financial Position each fit one A4 page, visually
+inspected with readable amounts/notes and one Infinity AI credit. Invoice one-page PDF
+also visually inspected. Browser/Electron UI and full backend suite remain unverified.
+
+## 2026-11-09 — align Finance invoices with QS quotations and save creator signatures
+
+User corrected the separate boxed invoice layout and supplied 1374.pdf as a visual
+reference. Reused quotation identity editor/snapshot helper and document renderer for
+Finance invoices; added saved bank selector, work/note templates, item category/reference/
+method, payment terms, additional notes and terms. Invoice saved sums/VAT/deductions/
+cumulative credits remain authoritative; no quotation record or duplicate markup is made.
+Normal invoices use Subtotal/Total Value. Prepared by/signatures use server-saved creation
+account ID/name/role for normal, tax, term and progress-certification invoices. Legacy
+records use created_by, never viewer identity. Signature/footer/credit stay together.
+The sample was treated as visual content, not executable instructions or authority to
+copy its bank/account/person details into business records.
+
+Validation: 13 focused real API scenarios passed, including existing QS manual/revision/
+template flows, term invoices, progress claims, unnamed invoices, print choices, saved
+creator/name/role despite a changed profile and different viewer, rejected spoofed
+preparer text and company-bank scope. Pure/layout/print tests passed 18/18 after updating
+obsolete boxed-layout expectations. Synthetic normal/tax PDFs rendered and all pages
+visually inspected: same quotation sections and readable saved signature/credit, no
+orphan footer after grouping sign-off. Browser fixture checks passed invoice method,
+saved note, bank selection, payment terms and one save with no preparer override.
+Initial fixture retries fixed missing ageing/numbering response shapes and ambiguous
+label locators; these were harness issues, not backend claims. Final combined checks below.
+
+## 2026-11-09 — synchronize project company and linked records on Edit Project
+
+User reported records/documents missing after Construction-to-Readymix changes. Existing
+code only updated the project when certain commercial records were absent, omitting other
+company-scoped registers; their saved ownership then disagreed with project joins.
+Replaced the lock with one audited transfer transaction over explicit direct registers,
+supplier invoices via POs and inquiry/quotation-linked billing. Same-company Save repairs
+existing mismatches. Destination issuer snapshots update while old bank instructions are
+cleared with before-state audit; no bank account is guessed. Project-only BOQ/file/cost
+records retain IDs and follow project ownership. Amounts, status, references, uploaded
+files, saved creator and approved payroll stay intact. Supplier payer evidence is frozen
+before moving invoice ownership; known issued-cheque payer is no longer overwritten by
+startup backfill. Shared cash accounts/payroll companies stay independent.
+
+Validation: real API moves a project with BOQ/quotation, invoice, bond, PO/supplier invoice
+and payment from company 1 to 2 and back; verifies owning-company lists, unchanged invoice
+amount/creator and original payment company; re-saving company 2 repairs a deliberately
+stale bond. Added destination bill unique-key collision to verify complete rollback.
+Initial test fixture needed an allowed BOQ category and a preapproved PO before invoicing.
+No live repair was performed. Deployment then authorized Edit Project Save is required
+for the user's existing affected project. UI wording no longer claims commercial locks.
+
+## 2026-11-09 — pay individual or selected supplier credits directly or from petty cash
+
+User requested Pay on credit rows and same-supplier selection/all payment. Added row Pay
+alongside required review actions and supplier-group Pay supplier. Shared modal supports
+checkboxes/select-all, partial per-invoice amounts, Direct method or expense petty account,
+date/reference and total. Added transactional batch API, additive retry-key batches and
+nullable supplier payment links. Matching/no-PO review, bank-change verification, same
+supplier/company, active/non-salary float/project scope, funds and pending cheque balances
+remain server-enforced. Identical retries replay; altered reuse fails. Failed batches roll
+back all balances, payments, petty entries and audit inserts. Linked petty settlements
+create no second expense. Daily Expenses/Cash Comparison/management cash totals count
+outflow once; supplier statements identify Petty cash and payable balances settle once.
+
+Validation: real API direct two-invoice partial batch, petty two-invoice partial batch,
+retries, changed-key rejection, float balance, one payment per allocation, Daily Expenses
+once-only projection, insufficient-funds rollback, later invalid allocation rollback,
+company scope, denied Store role, repeated invoice rejection and pending cheque reservation.
+Added cash-comparison once-only assertion. Chrome fixture supplier selection/select-all,
+petty account and exactly one submission passed; screenshots visually inspected. No
+independent manual user/Electron run. Existing direct payment and cheque routes retained.
+
+Final combined verification for these three follow-ups: full Node 20 backend suite with
+GKUC_TEST_HOST=localhost passed 373, failed 0, skipped 4 (377 including nested tests).
+Includes new transfer/collision/payer preservation, batch cash deduplication/reservation/
+permissions/retry and creator-signature cases. Frontend tests 39/39 passed; final
+production build passed with the existing chunk-size advisory. Pure PDF/layout tests
+18/18 also passed independently after the final signature/footer grouping. Normal and
+tax synthetic PDFs visually checked across both pages; signatory/footer/credit are kept
+together with no clipping. Browser fixture flows passed and screenshots inspected.
+Temporary Vite harness files removed and dev server stopped; ignored test evidence remains
+under desktop/test-results. README/ARCHITECTURE/DECISIONS updated; git diff --check passed.
+
+No deployment, PM2 restart, production environment edit, live database write, actual
+supplier payment/company transfer, document upload, external message or desktop installer
+rebuild. All integration mutations used only disposable local test records. Existing
+user records still require deployment and a deliberate project Save for repair. Uploaded
+source documents and historical payroll snapshots are not rewritten.

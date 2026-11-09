@@ -1,3 +1,4 @@
+import BoqAdjustments from './BoqAdjustments.jsx';
 import LinkedImportReview from './LinkedImportReview.jsx';
 import React, { useEffect, useState } from 'react';
 import { api } from './api.js';
@@ -118,6 +119,8 @@ function DocumentReview({ review, setReview, context, busy, onConfirm }) {
       <p>Nothing below is live yet. Link existing records or enter the missing details, then check every priced line.</p></div>
       <span className="badge">{review.rows.length} lines extracted</span></div>
 
+    <BoqAdjustments value={document.adjustments||[]} onChange={adjustments=>updateDocument({adjustments,adjustmentsReviewed:false})} subtotal={review.rows.reduce((sum,row)=>sum+Number(row.data.quantity||0)*Number(row.data.rate||0),0)}/>
+    <label><input type="checkbox" checked={Boolean(document.adjustmentsReviewed)} onChange={e=>updateDocument({adjustmentsReviewed:e.target.checked})}/>I reviewed taxes/deductions, removed repeats and confirmed the subtotal basis.</label>
     <div className="import-review-section">
       <h3>1. BOQ details</h3>
       <div className="form-grid import-detail-grid">

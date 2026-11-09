@@ -65,7 +65,7 @@ const BANK_ACCOUNT = `SELECT id,company_id companyId,label,bank_name bankName,br
   account_name accountName,account_number accountNumber,swift_code swiftCode,active
   FROM company_bank_accounts`;
 
-router.get('/company-bank-accounts', auth, permit("admin.company"), wrap(async (req, res) => {
+router.get('/company-bank-accounts', auth, permit('admin.company','qs.quotation','finance.invoice'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId) || 1;
   res.json(await query(`${BANK_ACCOUNT} WHERE company_id=? AND active=1 ORDER BY label,bank_name`, [companyId]));
 }));

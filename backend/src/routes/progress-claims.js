@@ -202,6 +202,8 @@ router.post('/:id/certify',permit('finance.invoice'),validate(certificationSchem
       VALUES (?,?,?,?,?,'Payment Certificate','Interim',?,?,?,?,?,?,?,?,?,?,?,?,?,?,'Issued',NOW(),?)`,
       [reference,project.id,project.company_id,project.client_id||null,project.client,`${claim.reference} / ${b.certificateReference}`,b.certifiedDate,b.dueDate,claim.period_from,claim.period_to,
         totals.gross,b.vatRate?'Standard':'Exempt',b.vatRate,totals.vat,b.retention,b.advance,b.other+b.stampDuty,b.reason,totals.net,req.user.id]);
+    const creator=await getOne(`SELECT u.id userId,u.name,COALESCE(r.name,u.role) role FROM users u LEFT JOIN roles r ON r.id=u.role_id WHERE u.id=?`,[req.user.id]);
+    await connection.execute('UPDATE client_invoices SET invoice_options=? WHERE id=?',[JSON.stringify({creator}),invoice.insertId]);
     for(const line of lines.filter(line=>line.current>0))await connection.execute('INSERT INTO client_invoice_items(invoice_id,description,unit,quantity,rate,amount) VALUES (?,?,?,?,?,?)',
       [invoice.insertId,line.description,line.unit,line.quantity-line.previousQuantity,line.rate,line.current]);
     await connection.execute('UPDATE client_invoices SET taxable_base=?,notes=? WHERE id=?',
@@ -249,9 +251,9 @@ router.get('/:id/document',read,wrap(async(req,res)=>{
 
   if(type==='invoice'){
     if(!claim.invoice_reference)throw fail(409,'Issue the optional invoice first.');
-    const invoice=await getOne(`SELECT reference,print_options printOptions,invoice_options invoiceOptions,client,title,invoice_date invoiceDate,due_date dueDate,gross,tax_treatment taxTreatment,vat_rate vatRate,
+    const invoice=await getOne(`SELECT i.reference,i.print_options printOptions,i.invoice_options invoiceOptions,i.client,i.title,i.invoice_date invoiceDate,i.due_date dueDate,i.gross,i.tax_treatment taxTreatment,i.vat_rate vatRate,
       buyer_tin buyerTin,buyer_vat_number buyerVatNumber,buyer_address buyerAddress,buyer_phone buyerPhone,notes,
-      vat_amount vatAmount,retention_amount retentionAmount,advance_recovery advanceRecovery,other_deductions otherDeductions,net_payable netPayable FROM client_invoices WHERE id=?`,[claim.invoice_id]);
+      vat_amount vatAmount,retention_amount retentionAmount,advance_recovery advanceRecovery,other_deductions otherDeductions,net_payable netPayable,u.name preparedBy,COALESCE(r.name,u.role) preparedByDesignation FROM client_invoices i LEFT JOIN users u ON u.id=i.created_by LEFT JOIN roles r ON r.id=u.role_id WHERE i.id=?`,[claim.invoice_id]);
     const items=await query('SELECT description,unit,quantity,rate,amount FROM client_invoice_items WHERE invoice_id=?',[claim.invoice_id]);
     return sendDocument(req,res,invoiceDocument({...context,invoice:{...invoice,reference:claim.invoice_reference,project:claim.project,documentType:invoice.vatRate?'Tax Invoice':'Invoice'},items}),`${claim.invoice_reference}.pdf`);
   }

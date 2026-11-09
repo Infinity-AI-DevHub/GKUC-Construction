@@ -9,8 +9,10 @@ export function periodBounds(period) {
   return { start: `${period}-01`, next };
 }
 
-export async function managementPack(companyId, period, { includeExpenseSource = false } = {}) {
-  const { start, next } = periodBounds(period);
+export async function managementPack(companyId, period, { includeExpenseSource = false, from, to } = {}) {
+  const bounds = periodBounds(period);
+  const start = from || bounds.start;
+  const next = to ? new Date(Date.parse(to+'T00:00:00Z')+86400000).toISOString().slice(0,10) : bounds.next;
   const [company, projects, invoices, receipts, incomes, expenses, supplierInvoices,
     supplierPayments, bills, petty, payroll, adjustments, payerSupplierPayments] = await Promise.all([
     query('SELECT id,name FROM companies WHERE id=?', [companyId]),
@@ -42,10 +44,10 @@ export async function managementPack(companyId, period, { includeExpenseSource =
       AND period_end>=? AND period_end<?`, [companyId,start,next]),
     query(`SELECT a.id,a.category,a.amount,a.explanation,a.reference,a.project_id projectId,a.created_at createdAt,
       u.name createdBy FROM management_adjustments a JOIN users u ON u.id=a.created_by
-      WHERE a.company_id=? AND a.period=? ORDER BY a.id`, [companyId,period]),
+      WHERE a.company_id=? AND a.period>=? AND a.period<=? ORDER BY a.id`, [companyId,start.slice(0,7),(to || period).slice(0,7)]),
     query(`SELECT sp.amount,sp.paid_date date FROM supplier_payments sp
       JOIN supplier_invoices si ON si.id=sp.invoice_id
-      WHERE COALESCE(sp.payment_company_id,si.company_id)=? AND sp.paid_date>=? AND sp.paid_date<?`,[companyId,start,next])
+      WHERE COALESCE(sp.payment_company_id,si.company_id)=? AND sp.petty_cash_entry_id IS NULL AND sp.paid_date>=? AND sp.paid_date<?`,[companyId,start,next])
   ]);
   if (!company.length) return null;
   const inMonth = row => row.date >= start && row.date < next;
@@ -85,7 +87,7 @@ export async function managementPack(companyId, period, { includeExpenseSource =
     { label: 'Supplier invoices = payments + outstanding', difference: rounded(sum(supplierInvoices,'amount') - sum(supplierPayments,'amount') - sum(payableRows,'outstanding')) },
     { label: 'Operating bills = paid + outstanding', difference: rounded(sum(bills,'totalAmount') - sum(bills.filter(row => row.paidDate && row.paidDate < next),'totalAmount') - sum(billPayables,'outstanding')) }
   ];
-  return { company: company[0], period, basis: 'Management estimate — not audited',
+  return { company: company[0], period, from:start, to:to || new Date(Date.parse(next+'T00:00:00Z')-86400000).toISOString().slice(0,10), basis: 'Management estimate — not audited',
     accrual: { billedWorkRevenue: rounded(revenue), revenueAdjustments: rounded(adj('Revenue')),
       recordedCost: rounded(cost), costAdjustments: rounded(adj('Cost')),
       result: rounded(revenue + adj('Revenue') - cost - adj('Cost')) },

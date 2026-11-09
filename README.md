@@ -468,3 +468,26 @@ Bond lists now emphasize project names and retain bank bond numbers below them.
 Finance → Retention and QS → Retention open the same shared workspace and records.
 Finance managers or users with QS retention permission can add/release there; viewers
 remain read-only. One saved retention appears in both views without a duplicate copy.
+
+BOQ creation supports labelled tax/addition/deduction rows as a percentage of work
+subtotal or fixed LKR amount. Excel/PDF uploads propose recognised financial rows for
+mandatory review; the template includes an optional Adjustments sheet. Saved details
+and printed BOQs show the calculation breakdown. See [BOQ tax/deduction rules and
+import coverage](docs/BOQ_FINANCIALS.md).
+
+
+Client invoices support a project BOQ/quotation picker (Approved BOQs and Sent/Accepted
+quotations), saved invoice bank details and manual place of supply. The print layout
+shows the work title above descriptions and only user notes under additional information.
+Finance → Financial reports → Income Statement / Statement of Financial Position offer
+From/To dates, CSV and PDF export with the Infinity AI credit. Financial Position is as
+at To; month-based management adjustments are included in full for intersecting months.
+
+Invoice authoring now shares QS quotation identity choices, bank accounts, saved work/
+note templates and notes/payment terms. Both use the same document layout. Invoice
+signatories are saved automatically from the creator's account name and role.
+Edit Project synchronizes linked commercial ownership when changing company; saving the
+current company again also repairs older mismatches. Actual supplier payer/payroll
+history is retained, and old-company bank instructions are removed from generated
+project documents. Credit purchases offer Pay per row and Pay supplier for selected/all
+invoices, using Direct or Petty cash with atomic, retry-safe settlement.

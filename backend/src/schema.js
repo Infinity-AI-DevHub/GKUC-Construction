@@ -572,6 +572,7 @@ async function createBoqTables() {
     CONSTRAINT fk_boq_preparer FOREIGN KEY(prepared_by) REFERENCES users(id),
     CONSTRAINT fk_boq_approver FOREIGN KEY(approved_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await addColumn('boqs','financial_adjustments','JSON NULL');
   await query(`CREATE TABLE IF NOT EXISTS boq_items (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, boq_id BIGINT UNSIGNED NOT NULL,
     category VARCHAR(60) NULL DEFAULT NULL, description VARCHAR(300) NOT NULL,
@@ -648,6 +649,8 @@ async function createDailyCostTables() {
     CONSTRAINT fk_cost_task_line FOREIGN KEY(line_id) REFERENCES daily_cost_lines(id) ON DELETE CASCADE,
     CONSTRAINT fk_cost_task_task FOREIGN KEY(task_id) REFERENCES tasks(id)
   ) ENGINE=InnoDB`);
+  await addColumn('daily_cost_lines','labour_hours','DECIMAL(8,3) NULL');
+  await addColumn('daily_cost_lines','labour_snapshot','JSON NULL');
   await addColumn('daily_cost_lines','fuel_float_id','BIGINT UNSIGNED NULL');
   await addColumn('daily_cost_lines','odometer','INT UNSIGNED NULL');
   await addForeignKey('daily_cost_lines','fk_daily_line_float',
@@ -2396,6 +2399,8 @@ async function createBoqImportTables() {
     INDEX idx_boqimport_status(status, id)
   ) ENGINE=InnoDB`);
 
+  await addColumn('boq_imports','financial_adjustments','JSON NULL');
+  await addColumn('boq_imports','adjustments_reviewed','TINYINT NOT NULL DEFAULT 1');
   await query(`CREATE TABLE IF NOT EXISTS boq_import_items (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     import_id BIGINT UNSIGNED NOT NULL,
@@ -2872,7 +2877,7 @@ async function migrateExistingInstalls() {
   await query(`UPDATE tenders SET company_id=2 WHERE LOWER(COALESCE(bidding_entity,'')) REGEXP 'ready[ ]?mix|readymix'`);
   await query('UPDATE tenders t JOIN projects p ON p.id=t.project_id SET t.company_id=p.company_id');
   await query('UPDATE supplier_invoices si JOIN purchase_orders po ON po.id=si.order_id JOIN projects p ON p.id=po.project_id SET si.company_id=p.company_id');
-  await query('UPDATE issued_cheques c JOIN supplier_invoices si ON si.id=c.invoice_id SET c.company_id=si.company_id WHERE c.invoice_total IS NULL');
+  await query('UPDATE issued_cheques c JOIN supplier_invoices si ON si.id=c.invoice_id SET c.company_id=si.company_id WHERE c.invoice_total IS NULL AND c.company_id IS NULL');
   await query('UPDATE received_cheques c JOIN projects p ON p.id=c.project_id SET c.company_id=p.company_id');
   await query('UPDATE bank_bonds b JOIN projects p ON p.id=b.project_id SET b.company_id=p.company_id');
   await query('UPDATE petty_cash_floats f JOIN projects p ON p.id=f.project_id SET f.company_id=p.company_id');
@@ -3661,6 +3666,18 @@ export async function migrate() {
   for(const index of quoteIndexes.filter(index=>index.Column_name==='reference'&&!index.Non_unique&&index.Key_name!=='uq_quote_revision_number')) {
     if(quoteIndexes.filter(other=>other.Key_name===index.Key_name).length===1)await query(`ALTER TABLE quotations_client DROP INDEX \`${index.Key_name}\``);
   }
+  await query(`CREATE TABLE IF NOT EXISTS supplier_payment_batches (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,client_ref VARCHAR(64) NOT NULL,
+    request_hash CHAR(64) NOT NULL,company_id TINYINT UNSIGNED NOT NULL,supplier_id BIGINT UNSIGNED NOT NULL,
+    created_by BIGINT UNSIGNED NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_supplier_payment_client_ref(client_ref),
+    FOREIGN KEY(company_id) REFERENCES companies(id),FOREIGN KEY(supplier_id) REFERENCES suppliers(id),FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('supplier_payments','batch_id','BIGINT UNSIGNED NULL');
+  await addColumn('supplier_payments','petty_cash_entry_id','BIGINT UNSIGNED NULL');
+  await addForeignKey('supplier_payments','fk_supplier_payment_batch','CONSTRAINT fk_supplier_payment_batch FOREIGN KEY(batch_id) REFERENCES supplier_payment_batches(id)');
+  await addForeignKey('supplier_payments','fk_supplier_payment_petty','CONSTRAINT fk_supplier_payment_petty FOREIGN KEY(petty_cash_entry_id) REFERENCES petty_cash_entries(id)');
+  await addIndex('supplier_payments','uq_supplier_payment_petty','UNIQUE KEY uq_supplier_payment_petty(petty_cash_entry_id)');
   await migrateEmployeeOtRates({query, transaction});
   await createEmployeeReadViews(query);
   await seedWorkMethods();

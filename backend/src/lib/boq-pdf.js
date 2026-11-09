@@ -1,3 +1,4 @@
+import {detectFinancialRows} from './boq-financials.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { extractText } from './ocr.js';
@@ -152,6 +153,7 @@ export async function parseBoqPdf(filePath) {
       pending = [];
       return;
     }
+    if(detectFinancialRows([line.trim().split(/\s{2,}/)],'PDF').length){finish();pending=[];return;}
     if (isNoise(line) || /^item\s+description\s+units?/i.test(value)) return;
     if (subtotalPattern.test(value)) {
       finish();
@@ -181,6 +183,7 @@ export async function parseBoqPdf(filePath) {
   }
   return {
     ok: true,
+    financialAdjustments:detectFinancialRows(lines.map(line=>line.trim().split(/\s{2,}/)),'PDF'),
     title: metadata.title,
     client: metadata.client,
     items,

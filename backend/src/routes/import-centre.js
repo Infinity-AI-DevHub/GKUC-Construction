@@ -1,3 +1,4 @@
+import {boqAdjustmentsSchema,calculateBoqFinancials,detectFinancialRows,detectFinancialColumns} from '../lib/boq-financials.js';
 import {isLinkedWorkbook,readLinkedWorkbook,inspectLinked} from '../lib/linked-historical-import.js';
 import {saveLinked} from '../lib/linked-historical-save.js';
 import { Router } from 'express';
@@ -52,7 +53,8 @@ async function flexibleBoqPreview(file) {
   const matchingProject = projectName
     ? await getOne('SELECT id,name,client_id clientId FROM projects WHERE active=1 AND LOWER(name)=LOWER(?) ORDER BY id LIMIT 1', [projectName])
     : null;
-  const rows = parsed.items.map((item, index) => {
+  const adjustments=parsed.financialAdjustments||[];
+  const rows = parsed.items.filter(item=>!adjustments.some(row=>row.label.trim().toLowerCase()===String(item.description||'').trim().toLowerCase())).map((item, index) => {
     const data = { category: item.category || '', description: item.description || '', unit: item.unit || '',
       quantity: item.quantity ?? '', rate: item.rate ?? '', method: item.method || '', notes: item.notes || '' };
     const errors = [...new Set([...(item.problems || []), ...boqProblems(data)])];
@@ -60,7 +62,7 @@ async function flexibleBoqPreview(file) {
       row: item.sheetRow || item.sourceRow || index + 1, code: String(index + 1),
       action: errors.length ? 'blocked' : 'create', errors, data };
   });
-  const document = { title: clean(parsed.title) || file.filename.replace(/\.(xlsx|pdf)$/i, ''),
+  const document = { adjustments,adjustmentsReviewed:!adjustments.length,title: clean(parsed.title) || file.filename.replace(/\.(xlsx|pdf)$/i, ''),
     reference: clean(parsed.layout?.reference), documentDate: clean(parsed.layout?.documentDate),
     location: clean(parsed.layout?.location), notes: '', companyId: 1,
     clientId: matchingClient?.id || null, clientType: 'Organisation', clientName,
@@ -174,6 +176,12 @@ router.post('/dry-check', auth, wrap(async (req, res) => {
       const source=await readUploadedFile(file.path);
       if(source.length>15*1024*1024)throw fail(413,'Split this workbook into smaller files.');
       if(isLinkedWorkbook(kind,source)){
+        if(kind==='boqs'){
+          const workbook=readWorkbook(source);
+          const financials=workbook.names.flatMap(name=>{const rows=workbook.sheet(name).rows.slice(1);return [...detectFinancialRows(rows,name),...detectFinancialColumns(rows,name)];});
+          if(financials.length)throw fail(422,'Taxes/deductions were detected in this linked historical workbook. Upload each BOQ through QS BOQ import to review its own adjustments; do not assign one summary to several bills.');
+        }
+
         const sourceRows=readLinkedWorkbook(kind,source);
         const preview={...await inspectLinked(kind,sourceRows),sourceRows};
         const checksum=crypto.createHash('sha256').update(source).digest('hex');
@@ -237,6 +245,8 @@ router.patch('/batches/:id/review', auth, permit('qs.boq'), wrap(async (req, res
   const current = JSON.parse(batch.preview_json);
   if (current.mode !== 'document-review') return res.status(409).json({ error: 'Upload this older source document again to use the editable review.' });
   const document = { ...current.document, ...(req.body.document || {}) };
+  document.adjustments=boqAdjustmentsSchema.parse(document.adjustments||[]);
+  document.adjustmentsReviewed=document.adjustmentsReviewed===true;
   if (!clean(document.title)) throw fail(400, 'Enter the BOQ title.');
   const rows = Array.isArray(req.body.rows) ? req.body.rows.map((row, index) => {
     const data = { category: clean(row.data?.category), description: clean(row.data?.description), unit: clean(row.data?.unit),
@@ -266,6 +276,7 @@ async function confirmFlexibleBoq(req, batch, preview) {
     throw fail(409, 'Correct every highlighted BOQ line and save the review before importing.');
   if (!preview.rows.length) throw fail(400, 'Add at least one BOQ line.');
   const d = preview.document || {};
+  if(d.adjustments?.length&&!d.adjustmentsReviewed)throw fail(409,'Review and confirm the tax/deduction amounts and subtotal basis before importing.');
   if (!clean(d.title)) throw fail(400, 'Enter the BOQ title.');
   const mayCreateClient = req.user.permissions.includes('clients.manage');
   const mayCreateProject = req.user.permissions.includes('projects.manage');
@@ -318,14 +329,15 @@ async function confirmFlexibleBoq(req, batch, preview) {
         project = { id: created.insertId, name: clean(d.projectName), clientId: client.id, client: client.name };
       }
     }
-    const total = preview.rows.reduce((sum, row) => sum + Number(row.data.quantity) * Number(row.data.rate), 0);
+    const adjustments=boqAdjustmentsSchema.parse(d.adjustments||[]);
+    const total = calculateBoqFinancials(preview.rows.reduce((sum,row)=>sum+Math.round(Number(row.data.quantity)*Number(row.data.rate)*100)/100,0),adjustments).total;
     const sourceNotes = [batch.filename ? `Imported from ${batch.filename}` : null,
       clean(d.reference) ? `Source reference: ${clean(d.reference)}` : null,
       clean(d.documentDate) ? `Source date: ${clean(d.documentDate)}` : null,
       clean(d.notes)].filter(Boolean).join('\n').slice(0, 1000) || null;
     const [createdBoq] = await connection.execute(`INSERT INTO boqs
-      (project_id,reference,title,status,total,prepared_by,notes) VALUES (?,?,?,'Draft',?,?,?)`,
-    [project.id, reference, clean(d.title), total, req.user.id, sourceNotes]);
+      (project_id,reference,title,status,total,prepared_by,notes,financial_adjustments) VALUES (?,?,?,'Draft',?,?,?,?)`,
+    [project.id, reference, clean(d.title), total, req.user.id, sourceNotes,JSON.stringify(adjustments)]);
     for (const row of preview.rows) {
       const item = row.data;
       await connection.execute(`INSERT INTO boq_items

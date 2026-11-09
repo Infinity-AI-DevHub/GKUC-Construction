@@ -284,7 +284,7 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
       setError(''); await load(); await refresh();
     } catch (failure) { setError(failure.message); }
   };
-  const template = creditOnly ? 'minmax(170px,1.4fr) 130px 120px 140px 125px 130px 120px 110px' : INVOICE_TEMPLATE;
+  const template = creditOnly ? 'minmax(170px,1.4fr) 130px 120px 140px 125px 130px 120px 200px' : INVOICE_TEMPLATE;
   const columns = creditOnly ? INVOICE_COLUMNS.filter(column => column !== 'Supplier') : INVOICE_COLUMNS;
   const supplierGroups = new Map();
   if (creditOnly) for (const row of rows) {
@@ -303,24 +303,22 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
         <div><span>{rupees(row.netAmount)}</span><small>VAT {rupees(row.vatAmount)}</small></div><span>{rupees(row.amount)}</span>
         <strong>{rupees(Number(row.amount) - Number(row.paidAmount))}</strong>
         <Badge tone={slug(row.status)}>{row.status}</Badge>
-        {row.orderReference && !row.verifiedAt && can.supplierPay
-          ? <button className="status-button" onClick={() => verifyInvoice(row)}>Verify match</button>
-          : row.status !== 'Paid' && !row.orderReference && !row.paymentExceptionApprovedBy && can.finance
-          ? <button className="status-button" onClick={() => approveException(row)}>Review exception</button>
-          : row.status !== 'Paid' && can.supplierPay && (row.orderReference || row.paymentExceptionApprovedBy)
-            ? <button className="status-button" onClick={() => setPaying(row)}>Pay</button>
-          : <span>—</span>}
+        <div className="row-actions">
+          {row.orderReference && !row.verifiedAt && can.supplierPay && <button className="status-button" onClick={()=>verifyInvoice(row)}>Verify match</button>}
+          {row.status!=='Paid'&&!row.orderReference&&!row.paymentExceptionApprovedBy&&can.finance && <button className="status-button" onClick={()=>approveException(row)}>Review exception</button>}
+          {row.status!=='Paid'&&can.supplierPay && <button className="status-button" onClick={()=>setPaying({invoice:row,invoices:[row]})}>Pay</button>}
+        </div>
       </Row>;
   return <>
     {error && <p className="form-error">{error}</p>}
     <div className="supplier-credit-groups">
       {groups.map(group => <Table key={group.key} columns={columns} template={template} title={group.name}
-        tools={creditOnly && group.rows.length ? <div className="supplier-credit-summary"><span>{group.rows.length} {group.rows.length === 1 ? 'purchase' : 'purchases'}</span><strong>Outstanding {rupees(group.rows.reduce((sum,row) => sum + Number(row.amount) - Number(row.paidAmount),0))}</strong></div> : null}
+        tools={creditOnly && group.rows.length ? <div className="supplier-credit-summary"><span>{group.rows.length} {group.rows.length === 1 ? 'purchase' : 'purchases'}</span><strong>Outstanding {rupees(group.rows.reduce((sum,row) => sum + Number(row.amount) - Number(row.paidAmount),0))}</strong>{can.supplierPay && group.rows.some(row=>row.status!=='Paid') && <button type="button" className="status-button" onClick={()=>setPaying({invoices:group.rows.filter(row=>row.status!=='Paid')})}>Pay supplier</button>}</div> : null}
         empty={creditOnly ? 'No credit purchases recorded.' : 'No invoices recorded.'}>
         {group.rows.map(renderInvoice)}
       </Table>)}
     </div>
-    {paying && <PaymentForm invoice={paying} close={() => setPaying(null)}
+    {paying && <PaymentForm {...paying} companyId={companyId} close={() => setPaying(null)}
       reload={async () => { await load(); await refresh(); }} />}
   </>;
 }
@@ -503,25 +501,38 @@ function InvoiceForm({ companyId, close, reload, creditOnly=false }) {
   </FormModal>;
 }
 
-function PaymentForm({ invoice, close, reload }) {
-  const payMethods = useOptions('income.method');
-  const outstanding = Number(invoice.amount) - Number(invoice.paidAmount);
-  return <FormModal title={`Pay ${invoice.invoiceNo}`} close={close} label="Record payment" onSubmit={async values => {
-    await post(`/purchasing/invoices/${invoice.id}/payments`, {
-      amount: Number(values.amount),
-      paidDate: values.paidDate,
-      method: values.method,
-      reference: values.reference || undefined,
-      bankChangeAcknowledged: Boolean(values.bankChangeReason?.trim()),
-      bankChangeReason: values.bankChangeReason || undefined
-    });
+function PaymentForm({ invoice, invoices, companyId, close, reload }) {
+  const payMethods=useOptions('income.method');
+  const choices=invoices || [invoice];
+  const available=row=>Math.max(0,Number(row.amount)-Number(row.paidAmount)-Number(row.pendingChequeAmount || 0));
+  const [amounts,setAmounts]=useState(()=>Object.fromEntries(choices.map(row=>[row.id,String(available(row))])));
+  const [selected,setSelected]=useState(()=>choices.filter(row=>available(row)>0).map(row=>row.id));
+  const [source,setSource]=useState('Direct');
+  const [floats,setFloats]=useState([]);
+  const [floatError,setFloatError]=useState('');
+  const [clientRef]=useState(()=>crypto.randomUUID());
+  useEffect(()=>{let live=true;api(`/receivables/petty-cash?companyId=${companyId}`).then(rows=>{if(live)setFloats(rows.filter(row=>row.accountType!=='Salary advance'));}).catch(error=>{if(live)setFloatError(error.message);});return ()=>{live=false;};},[companyId]);
+  const total=selected.reduce((sum,id)=>sum+Number(amounts[id] || 0),0);
+  return <FormModal title={invoice?`Pay ${invoice.invoiceNo}`:`Pay ${choices[0]?.supplier || 'supplier'} invoices`} close={close} label="Record payment" wide onSubmit={async values=>{
+    if(!selected.length)throw new Error('Select at least one invoice.');
+    await post('/purchasing/supplier-payments/batch',{companyId:Number(companyId),supplierId:Number(choices[0].supplierId),clientRef,source,
+      floatId:source==='Petty cash'?Number(values.floatId):undefined,paidDate:values.paidDate,method:source==='Petty cash'?'Cash':values.method,
+      reference:values.reference || undefined,bankChangeReason:values.bankChangeReason || undefined,
+      items:selected.map(id=>({invoiceId:Number(id),amount:Number(amounts[id])}))});
     await reload();
   }}>
-    <Field name="amount" label={`Amount (outstanding ${rupees(outstanding)})`} type="number" step="any" min="0" defaultValue={outstanding} />
+    <fieldset className="wide"><legend>Invoices to pay</legend>
+      {choices.length>1&&<label><input type="checkbox" checked={selected.length===choices.filter(row=>available(row)>0).length} onChange={event=>setSelected(event.target.checked?choices.filter(row=>available(row)>0).map(row=>row.id):[])} />Select all available invoices</label>}
+      {choices.map(row=><div className="supplier-payment-option" key={row.id}><label className="supplier-payment-check"><input type="checkbox" checked={selected.includes(row.id)} disabled={available(row)<=0} onChange={event=>setSelected(current=>event.target.checked?[...current,row.id]:current.filter(id=>id!==row.id))} />{row.invoiceNo} · available {rupees(available(row))}</label>
+        {selected.includes(row.id)&&<label>Payment amount<input aria-label={`Payment for ${row.invoiceNo}`} type="number" min="0.01" max={available(row)} step="0.01" required value={amounts[row.id]} onChange={event=>setAmounts(current=>({...current,[row.id]:event.target.value}))} /></label>}
+        {!row.orderReference&&!row.paymentExceptionApprovedBy&&<p className="invoice-note">Review the no-purchase-order exception before paying this invoice.</p>}
+      </div>)}<strong>Total payment: {rupees(total)}</strong>
+    </fieldset>
+    <label>Payment source<select value={source} onChange={event=>setSource(event.target.value)}><option>Direct</option><option>Petty cash</option></select></label>
+    {source==='Petty cash'?<><SelectField name="floatId" label="Petty cash account" options={floats.filter(row=>row.active!==0).map(row=>[row.id,`${row.name} · ${rupees(row.balance)} available`])} />{floatError&&<p className="form-error">{floatError}</p>}</>:<SelectField name="method" label="Method" options={payMethods.filter(method=>method!=='Cheque')} />}
     <Field name="paidDate" label="Paid on" type="date" defaultValue={todayInput()} />
-    <SelectField name="method" label="Method" options={payMethods.filter(method => method !== 'Cheque')} />
     <Field name="reference" label="Reference" required={false} />
-    <Field name="bankChangeReason" label="If the supplier changed bank details recently, how were they independently verified?" required={false} wide />
-    <p className="invoice-note">Use Issued cheques for cheque payments; clearing the cheque will update this invoice.</p>
+    <Field name="bankChangeReason" label="If supplier bank details changed recently, how were they independently verified?" required={false} wide />
+    <p className="invoice-note wide">Pending cheques reserve their invoice balances. Use Issued cheques for cheque payments. Petty cash payments reduce the account once and settle these same supplier invoices.</p>
   </FormModal>;
 }

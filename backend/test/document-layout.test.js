@@ -107,7 +107,7 @@ test('quotation, invoice and receipt PDF layouts retain company, type and refere
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
 
-test('long quotations print the full letterhead only on page one while invoices keep their existing behavior', async t => {
+test('quotations and invoices share the first-page letterhead behavior', async t => {
   try {
     await access('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
     await exec('pdfinfo', ['-v']);
@@ -138,7 +138,7 @@ test('long quotations print the full letterhead only on page one while invoices 
       const { stdout: text } = await exec('pdftotext', ['-layout', file, '-']);
       assert.equal(text.split('\f').filter(page => page.trim()).length, pages);
       for (const [pageIndex, page] of text.split('\f').filter(page => page.trim()).entries()) {
-        if (index === 0 && pageIndex > 0) {
+        if (pageIndex > 0) {
           assert.doesNotMatch(page, /Address line 1 with additional company information/, 'quotation continuation pages omit the full letterhead');
           continue;
         }
@@ -146,12 +146,12 @@ test('long quotations print the full letterhead only on page one while invoices 
         const compact = page.toUpperCase().replace(/\s+/g, '');
         assert.ok(compact.includes(index === 0 ? 'QUOTATION' : 'INVOICE'),
           'the applicable page retains the document title');
-        assert.ok(page.includes(index === 0 ? 'QUO-LAYOUT-TEST' : 'INV-LAYOUT-TEST'),
+        assert.ok(index === 1 && pageIndex > 0 || page.includes(index === 0 ? 'QUO-LAYOUT-TEST' : 'INV-LAYOUT-TEST'),
           'the applicable page retains the document reference');
         assert.ok(page.includes('Address line 1 with additional company information'),
           'the applicable page retains the company details');
       }
-      assert.equal((text.match(index === 0 ? /Subtotal/g : /Total amount including VAT/g) || []).length, 1,
+      assert.equal((text.match(index === 0 ? /Subtotal/g : /Total Value/g) || []).length, 1,
         'document totals must not repeat on every page');
     }
   } finally { await rm(temporary, { recursive: true, force: true }); }
@@ -178,4 +178,14 @@ test('quotation pagination is verified at one, two and three A4 pages with one f
       for (const continuation of pages.slice(1)) assert.doesNotMatch(continuation, /Head office road/);
     }
   } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+test('invoice uses quotation blocks with creator signature and saved details',()=>{
+ const html=invoiceDocument({company:{name:'Supplier',address:'First, Second, Third',bankDetails:'Old bank'},invoice:{reference:'INV-NEW',invoiceDate:'2026-11-09',documentType:'Tax Invoice',taxTreatment:'Standard',vatRate:18,gross:100,vatAmount:18,netPayable:118,client:'Buyer',buyerAddress:'One, Two, Three',title:'Work package',notes:'User notes only',placeOfSupply:'Entered site',invoiceOptions:{creator:{name:'Creator Name',role:'Finance / Accounts'},bankDetails:'Saved bank\nAccount 123',paymentTerms:'Payment on delivery',additionalNotes:'Final note',terms:'Saved terms',itemDetails:[{methodStatement:'Saved method'}]}},items:[{description:'Work item',quantity:1,rate:100,amount:100}]});
+ assert.match(html,/Invoice for/);assert.match(html,/data-piece="reference"/);
+ assert.match(html,/First<br>Second<br>Third/);assert.match(html,/One<br>Two<br>Three/);
+ assert.match(html,/User notes only/);assert.doesNotMatch(html,/invoice-information/);
+ assert.ok(html.indexOf('Work package')<html.indexOf('Item \/ surfacing'));
+ for(const text of ['Saved bank<br>Account 123','Payment on delivery','Final note','Saved terms','Saved method','Creator Name','Finance \/ Accounts'])assert.ok(html.includes(text),text);
+ assert.doesNotMatch(html,/Old bank/);
 });

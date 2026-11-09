@@ -1,3 +1,4 @@
+import BoqAdjustments from './BoqAdjustments.jsx';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Upload, AlertTriangle, Info, Check, X, FileSpreadsheet, FileText, Loader2, PencilLine, Wand2, Paperclip } from 'lucide-react';
 import { api, post, del, rupees, announceDataChanged, fetchDownload } from './api.js';
@@ -172,6 +173,8 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
 
   useEffect(() => {
     setDocumentDraft({
+      adjustments:staged.financialAdjustments||[],
+      adjustmentsReviewed:Boolean(staged.adjustmentsReviewed),
       title: staged.title || '',
       documentReference: staged.documentReference || staged.layout?.reference || '',
       location: staged.location || staged.layout?.location || '',
@@ -221,6 +224,7 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
       setError('Choose the project this BOQ belongs to before approving it.');
       return;
     }
+    if(!documentDraft.adjustmentsReviewed||JSON.stringify(documentDraft.adjustments||[])!==JSON.stringify(staged.financialAdjustments||[])||!staged.adjustmentsReviewed){setError('Review and save the taxes/deductions before approving.');return;}
     if (problems > 0) {
       setError(`Correct the ${problems} row${problems === 1 ? '' : 's'} marked in amber, or untick them, before approving.`);
       return;
@@ -267,7 +271,8 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
   };
 
   const included = staged.items.filter(item => item.include);
-  const total = included.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const subtotal = included.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const total=subtotal+(staged.adjustmentsReviewed?(staged.financialAdjustments||[]):[]).reduce((sum,row)=>sum+(row.direction==='Deduct'?-1:1)*(row.mode==='Percent'?subtotal*Number(row.value)/100:Number(row.value)),0);
   /* The category is the BOQ section. First appearance controls section order while rows
      keep their source order inside that section, so reviewing never loses traceability. */
   const groups = [...staged.items.reduce((result, item) => {
@@ -331,6 +336,12 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
         <label className="boq-document-notes">Notes<textarea rows="2" value={documentDraft.notes || ''}
           onChange={event => setDocumentDraft(current => ({ ...current, notes: event.target.value }))} /></label>
       </div>
+    </div>
+
+    <div className="boq-document-details">
+      <BoqAdjustments value={documentDraft.adjustments||[]} onChange={adjustments=>setDocumentDraft(current=>({...current,adjustments,adjustmentsReviewed:false}))} subtotal={staged.items.filter(item=>item.include).reduce((sum,item)=>sum+Number(item.amount||0),0)}/>
+      <label><input type="checkbox" checked={Boolean(documentDraft.adjustmentsReviewed)} onChange={e=>setDocumentDraft(current=>({...current,adjustmentsReviewed:e.target.checked}))}/>I reviewed the tax/deduction labels, rates, amounts and subtotal basis; removed repeated summary rows.</label>
+      <button type="button" className="secondary" onClick={saveDocument} disabled={documentSaving}>Save tax / deduction review</button>
     </div>
 
     {/*
@@ -441,7 +452,7 @@ function ReviewTable({ staged, projects, projectId, setProjectId, onChange, onCa
           </React.Fragment>)}
         </tbody>
         <tfoot>
-          <tr><td colSpan={7}>Total of the lines being used</td><td className="num"><strong>{rupees(total)}</strong></td></tr>
+          <tr><td colSpan={7}>BOQ total after reviewed adjustments</td><td className="num"><strong>{rupees(total)}</strong></td></tr>
         </tfoot>
       </table>
     </div>

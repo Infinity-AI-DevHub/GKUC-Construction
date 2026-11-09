@@ -1,3 +1,4 @@
+import {quotationVisibility,quotationIdentity,quotationPresentation} from '../lib/quotation-presentation.js';
 import {installBondImport} from './bond-import.js';
 import {installPrintOptions} from './document-print-options.js';
 import { Router } from 'express';
@@ -179,6 +180,11 @@ router.get('/receivables/ageing', auth, permit('finance.view', 'finance.invoice'
 
 const invoiceColumnsSchema = z.object({ unit: z.boolean().default(true), quantity: z.boolean().default(true), rate: z.boolean().default(true) });
 const invoiceSchema = z.object({
+  visibility: quotationVisibility.optional(),
+  bankAccountId: z.coerce.number().int().positive().optional(),
+  paymentTerms:z.string().trim().max(2000).optional(),
+  additionalNotes:z.string().trim().max(2000).optional(),
+  terms:z.string().trim().max(2000).optional(),
   columns: invoiceColumnsSchema.default({ unit: false, quantity: false, rate: false }),
   previousInvoiceIds: z.array(z.coerce.number().int().positive()).max(50).default([]),
   reference: z.string().trim().min(1).max(60).regex(/^[A-Za-z0-9][A-Za-z0-9 ./_-]*$/).optional(),
@@ -203,8 +209,12 @@ const invoiceSchema = z.object({
   otherDeductions: z.coerce.number().min(0).default(0),
   deductionNote: z.string().trim().max(300).optional(),
   notes: z.string().trim().max(1000).optional(),
+  bankDetails: z.string().trim().max(2000).optional(),
   billingTermId: z.coerce.number().int().positive().optional(),
   items: z.array(z.object({
+    category:z.string().trim().max(120).optional(),
+    area:z.string().trim().max(120).optional(),
+    methodStatement:z.string().trim().max(4000).optional(),
     description: z.string().trim().min(1).max(300),
     unit: z.string().trim().max(30).optional(),
     quantity: z.coerce.number().min(0).default(0),
@@ -214,19 +224,24 @@ const invoiceSchema = z.object({
   })).min(1, 'An invoice needs at least one line')
 });
 
+router.get('/receivables/invoice-identity',auth,permit('finance.invoice'),async(req,res,next)=>{try{
+  const companyId=companyParam(req);if(!companyId)throw fail(400,'Choose an operating company');
+  res.json(await quotationIdentity(companyId,Number(req.query.clientId)||null));
+}catch(error){next(error);}});
+
 router.get('/receivables/quote-lines',auth,permit('finance.view','finance.invoice'),async(req,res,next)=>{try{
   const projectId=Number(req.query.projectId);
   if(!Number.isInteger(projectId)||projectId<1)throw fail(400,'Choose a project');
   res.json(await query(`SELECT qi.id,qi.quotation_id quotationId,q.reference,q.status,qi.category,qi.description,qi.unit,
-    qi.quantity,ROUND(qi.rate*(1+q.markup_percent/100),2) rate,qi.source_subquote_id sourceSubquoteId
+    qi.area,qi.method_statement methodStatement,qi.quantity,ROUND(qi.rate*(1+q.markup_percent/100),2) rate,qi.source_subquote_id sourceSubquoteId
     FROM quotation_items qi JOIN quotations_client q ON q.id=qi.quotation_id
-    WHERE q.project_id=? AND q.status='Accepted' ORDER BY q.id DESC,qi.id`,[projectId]));
+    WHERE q.project_id=? AND q.status IN ('Sent','Accepted') ORDER BY q.id DESC,qi.id`,[projectId]));
 }catch(error){next(error);}});
 
 router.get('/receivables/boq-lines',auth,permit('finance.view','finance.invoice'),async(req,res,next)=>{try{
   const projectId=Number(req.query.projectId);
   if(!Number.isInteger(projectId)||projectId<1)throw fail(400,'Choose a project to see its approved BOQ items');
-  res.json(await query(`SELECT bi.id,b.reference,bi.category,bi.description,bi.unit,bi.quantity,bi.rate,
+  res.json(await query(`SELECT bi.id,b.id boqId,b.reference,b.status,bi.category,bi.description,bi.unit,bi.quantity,bi.rate,
     GREATEST(0,bi.quantity-COALESCE((SELECT SUM(ii.quantity) FROM client_invoice_items ii
       JOIN client_invoices ci ON ci.id=ii.invoice_id
       WHERE ii.boq_item_id=bi.id AND ci.status<>'Cancelled'),0)) remainingQuantity
@@ -296,6 +311,9 @@ const createInvoice = async (req, res, next) => {
       if (!company) throw fail(400, 'That operating company is not active');
       const vatRate = req.body.vatRate ?? Number(company?.defaultVatRate ?? 18);
 
+      const creator=await getOne(`SELECT u.id userId,u.name,COALESCE(r.name,u.role) role FROM users u LEFT JOIN roles r ON r.id=u.role_id WHERE u.id=?`,[req.user.id]);
+      if(req.body.bankAccountId&&!await getOne('SELECT id FROM company_bank_accounts WHERE id=? AND company_id=? AND active=1',[req.body.bankAccountId,companyId]))throw fail(400,'Choose an active bank account for this company');
+      const presentation=JSON.parse(await quotationPresentation(companyId,clientId,project?.name,req.body.bankAccountId,req.body.visibility));
       const priced=[];
       for(const item of req.body.items){
         if(item.quotationItemId && item.boqItemId) throw fail(400, 'Choose either a BOQ item or a quotation line for each invoice row');
@@ -303,8 +321,8 @@ const createInvoice = async (req, res, next) => {
           if (!project) throw fail(400, 'Quotation lines require a project');
           const line=await getOne(`SELECT qi.id,qi.rate,q.markup_percent markupPercent
             FROM quotation_items qi JOIN quotations_client q ON q.id=qi.quotation_id
-            WHERE qi.id=? AND q.project_id=? AND q.status='Accepted'`,[item.quotationItemId,project.id]);
-          if(!line)throw fail(400,'That accepted quotation line does not belong to this project');
+            WHERE qi.id=? AND q.project_id=? AND q.status IN ('Sent','Accepted')`,[item.quotationItemId,project.id]);
+          if(!line)throw fail(400,'That issued quotation line does not belong to this project');
           priced.push({...item,rate:Math.round(Number(line.rate)*(1+Number(line.markupPercent)/100)*100)/100});
         }else if(item.boqItemId){
           if (!project) throw fail(400, 'BOQ lines require a project');
@@ -331,7 +349,7 @@ const createInvoice = async (req, res, next) => {
         }, previousIds, { companyId, clientId, projectId: project?.id, invoiceDate: req.body.invoiceDate,
           taxTreatment: req.body.taxTreatment, vatRate: sums.vatRate });
         sums = cumulativeInvoice(sums, credits);
-        const options = { columns: req.body.columns, previousInvoices: sums.previousInvoices, cumulativeTotals: sums.cumulativeTotals };
+        const options = { creator, presentation, paymentTerms:req.body.paymentTerms || '', terms:req.body.terms || '', additionalNotes:req.body.additionalNotes || '', itemDetails:priced.map(item=>({category:item.category || '',area:item.area || '',methodStatement:item.methodStatement || ''})), bankDetails: req.body.bankDetails ?? null, columns: req.body.columns, previousInvoices: sums.previousInvoices, cumulativeTotals: sums.cumulativeTotals };
         const requestedBoqQuantities = new Map();
         for (const item of priced) if (item.boqItemId)
           requestedBoqQuantities.set(item.boqItemId, (requestedBoqQuantities.get(item.boqItemId) || 0) + Number(item.quantity));
@@ -376,7 +394,7 @@ const createInvoice = async (req, res, next) => {
       });
 
       await audit(pool, req.user.id, 'CREATE', 'client_invoice', id, null,
-        { reference, gross: sums.gross, net: sums.netPayable, treatment: req.body.taxTreatment, previousInvoices: sums.previousInvoices, columns: req.body.columns }, req.ip);
+        { reference, gross: sums.gross, net: sums.netPayable, treatment: req.body.taxTreatment, previousInvoices: sums.previousInvoices, columns: req.body.columns, bankDetails: req.body.bankDetails ?? null, placeOfSupply: req.body.placeOfSupply ?? null }, req.ip);
       publishChange('receivables', {});
       res.status(201).json({ id, reference, billingTermId: billingTerm?.id || null, ...sums });
     } catch (error) { next(error); }
@@ -446,8 +464,8 @@ router.get('/receivables/invoices/:id/document', auth, permit('finance.view', 'f
         i.buyer_phone buyerPhone,i.due_date dueDate,i.gross,i.tax_treatment taxTreatment,
         i.vat_rate vatRate,i.vat_amount vatAmount,i.retention_amount retentionAmount,
         i.advance_recovery advanceRecovery,i.other_deductions otherDeductions,i.net_payable netPayable,
-        i.invoice_options invoiceOptions,i.notes,p.name project,i.company_id companyId FROM client_invoices i
-        LEFT JOIN projects p ON p.id=i.project_id WHERE i.id=?`, [req.params.id]);
+        i.invoice_options invoiceOptions,i.notes,p.name project,i.company_id companyId,u.name preparedBy,COALESCE(r.name,u.role) preparedByDesignation FROM client_invoices i
+        LEFT JOIN projects p ON p.id=i.project_id LEFT JOIN users u ON u.id=i.created_by LEFT JOIN roles r ON r.id=u.role_id WHERE i.id=?`, [req.params.id]);
       if (!invoice) throw fail(404, 'That invoice was not found');
       const [items, context] = await Promise.all([
         query('SELECT description,unit,quantity,rate,amount FROM client_invoice_items WHERE invoice_id=? ORDER BY id', [req.params.id]),
@@ -810,7 +828,7 @@ router.post('/receivables/bonds/:id/extend',auth,permit('finance.invoice'),valid
 
 /* ---- petty cash ------------------------------------------------------------ */
 
-router.get('/receivables/petty-cash', auth, permit('finance.view', 'finance.manage'),
+router.get('/receivables/petty-cash', auth, permit('finance.view', 'finance.manage','finance.pay'),
   async (req, res, next) => {
     try {
       const companyId = companyParam(req);

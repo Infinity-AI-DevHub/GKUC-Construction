@@ -410,3 +410,132 @@ Read-only users cannot create/release. Bootstrap includes minimal project choice
 retention/finance managers without broader project view; forms accept both company field
 shapes and show only the selected company's projects. Existing records/IDs and releases
 are shared across entry points, not migrated or duplicated. No schema change.
+
+### BOQ financial adjustments and import review (2026-11-09)
+
+`boq-financials.js` validates/calculates independent subtotal percentages and fixed LKR
+Add/Deduct rows. Nullable guarded boqs.financial_adjustments persists entered values;
+boq_imports.financial_adjustments and adjustments_reviewed persist staged proposals and
+confirmation. Create, detail, document, item-add and approved item-change paths share the
+calculation, preserving existing approval/budget behavior and direct-edit locks. Item
+addition recalculates in one transaction. Existing BOQs with no adjustments are unchanged.
+
+The workbook parser scans all sheets, including the new optional template Adjustments
+sheet; PDF text/OCR parser detects common labelled tax/deduction lines separately from
+priced work. Staging retains source references, excludes matching summary work rows,
+requires saved financial review and locks import status at commit to avoid a second BOQ.
+Metadata/review edits are audited. Flexible Import Centre document review reuses the
+editor, validation and BOQ storage. Linked historical multi-BOQ identity/declared-total
+imports remain a separate contract. No automatic VAT/retention/payment posting is added.
+See [BOQ financial adjustments](BOQ_FINANCIALS.md) for bases, examples and parser limits.
+
+### HR-earned labour allocation to BOQ items (2026-11-09)
+
+Cost Control can allocate one employee's worked day across multiple BOQ items. The
+server reads saved HR attendance and the effective payroll rules for the work date, or
+the immutable Approved/Paid payslip detail where it exists. It derives earned daily pay
+as basic earnings plus approved OT minus late deductions, divides that by worked hours,
+and persists each BOQ allocation's hours and calculation snapshot on `daily_cost_lines`.
+The submission transaction recalculates the amount and rejects allocations beyond the
+employee's recorded hours, duplicate legacy full-day entries, payroll allocations, and
+attendance requiring HR review. Finance approval continues to post the saved line cost.
+
+### Direct office payment categories (2026-11-09)
+
+The Daily Expenses direct-office-payment form reads the existing Finance expense-category
+register and stores the selected category name on the separate office payment record.
+It does not create a project expense or alter existing category records.
+
+
+## 2026-11-09 — invoice source documents and statement ranges
+
+Client invoice entry groups existing project item sources by BOQ/quotation ID. Quotation
+sources include Sent and Accepted; Draft/Declined/Expired remain excluded. BOQs retain
+the Approved requirement and transactionally locked remaining-quantity cap. Source
+rates remain server-resolved, including quotation markup. Source requests clear stale
+results on project changes and ignore responses after selection changes. Item links
+persist in client_invoice_items as before; no extra receivable or mirrored document.
+Invoice-specific bankDetails is validated and saved inside invoice_options; an explicit
+empty string suppresses company bank defaults, while legacy/null options retain them.
+The shared print renderer suppresses duplicate letterhead date/reference, enlarges the
+title, splits comma-delimited addresses, places the work title immediately before the
+items table and confines additional information to saved user notes. Place of supply
+continues to accept a manually entered saved value, with the existing blank-site fallback.
+
+GET /finance/financial-statements accepts companyId plus inclusive from/to dates (legacy
+period remains supported). managementPack receives optional bounds only for this view;
+monthly close APIs retain calendar-month behavior. Income/cost uses those dates; balances
+include earlier records and only receipts/payments through To. Monthly management
+adjustments apply in full for months touched, explicitly disclosed because no daily
+adjustment date is stored. Unknown balance-sheet accounts remain unknown. Authenticated
+GET /finance/financial-statements/document uses the same data and finance.reports permission
+and shared sendDocument PDF generator, including the mandatory Infinity AI end credit.
+The UI offers From/To, CSV and authenticated PDF download; no ticket or public URL needed.
+
+## 2026-11-09 — shared quotation/invoice authoring and creator signatures
+
+`QuotationIdentityChoices.jsx` is shared by QS and Finance. The identity/presentation
+schema and snapshot helpers are extracted to `quotation-presentation.js` without changing
+QS contracts. Finance can read saved company bank accounts, work methods and quotation
+note templates; write/admin permissions remain unchanged. New authenticated
+GET /receivables/invoice-identity allows an optional purchaser. Invoice creation validates
+company bank ownership and saves presentation, user-entered terms/payment terms/additional
+notes and per-line category/reference/method text in existing invoice_options JSON.
+No arbitrary markup is added to invoices: existing server-owned source rates and saved
+invoice totals/deductions remain authoritative.
+
+`invoiceDocument` adapts saved invoice data into `quotationDocument`, retaining its
+letterhead, identity blocks, subject, priced table, methods, terms, bank section and
+first-page-only letterhead. Invoice totals are injected from the saved invoice snapshot,
+including cumulative credits; quotation arithmetic cannot replace them. Exempt invoices
+use Subtotal/Total Value; tax invoices retain VAT working. Signature/footer/Infinity AI
+credit are grouped to avoid an orphan footer. Presentation flags remain effective.
+Normal, tax, billing-term and progress-certificate receivables snapshot the actual
+creator's user ID/name/account role in invoice_options.creator. Client-provided preparer
+names are ignored. The document route uses this immutable snapshot; legacy records use
+the linked created_by account, never the printing user. Existing quotations' selectable
+preparer behavior and payment-request letter behavior are unchanged.
+
+## 2026-11-09 — atomic project company ownership synchronization
+
+PATCH /projects/:id retains projects.manage and validates the active destination company.
+With the project locked, `moveProjectCompany` synchronizes explicit company_id registers
+(tasks, fleet fuel/maintenance/readings, income, bills, inquiries, quotations, tenders,
+client invoices/plans, received cheques, bonds, dedicated floats, subcontract quotations,
+management adjustments and outflow plans), plus supplier invoices through project POs
+and quotation-linked billing records. Project-only BOQs, costs, files and operations
+inherit ownership through their existing project IDs. Same-company saves run the same
+repair, supporting projects already moved by older code. Each changed ownership and
+document snapshot is audited in the same transaction. A destination unique-key conflict
+returns 409 and rolls everything back; stale project-company edits are rejected.
+
+Saved quotation/invoice issuer presentation switches to the destination company. Source
+bank instructions/account IDs are cleared instead of choosing a new bank account by
+assumption; originals remain in audit history. Original document numbers, amounts,
+statuses, attachments, creator identity and payroll snapshots are retained. Shared cash
+accounts and employee payroll companies are not reclassified. Actual supplier payer is
+fixed in payment_company_id before invoice ownership moves; issued-cheque payer remains
+unchanged. Startup legacy cheque backfill no longer overwrites a known payer. The
+feature performs no background/live database repair: the updated application must be
+released, then an authorized user saves the affected project.
+
+## 2026-11-09 — supplier direct and petty-cash batch payments
+
+POST /purchasing/supplier-payments/batch requires finance.pay. Up to 100 distinct invoice
+allocations must share the selected company and supplier. Amounts are positive cents.
+Independent no-PO approval/three-way matching and recent supplier-bank verification still
+apply. Invoice locks serialize payments; active cheque allocations reserve balances.
+A selected expense float must be active, belong to that company, have sufficient balance
+and satisfy a dedicated-project restriction. Salary-advance floats cannot fund suppliers.
+
+Additive supplier_payment_batches stores a unique client reference and request hash.
+Same-user identical retries return the saved batch; a changed request rejects reuse.
+Nullable supplier_payments.batch_id and unique petty_cash_entry_id link each settlement
+to its batch and one signed cash movement. Validation, invoice balances, supplier payment,
+float debit and audits commit atomically. No second project expense is inserted.
+Daily Expenses, Cash Comparison and management cash totals omit linked supplier rows
+because the petty movement already represents the outflow; payable balances still use
+all supplier payments. Statements label linked settlements as Petty cash. Existing
+single-invoice direct API and Issued cheques remain available. Credit-purchase UI exposes
+Pay alongside review actions and Pay supplier with selection/select-all, partial amounts,
+source/account and one total. Required reviews remain enforced by the server.
