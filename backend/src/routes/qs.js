@@ -1545,12 +1545,12 @@ const retentionSelect = `SELECT r.id,r.description,r.amount,r.percent,r.held_fro
   r.project_id projectId,p.name project,p.client,u.name createdBy
   FROM retentions r JOIN projects p ON p.id=r.project_id JOIN users u ON u.id=r.created_by`;
 
-router.get('/retentions', auth, permit('qs.view', 'finance.view'), wrap(async (req, res) => {
+router.get('/retentions', auth, permit('qs.view', 'finance.view','qs.retention','finance.manage'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId);
   res.json(await query(`${retentionSelect} ${companyId > 0 ? 'WHERE p.company_id=?' : ''} ORDER BY r.release_date`, companyId > 0 ? [companyId] : []));
 }));
 
-router.post('/retentions', auth, permit('qs.retention'), validate(z.object({
+router.post('/retentions', auth, permit('qs.retention','finance.manage'), validate(z.object({
   projectId: z.number().int().positive(),
   description: z.string().min(3).max(300),
   amount: z.number().positive(),
@@ -1570,7 +1570,7 @@ router.post('/retentions', auth, permit('qs.retention'), validate(z.object({
   res.status(201).json(await getOne(`${retentionSelect} WHERE r.id=?`, [result.insertId]));
 }));
 
-router.post('/retentions/:id/release', auth, permit('qs.retention'), validate(z.object({
+router.post('/retentions/:id/release', auth, permit('qs.retention','finance.manage'), validate(z.object({
   amount: z.number().positive(),
   notes: z.string().max(600).optional()
 })), wrap(async (req, res) => {

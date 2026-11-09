@@ -1,3 +1,4 @@
+import Retention from './Retention.jsx';
 import React, { useEffect, useState } from 'react';
 import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
 import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
@@ -18,8 +19,9 @@ import ProgressClaims from './ProgressClaims.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
-const TABS = ['Financial reports','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Progress claims','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Credit purchases','Supplier invoices','Supplier statements','Categories'];
+const TABS = ['Financial reports','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Retention','Progress claims','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Credit purchases','Supplier invoices','Supplier statements','Categories'];
 const TAB_PERMISSIONS = {
+  Retention:['finance.view','finance.manage','qs.retention'],
   'Progress claims':['finance.view','finance.invoice'],
   'Financial reports':['finance.reports'], 'Management accounts':['finance.managementAccounts'],
   'Cash comparison':['finance.cashComparison'], 'Daily expenses':['finance.dailyExpenses'],
@@ -33,7 +35,7 @@ const TAB_PERMISSIONS = {
 };
 const TAB_GROUPS = [
   { label: 'Overview & review', tabs: ['Financial reports', 'Management accounts', 'Cash comparison', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
-  { label: 'Money in', tabs: ['Invoices', 'Progress claims', 'Income', 'VAT ledger'] },
+  { label: 'Money in', tabs: ['Invoices', 'Retention', 'Progress claims', 'Income', 'VAT ledger'] },
   { label: 'Money out', tabs: ['Expected outflows', 'Bills', 'Credit purchases', 'Supplier invoices', 'Supplier statements', 'Expenses', 'Petty cash', 'Credit cards'] },
   { label: 'Controls', tabs: ['VAT clearance', 'Cheques', 'Bonds', 'Categories'] }
 ];
@@ -84,6 +86,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     <Tabs tabs={visibleTabs} active={tab} onChange={setTab} groups={visibleGroups} />
 
     <>
+    {tab === 'Retention' && <Retention key={companyId} can={can} companyId={companyId} data={data} />}
     {tab === 'Financial reports' && <FinanceReports projects={data.projects} companyId={companyId} company={company} />}
     {tab === 'Management accounts' && <ManagementAccounts projects={data.projects.filter(project => Number(project.companyId) === Number(companyId))} companyId={companyId} company={company} can={featureCan('finance.managementAccountsManage')} />}
     {tab === 'Cash comparison' && <CashComparison companyId={companyId} company={company} can={featureCan('finance.cashComparison')} />}

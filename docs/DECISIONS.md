@@ -243,9 +243,11 @@ User explicitly requires display/planning only: saving planned amounts or the ma
 bank balance never creates actual expenses, income, payments or account balances.
 Cash outflow table is manual standalone planning, supports multiple rows in one save,
 and remains separate from automatically read Receivables and Outstanding. Interpret
-Outstanding as supplier invoices plus operating bills. Period basis is due date inside
-From/To (fallback invoice/bill date), balances net of payments through To; label this
-basis on screen and PDF. Bank balance is remembered for the exact company/date range,
+Outstanding as supplier invoices plus operating bills. The later clarification limits
+From/To filtering to cash-outflow rows; all current unpaid receivable/payable balances
+are shown irrespective of dates, after all saved payments. PDF shows the selected
+dates without notes or headings explaining selective filter scope; retain the
+mandatory Infinity AI developer credit. Bank balance is remembered for the exact company/date range,
 not treated as verified cash. Preserve existing finance records and legacy schedules.
 
 ## 2026-11-09 — bond titles and project choices
@@ -254,3 +256,10 @@ Show project/tender name as the primary bond list identity, actual bank bond num
 below. Hide system/import reference from the list title while preserving it internally
 and in search/history/import contracts. Fix project-company field compatibility and
 provide minimal project choices to bond writers, without cross-company linking.
+
+## 2026-11-09 — expose the existing QS Retention workspace in Finance
+
+User requires the same page, operations, view and records in both modules. Reuse one
+shared component and the existing QS retention API/table. Finance managers may add and
+release through that same workflow; Finance viewers remain read-only. Never mirror,
+copy or automatically insert a second retention merely because it is viewed in Finance.

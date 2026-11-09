@@ -116,7 +116,7 @@ const capabilities = permissions => {
     quotationFinalize: any('qs.quotationFinalize'),
     qsApprove: any('qs.approve'),
     tender: any('qs.tender'),
-    retention: any('qs.retention'),
+    retention: any('qs.retention','finance.manage'),
     subcontractors: any('subcontractors.manage'),
     transport: any('transport.manage')
   };

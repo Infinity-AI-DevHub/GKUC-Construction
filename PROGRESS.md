@@ -1060,3 +1060,59 @@ reference title absent, project name present and Project One selectable from sna
 project data while another company's project is excluded. No bond number/reference,
 amount, status, historical project link or live record was altered. Updated architecture,
 decisions and README. No deployment or live DB write; desktop releases not rebuilt.
+
+## 2026-11-09 — all-date receivable/outstanding schedules and plain PDF period
+
+User clarified that From/To must filter only manual Cash outflow rows, not Receivables
+or Outstanding. Removed all invoice/due-date restrictions and payment-date cutoffs from
+those company-scoped schedules. They now show all saved unpaid client/supplier balances
+after all recorded receipts/payments, plus all unpaid operating bills. Cash outflow
+range and exact-range manual planning bank-balance storage are unchanged. UI labels
+clarify cash-outflow date controls and all-date schedules. No financial posting/write
+or schema change is introduced. Updated README, ARCHITECTURE and DECISIONS.
+
+User additionally requested the selected dates on PDF without any note/heading saying
+that the filter applies selectively. PDF retains plain period and ordinary Receivables/
+Outstanding headings; only a short planning-only disclaimer remains. Shared PDF pipeline
+retains Developed by Infinity AI (Pvt) Ltd, Sri Lanka once at the end.
+
+Validation: focused Node 20 real API worksheet test passed (1 passed, 179 unrelated
+filtered out), including bulk non-posting/rollback, company scope, all-date balance
+invariance for both earlier/later selected ranges, cash-outflow exclusion outside its
+range, recorded payment deduction irrespective of To, and prior bank/document checks.
+Frontend production build passed (existing chunk advisory). Generated a real one-page
+PDF through shared renderer with receivable/outstanding dates outside the header period;
+PDF text assertions confirm selected From/To, both out-of-period dates and exact developer
+credit, and no selective-date-filter explanation. Poppler render visually inspected:
+all four summaries, three tables and end credit readable with no overlap. PDF evidence
+ignored at desktop/test-results/outflow-all-dates.pdf. Final whitespace check passed.
+Full backend suite and browser/Electron UI were not rerun for this focused follow-up.
+No deployment, PM2 action, production configuration edit, live DB write or desktop
+installer rebuild. Integration tests used disposable local records only.
+
+## 2026-11-09 — reuse the QS Retention workspace inside Finance
+
+User requested the exact QS retention page/operations/view in Finance, including add,
+without separate Finance entries. Extracted the existing summaries, table, create and
+release forms into one Retention.jsx component mounted by both modules. Moved Record
+retention into that component so both entry points expose the same action. Added Finance
+Retention navigation/deep-link support. Existing /qs/retentions routes and retentions
+records remain the only persistence; no new register, schema, mirror or data migration.
+Finance manage now authorizes create/release alongside qs.retention, and UI capabilities
+match. Finance view remains read-only. Minimal project choices reach retention/finance
+managers lacking projects.view; creation filters the selected company with both company
+field shapes. Existing company-filtered lists, IDs, releases/audit and amount checks remain.
+
+Validation: focused Node 20 real API run 2 passed, zero failed (179 unrelated filtered
+out), covering the existing shared Finance/QS cost-ledger test and new retention test.
+New test removes QS retention permission from the disposable Finance role and verifies
+Finance creation/release still works; QS reads/releases that same ID, company isolation,
+unauthorized Store rejection, over-release rejection and exactly one saved row. Role grant
+is restored in finally. Frontend production build passed (existing chunk-size advisory).
+Chrome fixture UI check exercises the same component from Finance/QS hosts: one create,
+company-scoped project options, one shared row, QS release reflected in Finance and no
+second create. Updated README, ARCHITECTURE and DECISIONS. Full backend suite and packaged
+Electron were not rerun for this change. No deployment, PM2 restart, production .env edit,
+live DB write or desktop installer rebuild; API tests use disposable local records.
+Final verification for shared Retention: frontend tests 39/39 and git diff --check pass.
+Temporary browser harness/server removed after the passing UI check.

@@ -6355,7 +6355,37 @@ test('outflow worksheet bulk entries and balance never create financial postings
  const clientInvoice=await call(owner,'POST','/receivables/invoices',{companyId:1,kind:'Interim',title:'Worksheet client invoice',invoiceDate:from,dueDate:'2048-11-16',documentType:'Invoice',taxTreatment:'Exempt',vatRate:0,items:[{description:'Work delivered',quantity:1,rate:900}]});assert.equal(clientInvoice.status,201,JSON.stringify(clientInvoice.body));
  assert.equal((await call(owner,'POST',`/receivables/invoices/${clientInvoice.body.id}/issue`,{})).status,204);
  await admin.query(`INSERT INTO ${testDatabase}.supplier_payments(invoice_id,amount,paid_date,method,created_by) VALUES (?,100,'2048-12-01','Cash',1)`,[supplierInvoice.body.id]);
- const withSources=(await call(owner,'GET',url)).body;assert.equal(withSources.outstanding.find(r=>r.id===supplierInvoice.body.id&&r.source==='Supplier invoice').amount,700);assert.equal(withSources.receivables.find(r=>r.id===clientInvoice.body.id).amount,900);assert.equal(withSources.totals.cashOutflow,320.25);
+ const withSources=(await call(owner,'GET',url)).body;assert.equal(withSources.outstanding.find(r=>r.id===supplierInvoice.body.id&&r.source==='Supplier invoice').amount,600);assert.equal(withSources.receivables.find(r=>r.id===clientInvoice.body.id).amount,900);assert.equal(withSources.totals.cashOutflow,320.25);
+ const outside=(await call(owner,'GET',url.replace(from,'2049-01-01').replace(to,'2049-01-31'))).body;
+ assert.equal(outside.entries.length,0,'only cash outflow uses the selected dates');
+ assert.deepEqual(outside.receivables,withSources.receivables,'receivables stay identical outside invoice dates');
+ assert.deepEqual(outside.outstanding,withSources.outstanding,'outstanding stays identical outside invoice dates');
+ assert.equal(outside.totals.receivables,withSources.totals.receivables);assert.equal(outside.totals.outstanding,withSources.totals.outstanding);
+ const earlier=(await call(owner,'GET',url.replace(from,'2047-01-01').replace(to,'2047-01-31'))).body;
+ assert.deepEqual(earlier.receivables,withSources.receivables);assert.deepEqual(earlier.outstanding,withSources.outstanding,'To date never limits recorded payments or balances');
+ const otherCompany=(await call(owner,'GET',url.replace('companyId=1','companyId=2'))).body;
+ assert.ok(!otherCompany.receivables.some(r=>r.id===clientInvoice.body.id));assert.ok(!otherCompany.outstanding.some(r=>r.source==='Supplier invoice'&&r.id===supplierInvoice.body.id));
  const archive=await call(owner,'PATCH',`/finance/expected-outflows/plans/${result.body.ids[0]}`,{companyId:1,status:'Cancelled'});assert.equal(archive.status,200);assert.ok(!(await call(owner,'GET',url)).body.entries.some(r=>r.id===result.body.ids[0]));
  const boot=await call(owner,'GET','/bootstrap');assert.ok(boot.body.data.projects.length);assert.ok(boot.body.data.projects.every(r=>r.companyId));
+});
+
+test('Finance and QS share one retention register and Finance manages it without QS write permission',async()=>{
+ const finance=await login('finance@gkuc.lk'),qs=await login('qs@gkuc.lk'),store=await login('store@gkuc.lk');
+ const [[user]]=await admin.query(`SELECT role_id FROM ${testDatabase}.users WHERE email='finance@gkuc.lk'`);
+ const [prior]=await admin.query(`SELECT permission_key FROM ${testDatabase}.role_permissions WHERE role_id=? AND permission_key='qs.retention'`,[user.role_id]);
+ await admin.query(`DELETE FROM ${testDatabase}.role_permissions WHERE role_id=? AND permission_key='qs.retention'`,[user.role_id]);
+ try{
+  const description=`Shared retention ${Date.now()}`;
+  const body={projectId:1,description,amount:1000,percent:5,heldFrom:today(),releaseDate:shift(30)};
+  assert.equal((await call(store,'POST','/qs/retentions',body)).status,403);
+  const created=await call(finance,'POST','/qs/retentions',body);assert.equal(created.status,201,JSON.stringify(created.body));
+  for(const token of [finance,qs]){const list=await call(token,'GET','/qs/retentions?companyId=1');assert.equal(list.status,200);assert.equal(list.body.filter(r=>r.id===created.body.id).length,1);}
+  const other=await call(finance,'GET','/qs/retentions?companyId=2');assert.ok(!other.body.some(r=>r.id===created.body.id));
+  assert.equal((await call(finance,'POST',`/qs/retentions/${created.body.id}/release`,{amount:400})).status,200);
+  const shared=(await call(qs,'GET','/qs/retentions?companyId=1')).body.find(r=>r.id===created.body.id);
+  assert.equal(Number(shared.releasedAmount),400);assert.equal(shared.status,'Partially released');
+  assert.equal((await call(qs,'POST',`/qs/retentions/${created.body.id}/release`,{amount:600})).status,200);
+  assert.equal((await call(finance,'POST',`/qs/retentions/${created.body.id}/release`,{amount:1})).status,409);
+  const [[saved]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.retentions WHERE description=?`,[description]);assert.equal(Number(saved.n),1);
+ }finally{if(prior.length)await admin.query(`INSERT IGNORE INTO ${testDatabase}.role_permissions(role_id,permission_key) VALUES (?,'qs.retention')`,[user.role_id]);}
 });
