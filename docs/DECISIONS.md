@@ -273,3 +273,47 @@ VAT or cascade taxes silently. Recognised source rows are editable proposals req
 saved confirmation; preserve originals and prevent counting a summary as priced work too.
 Existing approval remains the budget update event; BOQ pricing does not create a second
 VAT, payment or retention ledger entry. Keep legacy/no-adjustment BOQs unchanged.
+
+
+## 2026-11-09 — invoice sources and statement date-range presentation
+
+Invoice writers may use issued (Sent) as well as Accepted quotation lines; existing
+Approved BOQ and overbilling protections remain. A separate source-document picker
+filters item choices without discarding already entered lines. Invoice bank details
+are a per-invoice saved text snapshot; no bank/account facts are inferred. Additional
+information prints only user notes; project/due/title text is no longer injected there.
+The work title appears above item descriptions. Manual place of supply remains supported.
+
+Income Statement uses inclusive From/To. Financial Position is as at To, including
+balances before From, rather than incorrectly showing only movements within the range.
+Month-based adjustments cannot be prorated without inventing daily allocations: include
+full adjustments for months intersecting the range and disclose that basis. Monthly
+management closes remain separate. PDF export uses the shared renderer and end credit.
+
+## 2026-11-09 — superseding the separate invoice body layout
+
+The user's attached sample and correction replace the earlier boxed tax-invoice body
+choice. Invoice and quotation now share authoring information choices and one document
+renderer. Keep saved invoice arithmetic and mandatory invoice tax/deduction working;
+reuse quotation presentation rather than creating quotation financial records. Only
+explicitly entered invoice notes are added. Every invoice's prepared-by/signature uses
+the creation account's name and role, saved server-side and independent of who prints.
+Legacy invoices resolve their original created_by account without rewriting amounts.
+
+## 2026-11-09 — company changes move project ownership together
+
+The user explicitly requested moving all related project records between Construction
+and Readymix. Replace the former commercial-record lock with an audited atomic ownership
+transfer. Preserve amounts, document numbers, statuses, original uploaded files and
+approved/paid payroll. Preserve the actual paying company on supplier payments and
+cheques, rather than falsely moving historical bank/cash payments. Remove old-company
+bank instructions from generated issuer snapshots. An existing-company Save repairs
+older mismatches; do not silently write live business records from a startup migration.
+
+## 2026-11-09 — one supplier payment, one cash outflow
+
+Credit purchases may be paid directly or from expense petty cash, individually or in a
+selected supplier batch. Preserve independent payment review controls. The petty debit
+and supplier settlement are two linked representations of one payment; aggregate cash
+views count the petty movement once and never create another project cost. Retry keys,
+invoice/float locks, cheque reservations and whole-batch rollback protect partial payments.

@@ -1,3 +1,4 @@
+import {quotationVisibility,parsePresentation,quotationIdentity,quotationPresentation} from '../lib/quotation-presentation.js';
 import {installPrintOptions} from './document-print-options.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -31,55 +32,6 @@ async function preparedSnapshot(body, fallbackUser) {
   if (body.preparedByUserId && !selected) throw Object.assign(new Error('The selected preparer is no longer active.'), { status: 400 });
   return { userId: selected?.id || null, name: body.preparedByName || selected?.name || fallbackUser.name,
     designation: body.preparedByDesignation || selected?.designation || fallbackUser.role || 'Authorised staff member' };
-}
-
-const quotationVisibility = z.object({
-  company: z.object({
-    logo: z.boolean(), name: z.boolean(), address: z.boolean(), telephone: z.boolean(),
-    email: z.boolean(), registrationNumber: z.boolean().optional(), tin: z.boolean(), vatNumber: z.boolean(), svatNumber: z.boolean(),
-    bankDetails: z.boolean()
-  }).strict(),
-  client: z.object({
-    name: z.boolean(), billingAddress: z.boolean(), siteAddress: z.boolean(),
-    contactPerson: z.boolean(), phone: z.boolean(), alternatePhone: z.boolean(), email: z.boolean(),
-    city: z.boolean(), district: z.boolean(), province: z.boolean(), country: z.boolean(),
-    registrationNumber: z.boolean(), tin: z.boolean(), vatNumber: z.boolean(), project: z.boolean()
-  }).strict()
-}).strict();
-
-const parsePresentation = value => {
-  if (!value) return null;
-  if (typeof value === 'object') return value;
-  try { return JSON.parse(value); } catch { return null; }
-};
-
-async function quotationIdentity(companyId, clientId, fallbackName = '') {
-  const [{ company }, client] = await Promise.all([
-    documentContext(getOne, companyId),
-    clientId ? getOne(`SELECT name,billing_address billingAddress,site_address siteAddress,
-      contact_person contactPerson,phone,alternate_phone alternatePhone,email,city,district,province,country,
-      registration_number registrationNumber,
-      COALESCE(NULLIF(tin,''),tax_number) tin,vat_number vatNumber
-      FROM clients WHERE id=? AND active=1`, [clientId]) : null
-  ]);
-  if (!company) return null;
-  return {
-    company: { name: company.name, address: company.address, telephone: company.telephone,
-      registrationNumber: company.registrationNumber,
-      email: company.email, tin: company.tin, vatNumber: company.vatNumber, svatNumber: company.svatNumber,
-      bankDetails: company.bankDetails },
-    client: client || { name: fallbackName }
-  };
-}
-
-async function quotationPresentation(companyId, clientId, projectName, bankAccountId, visibility, fallbackName = '') {
-  const identity = await quotationIdentity(companyId, clientId, fallbackName);
-  if (!identity) return null;
-  const bank = bankAccountId ? await getOne(`SELECT label,bank_name bankName,branch,
-    account_name accountName,account_number accountNumber,swift_code swiftCode
-    FROM company_bank_accounts WHERE id=? AND company_id=? AND active=1`, [bankAccountId, companyId]) : null;
-  return JSON.stringify({ show: visibility, company: identity.company,
-    client: { ...identity.client, project: projectName || null }, bank });
 }
 
 /* ------------------------------------------------------------------ Quotations */
@@ -180,7 +132,7 @@ const describe = boq => (boq.title?.toLowerCase().includes(String(boq.project ||
  * long list, which is how these quotations are actually put together: two or three ways to
  * do the same job, offered side by side.
  */
-router.get('/methods', auth, permit('qs.view', 'qs.quotation'), wrap(async (_req, res) =>
+router.get('/methods', auth, permit('qs.view', 'qs.quotation','finance.invoice'), wrap(async (_req, res) =>
   res.json(await query(`SELECT id,code,name,category,description,unit,default_rate defaultRate,
     method_statement methodStatement,payment_terms paymentTerms
     FROM work_methods WHERE active=1 ORDER BY category,name`))));
@@ -235,7 +187,7 @@ router.patch('/methods/:id', auth, permit('qs.templates'), validate(z.object({
   res.json(after);
 }));
 
-router.get('/quotation-note-templates', auth, permit('qs.view', 'qs.quotation'), wrap(async (_req, res) => {
+router.get('/quotation-note-templates', auth, permit('qs.view', 'qs.quotation','finance.invoice'), wrap(async (_req, res) => {
   res.json(await query(`SELECT id,name,body FROM quotation_note_templates WHERE active=1 ORDER BY name`));
 }));
 

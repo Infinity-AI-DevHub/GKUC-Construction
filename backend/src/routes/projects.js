@@ -1,3 +1,4 @@
+import {moveProjectCompany} from '../lib/project-company.js';
 import {installProjectDeadlines,projectDate} from './project-deadlines.js';
 import { projectCompletion } from '../lib/project-completion.js';
 import { Router } from 'express';
@@ -298,20 +299,6 @@ router.post('/', auth, permit('projects.manage'), validate(projectSchema), wrap(
 router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM projects WHERE id=? AND active=1', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Project not found' });
-  if (req.body.companyId && Number(req.body.companyId) !== Number(before.company_id)) {
-    // Moving a project with commercial records would leave company-scoped ledgers and documents inconsistent.
-    const committedTables = ['boqs', 'quotations_client', 'client_invoices',
-      'daily_cost_sheets', 'expenses', 'incomes', 'purchase_requests', 'purchase_orders',
-      'subcontractor_bills', 'subcontractor_project_rates', 'subcontractor_quotations',
-      'variation_orders', 'quotation_billing_plans', 'petty_cash_entries',
-      'fuel_records',
-      'project_awards', 'project_work_authorisations','project_extensions'];
-    for (const table of committedTables) {
-      if (await getOne(`SELECT 1 AS found FROM ${table} WHERE project_id=? LIMIT 1`, [before.id]))
-        return res.status(409).json({ error: 'This project already has commercial or financial records. Its operating company cannot be changed without moving those records. Other project details can still be edited.' });
-    }
-  }
-
   /* Only one end of the range may be in the request, so the other comes from the record. */
   const asDate = value => (value instanceof Date ? value.toISOString().slice(0, 10) : value);
   const startDate = req.body.startDate ?? asDate(before.start_date);
@@ -335,9 +322,11 @@ router.patch('/:id', auth, permit('projects.manage'), validate(projectPatch), wr
   const { fields, values } = toRow(body);
   if (!fields.length) return res.json(before);
   await transaction(async connection => {
-    const [[current]]=await connection.execute('SELECT end_date,start_date FROM projects WHERE id=? AND active=1 FOR UPDATE',[before.id]);
+    const [[current]]=await connection.execute('SELECT end_date,start_date,company_id FROM projects WHERE id=? AND active=1 FOR UPDATE',[before.id]);
     if(!current)throw fail(404,'Project not found.');
     if(('endDate' in body||'startDate' in body)&&(asDate(current.end_date)!==asDate(before.end_date)||asDate(current.start_date)!==asDate(before.start_date)))throw fail(409,'Project dates changed. Reload before saving.');
+    if(Number(current.company_id)!==Number(before.company_id))throw fail(409,'Project company changed. Reload before saving.');
+    if(body.companyId){try{await moveProjectCompany(connection,before.id,body.companyId,req.user.id,req.ip);}catch(error){if(error.code==='ER_DUP_ENTRY')throw fail(409,'A linked record conflicts with an existing record in the destination company. Nothing was moved; resolve that duplicate before saving.');throw error;}}
     await connection.execute(`UPDATE projects SET ${fields.map(key => `${key}=?`).join(',')} WHERE id=?`, [...values, req.params.id]);
     if (body.stage === 'Mid-way' || body.stage === 'Completed') await connection.execute(
       'UPDATE project_start_reminders SET active=0 WHERE project_id=?', [before.id]);

@@ -1,3 +1,4 @@
+import QuotationIdentityChoices,{defaultQuotationVisibility} from './QuotationIdentityChoices.jsx';
 import BondImport from './BondImport.jsx';
 import DocumentPrintOptions from './DocumentPrintOptions.jsx';
 import React, { useEffect, useRef, useState } from 'react';
@@ -327,11 +328,42 @@ function CertificateForm({ data, companyId, close, reload }) {
     && String(project.clientId || project.client_id) === String(clientId));
   const [quoteLines,setQuoteLines]=useState([]);
   const [boqLines,setBoqLines]=useState([]);
+  const [sourceDocument,setSourceDocument]=useState('');
+  const [sourceError,setSourceError]=useState('');
+  const [identity,setIdentity]=useState(null);
+  const [identityError,setIdentityError]=useState('');
+  const [visibility,setVisibility]=useState(defaultQuotationVisibility);
+  const [bankAccounts,setBankAccounts]=useState([]);
+  const [bankAccountId,setBankAccountId]=useState('');
+  const [noteTemplates,setNoteTemplates]=useState([]);
+  const [methods,setMethods]=useState([]);
+  const [selectedNote,setSelectedNote]=useState('');
+  const [notes,setNotes]=useState('');
   useEffect(()=>{
-    if (!projectId) { setQuoteLines([]); setBoqLines([]); return; }
-    api(`/receivables/quote-lines?projectId=${projectId}`).then(setQuoteLines).catch(()=>setQuoteLines([]));
-    api(`/receivables/boq-lines?projectId=${projectId}`).then(setBoqLines).catch(()=>setBoqLines([]));
+    let live=true;setIdentity(null);setIdentityError('');
+    api(`/receivables/invoice-identity?companyId=${companyId}${clientId?`&clientId=${clientId}`:''}`).then(result=>{if(live)setIdentity(result);}).catch(error=>{if(live)setIdentityError(error.message);});
+    return ()=>{live=false;};
+  },[companyId,clientId]);
+  useEffect(()=>{
+    let live=true;
+    Promise.all([api(`/company-bank-accounts?companyId=${companyId}`),api('/qs/quotation-note-templates'),api('/qs/methods')]).then(([banks,templates,workMethods])=>{if(live){setBankAccounts(banks);setNoteTemplates(templates);setMethods(workMethods);}}).catch(error=>{if(live)setIdentityError(error.message);});
+    return ()=>{live=false;};
+  },[companyId]);
+
+  useEffect(()=>{
+    let active=true;
+    setQuoteLines([]);setBoqLines([]);setSourceDocument('');setSourceError('');
+    if(projectId) Promise.all([
+      api(`/receivables/quote-lines?projectId=${projectId}`),
+      api(`/receivables/boq-lines?projectId=${projectId}`)
+    ]).then(([quotes,boqs])=>{if(active){setQuoteLines(quotes);setBoqLines(boqs);}})
+      .catch(error=>{if(active)setSourceError(error.message);});
+    return ()=>{active=false;};
   },[projectId]);
+  const sourceDocuments=[...new Map([
+    ...boqLines.map(row=>[`boq:${row.boqId}`,{key:`boq:${row.boqId}`,label:`BOQ · ${row.reference}`}]),
+    ...quoteLines.map(row=>[`quote:${row.quotationId}`,{key:`quote:${row.quotationId}`,label:`Quotation · ${row.reference} · ${row.status}`}])
+  ]).values()];
   const [documentType,setDocumentType]=useState('Tax Invoice');
   const [invoiceDate,setInvoiceDate]=useState(todayInput());
   const [terms, setTerms] = useState({
@@ -347,6 +379,7 @@ function CertificateForm({ data, companyId, close, reload }) {
   const items = lines
     .filter(line => line.description.trim() && Number(line.quantity) > 0)
     .map(line => ({
+      category:line.category || undefined,area:line.area || undefined,methodStatement:line.methodStatement || undefined,
       description: line.description.trim(),
       unit: line.unit.trim() || undefined,
       quantity: Number(line.quantity),
@@ -388,6 +421,7 @@ function CertificateForm({ data, companyId, close, reload }) {
     ['Net payable', preview ? rupees(preview.netPayable) : 'Add invoice items to calculate']
   ]} reviewContent={<><h3>Invoice items</h3>{items.map((item, index) => <div key={index}><span>{item.description}{!amountOnly && <small>{item.quantity} {item.unit || 'units'} × {rupees(item.rate)}</small>}</span><strong>{rupees(item.quantity * item.rate)}</strong></div>)}{preview?.workings.map(step => <div key={step.label}><span>{step.label}</span><strong>{rupees(step.amount)}</strong></div>)}</>}
     onSubmit={async values => {
+      if(!identity)throw new Error(identityError || 'Wait for company and client information to load.');
       if (!items.length) throw new Error('Add at least one line with a description and a quantity or lump-sum amount');
       await post('/receivables/invoices', {
         projectId: values.projectId ? Number(values.projectId) : null,
@@ -401,7 +435,11 @@ function CertificateForm({ data, companyId, close, reload }) {
         paymentMode: values.paymentMode || undefined,
         dueDate: values.dueDate || undefined,
         svatVoucher: values.svatVoucher || undefined,
-        notes: values.notes || undefined,
+        notes: notes || undefined,
+        paymentTerms:values.paymentTerms || undefined,terms:values.terms || undefined,additionalNotes:values.additionalNotes || undefined,
+        bankAccountId:bankAccountId?Number(bankAccountId):undefined,
+        visibility:{...visibility,company:{...visibility.company,bankDetails:visibility.company.bankDetails && Boolean(bankAccountId || values.bankDetails)}},
+        bankDetails: values.bankDetails || (bankAccountId ? undefined : ''),
         ...shape
       });
       await reload();
@@ -419,38 +457,53 @@ function CertificateForm({ data, companyId, close, reload }) {
       setTerms(current => ({ ...current, taxTreatment: chosen === 'Invoice' ? 'Exempt' : 'Standard' }));
     }}><option value="Tax Invoice">VAT tax invoice</option><option value="Invoice">Standard invoice — no VAT</option></select></label>
     <SelectField name="kind" label="Billing type" options={['Interim', 'Final', 'Advance', 'Variation', 'Other']} />
-    <Field name="title" label="Title" wide placeholder="IPA No. 3 — works to 25 August" />
+    <Field name="title" label="Invoice title" wide placeholder="IPA No. 3 — works to 25 August" />
     <label>Invoice date *<input name="invoiceDate" type="date" required value={invoiceDate} onChange={event=>{
       const value=event.target.value;setInvoiceDate(value);
       if(value>'2025-09-30'&&terms.taxTreatment==='SVAT')setTerm('taxTreatment','Standard');
     }}/></label>
     <Field name="deliveryDate" label="Date of delivery" type="date" required={false} />
-    <Field name="placeOfSupply" label="Place of supply" required={false} placeholder="Defaults to the client's site or project site" />
+    <Field name="placeOfSupply" label="Place of supply" required={false} placeholder="Enter place of supply (optional)" />
     <SelectField name="paymentMode" label="Expected payment mode" options={['Bank transfer', 'Cheque', 'Cash', 'Card', 'Other']} />
     <Field name="dueDate" label="Payment due" type="date" required={false} />
 
-    <div className="qs-form-section wide"><span>02</span><div><h3>What is being invoiced</h3><p>Use accepted quotation or BOQ items, or add a manual line.</p></div></div>
+    <div className="qs-form-section wide"><span>02</span><div><h3>What is being invoiced</h3><p>Choose an issued quotation or approved BOQ, then select its items, or add a manual line.</p></div></div>
     <div className="wide"><InvoiceColumnControls columns={columns} setColumns={setColumns} />
       <button type="button" className="secondary" onClick={() => setColumns({ unit: true, quantity: true, rate: true })}>Use quantity × rate</button>
       <p className="invoice-note">For tar or other materials, choose Litres or Barrels and enter the rate per selected unit. Quantities are not converted between units.</p>
       <p className="invoice-note">Choose which columns appear on this invoice's PDF. Description and amount always appear. Hide both Quantity and Rate to enter a manual lump-sum amount.</p></div>
+    <label>Bank account<select name="bankAccountId" value={bankAccountId} onChange={event=>setBankAccountId(event.target.value)}><option value="">Do not show bank details</option>{bankAccounts.map(bank=><option key={bank.id} value={bank.id}>{bank.label} — {bank.bankName} · {bank.accountNumber}</option>)}</select></label>
+    {identityError && <p className="form-error wide" role="alert">{identityError}</p>}
+    <QuotationIdentityChoices identity={identity} visibility={visibility} onChange={setVisibility} documentLabel="invoice"
+      projectName={clientProjects.find(project=>String(project.id)===String(projectId))?.name}
+      bankName={bankAccounts.find(bank=>String(bank.id)===bankAccountId)?.bankName} />
+    <p className="invoice-note wide">Prepared by and signatory use the name and role of the account creating this invoice.</p>
     <div className="invoice-lines wide">
       <h3>What is being invoiced</h3>
-      {lines.map((line, index) => <div className={`invoice-line${amountOnly ? ' invoice-line-amount-only' : ''}`} key={index}>
+      <label>BOQ or quotation<select aria-label="BOQ or quotation" value={sourceDocument} onChange={event=>setSourceDocument(event.target.value)}>
+        <option value="">All project documents</option>{sourceDocuments.map(doc=><option key={doc.key} value={doc.key}>{doc.label}</option>)}
+      </select></label>
+      {sourceError && <p className="form-error" role="alert">{sourceError}</p>}
+      {projectId && !sourceDocuments.length && !sourceError && <p>No issued quotations or approved BOQ items found for this project.</p>}
+
+      {lines.map((line, index) => <div className="manual-quotation-line" key={index}>
         <select value={line.boqItemId ? `boq:${line.boqItemId}` : line.quotationItemId ? `quote:${line.quotationItemId}` : ''}
           aria-label="Invoice line source" onChange={event=>{
             const [type,id]=event.target.value.split(':');
             const source=type==='boq' ? boqLines.find(row=>String(row.id)===id) : quoteLines.find(row=>String(row.id)===id);
             setLines(current=>current.map((row,pos)=>pos===index ? {
               ...row,boqItemId:type==='boq'?id:'',quotationItemId:type==='quote'?id:'',
-              description:source?.description||row.description,unit:source?.unit||row.unit,
-              quantity:type==='boq' ? String(Math.max(0,Number(source?.remainingQuantity||0))) : (row.quantity || (source ? String(source.quantity || 1) : '')),
+              description:source?.description||row.description,unit:source?.unit||row.unit,category:source?.category||'',area:source?.area||'',methodStatement:source?.methodStatement||'',
+              quantity:type==='boq' ? String(Math.max(0,Number(source?.remainingQuantity||0))) : (source ? String(source.quantity || 1) : row.quantity),
               rate:source?.rate??row.rate
             } : row));
           }}><option value="">Manual line</option>
-          {boqLines.length > 0 && <optgroup label="Approved BOQ items">{boqLines.map(row=><option value={`boq:${row.id}`} key={`boq:${row.id}`} disabled={Number(row.remainingQuantity)<=0}>{row.reference} · {row.description} · {rupees(row.rate)}/{row.unit} · {row.remainingQuantity} left</option>)}</optgroup>}
-          {quoteLines.length > 0 && <optgroup label="Accepted quotation lines">{quoteLines.map(row=><option value={`quote:${row.id}`} key={`quote:${row.id}`}>{row.reference} · {row.description} · {rupees(row.rate)}/{row.unit}</option>)}</optgroup>}
+          {boqLines.length > 0 && <optgroup label="Approved BOQ items">{boqLines.filter(row=>!sourceDocument||sourceDocument===`boq:${row.boqId}`).map(row=><option value={`boq:${row.id}`} key={`boq:${row.id}`} disabled={Number(row.remainingQuantity)<=0}>{row.reference} · {row.description} · {rupees(row.rate)}/{row.unit} · {row.remainingQuantity} left</option>)}</optgroup>}
+          {quoteLines.length > 0 && <optgroup label="Issued quotation lines">{quoteLines.filter(row=>!sourceDocument||sourceDocument===`quote:${row.quotationId}`).map(row=><option value={`quote:${row.id}`} key={`quote:${row.id}`}>{row.reference} · {row.description} · {rupees(row.rate)}/{row.unit}</option>)}</optgroup>}
         </select>
+        <label>Saved work template<select value="" onChange={event=>{const method=methods.find(row=>String(row.id)===event.target.value);if(method)setLines(current=>current.map((row,pos)=>pos===index?{...row,quotationItemId:'',boqItemId:'',category:method.category,description:method.description||method.name,methodStatement:method.methodStatement||'',unit:method.unit,quantity:'1',rate:String(method.defaultRate)}:row));}}><option value="">Choose a template (optional)</option>{methods.map(method=><option key={method.id} value={method.id}>{method.name}</option>)}</select></label>
+        <input value={line.category || ''} aria-label={`Line ${index+1} category`} placeholder="Category" onChange={event=>setLine(index,'category',event.target.value)} />
+        <input value={line.area || ''} aria-label={`Line ${index+1} item reference`} placeholder="Item no. / surfacing" onChange={event=>setLine(index,'area',event.target.value)} />
         <input value={line.description} aria-label={`Line ${index + 1} description`} placeholder="Description of goods or work"
           onChange={event => setLine(index, 'description', event.target.value)} />
         <MeasurementUnit value={line.unit} aria-label={`Line ${index + 1} unit`}
@@ -466,6 +519,7 @@ function CertificateForm({ data, companyId, close, reload }) {
         <input value={line.rate} aria-label={`Line ${index + 1} rate`} type="number" step="any" min="0" placeholder="Rate" readOnly={Boolean(line.quotationItemId || line.boqItemId)}
           onChange={event => setLine(index, 'rate', event.target.value)} />
         </>}
+        <textarea value={line.methodStatement || ''} aria-label={`Line ${index+1} method`} placeholder="Method for this item — one step per line" onChange={event=>setLine(index,'methodStatement',event.target.value)} />
         <span>{rupees((Number(line.quantity) || 0) * (Number(line.rate) || 0))}</span>
         <button type="button" className="icon-btn" aria-label="Remove line"
           disabled={lines.length === 1}
@@ -513,7 +567,14 @@ function CertificateForm({ data, companyId, close, reload }) {
       {previousInvoiceIds.length > 0 && <p className="invoice-note">Any earlier paid invoices already deducted by your selection are included once automatically.</p>}
     </fieldset>
     {previewError && <p className="form-error wide" role="alert">{previewError}</p>}
-    <TextArea name="notes" label="Additional information on the invoice" required={false} rows={2} />
+    <div className="qs-form-section wide"><span>04</span><div><h3>Notes & payment terms</h3><p>Use saved notes or tailor the wording for this client.</p></div></div>
+    <div className="quotation-note-picker wide"><label>Insert a saved note into Notes<select value={selectedNote} onChange={event=>setSelectedNote(event.target.value)}><option value="">Choose a note template…</option>{noteTemplates.map(template=><option key={template.id} value={template.id}>{template.name}</option>)}</select></label><button type="button" className="secondary" disabled={!selectedNote} onClick={()=>{const template=noteTemplates.find(row=>String(row.id)===selectedNote);if(template){const combined=[notes,template.body].filter(Boolean).join('\n');if(combined.length>1000){setPreviewError('Notes can contain up to 1,000 characters.');return;}setNotes(combined);setSelectedNote('');}}}>Insert note</button></div>
+    <label className="wide">Notes to the client<textarea maxLength={1000} rows={4} value={notes} onChange={event=>setNotes(event.target.value)} /></label>
+    <TextArea name="paymentTerms" label="Payment terms" required={false} />
+    <TextArea name="additionalNotes" label="Additional notes" required={false} />
+    <TextArea name="terms" label="Terms for this invoice" required={false} />
+
+    <TextArea name="bankDetails" label="Bank account details on this invoice" required={false} rows={4} />
 
     {preview && <div className="invoice-working wide">
       <h3>What the client will be asked for</h3>

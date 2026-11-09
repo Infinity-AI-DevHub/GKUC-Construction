@@ -1,3 +1,4 @@
+import {installSupplierBatchPayments} from './supplier-batch-payments.js';
 import {installPurchaseOrderEdit} from './purchase-order-edit.js';
 import {poItem,poPresentation,orderTotal,receiptRate,poDate} from '../lib/purchase-order-edit.js';
 import { allocateCheque } from '../lib/cheque-allocations.js';
@@ -13,6 +14,7 @@ import { sendDocument } from '../lib/document-pdf.js';
 
 const router = Router();
 installPurchaseOrderEdit(router);
+installSupplierBatchPayments(router);
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 /* Suppliers */
@@ -64,7 +66,7 @@ router.get('/suppliers/:id/statement', auth, permit('finance.supplierStatements'
     FROM supplier_invoices i LEFT JOIN purchase_orders o ON o.id=i.order_id
     LEFT JOIN projects p ON p.id=o.project_id
     WHERE i.supplier_id=? AND i.company_id=? ORDER BY i.invoice_date,i.id`, [supplier.id, companyId]);
-  const payments = await query(`SELECT sp.id,sp.paid_date date,sp.amount,sp.method,sp.reference,
+  const payments = await query(`SELECT sp.id,sp.paid_date date,sp.amount,CASE WHEN sp.petty_cash_entry_id IS NOT NULL THEN 'Petty cash' ELSE sp.method END method,sp.reference,
     i.invoice_no invoiceNo,o.reference orderReference,p.name project,p.site destination
     FROM supplier_payments sp JOIN supplier_invoices i ON i.id=sp.invoice_id
     LEFT JOIN purchase_orders o ON o.id=i.order_id LEFT JOIN projects p ON p.id=o.project_id

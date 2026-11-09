@@ -151,9 +151,9 @@ function EditProjectForm({ project, companies, employees, close, reload, setComp
     setCompanyId(companyId);
     await reload();
   }}>
-    <p className="form-note wide">You can correct the operating company before commercial records are created. Once BOQs, quotations, invoices or costs exist, the company is locked to protect those records.</p>
     <Field name="name" label="Project name" defaultValue={project.name} />
     <SelectField name="companyId" label="Operating company" defaultValue={project.companyId} options={companies.map(company => [company.id, company.name])} />
+    <p className="form-note wide">Saving synchronizes this project’s linked records with the selected company. Saved amounts and actual payment/payslip history stay intact. Company bank details on generated documents must be reviewed after a move.</p>
     <SelectField name="clientId" label="Client" defaultValue={project.clientId} options={clients.map(client => [client.id, client.name])} />
     <SelectField name="managerEmployeeId" label="Project manager" defaultValue={project.managerEmployeeId} options={employees.map(employee => [employee.id, `${employee.name} — ${employee.designation}`])} />
     <Field name="site" label="Site location" defaultValue={project.site} />

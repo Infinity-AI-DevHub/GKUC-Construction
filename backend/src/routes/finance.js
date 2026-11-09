@@ -6,7 +6,7 @@ import { audit, getOne, pool, query, spendSql, transaction } from '../db.js';
 import { auth, permit, validate, wrap, fromOptions } from '../lib/http.js';
 import { assertUniqueManualEntry } from '../lib/ledger-duplicates.js';
 import {incomeTax,incomeTaxFields} from '../lib/income-tax.js';
-import { financialStatements } from '../lib/financial-statements.js';
+import { financialStatements, financialStatementDocument } from '../lib/financial-statements.js';
 import { managementPack } from '../lib/management-accounts.js';
 import { cashOutflows } from '../lib/cash-outflows.js';
 import { cashComparison } from '../lib/cash-comparison.js';
@@ -186,7 +186,7 @@ router.get('/daily-expenses',auth,permit('finance.dailyExpenses'),wrap(async(req
       FROM supplier_payments sp JOIN supplier_invoices si ON si.id=sp.invoice_id
       JOIN suppliers s ON s.id=si.supplier_id LEFT JOIN purchase_orders po ON po.id=si.order_id
       LEFT JOIN projects p ON p.id=po.project_id
-      WHERE COALESCE(sp.payment_company_id,si.company_id)=? AND sp.paid_date=?`,[companyId,date]),
+      WHERE COALESCE(sp.payment_company_id,si.company_id)=? AND sp.paid_date=? AND sp.petty_cash_entry_id IS NULL`,[companyId,date]),
     query(`SELECT b.id,b.paid_date date,b.total_amount amount,b.payment_method method,
       b.payment_reference reference,b.provider payee,b.bill_type category,b.project_id projectId,p.name project
       FROM operating_bills b LEFT JOIN projects p ON p.id=b.project_id
@@ -244,14 +244,20 @@ router.get('/daily-expenses',auth,permit('finance.dailyExpenses'),wrap(async(req
     note:'Each recorded payment appears once. Linked Fleet fuel and project-cost rows are not counted a second time. Petty-cash top-ups are displayed separately from the same saved ledger records and excluded from expense totals; actual spending is counted once. Salary advances and card-statement settlements are not operating expenses. Older manual expenses without payment details are excluded until verified.'});
 }));
 
-router.get('/financial-statements', auth, permit('finance.reports'), wrap(async (req,res) => {
+const statementHandler=wrap(async(req,res)=>{
   const companyId=companyParam(req), period=String(req.query.period||'');
-  if (!companyId || !accountPeriod.safeParse(period).success || period.startsWith('0000'))
-    return res.status(400).json({error:'Choose a company and a month in YYYY-MM format.'});
-  const pack=await managementPack(companyId,period,{includeExpenseSource:true});
-  if (!pack) return res.status(404).json({error:'Company not found.'});
-  res.json(financialStatements(pack));
-}));
+  const from=String(req.query.from||''),to=String(req.query.to||'');
+  const validDate=value=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&!value.startsWith('0000')&&!Number.isNaN(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
+  if(!companyId || ((from||to)?(!validDate(from)||!validDate(to)||from>to):(!accountPeriod.safeParse(period).success||period.startsWith('0000'))))
+    return res.status(400).json({error:'Choose a company and valid From/To dates.'});
+  const pack=await managementPack(companyId,from?from.slice(0,7):period,{includeExpenseSource:true,from:from||undefined,to:to||undefined});
+  if(!pack)return res.status(404).json({error:'Company not found.'});
+  const data=financialStatements(pack);
+  if(req.path.endsWith('/document'))return sendDocument(req,res,financialStatementDocument(data,req.query.statement==='financial-position'),`financial-statement-${data.from}-${data.to}.pdf`);
+  res.json(data);
+});
+router.get('/financial-statements',auth,permit('finance.reports'),statementHandler);
+router.get('/financial-statements/document',auth,permit('finance.reports'),statementHandler);
 
 router.get('/management-accounts', auth, permit('finance.managementAccounts'), wrap(async (req,res) => {
   const companyId=companyParam(req), period=String(req.query.period||'');
