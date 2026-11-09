@@ -5,7 +5,8 @@ import {calculatePayslip} from '../src/lib/payroll-policy.js';
 import {payslipDetail} from '../src/lib/payslip-detail.js';
 import {payrollSheets,payslipDocument} from '../src/lib/payroll-export.js';
 import {INITIAL_HR_RULES} from '../src/lib/hr-payroll-rules.js';
-import {SPECIAL_PAY_RATES} from '../src/lib/special-pay.js';
+import {calculatePayrollLeave} from '../src/lib/payroll-leave.js';
+import {operatorPayrollDays,SPECIAL_PAY_RATES} from '../src/lib/special-pay.js';
 const policy={id:1,company_id:1,effective_from:'2025-01-01',site_labour_site_ot_rate:999,site_labour_travel_ot_rate:999,hr_rules:INITIAL_HR_RULES};
 const day=(date='2026-01-01',extra={})=>({id:Number(date.slice(-2)),work_date:date,state:'Checked out',check_in:'07:30:00',check_out:'16:30:00',work_location:'Site',...extra});
 const emp=(mode,inputs=[])=>({id:1,daily_rate:1000,payroll_company_id:1,payroll_category:'Site labourer',worker_type:'Site',
@@ -90,4 +91,39 @@ test('operator Standby pays normal labour Site OT from 30 minutes, with exact mi
   assert.equal(calc(employee,[day(undefined,{check_out:'17:00:00'})]).site_ot_pay,499.5,'use the dated labour rate, not the operator meter rate or role preset');
   assert.equal(compute('17:00:00',[{work_date:'2026-01-01',overtime_type:'Site',hours:0.5,status:'Approved'}]).site_ot_pay,112.5);
   assert.throws(()=>compute('17:00:00',[{work_date:'2026-01-01',overtime_type:'Travel',hours:1,status:'Approved'}]),/Operator OT is allowed only/);
+});
+
+
+test('only active Machine records replace missing operator attendance, with unpaid absence otherwise',()=>{
+  const employee=emp('Machine operator',[input('2026-01-01','Machine',{start_meter:10,end_meter:12.6})]);
+  const derived=operatorPayrollDays(employee,[],'2026-01-01','2026-01-02');
+  const leave=calculatePayrollLeave(employee,derived,[],'2026-01-01','2026-01-02');
+  assert.equal(leave.days_present,1);assert.equal(leave.days_absent,1);
+  const result=calc(employee,leave.attendance,[],derived);
+  assert.equal(result.attendance_basic,1800);
+  assert.equal(result.calculation_detail.attendance[0].specialPay.transport,300);
+  assert.equal(result.overtime_pay,0);assert.equal(result.late_deduction,0);
+  assert.equal(derived[0].special_pay_input_id,1);assert.equal(derived[0].id,null);
+  assert.deepEqual(operatorPayrollDays(emp('Work role',[]),[],'2026-01-01','2026-01-02'),[]);
+  assert.deepEqual(operatorPayrollDays({...employee,special_pay_rules:[{mode:'Standard',effective_from:'2026-01-01'}]},[],'2026-01-01','2026-01-02'),[]);
+  const archived={...employee,special_pay_days:[{...employee.special_pay_days[0],active:0}]};
+  assert.equal(operatorPayrollDays(archived,[],'2026-01-01','2026-01-01')[0].state,'Absent');
+});
+
+test('operator machine evidence preserves real attendance, blocks contradictory absence/leave and requires standby attendance',()=>{
+  const machine=emp('Machine operator',[input('2026-01-01','Machine',{start_meter:10,end_meter:16})]);
+  const actual=[day()];assert.deepEqual(operatorPayrollDays(machine,actual,'2026-01-01','2026-01-01'),actual);
+  assert.throws(()=>operatorPayrollDays(machine,[day(undefined,{state:'Absent'})],'2026-01-01','2026-01-01'),/conflicts/);
+  assert.throws(()=>calculatePayrollLeave(machine,operatorPayrollDays(machine,[],'2026-01-01','2026-01-01'),[{employee_id:1,status:'Approved',from_date:'2026-01-01',to_date:'2026-01-01',payment_type:'Paid'}],'2026-01-01','2026-01-01'),/conflicts/);
+  const standby=emp('Machine operator',[input('2026-01-01','Standby',{hours:8})]);
+  assert.equal(operatorPayrollDays(standby,[],'2026-01-01','2026-01-01')[0].state,'Absent');
+  assert.equal(calc(standby,operatorPayrollDays(standby,[],'2026-01-01','2026-01-01')).attendance_basic,0);
+});
+
+test('machine-only work counts once toward monthly premium, including earlier dates outside run',()=>{
+  const inputs=Array.from({length:26},(_,i)=>input(`2026-01-${String(i+1).padStart(2,'0')}`,'Machine',{start_meter:10,end_meter:16}));
+  const employee=emp('Machine operator',inputs);
+  const calendar=operatorPayrollDays(employee,[],'2026-01-01','2026-01-26');
+  assert.equal(calc(employee,[calendar[25]],[],calendar).attendance_basic,2700);
+  assert.equal(calc(employee,calendar,[],calendar).attendance_basic,25*3900+2700);
 });

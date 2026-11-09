@@ -1,4 +1,4 @@
-import {activeSpecialRule,specialRates,specialInputFor} from '../lib/special-pay.js';
+import {activeSpecialRule,specialRates,specialInputFor,operatorPayrollDays} from '../lib/special-pay.js';
 import {attendanceForEmployee,salaryCalculationIssues} from '../lib/payroll-attendance-match.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -388,14 +388,16 @@ async function buildPayroll(req,connection){
         row.etf_eligible = eligibility.etf;
         const missingRates = contributionRateProblems(row,policy,payFrequency);
         if (missingRates.length) throw fail(409,`${payrollCompany.name}: ${row.name} is eligible for contributions, but ${missingRates.join(', ')} rates are zero or invalid in policy ${policy.id} (${String(policy.effective_from).slice(0,10)}). Open People > Payroll settings > Set / change rates, save a corrected dated policy effective on or before ${periodEnd}, then regenerate this Draft payroll. No payroll changes were saved.`);
-        const days=attendanceForEmployee(row,attendanceRows,employeeNames);
+        let days=attendanceForEmployee(row,attendanceRows,employeeNames);
         try {
+          const calendarDays=operatorPayrollDays(row,attendanceForEmployee(row,calendarAttendanceRows,employeeNames),calendarStart,periodEnd);
+          days=calendarDays.filter(day=>day.work_date>=periodStart&&day.work_date<=periodEnd);
           const leave=calculatePayrollLeave(row,days,approvedLeave,periodStart,periodEnd);
           const {attendance,detail,...leaveCounts}=leave;
           Object.assign(row,leaveCounts);
           Object.assign(row,calculateAttendancePayroll(row,attendance,otRows.filter(o=>Number(o.employee_id)===Number(row.id)),
             datedPolicies,travelClaims.filter(c=>Number(c.employee_id)===Number(row.id)),
-            attendanceForEmployee(row,calendarAttendanceRows,employeeNames)));
+            calendarDays));
           for(const input of row.special_pay_days.filter(item=>item.work_date>=periodStart&&activeSpecialRule(row,item.work_date))) {
             if(!attendance.some(day=>day.work_date===input.work_date&&['On site','Late','Checked out','Business trip','On leave'].includes(day.state)))
               throw new Error(`HR daily work exists on ${input.work_date} without worked attendance or approved leave. Review the attendance first.`);
@@ -423,7 +425,8 @@ async function buildPayroll(req,connection){
             employmentType:row.employment_type,joinDate:row.join_date};
           row.calculation_detail.sourceAttendance=days.map(day=>({id:day.id,workDate:day.work_date,state:day.state,
             checkIn:day.check_in,checkOut:day.check_out,workLocation:day.work_location,projectId:day.project_id,
-            needsReview:Boolean(day.needs_review)}));
+            needsReview:Boolean(day.needs_review),source:day.source,
+            payrollOnly:Boolean(day.payroll_only),specialPayInputId:day.special_pay_input_id||null}));
         } catch(error) {throw fail(409,`${row.name}: ${error.message}`);}
       }
       const covered=await getOne(`SELECT ps.employee_id,e.name employee,c.name company,pr.reference,pr.company_id,pr.pay_frequency,pr.period_start,pr.period_end,pr.status FROM payslips ps JOIN payroll_runs pr ON pr.id=ps.run_id JOIN employees e ON e.id=ps.employee_id JOIN companies c ON c.id=pr.company_id WHERE ps.employee_id IN (${employees.map(()=>'?').join(',')}) AND pr.period_start<=? AND pr.period_end>=? LIMIT 1 FOR UPDATE`,[...employees.map(e=>e.id),periodEnd,periodStart]);

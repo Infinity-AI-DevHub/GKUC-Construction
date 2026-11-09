@@ -3099,6 +3099,18 @@ test('monthly management pack separates companies and preserves versioned close 
   assert.equal(initial.status, 200, JSON.stringify(initial.body));
   assert.equal(initial.body.company.id, 1);
   assert.ok(initial.body.accrual && initial.body.cash && initial.body.workingCapital && initial.body.wip);
+  const statementsUrl = companyId => `/finance/financial-statements?companyId=${companyId}&period=${period}`;
+  assert.equal((await call(null,'GET',statementsUrl(1))).status,401);
+  assert.equal((await call(owner,'GET','/finance/financial-statements?companyId=1&period=2026-13')).status,400);
+  assert.equal((await call(owner,'GET',`/finance/financial-statements?companyId=999999&period=${period}`)).status,404);
+  const statements = await call(owner,'GET',statementsUrl(1));
+  assert.equal(statements.status,200,JSON.stringify(statements.body));
+  assert.equal(statements.body.company.id,1);
+  assert.equal(statements.body.financialPosition.find(row=>row.label==='Accounts receivable').amount,initial.body.workingCapital.receivables);
+  assert.equal(statements.body.incomeStatement.find(row=>row.label==='Operating Profit / (Loss) — recorded sources').amount,initial.body.accrual.result);
+  assert.equal(statements.body.financialPosition.find(row=>row.label==='Total Assets').amount,null);
+  const otherStatement=await call(owner,'GET',statementsUrl(2));
+  assert.equal(otherStatement.body.company.id,2);
   const change = await call(owner, 'POST', '/finance/management-accounts/adjustments', {
     companyId: 1, period, category: 'Revenue', amount: 1250,
     explanation: 'Accrued approved month end adjustment', reference: 'MGT-REV-001'
@@ -3194,6 +3206,34 @@ test('daily expense register merges direct and petty payments once by company an
   assert.equal(other.status,200);
   assert.ok(!other.body.entries.some(row=>row.reference===`DIRECT-${suffix}`));
   assert.equal((await call(owner,'GET',`/finance/daily-expenses?companyId=1&date=wrong`)).status,400);
+});
+
+test('petty cash funding appears on expenses for every account type without a duplicate expense or cash charge',async()=>{
+  const owner=await login(),stamp=Date.now(),date=today(),period=date.slice(0,7);
+  const [[initial]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.expenses`);
+  const cashBefore=(await call(owner,'GET',`/finance/cash-comparison?companyId=1&period=${period}`)).body.current.payments;
+  const added=[];
+  for(const companyId of [1,2])for(const accountType of ['Office expenses','Fuel','Salary advance']){
+    const account=await call(owner,'POST','/receivables/petty-cash',{companyId,name:`Funding ${stamp} ${companyId} ${accountType}`,accountType,holderName:'QA holder',ceiling:1000,openingBalance:25,openingDate:date});
+    assert.equal(account.status,201,JSON.stringify(account.body));
+    const topup=await call(owner,'POST',`/receivables/petty-cash/${account.body.id}/entries`,{kind:'Top up',amount:50,entryDate:date,description:`Funding visibility ${stamp}`});
+    assert.equal(topup.status,201,JSON.stringify(topup.body));added.push({companyId,id:account.body.id});
+  }
+  for(const companyId of [1,2]){
+    const register=await call(owner,'GET',`/finance/daily-expenses?companyId=${companyId}&date=${date}`);
+    assert.equal(register.status,200,JSON.stringify(register.body));
+    const rows=register.body.fundingEntries.filter(row=>added.some(account=>account.id===row.floatId));
+    assert.equal(rows.length,6,'opening and later funding appear once for each of three account types');
+    assert.equal(rows.reduce((sum,row)=>sum+row.amount,0),225);
+    assert.ok(rows.every(row=>added.some(account=>account.id===row.floatId&&account.companyId===companyId)));
+    assert.equal(new Set(rows.map(row=>row.key)).size,6);
+    assert.ok(!register.body.entries.some(row=>row.description===`Funding visibility ${stamp}`));
+    const nextDay=(await call(owner,'GET',`/finance/daily-expenses?companyId=${companyId}&date=${shift(1)}`)).body;
+    assert.ok(!nextDay.fundingEntries.some(row=>added.some(account=>account.id===row.floatId)));
+  }
+  const [[after]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.expenses`);
+  assert.equal(after.count,initial.count,'top ups do not create another expense record');
+  assert.equal((await call(owner,'GET',`/finance/cash-comparison?companyId=1&period=${period}`)).body.current.payments,cashBefore);
 });
 
 test('expected outflows schedule source bills once and keep companies separate', async () => {
@@ -3638,13 +3678,14 @@ test('HR special daily work and operator records persist, generate drafts and pr
     const saved=await call(hr,'POST','/payroll/special-pay/rules',body);
     assert.equal(saved.status,200,JSON.stringify(saved.body));
     for(const date of [first,'2057-01-06',last]){
+      if(index===1&&date===first)continue; // Machine payroll must work without attendance.
       const response=await call(hr,'POST','/attendance',{employeeId:created.body.id,date,state:'Checked out',workLocation:'Office',
         checkIn:index&&date==='2057-01-06'?'10:00':'07:30',checkOut:date===last?'11:30':index&&date==='2057-01-06'?'18:00':'16:30',
         informationSource:'Signed timesheet',sourceNotes:'Special pay QA'});
       assert.equal(response.status,201,JSON.stringify(response.body));
     }
   }
-  const runBody={companyId:2,periodStart:first,periodEnd:last,payFrequency:'Daily'};
+  const runBody={companyId:2,periodStart:first,periodEnd:'2057-01-08',payFrequency:'Daily'};
   const missing=await call(hr,'POST','/payroll',runBody);
   assert.equal(missing.status,409);assert.match(missing.body.error,/Record HR daily work/);
   const entry=(employeeId,date,kind,extra={})=>({employeeId,date,kind,reason:'HR checked daily work',...extra});
@@ -3663,6 +3704,10 @@ test('HR special daily work and operator records persist, generate drafts and pr
   assert.equal(operator.epfEmployeeDeduction,0);assert.equal(role.epfEmployeeDeduction,0);
   const snapshot=typeof operator.calculationDetail==='string'?JSON.parse(operator.calculationDetail):operator.calculationDetail;
   assert.equal(snapshot.attendance[0].specialPay.meterHours,6);
+  assert.equal(operator.daysPresent,3);assert.equal(operator.daysAbsent,1);
+  assert.ok(snapshot.sourceAttendance.some(day=>day.workDate===first&&day.payrollOnly&&day.specialPayInputId));
+  const [[actualAttendance]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.attendance WHERE employee_id=? AND work_date=?`,[people[1],first]);
+  assert.equal(Number(actualAttendance.n),0,'meter payroll must not manufacture attendance records');
   assert.ok(snapshot.attendance.every(row=>row.specialPay.recordedBy));
   assert.equal((await call(hr,'POST','/payroll/special-pay/days',entry(people[1],first,'Machine',{startMeter:10,endMeter:15}))).status,200);
   assert.equal((await call(hr,'GET',`/payroll/${id}`)).body.payslips.find(row=>row.employeeId===people[1]).basic,6600,'input edits do not recalculate existing drafts automatically');
@@ -5625,7 +5670,41 @@ test('one supplier cheque selects multiple invoices, requires override reasons a
   assert.equal(statement.summary.paid,250.5);assert.equal(statement.summary.outstanding,351);
 });
 
-test('supplier cheque selections enforce company/supplier scope and clearance rolls back all invoices on conflict',async()=>{
+test('supplier cheques select both companies and retain payer cash scope when clearing',async()=>{
+  const owner=await login(),stamp=Date.now(),period=today().slice(0,7);
+  const supplier=(await call(owner,'POST','/purchasing/suppliers',{name:`Both companies cheque ${stamp}`})).body;
+  const invoices=[];
+  for(const [index,companyId,amount] of [[0,1,100],[1,2,200],[2,1,75]]){
+    const result=await call(owner,'POST','/purchasing/invoices',{companyId,supplierId:supplier.id,invoiceNo:`BOTH-${stamp}-${index}`,amount,invoiceDate:today()});
+    assert.equal(result.status,201,JSON.stringify(result.body));invoices.push(result.body);
+  }
+  const all=(await call(owner,'GET','/purchasing/invoices')).body.filter(row=>row.supplierId===supplier.id);
+  assert.equal(all.length,3);assert.ok(all.every(row=>row.company));
+  const scoped=(await call(owner,'GET','/purchasing/invoices?companyId=2')).body.filter(row=>row.supplierId===supplier.id);
+  assert.equal(scoped.length,1,'ordinary company-filtered invoice list stays filtered');
+  const cash=async companyId=>(await call(owner,'GET',`/finance/cash-comparison?companyId=${companyId}&period=${period}`)).body.current.components.supplierPayments;
+  const before=[await cash(1),await cash(2)];
+  const body={companyId:1,supplierId:supplier.id,invoiceIds:invoices.slice(0,2).map(row=>row.id),chequeNumber:`BOTH-CHQ-${stamp}`,bank:'QA account',payee:supplier.name,purpose:'Both company invoices',amount:300,expectedInvoiceTotal:300,issueDate:today(),chequeDate:today()};
+  const created=await call(owner,'POST','/purchasing/cheques',body);
+  assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(created.body.company_id,1);
+  const pending=(await call(owner,'GET','/purchasing/invoices')).body.filter(row=>invoices.slice(0,2).some(invoice=>invoice.id===row.id));
+  assert.ok(pending.every(row=>Number(row.availableForCheque)===0));
+  assert.equal((await call(owner,'PATCH',`/purchasing/cheques/${created.body.id}`,{status:'Cleared'})).status,200);
+  assert.equal((await call(owner,'PATCH',`/purchasing/cheques/${created.body.id}`,{status:'Cleared'})).status,200);
+  const reverse=await call(owner,'POST','/purchasing/cheques',{...body,companyId:2,invoiceIds:[invoices[2].id],amount:75,expectedInvoiceTotal:75,chequeNumber:`REVERSE-${stamp}`});
+  assert.equal(reverse.status,201,JSON.stringify(reverse.body));
+  // Re-running the legacy ownership backfill must not reassign a modern cross-company cheque.
+  await admin.query(`UPDATE ${testDatabase}.issued_cheques c JOIN ${testDatabase}.supplier_invoices si ON si.id=c.invoice_id SET c.company_id=si.company_id WHERE c.invoice_total IS NULL`);
+  assert.equal((await call(owner,'GET','/purchasing/cheques?companyId=2')).body.find(row=>row.id===reverse.body.id).companyId,2);
+  assert.equal((await call(owner,'PATCH',`/purchasing/cheques/${reverse.body.id}`,{status:'Cleared'})).status,200);
+  assert.equal(await cash(1),before[0]+300);assert.equal(await cash(2),before[1]+75);
+  const [payments]=await admin.query(`SELECT payment_company_id companyId,amount FROM ${testDatabase}.supplier_payments WHERE reference IN (?,?)`,[body.chequeNumber,`REVERSE-${stamp}`]);
+  assert.equal(payments.length,3);assert.equal(payments.filter(row=>row.companyId===1).reduce((sum,row)=>sum+Number(row.amount),0),300);
+  const [saved]=await admin.query(`SELECT company_id,paid_amount,amount FROM ${testDatabase}.supplier_invoices WHERE id IN (?,?,?)`,invoices.map(row=>row.id));
+  assert.deepEqual(saved.map(row=>row.company_id).sort(),[1,1,2]);assert.ok(saved.every(row=>Number(row.paid_amount)===Number(row.amount)));
+});
+
+test('supplier cheque selections enforce supplier scope and clearance rolls back all invoices on conflict',async()=>{
   const owner=await login();
   const supplierId=(await call(owner,'POST','/purchasing/suppliers',{name:`Cheque scope supplier ${Date.now()}`})).body.id;
   const otherSupplierId=(await call(owner,'POST','/purchasing/suppliers',{name:`Other cheque supplier ${Date.now()}`})).body.id;
@@ -5635,7 +5714,7 @@ test('supplier cheque selections enforce company/supplier scope and clearance ro
     assert.equal(created.status,201,JSON.stringify(created.body));invoices.push(created.body);
   }
   const base={companyId:1,supplierId,bank:'QA scoped account',payee:'QA supplier',purpose:'Cheque scope test',amount:300,issueDate:today(),chequeDate:today()};
-  for(const ids of [[invoices[0].id,invoices[2].id],[invoices[0].id,invoices[3].id],[invoices[0].id,invoices[0].id]]){
+  for(const ids of [[invoices[0].id,invoices[3].id],[invoices[0].id,invoices[0].id]]){
     assert.equal((await call(owner,'POST','/purchasing/cheques',{...base,invoiceIds:ids,chequeNumber:`INVALID-${Date.now()}`})).status,400);
   }
   const created=await call(owner,'POST','/purchasing/cheques',{...base,invoiceIds:[invoices[0].id,invoices[1].id],chequeNumber:`CONFLICT-${Date.now()}`});

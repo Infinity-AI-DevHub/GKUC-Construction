@@ -139,7 +139,7 @@ These are opt-in employee agreements, not new defaults for everyone. HR must sel
 
 ### Machine operator method
 
-- HR records Machine work (start/end hour-meter readings, positive difference at most 24 hours) or Standby (hours attended without operating the machine).
+- HR records Machine work (start/end hour-meter readings, positive difference at most 24 hours) or Standby (hours attended without operating the machine). From the 2026-11-09 clarification, saved active Machine records are sufficient payroll work evidence even without attendance, only while the employee has an effective Machine operator method. Standby still requires attendance.
 - Machine work: `max(LKR 1,800, meter hours × LKR 650)`. Attendance duration does not reduce machine pay. Meter work counts as one worked-day equivalent because it receives a full minimum daily payment.
 - Standby: `LKR 1,800 / 8 × min(attended hours, 8)`. Four hours pays LKR 900; eight pays LKR 1,800. Standby contributes the same fraction (hours / eight, capped at one) toward the calendar-month threshold.
 - When the running monthly count exceeds 25, a Machine day's basic payment is **LKR 1,800 × 1.5 = LKR 2,700**, replacing the normal meter-based basic payment on that extra day. It is not an extra LKR 2,700, an extra LKR 900, or 1.5× meter earnings. Standby uses the corresponding prorated LKR 2,700 rate. Leave does not advance the threshold; each calendar month resets it.
@@ -150,7 +150,7 @@ These are opt-in employee agreements, not new defaults for everyone. HR must sel
 
 ### Storage, contributions and history
 
-`employee_special_pay_rules` saves effective methods and a snapshot of the agreed rates; `employee_special_pay_days` saves HR choices/readings/hours, source/correction reason, recorder and an active flag. Edits and reversible archival are audited. Daily entries do not create attendance; an orphan daily record without worked attendance or approved leave blocks generation. Earlier operator inputs in the same month are needed to determine the premium correctly.
+`employee_special_pay_rules` saves effective methods and a snapshot of the agreed rates; `employee_special_pay_days` saves HR choices/readings/hours, source/correction reason, recorder and an active flag. Edits and reversible archival are audited. Daily entries never create attendance records. A Machine record under an effective Machine operator rule provides payroll-only worked-day evidence if attendance is missing. Other orphan daily records, including Standby, still block generation without worked attendance or approved leave. Machine records conflicting with explicit Absent/On leave attendance or approved leave block generation for review. Earlier operator inputs in the same month are needed to determine the premium correctly.
 
 As currently agreed, either special method disables employee/employer EPF in calculations while it is effective. The employee profile is not overwritten. **ETF retains the existing employee eligibility and statutory basis**; no inference of an ETF exemption or global LKR 30,000 basis correction is made. Contribution explanation snapshots state the special EPF exception. Non-special staff and statutory policies are unchanged.
 
@@ -220,3 +220,31 @@ Removed the temporary HR page/API restriction and configured OS/driver messages.
 People, attendance, biometric import, HR inputs, payroll settings/runs and saved payslip
 access again use their normal authorization and persistence. No policy, calculation,
 saved input or Approved/Paid snapshot is changed or recalculated by this restoration.
+
+
+### 2026-11-09 — optional attendance on operator Machine days only
+
+Applies to the effective Machine operator pay method, never inferred from job title,
+name or a hardcoded employee ID. Payroll reads active saved machine inputs for the
+entire opening calendar month through run end, so machine-only days count once toward
+the 25-day threshold even when earlier than the current run. With no actual attendance,
+a valid Machine record provides payroll-only worked evidence: existing meter formula,
+minimum, transport, no Machine-day OT and no late deduction all remain unchanged.
+Existing worked attendance plus Machine input is one date, never two.
+
+Missing attendance and no active Machine record yields payroll-only Absent for operator
+dates from employment start within the effective rule. No earnings or transport is
+created for those dates. Existing approved paid/unpaid leave processing stays intact.
+Standby inputs cannot substitute for attendance; other special methods and Standard
+staff are unchanged. Explicit absence/leave conflicting with machine work and existing
+review-required attendance require correction, rather than being overwritten.
+
+No attendance rows or clock times are fabricated. Saved calculation source evidence
+records payrollOnly, source and specialPayInputId; the ordinary attendance register and
+profile attendance percentage still represent actual attendance only. Missing machine
+project attribution does not fabricate project-cost allocations. Editing/archiving an
+input changes future or explicitly regenerated Drafts only; Approved/Paid snapshots
+stay immutable. Tests cover meter-only pay, absent dates, deduplication, archived inputs,
+rule/role boundaries, leave/absence conflicts, monthly premiums and real API Draft
+regeneration plus approved snapshot protection. No live policy assignment is needed for
+an employee who already has the saved Machine operator method.

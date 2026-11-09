@@ -18,7 +18,7 @@ export async function cashComparison(companyId, period) {
       LEFT JOIN projects p ON p.id=i.project_id WHERE COALESCE(i.company_id,p.company_id)=?
       AND i.received_date>=? AND i.received_date<? GROUP BY period`,[companyId,start,end]),
     query(`SELECT DATE_FORMAT(sp.paid_date,'%Y-%m') period,SUM(sp.amount) amount FROM supplier_payments sp
-      JOIN supplier_invoices si ON si.id=sp.invoice_id WHERE si.company_id=? AND sp.method<>'Card'
+      JOIN supplier_invoices si ON si.id=sp.invoice_id WHERE COALESCE(sp.payment_company_id,si.company_id)=? AND sp.method<>'Card'
       AND sp.paid_date>=? AND sp.paid_date<? GROUP BY period`,[companyId,start,end]),
     query(`SELECT DATE_FORMAT(paid_date,'%Y-%m') period,SUM(total_amount) amount FROM operating_bills
       WHERE company_id=? AND status='Paid' AND COALESCE(payment_method,'')<>'Card'
