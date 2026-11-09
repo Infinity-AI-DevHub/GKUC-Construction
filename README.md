@@ -461,6 +461,10 @@ Paid figures remain unchanged. See [payroll rules](docs/PAYROLL.md).
 
 Expected outflows is a planning-only worksheet: select From/To, save a manual bank
 balance for that exact company/period, enter multiple cash-outflow rows, and export PDF
-for printing. Receivables and supplier/bill Outstanding are read automatically by due
-date in that range. Planning amounts do not post real expenses, income or payments.
+for printing. Receivables and supplier/bill Outstanding show all unpaid balances
+across all dates; only Cash outflow rows use the date range. Planning amounts do not post real expenses, income or payments.
 Bond lists now emphasize project names and retain bank bond numbers below them.
+
+Finance → Retention and QS → Retention open the same shared workspace and records.
+Finance managers or users with QS retention permission can add/release there; viewers
+remain read-only. One saved retention appears in both views without a duplicate copy.

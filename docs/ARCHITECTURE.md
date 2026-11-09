@@ -375,15 +375,17 @@ income, invoice, payment or bank-ledger write occurs from planning actions.
 `outflow_worksheet_periods` stores a manually entered bank_balance per exact company/
 From/To range, separately from cash-comparison and real bank reconciliation. Balance
 writes are audited. The worksheet reads client receivable balances and supplier/bill
-outstanding automatically, selecting due dates within the range (invoice/bill date if
-no due date) and excluding payments after To. These separate schedules are not added
+outstanding automatically across all dates, deducting all recorded payments. Only
+manual cash-outflow rows are date-filtered; receivable/payable schedules remain current
+company balances independent of From/To. These separate schedules are not added
 to manually entered outflow totals. Prior overdue items outside From are excluded.
 Current cancellations remain authoritative; this is a live planning view, not a
 closed historical accounting snapshot.
 
 The worksheet document route uses shared sendDocument/PDF generation and an exact
-short-lived PDF-ticket allowlist with From/To parameters. PDF includes company, period,
-manual bank balance, all three schedules, totals, basis and mandatory developer credit.
+short-lived PDF-ticket allowlist with From/To parameters. PDF includes company, the selected period,
+manual bank balance, all three schedules, totals and mandatory developer credit. Per user
+request PDF headings/notes do not explain which schedule the date filter applies to.
 All routes require auth + finance.expectedOutflows. Frontend supports bulk rows, edits,
 archive and PDF preview/download/print; exports contain saved records only.
 
@@ -393,3 +395,18 @@ selection accepts both field shapes for older-server compatibility and retains c
 scope/current saved selection. Bond lists emphasize linked project name or saved tender/
 project description, with actual bank bond number secondary; system references remain
 stored/searchable for audit/import linking but are not the list's displayed title.
+
+### One shared Retention workspace in QS and Finance (2026-11-09)
+
+`frontend/src/pages/Retention.jsx` owns the existing QS summaries/table, creation form
+and release form. Both QS → Retention and Finance → Retention render that exact shared
+component with the selected company/projects and identical operations; the Record
+retention action is inside the shared workspace. No Finance-specific API, table, sync
+job or copied retention record is created. Existing `/qs/retentions` GET/POST and release
+POST remain authoritative, with project-owned company scope and existing audit/history.
+Read permits qs.view, finance.view, qs.retention or finance.manage; writes permit
+qs.retention or finance.manage. UI capabilities mirror those write permissions.
+Read-only users cannot create/release. Bootstrap includes minimal project choices for
+retention/finance managers without broader project view; forms accept both company field
+shapes and show only the selected company's projects. Existing records/IDs and releases
+are shared across entry points, not migrated or duplicated. No schema change.
