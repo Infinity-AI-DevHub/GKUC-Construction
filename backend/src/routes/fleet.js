@@ -72,15 +72,15 @@ router.get('/', auth, permit('transport.view','transport.manage'), wrap(async (_
     maintenanceSchedules: schedules.filter(row => Number(row.vehicleId) === Number(vehicle.id)).map(row => maintenanceDue(row,vehicle.odometer)) })));
 }));
 
-/* Vehicles are shared; the selected company determines which funded fuel float can pay. */
+/* Vehicles and funded fuel floats are shared; each payment keeps its selected company. */
 router.get('/fuel-floats', auth, permit('transport.view','transport.manage'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId);
   if (!Number.isInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a company to see its fuel floats' });
   const floats = await query(`SELECT f.id,f.name,f.company_id companyId,f.project_id projectId,
     COALESCE(SUM(e.amount),0) balance FROM petty_cash_floats f
     LEFT JOIN petty_cash_entries e ON e.float_id=f.id
-    WHERE f.account_type='Fuel' AND f.active=1 AND f.company_id=?
-    GROUP BY f.id,f.name,f.company_id,f.project_id ORDER BY f.name`, [companyId]);
+    WHERE f.account_type='Fuel' AND f.active=1
+    GROUP BY f.id,f.name,f.company_id,f.project_id ORDER BY f.name`, []);
   res.json(floats);
 }));
 
@@ -416,15 +416,16 @@ router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
     const [[fuelFloat]]=body.fuelFloatId ? await connection.execute(`SELECT id,name,company_id companyId,project_id projectId
       FROM petty_cash_floats WHERE id=? AND account_type='Fuel' AND active=1 FOR UPDATE`,[body.fuelFloatId]) : [[null]];
     if(body.fuelFloatId&&!fuelFloat)throw Object.assign(new Error('Choose an active fuel float before recording fuel'),{status:400});
-    let companyId=body.companyId||fuelFloat?.companyId||null;
-    if(fuelFloat&&Number(companyId)!==Number(fuelFloat.companyId))throw Object.assign(new Error('The selected fuel float belongs to a different company.'),{status:400});
+    let companyId=body.companyId||null;
+    // Floats are shared. companyId identifies this fuel payment, not the account owner.
     if(projectId){
       const [[project]]=await connection.execute('SELECT id,company_id companyId FROM projects WHERE id=? AND active=1',[projectId]);
       if(!project)throw Object.assign(new Error('Project site not found'),{status:400});
       if(companyId&&Number(project.companyId)!==Number(companyId))throw Object.assign(new Error(
-        'The selected fuel float belongs to a different company than this project. Choose the matching float or project.'),{status:400});
+        'The selected payment company is a different company than this project. Choose the matching company or project.'),{status:400});
       companyId=project.companyId;
     }
+    companyId ||= fuelFloat?.companyId||null;
     const [[company]]=companyId?await connection.execute('SELECT id FROM companies WHERE id=? AND active=1',[companyId]):[[null]];
     if(!company)throw Object.assign(new Error('Choose an active operating company.'),{status:400});
     if(fuelFloat){
@@ -436,9 +437,9 @@ router.post('/:id/fuel', auth, permit('transport.manage'), validate(z.object({
       (vehicle_id,company_id,project_id,fuel_date,litres,cost,odometer,driver,created_by) VALUES (?,?,?,?,?,?,?,?,?)`,
       [vehicle.id,companyId,projectId,body.fuelDate,body.litres??null,body.cost,body.odometer,body.driver||vehicle.driver,req.user.id]);
     if(fuelFloat)await connection.execute(`INSERT INTO petty_cash_entries
-      (float_id,kind,amount,entry_date,description,category,project_id,fuel_record_id,payee,recorded_by)
-      VALUES (?,'Spend',?,?,?,'Fuel',?,?,?,?)`,
-      [fuelFloat.id,-body.cost,body.fuelDate,`Fuel — ${vehicle.vehicle} (${vehicle.registration})`,projectId,result.insertId,body.vendor||null,req.user.id]);
+      (float_id,kind,amount,entry_date,description,category,project_id,fuel_record_id,payee,recorded_by,company_id)
+      VALUES (?,'Spend',?,?,?,'Fuel',?,?,?,?,?)`,
+      [fuelFloat.id,-body.cost,body.fuelDate,`Fuel — ${vehicle.vehicle} (${vehicle.registration})`,projectId,result.insertId,body.vendor||null,req.user.id,companyId]);
     await connection.execute('UPDATE fleet SET odometer=GREATEST(odometer,?) WHERE id=?',[body.odometer,vehicle.id]);
     await connection.execute(`INSERT INTO vehicle_odometer_readings
       (vehicle_id,company_id,project_id,reading_date,odometer,source,source_id,recorded_by) VALUES (?,?,?,?,?,'Fuel',?,?)`,

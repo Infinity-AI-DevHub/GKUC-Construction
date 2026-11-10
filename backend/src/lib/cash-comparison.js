@@ -24,7 +24,7 @@ export async function cashComparison(companyId, period) {
       WHERE company_id=? AND status='Paid' AND COALESCE(payment_method,'')<>'Card'
       AND paid_date>=? AND paid_date<? GROUP BY period`,[companyId,start,end]),
     query(`SELECT DATE_FORMAT(e.entry_date,'%Y-%m') period,SUM(ABS(e.amount)) amount FROM petty_cash_entries e
-      JOIN petty_cash_floats f ON f.id=e.float_id WHERE f.company_id=? AND e.kind='Spend'
+      JOIN petty_cash_floats f ON f.id=e.float_id WHERE COALESCE(e.company_id,f.company_id)=? AND e.kind='Spend'
       AND e.entry_date>=? AND e.entry_date<? GROUP BY period`,[companyId,start,end]),
     query(`SELECT DATE_FORMAT(payment_date,'%Y-%m') period,SUM(amount) amount FROM office_expense_payments
       WHERE company_id=? AND payment_method<>'Card' AND payment_date>=? AND payment_date<? GROUP BY period`,[companyId,start,end]),

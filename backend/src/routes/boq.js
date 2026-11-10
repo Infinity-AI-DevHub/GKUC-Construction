@@ -313,8 +313,8 @@ router.get('/cost-control/options', auth, permit('qs.view','qs.boq','qs.costCont
       FROM quotation_items qi JOIN quotations_client q ON q.id=qi.quotation_id
       WHERE q.project_id=? AND q.status='Accepted' ORDER BY q.id DESC,qi.id`, [projectId]),
     query(`SELECT f.id,f.name,COALESCE(SUM(e.amount),0) balance FROM petty_cash_floats f
-      LEFT JOIN petty_cash_entries e ON e.float_id=f.id WHERE f.company_id=? AND f.account_type='Fuel' AND f.active=1
-      GROUP BY f.id,f.name ORDER BY f.name`, [project.companyId])
+      LEFT JOIN petty_cash_entries e ON e.float_id=f.id WHERE f.account_type='Fuel' AND f.active=1
+      GROUP BY f.id,f.name ORDER BY f.name`, [])
   ]);
   res.json({ tasks, employees, vehicles, reserves, fuel, quotationItems, fuelFloats });
 }));
@@ -521,9 +521,9 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
           } else {
             if (!line.fuelFloatId || !line.quantity || !line.odometer)
               throw costError('A new station fuel purchase needs a funded fuel float, litres and vehicle odometer.');
-            const [[fuelFloat]] = await connection.execute(`SELECT id FROM petty_cash_floats
-              WHERE id=? AND account_type='Fuel' AND active=1 AND company_id=?`,[line.fuelFloatId,project.companyId]);
-            if (!fuelFloat) throw costError('Choose an active fuel float belonging to this project company.');
+            const [[fuelFloat]] = await connection.execute(`SELECT active.id FROM petty_cash_floats old JOIN petty_cash_floats active ON active.id=COALESCE(old.merged_into_id,old.id)
+              WHERE old.id=? AND active.account_type='Fuel' AND active.active=1`,[line.fuelFloatId]);
+            if (!fuelFloat) throw costError('Choose an active shared fuel float.');
             const [[vehicle]] = await connection.execute('SELECT odometer FROM fleet WHERE id=?',[line.vehicleId]);
             if (!vehicle || Number(line.odometer)<Number(vehicle.odometer))
               throw costError('The vehicle odometer cannot be less than its last Fleet reading.');
@@ -604,10 +604,10 @@ router.post('/cost-control/daily-sheets/:id/review', auth, permit("finance.costR
             expenseId = fuel.expenseId;
           } else {
             const [[project]] = await connection.execute('SELECT company_id companyId FROM projects WHERE id=?',[sheet.project_id]);
-            const [[fuelFloat]] = await connection.execute(`SELECT id,name,company_id companyId FROM petty_cash_floats
-              WHERE id=? AND account_type='Fuel' AND active=1 FOR UPDATE`,[line.fuel_float_id]);
-            if (!fuelFloat || Number(fuelFloat.companyId)!==Number(project.companyId))
-              throw costError('The chosen fuel float is no longer active for this company. Return the sheet to QS.',409);
+            const [[fuelFloat]] = await connection.execute(`SELECT active.id,active.name,active.company_id companyId FROM petty_cash_floats old JOIN petty_cash_floats active ON active.id=COALESCE(old.merged_into_id,old.id)
+              WHERE old.id=? AND active.account_type='Fuel' AND active.active=1 FOR UPDATE`,[line.fuel_float_id]);
+            if (!fuelFloat)
+              throw costError('The chosen shared fuel float is no longer active. Return the sheet to QS.',409);
             const [[{balance}]] = await connection.execute('SELECT COALESCE(SUM(amount),0) balance FROM petty_cash_entries WHERE float_id=?',[fuelFloat.id]);
             if (Number(balance)+.001<Number(line.amount))
               throw costError(`${fuelFloat.name} has only LKR ${Number(balance).toLocaleString('en-LK')} available. Top up the fuel float or return this sheet.`,409);
@@ -618,13 +618,13 @@ router.post('/cost-control/daily-sheets/:id/review', auth, permit("finance.costR
               AND litres=? AND cost=? LIMIT 1`,[line.vehicle_id,sheet.work_date,line.quantity,line.amount]);
             if (duplicate) throw costError('Fleet already has a matching fuel purchase. Return this sheet and link that Fleet record instead.',409);
             const [createdFuel] = await connection.execute(`INSERT INTO fuel_records
-              (vehicle_id,project_id,fuel_date,litres,cost,odometer,driver,created_by) VALUES (?,?,?,?,?,?,?,?)`,
-              [line.vehicle_id,sheet.project_id,sheet.work_date,line.quantity,line.amount,line.odometer,vehicle.driver,req.user.id]);
+              (vehicle_id,project_id,fuel_date,litres,cost,odometer,driver,created_by,company_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+              [line.vehicle_id,sheet.project_id,sheet.work_date,line.quantity,line.amount,line.odometer,vehicle.driver,req.user.id,project.companyId]);
             await connection.execute(`INSERT INTO petty_cash_entries
-              (float_id,kind,amount,entry_date,description,category,project_id,fuel_record_id,recorded_by)
-              VALUES (?,'Spend',?,?,?,'Fuel',?,?,?)`,
+              (float_id,kind,amount,entry_date,description,category,project_id,fuel_record_id,recorded_by,company_id)
+              VALUES (?,'Spend',?,?,?,'Fuel',?,?,?,?)`,
               [fuelFloat.id,-Number(line.amount),sheet.work_date,`Fuel — ${vehicle.vehicle} (${vehicle.registration})`,
-                sheet.project_id,createdFuel.insertId,req.user.id]);
+                sheet.project_id,createdFuel.insertId,req.user.id,project.companyId]);
             await connection.execute('UPDATE fleet SET odometer=GREATEST(odometer,?) WHERE id=?',[line.odometer,line.vehicle_id]);
             await connection.execute(`INSERT INTO vehicle_odometer_readings
               (vehicle_id,reading_date,odometer,source,source_id,recorded_by) VALUES (?,?,?,'Fuel',?,?)`,

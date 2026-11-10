@@ -649,7 +649,7 @@ function FuelForm({ data, vehicle, close, reload }) {
       <option value="">No fuel float</option>
       {floats.map(float => <option key={float.id} value={float.id}>{float.name} — {rupees(float.balance)} available</option>)}
     </select></label>
-    {!floats.length && <p className="form-note wide">No fuel float is available for this company. You can save without one; no petty cash payment will be created.</p>}
+    {!floats.length && <p className="form-note wide">No shared fuel float is available. You can save without one; no petty cash payment will be created.</p>}
     {selectedFloat && <p className="form-note wide">Available in this float: {rupees(selectedFloat.balance)}. The amount entered below cannot exceed it.</p>}
     <SelectField name="projectId" label="Charge to project" required={false} options={[["",'Not project-specific'], ...data.projects.filter(project=>Number(project.companyId)===Number(data.companyId)).map(project => [project.id, project.name])]} defaultValue={vehicle?.projectId||''}/>
     <Field name="fuelDate" label="Date" type="date" defaultValue={todayInput()} />

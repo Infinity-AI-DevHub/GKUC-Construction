@@ -264,3 +264,15 @@ Coverage: separate 30/31/45-minute boundaries, preserved morning eligibility, mi
 People → Biometric import → Correct fingerprint identity can move selected attendance to a correct existing or new employee profile and reassign future scanner matching. A preview, reason, record-level selection and same-date conflict decisions are mandatory. Legacy rows without stored scanner IDs require explicit HR confirmation. Alternatives are archived and retained with their original employee identity, times and audit evidence.
 
 Overlapping Draft payslips for both profiles receive a saved blocking warning and must be explicitly regenerated before approval. Approved/Paid snapshots, payments and existing project allocations remain unchanged; HR acknowledges their presence and handles any historical payment correction separately with Finance. Reviewed OT, payroll claims, leave, salary settings and site costs are not transferred and must be separately reviewed. New profiles require HR to complete their pay/employment settings. Tests cover provenance filtering, legacy verification, conflicts, stale preview/replay, permissions, atomic profile creation, subsequent imports, Draft approval protection and unchanged paid snapshots. Driver Site minimum remains 31 minutes; corrected a documentation-only table typo from the prior change.
+
+## 2026-11-10 — HR work-type display names
+
+Special daily pay labels Bass as **Worker (Bass)** and Gola as **Helper (Gola)** in the work-type dropdown, daily records and related help text. Saved/API work kinds remain Bass/Gola; rates, calculations and historical payroll are unchanged.
+
+## 2026-11-10 — shared salary-advance floats
+
+Salary advance floats may be funded/used across both companies. Each advance explicitly records the employee's payroll company; the UI filters employees by that choice and the API rejects a mismatched pay company. Float opening/legacy company is not the advance owner. Existing daily-rate limits, employee-linked recoveries, saved payroll snapshots and Approved/Paid immutability are unchanged. Fuel and salary advance entries cannot be linked as MD personal expenses.
+
+### 2026-11-10 — petty-float consolidation and salary advances
+
+Only same-category floats can merge. A Salary advance merge preserves every entry ID, employee, date, amount and company and keeps salary_advance_recoveries references intact. No new advance/recovery is created, no policy is changed and no Draft/Approved/Paid salary is recalculated. Archived account ledgers retain historical membership; payroll continues to read the original employee-linked advances through their active same-category destination.

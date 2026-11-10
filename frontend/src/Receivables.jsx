@@ -1,9 +1,10 @@
+import PettyCashMerge from './PettyCashMerge.jsx';
 import QuotationIdentityChoices,{defaultQuotationVisibility} from './QuotationIdentityChoices.jsx';
 import BondImport from './BondImport.jsx';
 import DocumentPrintOptions from './DocumentPrintOptions.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Landmark, TriangleAlert, Wallet, PencilLine, Trash2 } from 'lucide-react';
-import { api, openDocument, post, rupees, shortDate, slug, todayInput } from './api.js';
+import { api, openDocument, post, rupees,rupeesExact, shortDate, slug, todayInput } from './api.js';
 import {
   Badge, EmptyState, Field, FormModal, WorkflowForm, Modal, Row, SelectField, Summary, Table, TextArea, useLiveList
 } from './ui.jsx';
@@ -754,18 +755,19 @@ function BondExtensionForm({bond,close,reload}){return <FormModal title={`Extend
 /* ---- petty cash ----------------------------------------------------------- */
 
 export function PettyCash(props) {
-  return <PettyCashAccounts key={props.companyId} {...props}/>;
+  return <PettyCashAccounts {...props}/>;
 }
 
 function PettyCashAccounts({ data, can, companyId }) {
+  const [merging,setMerging]=useState(false),[includeMerged,setIncludeMerged]=useState(false);
   const [floats, setFloats] = useState([]);
   const [opening, setOpening] = useState(false);
   const [open, setOpen] = useState(null);
   const [error,setError]=useState('');
   const loadVersion=useRef(0);
-  const load = () => {const version=++loadVersion.current;return api(`/receivables/petty-cash?companyId=${companyId}`).then(rows=>{if(version===loadVersion.current){setFloats(rows);setError('');}}).catch(failure=>{if(version===loadVersion.current)setError(failure.message);});};
+  const load = () => {const version=++loadVersion.current;return api(`/receivables/petty-cash?companyId=${companyId}&includeMerged=${includeMerged?1:0}`).then(rows=>{if(version===loadVersion.current){setFloats(rows);setError('');}}).catch(failure=>{if(version===loadVersion.current)setError(failure.message);});};
   useLiveList(load);
-  useEffect(() => {load();return ()=>{loadVersion.current++;};}, [companyId]);
+  useEffect(() => {load();return ()=>{loadVersion.current++;};}, [companyId,includeMerged]);
 
   /* The card the holder is looking at must follow the data, not the click that opened it. */
   const current = open ? floats.find(float => float.id === open) : null;
@@ -773,18 +775,19 @@ function PettyCashAccounts({ data, can, companyId }) {
 
   return <div className="petty-cash-management">
     <div className="toolbar">
-      <div className="segments"><span className="segment-label">Petty cash accounts by category</span></div>
-      {can.finance && <button className="secondary" onClick={() => setOpening(true)}>Add petty cash account</button>}
+      <div className="segments"><span className="segment-label">Shared petty cash floats · both companies</span></div>
+      {can.finance && <div className="row-actions"><button className="secondary" onClick={()=>setMerging(true)} disabled={floats.filter(f=>Number(f.active)!==0).length<2}>Merge accounts</button><button className="secondary" onClick={() => setOpening(true)}>Add petty cash account</button></div>}
+      <label><input type="checkbox" checked={includeMerged} onChange={e=>setIncludeMerged(e.target.checked)}/> Show merged accounts / history</label>
     </div>
 
     {error&&<p className="form-error" role="alert">{error}</p>}
     <div className="petty-account-summary">
       {accountTypes.map(type => {
-        const accounts = floats.filter(float => float.accountType === type);
+        const accounts = floats.filter(float => float.accountType === type&&Number(float.active)!==0);
         return <article key={type} className={`petty-account ${slug(type)}`}>
           <span>{type}</span>
           <strong>{rupees(accounts.reduce((sum, float) => sum + Number(float.balance), 0))}</strong>
-          <small>{accounts.length} active float{accounts.length === 1 ? '' : 's'} · independently funded</small>
+          <small>{accounts.length} active float{accounts.length === 1 ? '' : 's'} · shared across both companies</small>
         </article>;
       })}
     </div>
@@ -796,15 +799,16 @@ function PettyCashAccounts({ data, can, companyId }) {
           <Badge tone={slug(float.accountType)}>{float.accountType}</Badge>
           <strong>{float.name}</strong>
           <small>{float.holderName}{float.project ? ` · ${float.project}` : ''}</small>
-          <b className={low ? 'overdue' : ''}>{rupees(float.balance)}</b>
-          <small>{low ? 'Running low — needs topping up' : `Planned amount ${rupees(float.ceiling)}`}</small>
+          <b className={float.mergedIntoId?'':low ? 'overdue' : ''}>{float.mergedIntoId?`Merged into ${float.mergedIntoName}`:rupees(float.balance)}</b>
+          <small>{float.mergedIntoId?`Balance at merge: ${rupeesExact(float.mergedBalance)} · open history`:low ? 'Running low — needs topping up' : `Planned amount ${rupees(float.ceiling)}`}</small>
         </button>;
       })}
       {!floats.length && <EmptyState>No petty cash floats have been opened.</EmptyState>}
     </div>
 
+    {merging&&<PettyCashMerge floats={floats} close={()=>setMerging(false)} reload={load}/>}
     {opening && <FloatForm data={data} companyId={companyId} close={() => setOpening(false)} reload={load} />}
-    {current && <FloatLedger float={current} data={data} can={can} close={() => setOpen(null)} reload={load} />}
+    {current && <FloatLedger key={current.id} onOpen={id=>setOpen(id)} float={current} data={data} companyId={companyId} can={can} close={() => setOpen(null)} reload={load} />}
   </div>;
 }
 
@@ -814,14 +818,15 @@ function FloatForm({ data, companyId, close, reload, float=null }) {
     const payload={name:values.name,accountType:values.accountType||float?.accountType,holderName:values.holderName,
       projectId:values.projectId?Number(values.projectId):null,ceiling:Number(values.ceiling||0),lowAt:Number(values.lowAt||0)};
     if(float)await api(`/receivables/petty-cash/${float.id}`,{method:'PUT',body:JSON.stringify(payload)});
-    else await post('/receivables/petty-cash',{...payload,companyId,openingBalance:Number(values.openingBalance||0),openingDate:values.openingDate});
+    else await post('/receivables/petty-cash',{...payload,companyId:Number(values.fundingCompanyId||companyId),openingBalance:Number(values.openingBalance||0),openingDate:values.openingDate});
     await reload();
   }}>
     {hasHistory?<label>Account category<input readOnly value={float.accountType}/><small>Category is fixed because this account has transactions.</small></label>:<SelectField name="accountType" label="Account category" options={['Office expenses','Salary advance','Fuel']} defaultValue={float?.accountType}/>}
     <Field name="name" label="Account name" placeholder="Kandy site office" defaultValue={float?.name} maxLength={120}/>
     <Field name="holderName" label="Held by" defaultValue={float?.holderName} maxLength={120}/>
-    <SelectField name="projectId" label="Project (optional)" required={false} defaultValue={float?.projectId||''}
-      options={[["",'Not project specific'],...data.projects.filter(project=>Number(project.companyId)===Number(companyId)).map(project=>[project.id,project.name])]}/>
+    {!float&&<SelectField name="fundingCompanyId" label="Opening funding company" defaultValue={companyId} options={data.companies.map(c=>[c.id,c.name])}/>}
+    <SelectField name="projectId" label="Default project (optional)" required={false} defaultValue={float?.projectId||''}
+      options={[["",'Not project specific'],...data.projects.map(project=>[project.id,project.name])]}/>
     <Field name="ceiling" label="Planned float amount (LKR)" type="number" step="0.01" min="0" defaultValue={float?.ceiling||0}/>
     <Field name="lowAt" label="Low-balance warning at (LKR, optional)" required={false} type="number" step="0.01" min="0" placeholder="Optional" defaultValue={float?.lowAt||''}/>
     {!float&&<><Field name="openingBalance" label="Opening cash balance (LKR)" type="number" step="0.01" min="0" defaultValue="0"/><Field name="openingDate" label="Opening balance date" type="date" defaultValue={todayInput()}/></>}
@@ -831,44 +836,53 @@ function FloatForm({ data, companyId, close, reload, float=null }) {
 
 const ENTRY_TEMPLATE = '110px minmax(180px,1.6fr) 110px minmax(130px,1fr) 130px';
 
-function FloatLedger({ float, data, can, close, reload }) {
+function FloatLedger({ float, data, can, companyId,close, reload,onOpen }) {
   const [entries, setEntries] = useState([]);
+  const [hasMore,setHasMore]=useState(false),[loadingOlder,setLoadingOlder]=useState(false),[historyError,setHistoryError]=useState('');
   const [adding, setAdding] = useState('');
   const [editing,setEditing]=useState(false);
-  const load = () => api(`/receivables/petty-cash/${float.id}/entries`).then(setEntries).catch(() => setEntries([]));
+  const load = () => api(`/receivables/petty-cash/${float.id}/entries`).then(rows=>{setEntries(rows);setHasMore(rows.length===300);setHistoryError('');}).catch(e=>setHistoryError(e.message));
+  const older=async()=>{const last=entries.at(-1);if(!last)return;setLoadingOlder(true);try{const rows=await api(`/receivables/petty-cash/${float.id}/entries?beforeDate=${last.entryDate}&beforeId=${last.id}`);setEntries(current=>[...current,...rows.filter(r=>!current.some(e=>e.id===r.id))]);setHasMore(rows.length===300);setHistoryError('');}catch(e){setHistoryError(e.message);}finally{setLoadingOlder(false);}};
   useLiveList(load);
 
-  return <Modal title={`${float.name} — ${rupees(float.balance)} in hand`} close={close} wide>
+  return <Modal title={float.mergedIntoId?`${float.name} — merged account history`:`${float.name} — ${rupees(float.balance)} in hand`} close={close} wide>
+    {float.mergedIntoId&&<p className="form-note">Merged into {float.mergedIntoName}; balance at merge {rupeesExact(float.mergedBalance)}. Original movements remain below. <button className="secondary" onClick={()=>onOpen(float.mergedIntoId)}>Open shared account</button></p>}
     <div className="petty-ledger-heading"><Badge tone={slug(float.accountType)}>{float.accountType}</Badge>
-      <span>{float.accountType === 'Fuel'
+      <span>{float.mergedIntoId?'Read-only history. Open the shared account for new funding or payments.':float.accountType === 'Fuel'
         ? 'Top up this float here. Record fuel against a vehicle in Fleet; its cost and vehicle appear below automatically.'
         : 'This balance is maintained independently from the other petty-cash accounts.'}</span></div>
     <Table columns={['Date', 'Description', 'Kind', 'Recorded by', 'Amount']} template={ENTRY_TEMPLATE}
       empty="Nothing has moved through this float yet."
-      tools={can.finance ? <div className="row-actions"><button className="secondary" onClick={()=>setEditing(true)}>Edit account</button><button className="secondary" onClick={() => setAdding('Top up')}>Add money / Top up</button><button className="secondary" onClick={() => setAdding(float.accountType === 'Fuel' ? 'Top up' : 'Spend')}>Record a movement</button></div> : null}>
+      tools={can.finance && !float.mergedIntoId ? <div className="row-actions"><button className="secondary" onClick={()=>setEditing(true)}>Edit account</button><button className="secondary" onClick={() => setAdding('Top up')}>Add money / Top up</button><button className="secondary" onClick={() => setAdding(float.accountType === 'Fuel' ? 'Top up' : 'Spend')}>Record a movement</button></div> : null}>
       {entries.map(entry => <Row template={ENTRY_TEMPLATE} key={entry.id}>
         <span>{shortDate(entry.entryDate)}</span>
-        <div><strong>{entry.description}</strong><small>{entry.vehicle
+        <div><strong>{entry.description}</strong>{entry.originalFloat&&<small>Originally recorded in {entry.originalFloat}</small>}<small>{entry.vehicle
           ? `${entry.vehicle} · ${entry.registration}${entry.project ? ` · ${entry.project}` : ''}`
           : entry.employee
           ? `${entry.employee} · ${entry.employeeCode}${entry.outstandingAdvance > 0 ? ` · ${rupees(entry.outstandingAdvance)} awaiting payroll` : ' · recovered'}`
           : entry.project || entry.category || '—'}</small>{entry.fuelRecordId && <small>Also visible in <a href={`/fleet?section=fuel&record=${entry.fuelRecordId}`}>Fleet fuel record #{entry.fuelRecordId}</a> · source of this spend</small>}</div>
         <Badge tone={slug(entry.kind)}>{entry.kind}</Badge>
-        <span>{entry.recordedBy}</span>
+        <span>{entry.recordedBy}<small>{entry.company}</small>{entry.mdPersonalId&&<small>MD Personal · Mr. Gihan</small>}</span>
         <strong className={Number(entry.amount) < 0 ? 'overdue' : ''}>{rupees(entry.amount)}</strong>
       </Row>)}
     </Table>
+    {historyError&&<p className="form-error" role="alert">{historyError}</p>}
+    {hasMore&&<button className="secondary" disabled={loadingOlder} onClick={older}>{loadingOlder?'Loading…':'Load older movements'}</button>}
     {editing&&<FloatForm float={float} data={data} companyId={float.companyId} close={()=>setEditing(false)} reload={reload}/>}
-    {adding && <EntryForm key={adding} initialKind={adding} float={float} employees={data.employees} close={() => setAdding('')}
+    {adding && <EntryForm key={adding} initialKind={adding} float={float} employees={data.employees} companies={data.companies} projects={data.projects} companyId={companyId} close={() => setAdding('')}
       reload={async () => { await load(); await reload(); }} />}
   </Modal>;
 }
 
-function EntryForm({ float, employees, close, reload, initialKind }) {
+function EntryForm({ float, employees,companies,projects,companyId, close, reload, initialKind }) {
   const [kind, setKind] = useState(initialKind || (float.accountType === 'Fuel' ? 'Top up' : 'Spend'));
+  const [payingCompany,setPayingCompany]=useState(String(companyId||float.companyId)),[purpose,setPurpose]=useState('Company expense');
+  const [clientRef]=useState(()=>crypto.randomUUID());
+  const personal=kind==='Spend'&&purpose==='MD Personal';
   return <FormModal title={kind === 'Top up' ? `Add money — ${float.name}` : `Movement on ${float.name}`} close={close} label="Record it" onSubmit={async values => {
     await post(`/receivables/petty-cash/${float.id}/entries`, {
-      kind: values.kind,
+      kind: values.kind,companyId:Number(payingCompany),clientRef,mdPersonal:personal,personalCategory:personal?values.category:undefined,
+      projectId:personal?null:values.projectId?Number(values.projectId):null,
       amount: Number(values.amount),
       entryDate: values.entryDate,
       description: values.description,
@@ -882,13 +896,17 @@ function EntryForm({ float, employees, close, reload, initialKind }) {
       {(float.accountType === 'Fuel' ? ['Top up', 'Return', 'Adjustment'] : ['Spend', 'Top up', 'Return', 'Adjustment'])
         .map(option => <option key={option}>{option}</option>)}
     </select></label>
-    <Field name="amount" label="Amount (LKR)" type="number" step="any" min="0" />
+    <label>{kind==='Top up'?'Funding company':'Company paying / receiving this movement'} *<select required value={payingCompany} onChange={e=>setPayingCompany(e.target.value)}>{companies.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+    {kind==='Spend'&&float.accountType==='Office expenses'&&<label>Expense purpose<select value={purpose} onChange={e=>setPurpose(e.target.value)}><option>Company expense</option><option>MD Personal</option></select></label>}
+    {!personal&&<SelectField key={payingCompany} name="projectId" label="Project (optional)" required={false} options={[["",'Head office / no project'],...projects.filter(p=>Number(p.companyId)===Number(payingCompany)).map(p=>[p.id,p.name])]} />}
+    <Field name="amount" label="Amount (LKR)" type="number" step="0.01" min="0.01" />
     <Field name="entryDate" label="Date" type="date" defaultValue={todayInput()} />
     {float.accountType === 'Salary advance' && kind === 'Spend' && <SelectField name="employeeId" label="Employee receiving the advance"
-      options={employees.filter(employee => employee.status !== 'Left').map(employee => [employee.id, `${employee.name} — ${employee.code}`])} />}
-    <Field name="category" label="Category" required={false} placeholder="Fuel, refreshments, courier" />
+      options={employees.filter(employee => employee.status !== 'Left'&&Number(employee.payrollCompanyId||1)===Number(payingCompany)).map(employee => [employee.id, `${employee.name} — ${employee.code}`])} />}
+    <Field name="category" label={personal?"Personal expense category":"Category"} required={personal} placeholder="Fuel, refreshments, courier" />
     {kind === 'Spend' && <Field name="payee" label="Paid to" required={false} placeholder="Supplier, shop or person" />}
     <Field name="description" label="Description" wide placeholder={kind === 'Top up' ? 'Funding received / source or reference' : 'What this movement was for'} />
+    {personal&&<p className="form-note wide">This same payment appears in MD Personal Expenses — Mr. Gihan. No repayment balance or second expense is created.</p>}
     {kind === 'Top up' && <p className="form-note wide">This adds money to this account and saves a dated top-up in its ledger. It also appears automatically under Petty cash funding on the Expenses page, using this same record. Funding stays separate from expense totals so later spending is not counted twice.</p>}
     {float.accountType === 'Salary advance' && <p className="form-note wide">For daily-rate workers and site labourers, the total advanced on one day cannot exceed their daily salary rate. LKR 500 or 1,000 are common amounts, not required amounts. Advances are recovered from the employee's next available payroll, with any unpaid balance carried forward.</p>}
     {float.accountType === 'Fuel' && <p className="form-note wide">For fuel purchased for a vehicle, go to Fleet → Fuel & service → Record fuel. The float will be reduced automatically.</p>}

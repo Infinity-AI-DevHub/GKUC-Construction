@@ -1,3 +1,4 @@
+import MdPersonalExpenses from './MdPersonalExpenses.jsx';
 import Retention from './Retention.jsx';
 import React, { useEffect, useState } from 'react';
 import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
@@ -19,8 +20,9 @@ import ProgressClaims from './ProgressClaims.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
-const TABS = ['Financial reports','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Retention','Progress claims','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Credit purchases','Supplier invoices','Supplier statements','Categories'];
+const TABS = ['Financial reports','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Retention','Progress claims','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Credit purchases','Supplier invoices','Supplier statements','Categories','MD Personal Expenses'];
 const TAB_PERMISSIONS = {
+  'MD Personal Expenses':['finance.manage'],
   Retention:['finance.view','finance.manage','qs.retention'],
   'Progress claims':['finance.view','finance.invoice'],
   'Financial reports':['finance.reports'], 'Management accounts':['finance.managementAccounts'],
@@ -37,7 +39,8 @@ const TAB_GROUPS = [
   { label: 'Overview & review', tabs: ['Financial reports', 'Management accounts', 'Cash comparison', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
   { label: 'Money in', tabs: ['Invoices', 'Retention', 'Progress claims', 'Income', 'VAT ledger'] },
   { label: 'Money out', tabs: ['Expected outflows', 'Bills', 'Credit purchases', 'Supplier invoices', 'Supplier statements', 'Expenses', 'Petty cash', 'Credit cards'] },
-  { label: 'Controls', tabs: ['VAT clearance', 'Cheques', 'Bonds', 'Categories'] }
+  { label: 'Controls', tabs: ['VAT clearance', 'Cheques', 'Bonds', 'Categories'] },
+  { label: 'Personal spending',tabs:['MD Personal Expenses'] }
 ];
 
 /** PID 2.10 — costs, payments and profitability in one view, watched continuously. */
@@ -81,7 +84,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
 
   const refresh = async () => { await load(); await reload(); };
 
-  return <RecordScopeProvider scope={{ kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Finance" subtitle={`Project costs, payments and profitability for ${company?.name || 'the selected company'}.`}
+  return <RecordScopeProvider scope={['Petty cash','MD Personal Expenses'].includes(tab)?{kind:'shared'}:{ kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Finance" subtitle={tab==='Petty cash'?'Shared floats for both companies; each movement records its paying or funding company.':tab==='MD Personal Expenses'?"Mr. Gihan’s personal spending from both companies.":`Project costs, payments and profitability for ${company?.name || 'the selected company'}.`}
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={visibleTabs} active={tab} onChange={setTab} groups={visibleGroups} />
 
@@ -101,6 +104,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     {tab === 'Invoices' && <ClientInvoices data={data} can={can} companyId={companyId} />}
     {tab === 'Cheques' && <Cheques can={can} data={data} companyId={companyId} />}
     {tab === 'Bonds' && <Bonds data={data} can={can} companyId={companyId} />}
+    {tab === 'MD Personal Expenses'&&<MdPersonalExpenses data={data}/>}
     {tab === 'Petty cash' && <PettyCash data={data} can={can} companyId={companyId} />}
     {tab === 'Expenses' && <div className="expenses-workspace">
       {can.has('finance.dailyExpenses') && <DailyExpenses companyId={companyId} company={company} can={featureCan('finance.dailyExpenses')} />}

@@ -9,6 +9,7 @@ const router = Router();
 
 /** Uploading against a record needs the same permission as editing that record. */
 const WRITERS = {
+  md_personal_expense:'finance.manage',
   progress_certificate:'finance.invoice',
   attendance:'hr.attendance',claim:'hr.payroll',
   handover:'hr.assets',
@@ -30,6 +31,7 @@ const WRITERS = {
  * revealing as opening the employee page itself.
  */
 const READERS = {
+  md_personal_expense:['finance.manage'],
   progress_certificate:['qs.view','qs.boq','qs.approve','finance.view','finance.invoice'],
   attendance:['hr.attendance','hr.manage'],claim:['hr.payroll'],
   handover:['hr.assets','hr.manage'],
@@ -57,6 +59,7 @@ if (missingStorageFolders.length) {
 
 /** Each owner type points at the table its id must exist in. */
 const OWNER_TABLES = {
+  md_personal_expense:'md_personal_expenses',
   progress_certificate:'progress_claims',
   attendance:'visible_attendance',claim:'visible_hr_payroll_claims',
   handover:'visible_employee_asset_handovers',

@@ -1,5 +1,6 @@
 /** Only approved generated-document routes may use a temporary browser download ticket. */
 const documentPaths = [
+  /^\/finance\/md-personal-expenses\/document$/,
   /^\/boq\/cost-control\/daily-sheets\/(?:\d+\/)?document$/,
   /^\/finance\/expected-outflows\/worksheet\/document$/,
   /^\/purchasing\/orders\/\d+\/document$/,
@@ -24,11 +25,11 @@ export function canonicalDocumentDownloadPath(value) {
   const entries = [...parsed.searchParams.entries()];
   const costs=parsed.pathname==='/boq/cost-control/daily-sheets/document';
   if(costs&&(parsed.searchParams.getAll('projectId').length!==1||!/^\d+$/.test(parsed.searchParams.get('projectId'))||Number(parsed.searchParams.get('projectId'))<1))return null;
-  const worksheet=parsed.pathname==='/finance/expected-outflows/worksheet/document';
+  const worksheet=['/finance/expected-outflows/worksheet/document','/finance/md-personal-expenses/document'].includes(parsed.pathname);
   if(worksheet&&(['from','to'].some(key=>parsed.searchParams.getAll(key).length!==1||!/^\d{4}-\d{2}-\d{2}$/.test(parsed.searchParams.get(key)))))return null;
   const progress=/^\/progress-claims\/\d+\/document$/.test(parsed.pathname);
   if(parsed.searchParams.has('type')&&(!progress||parsed.searchParams.getAll('type').length!==1||!['application','letter','payment-request','certificate','invoice'].includes(parsed.searchParams.get('type'))))return null;
-  if (entries.some(([key]) => !['download', 'preview', 'companyId',...(progress?['type']:[]),...(costs?['projectId']:[]),...(worksheet?['from','to']:[])].includes(key)) ||
+  if (entries.some(([key]) => !['download', 'preview', 'companyId',...(progress?['type']:[]),...(costs?['projectId']:[]),...(worksheet?['from','to']:[]),...(parsed.pathname==='/finance/md-personal-expenses/document'?['category','source']:[])].includes(key)) ||
       Number(parsed.searchParams.getAll('download').length === 1 && parsed.searchParams.get('download') === 'pdf') +
         Number(parsed.searchParams.getAll('preview').length === 1 && parsed.searchParams.get('preview') === 'pdf') !== 1 ||
       parsed.searchParams.getAll('companyId').length > 1 ||
