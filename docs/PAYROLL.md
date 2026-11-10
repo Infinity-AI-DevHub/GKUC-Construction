@@ -28,14 +28,14 @@ For a valid attended day, actual worked time is the elapsed check-in to check-ou
 
 OT is an addition to salary. It uses exact actual minutes; no 15-minute rounding occurs. Once the relevant minimum is met, the whole eligible interval is payable.
 
-Morning OT is eligible only where check-in is **07:00 or earlier**. Morning and evening eligible minutes are combined before the applicable minimum is checked. Evening OT begins after 16:30. Office staff have no Travel OT. Travel OT requires an approved travel record with documented intervals; its intervals are removed from automatic Site/Office OT to prevent duplicate payment.
+Morning OT is eligible only where check-in is **07:00 or earlier**. Morning and evening eligible minutes are combined before the applicable minimum is checked. Evening OT begins after 16:30. Office staff have no Travel OT. For Labour/Supervisor/Driver site days, Travel OT uses the saved site departure to final office check-out; reviewed travel evidence can replace that automatic type. Other claims require approval with documented intervals; its intervals are removed from automatic Site/Office OT to prevent duplicate payment.
 
 | Category | Office OT | Site OT | Travel OT |
 | --- | --- | --- | --- |
 | Office staff, including IT | LKR 225/h; minimum 30 min | — | Not allowed |
-| Supervisor | — | LKR 225/h; minimum 30 min | LKR 100/h; minimum 31 min |
+| Supervisor | — | LKR 225/h; minimum 30 min | LKR 100/h; minimum 45 min (new policy default) |
 | Driver | — | LKR 100/h; minimum 31 min | LKR 225/h; minimum 30 min |
-| Site labourer | — | LKR 225/h; minimum 30 min | LKR 100/h; minimum 31 min |
+| Site labourer | — | LKR 225/h; minimum 30 min | LKR 100/h; minimum 45 min (new policy default) |
 
 Formula after the applicable minimum is reached:
 
@@ -132,7 +132,7 @@ These are opt-in employee agreements, not new defaults for everyone. HR must sel
 
 - HR records exactly one work type per employee/date: Bass (LKR 3,000/day) or Gola (LKR 2,500/day). No supervisor confirmation or separate approval is required.
 - Full day is eight paid hours. Short-day earnings use actual attendance hours capped at eight, using that day's chosen rate. Attendance and work location are still recorded/imported through the existing workflow.
-- Site OT is LKR 225/h, minimum 30 minutes; Travel OT is LKR 100/h, minimum 31 minutes, with approved travel evidence. Ordinary late grace/deduction rules continue, using LKR 225/h. Special-role automatic OT money uses exact eligible minutes.
+- Site OT is LKR 225/h, minimum 30 minutes; Travel OT is LKR 100/h, with the dated labour Travel minimum (new default 45 minutes; legacy saved 31-minute policies remain dated evidence). Three-punch attendance or reviewed travel evidence supplies its intervals. Ordinary late grace/deduction rules continue, using LKR 225/h. Special-role automatic OT money uses exact eligible minutes.
 - Calendar-month worked-day equivalents use actual attendance hours / eight, capped at one per day. Leave does not count. When the running count exceeds 25, the day's chosen Bass/Gola basic rate uses 1.5×; OT and late rates do not change.
 - Sundays/holidays use the selected daily role rate. There is no extra Sunday multiplier. Approved paid leave requires HR to select its applicable role too; the saved leave pay uses that daily rate, without adding a worked-day premium.
 - Missing daily choices, invalid attendance times or review-required attendance block Draft generation with an HR correction message. No fallback to a guessed role is allowed.
@@ -156,7 +156,7 @@ As currently agreed, either special method disables employee/employer EPF in cal
 
 Draft generation snapshots each day's rule, work type, HR input ID/recorder/reason, rates, readings, formula, earned basic and transport. Payslip PDFs and XLSX read those saved calculations, including a Special daily pay sheet. Per-day export basic uses saved earned amounts (including premiums), not a current profile rate. Changing an input/rule does not automatically recalculate any run; explicitly regenerate a Draft. Approved/Paid runs cannot be regenerated.
 
-Coverage: `backend/test/special-pay.test.js` tests effective dates, role/short-day pay, operator minimum/standby/transport, no Machine-day OT or operator late, Standby Site OT at 29/30/31-minute boundaries, 30/31-minute role thresholds, calendar resets/premiums, Standard restoration and saved export reconciliation. API scenarios test permission/persistence, missing-input blocking, archived inputs, Draft regeneration, approved snapshot protection, role-based paid leave, EPF exception and unchanged ETF eligibility.
+Coverage: `backend/test/special-pay.test.js` tests effective dates, role/short-day pay, operator minimum/standby/transport, no Machine-day OT or operator late, Standby Site OT at 29/30/31-minute boundaries, 30/45-minute role thresholds, calendar resets/premiums, Standard restoration and saved export reconciliation. API scenarios test permission/persistence, missing-input blocking, archived inputs, Draft regeneration, approved snapshot protection, role-based paid leave, EPF exception and unchanged ETF eligibility.
 
 ### 2026-11-03 clarification — operator Standby OT
 
@@ -248,3 +248,19 @@ stay immutable. Tests cover meter-only pay, absent dates, deduplication, archive
 rule/role boundaries, leave/absence conflicts, monthly premiums and real API Draft
 regeneration plus approved snapshot protection. No live policy assignment is needed for
 an employee who already has the saved Machine operator method.
+
+## 2026-11-10 — three-punch Site/Travel OT and corrected minimums
+
+Labour, Supervisor and Driver site days use check-in, site stop/departure and final office check-out. Existing eligible morning OT remains Site OT. Evening Site OT ends at site stop; Travel OT starts there and ends at office check-out. Each type independently meets its saved policy minimum. New policy defaults are Labour/Supervisor Site 30 and Travel 45 minutes; Driver Site 31 and Travel 30; Office remains 30. Rates remain company-policy based. Work-role Travel follows the dated labour Travel minimum (previous hardcoded 31 removed), while its agreed rates remain unchanged. Thresholds are eligibility gates, not minutes deducted. Exact minutes determine payment; displayed hours may show two decimals.
+
+Existing stored policies are never silently rewritten: save the corrected 45-minute Travel values in each company's effective-dated policy before generating or explicitly regenerating a Draft. Existing historical policies remain authoritative for their dates. Approved/Paid payslips keep saved inputs, policy and calculations unchanged.
+
+Attendance entry, bulk entry, correction and biometric import persist site_stop. CSV/workbook imports retain raw punches: exactly three distinct matching punches can identify the middle departure; missing/extra punches require HR confirmation. No historical departure is invented. Missing/invalid departure blocks new Draft approval until attendance is corrected and the Draft explicitly regenerated (or each OT type has an explicit reviewed decision). Reviewed Site and Travel override only their own type; calculated Travel claims suppress duplicate automatic Travel; manual travel allowances remain separate. Overlapping or unverifiable reviewed Site intervals block automatic Travel and approval. Saved payslip/Excel evidence includes site stop, intervals, minutes and per-type minimums.
+
+Coverage: separate 30/31/45-minute boundaries, preserved morning eligibility, missing/ambiguous departure, reviewed/rejected OT and claim deduplication, Driver thresholds, dated legacy policies, import persistence, invalid corrections, Draft approval/regeneration and approved snapshot protection.
+
+## 2026-11-10 — wrong fingerprint profile corrections
+
+People → Biometric import → Correct fingerprint identity can move selected attendance to a correct existing or new employee profile and reassign future scanner matching. A preview, reason, record-level selection and same-date conflict decisions are mandatory. Legacy rows without stored scanner IDs require explicit HR confirmation. Alternatives are archived and retained with their original employee identity, times and audit evidence.
+
+Overlapping Draft payslips for both profiles receive a saved blocking warning and must be explicitly regenerated before approval. Approved/Paid snapshots, payments and existing project allocations remain unchanged; HR acknowledges their presence and handles any historical payment correction separately with Finance. Reviewed OT, payroll claims, leave, salary settings and site costs are not transferred and must be separately reviewed. New profiles require HR to complete their pay/employment settings. Tests cover provenance filtering, legacy verification, conflicts, stale preview/replay, permissions, atomic profile creation, subsequent imports, Draft approval protection and unchanged paid snapshots. Driver Site minimum remains 31 minutes; corrected a documentation-only table typo from the prior change.

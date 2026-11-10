@@ -539,3 +539,67 @@ all supplier payments. Statements label linked settlements as Petty cash. Existi
 single-invoice direct API and Issued cheques remain available. Credit-purchase UI exposes
 Pay alongside review actions and Pay supplier with selection/select-all, partial amounts,
 source/account and one total. Required reviews remain enforced by the server.
+
+## 2026-11-09 — create materials within Site Today
+
+`MaterialForm.jsx` is extracted from Materials and reused by Site Today. Its existing
+POST /materials and PATCH /materials/:id contracts, validation and store.manage permission
+are unchanged. Optional onCreated and repeat props let Site Today close after one save,
+merge the returned record into its picker and append one zero-usage draft row. Existing
+Materials create/edit and repeat-entry behavior is retained. The local picker also keeps
+new records if the shared bootstrap refresh fails; a save is not retried for refresh
+failure. Functional draft updates preserve work/attendance/other material values and
+prevent adding the same material twice. No new schema, route or company scoping is added:
+materials remain shared catalogue records. Creation is unavailable offline, during loading/
+sync and on a synced report; existing offline draft editing remains supported. Store
+opening stock is not treated as issued site stock, and existing site consumption checks
+remain authoritative. Site reporters without store.manage can still choose saved materials
+but do not receive master-data creation permission through this page.
+
+## 2026-11-09 — daily cost sheet PDFs and Vehicle costs
+
+GET /boq/cost-control/daily-sheets/document?projectId=ID exports all saved project sheets,
+without the Cost Control screen's recent-row limit. GET /boq/cost-control/daily-sheets/:id/
+document exports one sheet. Both share existing sheet read permissions and require an
+active project; company identity is resolved from that project. `daily-cost-document.js`
+reads saved sheet/line amounts, statuses, work-task links, resources and review notes.
+PDF summary splits Approved/Submitted/Returned costs and approved quoted recovery, followed
+by category summary, sheet register and per-sheet detail. Proposals are not presented as
+posted actuals; quoted recovery is explicitly not a receipt or booked revenue. No export
+writes, approvals or recomputation from current rates. Shared sendDocument/Infinity AI
+credit and narrowly whitelisted ticket paths power normal browser/Electron preview,
+download and print. Output is landscape A4 with repeated table headings and row protection.
+
+Vehicle is added to daily_cost_lines.source through guarded modifyColumn and the default
+expense.source option. Expenses already store source as VARCHAR, so no expense-table
+migration is needed. Manual Vehicle lines require an existing active fleet vehicle;
+Excel review can select a vehicle for Vehicle rows and import persists the same FK.
+Finance approval posts the saved Vehicle amount once using the existing expense origin,
+without manufacturing Fuel, maintenance, cash or vehicle-odometer transactions. Historical
+categories and amounts are not reclassified. Fuel retains its separate controlled route.
+Vehicle costs are included as direct project costs in Income Statement presentation.
+
+## 2026-11-09 — VAT calendar-quarter countdown
+
+VAT Ledger uses `vat-quarter.js` to derive the calendar quarter containing the selected
+To date, displaying quarter label, quarter end and nonnegative calendar days remaining.
+On the final day it says Ends today; past quarters say Quarter ended. Default quarter
+and current date use Asia/Colombo explicitly. The open view refreshes that business date
+every minute. UTC-midnight date arithmetic avoids browser time-zone/DST day fractions.
+This is a quarter-end display only, independent of filing/payment due dates, VAT rates,
+filing status and saved reconciliation. Custom date ranges do not redefine quarter end.
+No VAT record, tax amount, deadline or notification is created or changed.
+
+### 2026-11-10 — attendance site departure and split OT
+
+Additive guarded attendance.site_stop TIME and raw_punches JSON columns retain the three-punch boundary and scanner evidence. Attendance single/bulk/PATCH, bootstrap and employee history expose siteStop; biometric preview/commit carry siteStop and punchTimes. Exactly three punches provide a candidate middle boundary, with raw punches visible in import review. Shared site-travel-ot.js supplies independent Site/Travel suggestions to payroll and HR review. Payroll inputs accept a reviewed overtimeType; input_detail retains actualMinutes when a rounded displayed suggestion is accepted, preserving exact-minute pay. Draft approval checks saved blocking warnings without recalculating approved history. Payslip and workbook exports read saved source/calculation details. Existing auth, audit, import correction protection and effective-dated policy scope remain.
+
+Split automatic OT is grouped into one Attendance OT project-cost allocation per source attendance ID, summing Site and Travel while retaining separate payslip details. This preserves the unique source audit key and prevents duplicate source allocations.
+
+### 2026-11-10 — audited fingerprint identity correction
+
+The biometric router registers correction handlers from `lib/biometric-correction.js`: GET `/biometric/correction-mappings`, GET `/biometric/corrections/history`, POST `/biometric/corrections/preview` and POST `/biometric/corrections/commit`; all require `hr.attendance`. Preview validates source/target/scanner ownership, returns provenance-qualified attendance, target conflicts, affected payroll/HR inputs and a SHA-256 state digest. Commit locks mappings, companies, employees and attendance, rechecks the digest, validates selected records/decisions and requires a reason plus applicable legacy/saved-payroll acknowledgements. New minimal profiles are created only within the successful transaction; no salary/other employment data is copied.
+
+Additive attendance.biometric_code records the actual scanner export code on future imports. Legacy Biometric rows with no code are candidates requiring explicit verification, while other known device codes and manual rows are excluded. Nullable identity_archived_at and identity_archived_employee_id preserve conflict alternatives: archiving retains the entire row/ID, original employee and timestamps while clearing employee_id to release the active employee/day uniqueness slot. visible_attendance excludes these archives; biometric legacy adoption also excludes them. No attendance is hard-deleted. Per-row before/after audit records and batch decisions preserve history, available from the correction screen.
+
+Mapping reassignment preserves the scanner-name alias and corrects its owner and primary legacy biometric_id fields. Import commits lock mappings before employees and reject changed ownership. Both profiles' overlapping Draft payslips receive a blocking saved warning until explicit regeneration. Approved/Paid snapshots, historical allocations, reviewed OT, leave, claims and site-cost records remain unchanged; UI identifies separate HR review requirements. This workflow uses shared employee identities and each selected profile's existing payroll company, without transferring company finances.

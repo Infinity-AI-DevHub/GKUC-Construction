@@ -1331,3 +1331,119 @@ supplier payment/company transfer, document upload, external message or desktop 
 rebuild. All integration mutations used only disposable local test records. Existing
 user records still require deployment and a deliberate project Save for repair. Uploaded
 source documents and historical payroll snapshots are not rewritten.
+
+## 2026-11-09 — add new materials directly from Site Today
+
+User requested material creation from the pictured Materials used section. Extracted
+existing Materials create/edit form into shared MaterialForm.jsx with optional onCreated
+and repeat controls. Site Today now shows Add new material to material creators, opens
+that form above the current draft, saves via existing POST /materials, then selects the
+returned record into one new zero-usage row. Existing work, attendance and quantities
+remain intact; duplicate selection is ignored. Cancel/error preserves the draft. Local
+picker merges successful creations even if bootstrap refresh fails, without retrying the
+saved POST. Offline/loading/sync/synced-report creation is disabled; offline saved-material
+editing remains available. Existing store.manage authorization, material audit, shared
+catalogue, opening store stock and site issue/consumption guards are unchanged. No new
+backend route/schema and no automatic stock issue or cost posting.
+
+Validation: focused real Node 20 API run 3 passed, zero failed (183 unrelated filtered),
+covering project/material coordination and stock corrections with existing site-stock
+protections. Frontend tests 39/39 and production build passed (existing chunk-size advisory).
+Headless Chrome fixture verifies cancel without POST, server-validation error preserves
+form, successful retry automatically adds/selects the returned material, old work and
+Cement quantity remain unchanged, reselect does not duplicate, offline disables creation
+and lack of stock permission hides it. Browser fixtures and real API tests were separate.
+Initial build found a missing JSX expression brace in the new callback; corrected before
+all final checks. Screenshot visually reviewed; temporary harness/server cleaned below.
+Updated README, ARCHITECTURE and DECISIONS; git diff --check passed. Full backend suite and
+packaged Electron were not rerun for this UI/form extraction.
+No deployment, PM2 action, production configuration edit, live DB write, real material
+creation/stock movement, document upload or desktop installer rebuild. API tests used
+only the disposable local database.
+Final cleanup: removed temporary browser harness files and stopped the local test server;
+ignored screenshot/script remain under desktop/test-results/site-material*. Visual review
+confirms the added material row and Add new material control are readable. Final whitespace
+check passed.
+
+## 2026-11-09 — daily cost sheets PDF with summary
+
+User requested PDF export including a summary. Added project-wide and single-sheet
+read-only document routes, existing read permissions and exact PDF-ticket whitelist.
+Exports use saved cost/recovery data, separate Approved/Submitted/Returned totals, category
+summary, sheet register and each sheet's task/resource/details/totals/notes. Project export
+includes all saved sheets, rather than silently truncating at the UI's recent list limit.
+Company comes from the selected project; no financial record or approval is changed.
+Shared PDF renderer supplies exact Infinity AI end credit. Added export controls on QS
+Daily cost sheets and the shared detail dialog (also available during Finance review).
+
+Validation: new real API scenario verifies company identity, HTML summary/amounts/resource,
+permissions, missing project, ticket and actual single-sheet PDF signature. Synthetic
+five-page landscape PDF with a 28-line approved sheet plus Submitted/Returned sheets was
+rendered and every page visually inspected: status separation, repeated table headers,
+readable totals, no overlap and one end credit. Optional unknown unit rates remain blank
+rather than implying a zero rate. Browser fixture export control requests the exact
+project-specific ticket. PDFs/scripts/images ignored under desktop/test-results.
+
+## 2026-11-09 — Vehicle category for Cost Control
+
+User requested vehicle costs. Added Vehicle in manual and Excel-review category choices,
+active vehicle selection and server validation. Guarded enum extension and expense.source
+seed option support persistence; expenses already support VARCHAR source. Saved vehicle FK
+feeds sheet detail/PDF. Existing Finance review posts exactly one Vehicle expense and keeps
+Fuel/stock/odometer/cash routines separate. Income Statement treats Vehicle as direct cost.
+No historical cost reclassification, fleet record creation or payroll change.
+
+Validation: new real API rejects missing/nonexistent vehicle, persists manual vehicle link,
+approves/posts saved amount once, rejects repeated approval and persists reviewed imported
+vehicle link. Financial-statement pure test confirms direct-cost classification. Browser
+fixture selects Vehicle/resource, task and amount and sends the correct persisted payload.
+An initial focused run included an old cost-baseline test while filtering out its prior
+BOQ setup, so that one fixture assertion failed; full ordered suite passes. Full run also
+covers existing Fuel and workbook import behavior, including the extra import SQL argument.
+
+## 2026-11-09 — VAT Ledger quarter-end days remaining
+
+User requested a countdown. Added selected-quarter label/end and remaining-day card, with
+Ends today/Quarter ended states. Uses the calendar quarter containing the selected To date,
+Asia/Colombo today, UTC date-only differences and a one-minute date refresh. This changes
+no VAT values/periods/filing locks and invents no filing deadline. Added pure checks for
+52-day example, quarter/year/leap boundaries, invalid dates, last/past day and Sri Lanka
+midnight. Browser fixture checks current count and selecting an ended quarter.
+
+Combined validation: full Node 20 backend suite with GKUC_TEST_HOST=localhost: 375 passed,
+zero failed, 4 skipped (379 including nested tests). Frontend 41/41 and final build passed
+(existing chunk advisory). Final focused Vehicle/PDF API rerun and whitespace result below.
+Browser fixtures and actual disposable-MySQL API tests were separate; harness locator
+retries corrected ambiguous Vehicle/task labels and missing mock VAT totals. No production
+behavior was inferred from those fixture mistakes. Updated README/ARCHITECTURE/DECISIONS.
+No deployment, PM2 operation, production .env change, live DB write, real cost posting,
+actual export upload/external message or desktop installer rebuild. Tests used disposable
+local records only. Prior Site Today changes in the dirty tree were preserved.
+Final follow-up: focused Vehicle/PDF real API scenario passed 1/1 (186 unrelated filtered).
+Pure statement/ticket checks passed 4/4, frontend 41/41 and final build passed. Current
+quarter screenshot visibly shows Q4 2026 ending 31 December with 52 days remaining;
+ended-quarter screenshot verified separately. PDF text confirms one exact developer
+credit. Removed temporary browser harness files and stopped Vite; ignored evidence stays
+under desktop/test-results/daily-cost-export and daily/vat UI files. git diff --check
+passed. No deployment or live data operation was performed.
+
+## 2026-11-10 — Labour/Supervisor/Driver three-punch OT and corrected Travel minimum
+
+- User confirmed retaining previous eligible morning OT, extending site departure capture to Drivers, preserving Driver Site/Travel minimums 31/30 minutes, and correcting Labour/Supervisor Travel minimum to 45 (Site remains 30).
+- Added guarded nullable attendance site_stop/raw_punches storage; entry/bulk/correction/import persist the boundary, bootstrap/history display it. CSV/workbook imports retain punches and infer only exactly three distinct matching punches; ambiguous/missing boundaries require HR confirmation. Import review shows scanner evidence; manual correction protection remains.
+- Shared calculator splits Site (eligible morning plus normal end to site stop) from Travel (site stop to office out), independently applies effective-dated policy minima/rates, and uses exact-minute money. Even early departures cap morning Site intervals to avoid overlap. New policy defaults are 45-minute labour/supervisor Travel; existing saved policies are not silently changed. Work-role Travel follows the dated labour minimum rather than a hardcoded 31.
+- HR review accepts Site and Travel separately with saved interval/minute evidence. Reviewed/rejected types and calculated Travel claims prevent duplicate automatic pay; manual travel allowances remain separate. Missing boundary/review evidence and conflicting reviewed intervals block Draft approval until corrected and explicitly regenerated. Approved/Paid payroll snapshots remain unchanged.
+- Saved payslip and Excel evidence includes site departure and OT minutes/intervals/minima. Site and Travel costs from one attendance source are summed into one audited Attendance OT project allocation, preserving the source unique key.
+- Updated README, architecture, payroll rules and decisions. Existing unrelated working-tree changes were preserved.
+- Validation with Node 20: complete backend suite **381 passed, 0 failed, 4 skipped (385 total)**; focused payroll/threshold/special-pay tests **22 passed**; frontend tests **41 passed**; frontend production build passed (existing chunk-size warning); git diff --check passed. Dedicated API scenario covers import persistence, invalid boundary rejection, category suggestions/minima, combined allocation, approval blocking, Draft regeneration and approved snapshot preservation. Shared payslip renderer produced a two-page QA fixture; both rendered pages visually checked, and workbook site-stop evidence checked. An earlier full run stalled during an existing quotation/invoice PDF scenario; stopped only that test run and the clean full retry passed.
+- No deployment, production restart, live database/policy write or real payroll regeneration. Existing company policies with Travel 31 must be saved as an appropriate dated 45-minute policy per company through Payroll settings before applying the correction to future or explicitly regenerated Draft payrolls.
+
+## 2026-11-10 — correct wrong fingerprint mapping and transfer attendance
+
+- Added People → Biometric import → Correct fingerprint identity. HR selects a saved scanner ID, source profile, date range and existing/new correct profile; previews times, site departure, locations, legacy provenance, target conflicts and affected payroll before selecting records and entering a reason. No changes occur during preview; new profiles are created atomically with successful transfer and need their pay/employment details completed separately.
+- Added authenticated hr.attendance mapping-list, correction preview/commit and history routes. A state digest and transaction locks reject stale mapping/attendance/payroll previews, invalid selections and replay. Imports serialize scanner mapping decisions and persist biometric_code going forward. Legacy Biometric records without code require explicit verification; known other codes/manual records are excluded.
+- Same-day decisions either retain target or imported attendance. The alternative is archived with its complete original row, timestamp and original employee ID; employee_id is released to preserve active employee/day uniqueness. Read views and legacy reimport adoption exclude archives. No record is hard-deleted. Site stop, raw punches, existing corrections and source location remain intact. Per-record before/after and batch audit details retain actor, reason, mapping, selections, alternatives and affected runs; recent history is shown in HR.
+- Both profiles' Draft payslips overlapping selected dates receive a blocking warning requiring explicit regeneration. Approved/Paid snapshots, payments and historical allocations remain unchanged, with explicit HR acknowledgement. Reviewed OT, leave, payroll claims, salary settings and site costs are not reassigned; screen/documents explain their separate review. Payroll company for a new profile is explicitly selected, not copied from the wrong profile.
+- Updated README, architecture, decisions and payroll documentation; also corrected the prior payroll-table documentation typo so Driver Site minimum reads 31 (calculation stayed 31 throughout). Preserved all earlier dirty-tree work.
+- Validation with Node 20: full backend **383 passed, 0 failed, 4 skipped (387 total)**; final focused correction API **2 passed** after narrowing Draft impact to selected dates and validating new-profile employment start. Scenarios cover permissions, provenance/legacy acknowledgement, invalid IDs, stale preview, conflict archival, preserved corrected times/site stop, atomic creation/no orphan profile, replay, future import ownership, Draft approval/regeneration and identical Paid snapshots. Frontend **41 passed** and final production build passed (existing chunk-size advisory). Browser fixture verified preview stays open, conflict decision, acknowledgements, correct commit payload and success completion; reviewed screenshot after table layout refinement. The first browser attempt lacked bundled Chromium, so verification used installed Chrome. Removed temporary harness files and stopped the task Vite server. git diff --check passed.
+- No deployment, PM2 operation, live database write or real employee/mapping/attendance transfer. Only disposable local test records were changed. Existing Approved/Paid payroll cannot be fixed by this attendance transfer and requires separate HR/Finance correction if needed.

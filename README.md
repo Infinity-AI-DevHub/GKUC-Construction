@@ -491,3 +491,21 @@ current company again also repairs older mismatches. Actual supplier payer/payro
 history is retained, and old-company bank instructions are removed from generated
 project documents. Credit purchases offer Pay per row and Pay supplier for selected/all
 invoices, using Direct or Petty cash with atomic, retry-safe settlement.
+
+Site Today → Materials used offers **Add new material** for users with material-create
+permission. It uses the shared Materials form, saves the real catalogue record and adds
+it to the current day's draft without leaving the page. Creating store stock does not
+issue it to the site; normal stock availability checks still apply on report submission.
+
+QS → Cost control → Daily cost sheets offers **Export PDF with summary** for the selected
+project and inside each sheet. PDFs separate Approved, Submitted and Returned costs,
+include category totals and saved line details, and retain the Infinity AI credit.
+Vehicle is a daily-cost category with a saved vehicle link and the usual Finance review.
+VAT Ledger shows the selected To date's calendar quarter and days until its end, using
+Sri Lanka's business date; the counter also identifies the last day and ended quarters.
+
+Payroll three-punch attendance (2026-11-10): Labour, Supervisor and Driver site work records check-in, site stop and final office check-out. Site and Travel OT are separate; morning rules remain. Save Labour/Supervisor Travel minimum 45 and Driver Site/Travel minimums 31/30 in each company's dated Payroll settings policy. Missing site departure needs HR confirmation and explicit Draft regeneration; saved Approved/Paid payroll is unchanged. See [payroll rules](docs/PAYROLL.md).
+
+### Correcting a wrong fingerprint identity
+
+People → Biometric import → **Correct fingerprint identity** previews a saved scanner ID, the wrong employee, date range and the correct existing/new profile. Select attendance days and resolve same-date conflicts by keeping the target or imported record; the alternative is archived, not deleted. Legacy imports lacking a saved machine ID require explicit HR verification. A reason and audit history are retained. Future imports follow the corrected mapping. Existing approved/paid payroll and other HR/site records are not moved or recalculated; affected Draft payrolls must be explicitly regenerated.

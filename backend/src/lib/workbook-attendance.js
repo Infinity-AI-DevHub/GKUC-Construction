@@ -229,6 +229,7 @@ export function parseAttendanceWorkbook(buffer) {
         checkIn: single ? (morning ? punches[0] : null) : punches[0],
         checkOut: single ? (morning ? null : punches[0]) : punches[punches.length - 1],
         punches,
+        punchTimes:[...new Set(punches)],
         needsReview: single
       });
       recordedDates.add(date);

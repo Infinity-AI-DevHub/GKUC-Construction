@@ -1,10 +1,11 @@
+import {usesSiteTravelPunches,siteTravelSuggestions} from '../lib/site-travel-ot.js';
 import {activeSpecialRule} from '../lib/special-pay.js';
 import {Router} from 'express';
 import {z} from 'zod';
 import {query,getOne,transaction,audit,pool} from '../db.js';
 import {auth,permit,validate,wrap,fail} from '../lib/http.js';
 import {rulesFor,suggestOvertime,calculateMileage,calculateLongDistance,intervalsOverlap,minutes} from '../lib/hr-payroll-rules.js';
-import {resolveOvertimeRate} from '../lib/payroll-policy.js';
+import {resolveOvertimeRate,overtimeMinimumMinutes} from '../lib/payroll-policy.js';
 import {attendanceOvertimeType} from '../lib/attendance-payroll.js';
 const router=Router();router.use(auth,permit('hr.payroll'));
 const parse=value=>typeof value==='string'?JSON.parse(value):value||{};
@@ -18,11 +19,16 @@ router.get('/',wrap(async(req,res)=>{
   const corrections=await query(`SELECT DISTINCT a.id,a.employee_id,a.work_date,a.project_id,'Attendance correction after draft' kind,'Needs review' status FROM visible_attendance a JOIN audit_logs l ON l.entity='attendance' AND CAST(l.entity_id AS UNSIGNED)=a.id AND l.action='CORRECTION' JOIN payslips ps ON ps.employee_id=a.employee_id JOIN payroll_runs pr ON pr.id=ps.run_id AND pr.status='Draft' AND a.work_date BETWEEN pr.period_start AND pr.period_end WHERE l.created_at>pr.created_at`);
   const specialProfiles=await query('SELECT * FROM employee_special_pay_rules ORDER BY effective_from DESC,id DESC');
   const specialDays=await query('SELECT employee_id,work_date,work_kind FROM employee_special_pay_days WHERE active=1');
-  const suggestions=attendance.map(a=>{
+  const suggestions=attendance.flatMap(a=>{
     const policy=policies.find(p=>p.company_id===a.company_id&&p.effective_from<=a.work_date);
     const special=activeSpecialRule({special_pay_rules:specialProfiles.filter(row=>Number(row.employee_id)===Number(a.employee_id))},a.work_date);
     const work=specialDays.find(row=>Number(row.employee_id)===Number(a.employee_id)&&row.work_date===a.work_date);
     const operatorBlocked=special?.mode==='Machine operator'&&work?.work_kind!=='Standby';
+    const payEmployee={...a,payroll_company_id:a.company_id,...(special?.mode==='Work role'?{payroll_category:'Site labourer'}:{}),special_pay_rule:special,special_pay_day:work};
+    if(policy&&usesSiteTravelPunches(payEmployee,a)){
+      const split=siteTravelSuggestions(payEmployee,a,policy);
+      return ['Site','Travel'].map(overtimeType=>({...a,overtimeType,suggestion:split[overtimeType],existing:ot.filter(o=>o.employee_id===a.employee_id&&o.work_date===a.work_date&&o.overtime_type===overtimeType)}));
+    }
     const suggestion=operatorBlocked?{hours:0,rawHours:0,intervals:[],warnings:[work?'No OT on machine-operating days.':'Record HR Standby/Machine work before reviewing operator OT.']}:policy?suggestOvertime(a,rulesFor(policy),special?30:undefined):{hours:0,warnings:['Configure an effective payroll policy.']};
     return {...a,suggestion,existing:ot.filter(o=>o.employee_id===a.employee_id&&o.work_date===a.work_date&&o.overtime_type!=='Travel')};
   });
@@ -119,7 +125,7 @@ router.patch('/:id/review',validate(z.object({status:z.enum(['Confirmed','Approv
     await audit(conn,req.user.id,req.body.status.toUpperCase(),'payroll_claim',before.id,before,req.body,req.ip);
   });res.json({id:Number(req.params.id)});
 }));
-router.post('/suggestions/:attendanceId',validate(z.object({hours:z.number().positive().max(24),reason:z.string().trim().min(3).max(1000)})),wrap(async(req,res)=>{
+router.post('/suggestions/:attendanceId',validate(z.object({hours:z.number().positive().max(24),reason:z.string().trim().min(3).max(1000),overtimeType:z.enum(['Site','Travel','Office']).optional()})),wrap(async(req,res)=>{
   const attendance=await getOne('SELECT * FROM visible_attendance WHERE id=?',[req.params.attendanceId]);if(!attendance)throw fail(404,'Attendance not found.');
   const employee=await getOne('SELECT * FROM visible_employees WHERE id=?',[attendance.employee_id]);
   const policy=await getOne('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.payroll_company_id,attendance.work_date]);if(!policy)throw fail(409,'Configure a payroll policy for this date.');
@@ -129,16 +135,20 @@ router.post('/suggestions/:attendanceId',validate(z.object({hours:z.number().pos
     employee.special_pay_day=await getOne('SELECT * FROM employee_special_pay_days WHERE employee_id=? AND work_date=? AND active=1',[employee.id,attendance.work_date]);
     if(employee.special_pay_day?.work_kind!=='Standby')throw fail(409,'Operator Site OT requires an HR-recorded Standby day. No OT is payable on machine-operating days.');
   }
-  const type=attendanceOvertimeType(employee,attendance);
-  const suggestion=suggestOvertime(attendance,rulesFor(policy),special?30:undefined);
+  const splitMode=usesSiteTravelPunches(employee,attendance);
+  const type=req.body.overtimeType || attendanceOvertimeType(employee,attendance);
+  if(type==='Travel'&&!splitMode)throw fail(409,'Use a Travel claim for this employee.');
+  const suggestion=splitMode?siteTravelSuggestions(employee,attendance,policy)[type]:suggestOvertime(attendance,rulesFor(policy),overtimeMinimumMinutes(employee,type,policy));
+  if(!suggestion)throw fail(400,'Choose Site or Travel OT for three-punch attendance.');
   if(!suggestion.intervals.length)throw fail(409,'Valid attended times are required. No payable OT is allowed on absent or leave days.');
   await transaction(async conn=>{
     await conn.query('SELECT id FROM visible_employees WHERE id=? FOR UPDATE',[employee.id]);
     const [existing]=await conn.query('SELECT * FROM visible_overtime_records WHERE employee_id=? AND work_date=?',[employee.id,attendance.work_date]);
     if(existing.some(o=>o.overtime_type===type))throw fail(409,'OT of this type already exists for this employee and date.');
     const [claims]=await conn.query("SELECT calculation FROM visible_hr_payroll_claims WHERE employee_id=? AND work_date=? AND kind='Travel' AND status<>'Rejected'",[employee.id,attendance.work_date]);
+    if(type==='Travel'&&claims.some(c=>parse(c.calculation).method!=='Manual'))throw fail(409,'A Travel claim already controls this day. Review that claim instead.');
     if(claims.some(c=>intervalsOverlap(suggestion.intervals,parse(c.calculation).intervals||[])))throw fail(409,'Site/Office OT overlaps a travel interval. Correct the attendance or travel record first.');
-    const [result]=await conn.query('INSERT INTO overtime_records(employee_id,project_id,work_date,overtime_type,hours,rate,policy_id,input_detail) VALUES(?,?,?,?,?,?,?,?)',[employee.id,attendance.project_id,attendance.work_date,type,req.body.hours,resolveOvertimeRate(employee,type,policy),policy.id,JSON.stringify({attendanceId:attendance.id,suggestion,intervals:suggestion.intervals,reason:req.body.reason})]);
+    const [result]=await conn.query('INSERT INTO overtime_records(employee_id,project_id,work_date,overtime_type,hours,rate,policy_id,input_detail) VALUES(?,?,?,?,?,?,?,?)',[employee.id,attendance.project_id,attendance.work_date,type,req.body.hours,resolveOvertimeRate(employee,type,policy),policy.id,JSON.stringify({attendanceId:attendance.id,suggestion,intervals:suggestion.intervals,reason:req.body.reason,...(splitMode?{threePunch:true,siteStop:attendance.site_stop,actualMinutes:Math.abs(req.body.hours-Math.round(suggestion.hours*100)/100)<.0001?suggestion.rawMinutes:null}:{})})]);
     await audit(conn,req.user.id,'SUGGESTION_CONFIRMED','overtime',result.insertId,null,{...req.body,suggestion},req.ip);
   });res.status(201).json({message:'Pending OT recorded. HR must review and approve it before payroll.'});
 }));

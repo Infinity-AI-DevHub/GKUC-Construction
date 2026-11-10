@@ -725,7 +725,7 @@ test('HR reviewed inputs reach weekly payroll once with separate OT, allowances 
   assert.equal((await call(hr,'PATCH',`/payroll/settings/employees/${employeeId}`,{payBasis:'Daily rate',payFrequency:'Weekly',payrollCategory:'Site labourer',basicSalary:0,weeklyRate:0,dailyRate:2500,compensationEffectiveFrom:date,epfEligible:false,etfEligible:false,allowanceEligibility:{transport:true,longDistance:true,motorcycle:true,machine:true,specialDuty:true}})).status,200);
   const policy={effectiveFrom:date,officeOtRate:225,siteLabourSiteOtRate:200,siteLabourTravelOtRate:100,driverOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3,hrRules:{...INITIAL_HR_RULES,fullTransportDays:20}};
   assert.equal((await call(hr,'POST','/payroll/settings/policies',policy)).status,201);
-  const attendance=await call(hr,'POST','/attendance',{employeeId,name:'HR Inputs QA',role:'Labourer',projectId:1,date,state:'On site',checkIn:'07:00',checkOut:'17:30',informationSource:'Signed timesheet',sourceNotes:'QA source'});assert.equal(attendance.status,201);
+  const attendance=await call(hr,'POST','/attendance',{employeeId,name:'HR Inputs QA',role:'Labourer',projectId:1,date,state:'On site',checkIn:'07:00',siteStop:'17:30',checkOut:'17:30',informationSource:'Signed timesheet',sourceNotes:'QA source'});assert.equal(attendance.status,201);
   assert.equal((await call(site,'GET','/payroll/inputs')).status,403);
   const suggestions=(await call(hr,'GET','/payroll/inputs')).body.suggestions;
   assert.equal(suggestions.find(r=>r.id===attendance.body.id).suggestion.hours,1.5);
@@ -3619,8 +3619,8 @@ test('approved paid leave restores LKR 1600 across payroll frequencies without p
       dailyRate:1600,epfEligible:false,etfEligible:false});
     assert.equal(person.status,201,JSON.stringify(person.body));
     const id=person.body.id;
-    await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out,project_id)
-      VALUES (?,?,'Worker',?,'Checked out','07:30','16:30',1),(?,?,'Worker',?,'Absent',NULL,NULL,NULL)`,
+    await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out,project_id,site_stop)
+      VALUES (?,?,'Worker',?,'Checked out','07:30','16:30',1,'16:30'),(?,?,'Worker',?,'Absent',NULL,NULL,NULL,NULL)`,
       [id,person.body.name,dates[0],id,person.body.name,dates[1]]);
     const requests=[];
     for(const [index,paymentType] of ['Paid','Unpaid','Paid'].entries()) {
@@ -3833,8 +3833,8 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
     people.push({...created.body,expectedOt,expectedLate,expectedHours:category==='Driver'&&workerType==='Office'?0:2.5});
   }
   const imported=await call(owner,'POST','/biometric/commit',{rows:people.flatMap(person=>[
-    {code:person.code,date:firstDate,checkIn:'08:15:00',checkOut:'17:30:00'},
-    {code:person.code,date:secondDate,checkIn:'08:45:00',checkOut:'17:30:00'}])});
+    {code:person.code,date:firstDate,checkIn:'08:15:00',siteStop:'17:30:00',checkOut:'17:30:00',workLocation:person.workerType==='Office'?'Office':'Site',projectId:person.workerType==='Office'?null:1},
+    {code:person.code,date:secondDate,checkIn:'08:45:00',siteStop:'17:30:00',checkOut:'17:30:00',workLocation:person.workerType==='Office'?'Office':'Site',projectId:person.workerType==='Office'?null:1}])});
   assert.equal(imported.status,201,JSON.stringify(imported.body));
   await admin.query(`UPDATE ${testDatabase}.attendance SET project_id=1 WHERE employee_id=?`,[people[0].id]);
   await admin.query(`UPDATE ${testDatabase}.attendance SET work_location='Site' WHERE employee_id=?`,[people[4].id]);
@@ -3853,7 +3853,7 @@ test('biometric attendance pays automatic OT and minute lateness for every categ
     assert.equal(Number(slip.netPay),6400-person.expectedLate+person.expectedOt);
     const calculation=typeof slip.calculationDetail==='string'?JSON.parse(slip.calculationDetail):slip.calculationDetail;
     assert.deepEqual(calculation.attendance.map(row=>row.policyId),[oldPolicy.body.id,newPolicy.body.id]);
-    assert.ok(calculation.overtime.every(row=>row.source==='Attendance'));
+    assert.ok(calculation.overtime.every(row=>row.source.startsWith('Attendance')));
     const [[records]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.overtime_records WHERE employee_id=?`,[person.id]);
     assert.equal(Number(records.n),0,'draft payroll does not fabricate approved OT source records');
   }
@@ -3884,8 +3884,8 @@ test('draft payroll can be rebuilt and deleted atomically without losing source 
     joinDate:today(),dailyRate:1000,epfEligible:false,etfEligible:false});
   assert.equal(person.status,201,JSON.stringify(person.body));
   const id=person.body.id;
-  await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,check_in,check_out,state,project_id)
-    VALUES (?,? ,'Labourer',?,'07:30','16:30','Checked out',1)`,[id,person.body.name,workDate]);
+  await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,check_in,check_out,state,project_id,site_stop)
+    VALUES (?,? ,'Labourer',?,'07:30','16:30','Checked out',1,'16:30')`,[id,person.body.name,workDate]);
   const [ot]=await admin.query(`INSERT INTO ${testDatabase}.overtime_records(employee_id,project_id,work_date,hours,rate,status)
     VALUES (?,1,?,2,200,'Approved')`,[id,workDate]);
   const body={companyId:1,periodStart:workDate,periodEnd:workDate,payFrequency:'Monthly'};
@@ -4989,8 +4989,8 @@ test('both-company payroll builds separate drafts atomically and protects locked
       joinDate:'2042-01-01',compensationEffectiveFrom:'2042-01-01',payrollCompanyId:companyId,
       payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1600,epfEligible:false,etfEligible:false});
     assert.equal(person.status,201,JSON.stringify(person.body));
-    await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out)
-      VALUES (?,?,'Worker','2042-02-01','Checked out','07:30','16:30')`,[person.body.id,person.body.name]);
+    await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out,site_stop)
+      VALUES (?,?,'Worker','2042-02-01','Checked out','07:30','16:30','16:30')`,[person.body.id,person.body.name]);
   }
   const payload={...period,companyIds:[2,1]};
   assert.equal((await call(site,'POST','/payroll/batch',payload)).status,403);
@@ -5825,6 +5825,7 @@ test('both-company payroll links unambiguous legacy attendance and blocks missin
     const person=await call(owner,'POST','/employees',{code:`LEGACY-BATCH-${companyId}-${Date.now()}`,name,joinDate:'2045-01-01',
       compensationEffectiveFrom:'2045-01-01',payrollCompanyId:companyId,payBasis:'Daily rate',payFrequency:'Daily',dailyRate:companyId===1?1600:0,epfEligible:false,etfEligible:false});
     assert.equal(person.status,201,JSON.stringify(person.body));people.push(person.body);
+  assert.equal((await call(owner,'POST','/biometric/mappings',{code:person.body.code,employeeId:person.body.id})).status,200);
     await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_name,role,work_date,state,check_in,check_out)
       VALUES (?,'Worker','2045-02-01','Checked out','07:30','16:30')`,[` ${name.toUpperCase().replaceAll(' ','  ')} `]);
   }
@@ -5851,6 +5852,7 @@ test('Sunday individual and bulk manual attendance saves and pays the recorded w
     const person=await call(owner,'POST','/employees',{code:`SUNDAY-${index}-${Date.now()}`,name:`Sunday Worker ${index}`,joinDate:'2029-01-01',
       compensationEffectiveFrom:'2029-01-01',payrollCompanyId:2,payFrequency:'Daily',payBasis:'Daily rate',dailyRate:1600,epfEligible:false,etfEligible:false});
     assert.equal(person.status,201,JSON.stringify(person.body));people.push(person.body);
+  assert.equal((await call(owner,'POST','/biometric/mappings',{code:person.body.code,employeeId:person.body.id})).status,200);
   }
   const entry={date,workLocation:'Office',projectId:null,state:'Checked out',checkIn:'07:30',checkOut:'16:30',informationSource:'Attendance sheet'};
   const first=await call(owner,'POST','/attendance',{...entry,employeeId:people[0].id});
@@ -6516,4 +6518,115 @@ test('supplier batch payments settle selected credits through direct or petty ca
  const cheque=await call(finance,'POST','/purchasing/cheques',{companyId:1,supplierId:supplier.body.id,invoiceIds:[invoices[2]],chequeNumber:`RESERVE-${stamp}`,bank:'QA bank',payee:'Supplier',purpose:'Reserved payment',amount:770,issueDate:today(),chequeDate:today()});assert.equal(cheque.status,201,JSON.stringify(cheque.body));
  assert.equal((await call(finance,'POST','/purchasing/supplier-payments/batch',{...payload,clientRef:`batch-${stamp}-reserved`,items:[{invoiceId:invoices[2],amount:1}]})).status,409);
 
+});
+
+test('Vehicle daily costs persist, post once and export project sheets with status summaries',async()=>{
+ const owner=await login(),qs=await login('qs@gkuc.lk'),stamp=Date.now();
+ const project=await call(owner,'POST','/projects',{companyId:2,name:`Vehicle cost PDF ${stamp}`,client:'Cost client',manager:'Project Manager',site:'Cost site',stage:'Mid-way'});assert.equal(project.status,201,JSON.stringify(project.body));const pid=project.body.id;
+ const options=(await call(qs,'GET',`/boq/cost-control/options?projectId=${pid}`)).body;const vehicleId=options.vehicles[0].id;
+ const task=await call(qs,'POST','/boq/cost-control/tasks',{projectId:pid,title:'Completed vehicle haul',workDate:today(),employeeIds:[]});assert.equal(task.status,201,JSON.stringify(task.body));
+ const body={projectId:pid,workDate:today(),notes:'Saved haul notes',lines:[{taskIds:[task.body.id],source:'Vehicle',vehicleId,description:'Transport hire',amount:2500,costType:'Expected'}]};
+ assert.equal((await call(qs,'POST','/boq/cost-control/daily-sheets',{...body,lines:[{...body.lines[0],vehicleId:null}]})).status,400);
+ assert.equal((await call(qs,'POST','/boq/cost-control/daily-sheets',{...body,lines:[{...body.lines[0],vehicleId:999999}]})).status,400);
+ const saved=await call(qs,'POST','/boq/cost-control/daily-sheets',body);assert.equal(saved.status,201,JSON.stringify(saved.body));
+ const pending=await call(qs,'POST','/boq/cost-control/daily-sheets',{...body,lines:[{...body.lines[0],description:'Pending vehicle cost',amount:500}]});assert.equal(pending.status,201);
+ assert.equal((await call(owner,'POST',`/boq/cost-control/daily-sheets/${saved.body.id}/review`,{decision:'Approved'})).status,200);
+ assert.equal((await call(owner,'POST',`/boq/cost-control/daily-sheets/${saved.body.id}/review`,{decision:'Approved'})).status,409);
+ const [[posted]]=await admin.query(`SELECT COUNT(*) n,SUM(amount) amount FROM ${testDatabase}.expenses WHERE project_id=? AND source='Vehicle'`,[pid]);assert.equal(Number(posted.n),1);assert.equal(Number(posted.amount),2500);
+ const detail=(await call(qs,'GET',`/boq/cost-control/daily-sheets/${saved.body.id}`)).body;assert.equal(Number(detail.lines[0].vehicle_id),Number(vehicleId));
+ const path=`/boq/cost-control/daily-sheets/document?projectId=${pid}`;
+ const response=await fetch(`${base}${path}`,{headers:{authorization:`Bearer ${qs}`}});assert.equal(response.status,200);const html=await response.text();
+ for(const value of ['Category summary','Sheet register','Transport hire','Pending vehicle cost','2,500.00','500.00','Vehicle','GKUC Readymix','Developed by Infinity AI'])assert.ok(html.includes(value),value);
+ assert.equal((await call(null,'GET',path)).status,401);const store=await login('store@gkuc.lk');assert.equal((await call(store,'GET',path)).status,403);
+ assert.equal((await call(qs,'GET','/boq/cost-control/daily-sheets/document?projectId=999999')).status,404);
+ assert.equal((await call(qs,'POST','/document-download-tickets',{path:path+'&download=pdf'})).status,200);
+ const single=await fetch(`${base}/boq/cost-control/daily-sheets/${saved.body.id}/document?download=pdf`,{headers:{authorization:`Bearer ${qs}`}});assert.equal(single.status,200);assert.equal(Buffer.from(await single.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
+ const imported=await call(qs,'POST','/boq/cost-control/import',{projectId:pid,filename:'Reviewed.xlsx',rows:[{workDate:today(),workTask:'Imported haul',source:'Vehicle',vehicleId,description:'Imported transport',amount:300,costType:'Expected'}]});assert.equal(imported.status,201,JSON.stringify(imported.body));
+ const [[importedLine]]=await admin.query(`SELECT l.vehicle_id FROM ${testDatabase}.daily_cost_lines l JOIN ${testDatabase}.daily_cost_sheets s ON s.id=l.sheet_id WHERE s.project_id=? AND l.description='Imported transport'`,[pid]);assert.equal(Number(importedLine.vehicle_id),Number(vehicleId));
+});
+
+test('three-punch OT persists imported site departures, applies category minimums and blocks incomplete draft approval',async()=>{
+ const owner=await login(),date='2078-11-05';
+ const policy=await call(owner,'POST','/payroll/settings/policies',{companyId:2,effectiveFrom:date,officeOtRate:225,siteLabourSiteOtRate:225,siteLabourTravelOtRate:100,driverOtRate:225,driverSiteOtRate:225,driverTravelOtRate:100,supervisorSiteOtRate:225,supervisorTravelOtRate:100,epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3,hrRules:INITIAL_HR_RULES});
+ assert.equal(policy.status,201,JSON.stringify(policy.body));
+ const people=[];
+ for(const category of ['Site labourer','Supervisor','Driver']){
+  const person=await call(owner,'POST','/employees',{code:`SPLIT-${category}`,name:`Split ${category}`,joinDate:date,compensationEffectiveFrom:date,payrollCompanyId:2,payBasis:'Daily rate',payFrequency:'Daily',payrollCategory:category,workerType:'Site',dailyRate:1800,epfEligible:false,etfEligible:false});
+  assert.equal(person.status,201,JSON.stringify(person.body));people.push(person.body);
+  assert.equal((await call(owner,'POST','/biometric/mappings',{code:person.body.code,employeeId:person.body.id})).status,200);
+  const imported=await call(owner,'POST','/biometric/commit',{rows:[{employeeId:person.body.id,code:person.body.code,date,checkIn:'06:30:00',checkOut:'17:45:00',punchTimes:['06:30:00','17:00:00','17:45:00'],workLocation:'Site',projectId:1}]});
+  assert.equal(imported.status,201,JSON.stringify(imported.body));
+ }
+ const attendance=(await call(owner,'GET',`/attendance?date=${date}`)).body;
+ for(const person of people)assert.equal(attendance.find(row=>row.employeeId===person.id).siteStop,'17:00:00');
+ const body={companyId:2,periodStart:date,periodEnd:date,payFrequency:'Daily'};
+ const run=await call(owner,'POST','/payroll',body);assert.equal(run.status,201,JSON.stringify(run.body));
+ let detail=(await call(owner,'GET',`/payroll/${run.body.id}`)).body;
+ for(const person of people){const slip=detail.payslips.find(row=>row.employeeCode===person.code);assert.equal(Number(slip.siteOtPay),337.5);assert.equal(Number(slip.travelOtPay),75);}
+ const [[allocated]]=await admin.query(`SELECT COUNT(*) n,SUM(amount) amount FROM ${testDatabase}.payroll_project_allocations WHERE employee_id=? AND source_type='Attendance OT'`,[people[0].id]);assert.equal(Number(allocated.n),1);assert.equal(Number(allocated.amount),412.5);
+ const target=attendance.find(row=>row.employeeId===people[0].id);
+ assert.equal((await call(owner,'PATCH',`/attendance/${target.id}`,{siteStop:'18:00',reason:'Invalid boundary test'})).status,400);
+ assert.equal((await call(owner,'PATCH',`/attendance/${target.id}`,{siteStop:null,reason:'Boundary needs confirmation'})).status,200);
+ assert.equal((await call(owner,'POST','/payroll',body)).status,201);
+ assert.equal((await call(owner,'PATCH',`/payroll/${run.body.id}`,{status:'Approved'})).status,409);
+ assert.equal((await call(owner,'PATCH',`/attendance/${target.id}`,{siteStop:'17:00',reason:'Confirmed supervisor departure record'})).status,200);
+ assert.equal((await call(owner,'POST','/payroll',body)).status,201);
+ const suggestions=(await call(owner,'GET','/payroll/inputs')).body.suggestions.filter(row=>row.id===target.id);
+ assert.deepEqual(suggestions.map(row=>row.overtimeType),['Site','Travel']);assert.equal(suggestions[1].suggestion.minimumMinutes,45);
+ assert.equal((await call(owner,'PATCH',`/payroll/${run.body.id}`,{status:'Approved'})).status,200);
+ detail=(await call(owner,'GET',`/payroll/${run.body.id}`)).body;
+ const saved=detail.payslips.find(row=>row.employeeCode===people[0].code);
+ assert.equal((await call(owner,'PATCH',`/attendance/${target.id}`,{siteStop:'16:30',reason:'Later correction preserves approved payroll'})).status,200);
+ const after=(await call(owner,'GET',`/payroll/${run.body.id}`)).body.payslips.find(row=>row.id===saved.id);
+ assert.deepEqual(after.calculationDetail,saved.calculationDetail);
+});
+
+test('fingerprint identity correction archives conflicting days, preserves paid snapshots and blocks stale drafts',async()=>{
+ const owner=await login(),site=await login('supervisor@gkuc.lk'),date='2090-03-01',next='2090-03-02',last='2090-03-03';
+ const people=[];
+ for(const code of ['ID-WRONG','ID-RIGHT']){const r=await call(owner,'POST','/employees',{code,name:code,joinDate:date,compensationEffectiveFrom:date,payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1800,epfEligible:false,etfEligible:false});assert.equal(r.status,201);people.push(r.body);}
+ const [source,target]=people;
+ assert.equal((await call(owner,'POST','/biometric/mappings',{code:'ID-DEVICE',scannerName:'Scanner Person',employeeId:source.id})).status,200);
+ const row=workDate=>({code:'ID-DEVICE',name:'Scanner Person',date:workDate,checkIn:'07:30:00',siteStop:'16:30:00',checkOut:'16:30:00',workLocation:'Site',projectId:1,correctionReason:'Supervisor verified scanner times'});
+ assert.equal((await call(owner,'POST','/biometric/commit',{rows:[row(date),row(next),row(last)]})).status,201);
+ const [original]=await admin.query(`SELECT * FROM ${testDatabase}.attendance WHERE employee_id=? ORDER BY work_date`,[source.id]);
+ await admin.query(`UPDATE ${testDatabase}.attendance SET biometric_code=NULL WHERE id=?`,[original[2].id]);
+ for(const d of [next,last])assert.equal((await call(owner,'POST','/attendance',{employeeId:target.id,date:d,name:target.name,role:'Worker',state:'On site',projectId:1,checkIn:'08:00',siteStop:'16:30',checkOut:'16:30'})).status,201);
+ await admin.query(`INSERT INTO ${testDatabase}.attendance(employee_id,employee_name,role,work_date,state,check_in,check_out,source,biometric_code) VALUES (?,?,'Worker','2090-03-04','Checked out','07:30','16:30','Biometric','OTHER-ID'),(?,?,'Worker','2090-03-05','Checked out','07:30','16:30','Manual',NULL)`,[source.id,source.name,source.id,source.name]);
+ const policy=await call(owner,'POST','/payroll/settings/policies',{companyId:1,effectiveFrom:date,officeOtRate:225,siteLabourSiteOtRate:225,siteLabourTravelOtRate:100,driverOtRate:225,driverSiteOtRate:100,driverTravelOtRate:225,supervisorSiteOtRate:225,supervisorTravelOtRate:100,epfEmployeeRate:8,epfEmployerRate:12,etfEmployerRate:3,hrRules:{...INITIAL_HR_RULES,fullTransportDays:null}});assert.equal(policy.status,201);
+ const runBody=d=>({companyId:1,periodStart:d,periodEnd:d,payFrequency:'Daily'});
+ const paid=await call(owner,'POST','/payroll',runBody(date));assert.equal(paid.status,201,JSON.stringify(paid.body));for(const status of ['Approved','Paid'])assert.equal((await call(owner,'PATCH',`/payroll/${paid.body.id}`,{status})).status,200);
+ const saved=(await call(owner,'GET',`/payroll/${paid.body.id}`)).body;
+ const draft=await call(owner,'POST','/payroll',runBody(next));assert.equal(draft.status,201);
+ const body={code:'ID-DEVICE',sourceEmployeeId:source.id,targetEmployeeId:target.id,from:date,to:'2090-03-05'};
+ assert.equal((await call(site,'POST','/biometric/corrections/preview',body)).status,403);
+ let p=await call(owner,'POST','/biometric/corrections/preview',body);assert.equal(p.status,200,JSON.stringify(p.body));assert.equal(p.body.rows.length,3);assert.ok(p.body.rows[2].legacy);assert.ok(p.body.rows[1].conflict);
+ const payload={...body,digest:p.body.digest,reason:'HR verified wrong scanner profile',acknowledgeLegacy:true,acknowledgePayroll:true,selections:original.map((r,i)=>({id:r.id,decision:['Move','Keep target','Use imported'][i]}))};
+ for(const flag of ['acknowledgeLegacy','acknowledgePayroll'])assert.equal((await call(owner,'POST','/biometric/corrections/commit',{...payload,[flag]:false})).status,400);
+ assert.equal((await call(owner,'POST','/biometric/corrections/commit',{...payload,selections:[{id:99999999,decision:'Move'}]})).status,409);
+ await admin.query(`UPDATE ${testDatabase}.attendance SET check_in='07:29' WHERE id=?`,[original[0].id]);assert.equal((await call(owner,'POST','/biometric/corrections/commit',payload)).status,409);
+ p=await call(owner,'POST','/biometric/corrections/preview',body);payload.digest=p.body.digest;
+ const r=await call(owner,'POST','/biometric/corrections/commit',payload);assert.equal(r.status,201,JSON.stringify(r.body));assert.equal(r.body.moved,2);assert.equal(r.body.kept,1);
+ const [stored]=await admin.query(`SELECT * FROM ${testDatabase}.attendance WHERE id IN (?,?,?) ORDER BY work_date`,original.map(r=>r.id));assert.equal(stored[0].employee_id,target.id);assert.equal(stored[0].correction_reason,'Supervisor verified scanner times');assert.equal(stored[0].site_stop,'16:30:00');assert.equal(stored[1].employee_id,null);assert.equal(stored[1].identity_archived_employee_id,source.id);assert.ok(stored[1].identity_archived_at);assert.equal(stored[2].employee_id,target.id);
+ const active=(await call(owner,'GET',`/attendance?date=${next}`)).body;assert.ok(!active.some(r=>r.id===original[1].id));assert.equal(active.filter(r=>r.employeeId===target.id).length,1);
+ assert.deepEqual((await call(owner,'GET',`/payroll/${paid.body.id}`)).body,saved);
+ assert.equal((await call(owner,'PATCH',`/payroll/${draft.body.id}`,{status:'Approved'})).status,409);assert.equal((await call(owner,'POST','/payroll',runBody(next))).status,201);assert.equal((await call(owner,'PATCH',`/payroll/${draft.body.id}`,{status:'Approved'})).status,200);
+ assert.equal((await call(owner,'GET','/biometric/correction-mappings')).body.find(m=>m.code==='ID-DEVICE').employeeId,target.id);
+ assert.equal((await call(owner,'POST','/biometric/commit',{rows:[row(date)]})).status,201);
+ const [after]=await admin.query(`SELECT employee_id FROM ${testDatabase}.attendance WHERE identity_archived_at IS NULL AND biometric_code='ID-DEVICE' AND work_date=?`,[date]);assert.equal(after.length,1);assert.equal(after[0].employee_id,target.id);
+ assert.ok((await call(owner,'GET','/biometric/corrections/history')).body.length);
+});
+
+test('fingerprint correction creates a new profile atomically and rejects invalid selection and replay',async()=>{
+ const owner=await login(),date='2091-01-10';
+ const source=await call(owner,'POST','/biometric/people',{code:'ID-NEW',name:'Wrong scanner profile',firstDate:date});assert.equal(source.status,201);
+ assert.equal((await call(owner,'POST','/biometric/commit',{rows:[{code:'ID-NEW',date,checkIn:'07:30:00',siteStop:'17:00:00',checkOut:'18:00:00',workLocation:'Office'}]})).status,201);
+ const body={code:'ID-NEW',sourceEmployeeId:source.body.id,from:date,to:date,newProfile:{code:'ID-CORRECT',name:'Correct new worker',joinDate:date,companyId:2,workerType:'Office'}};
+ const p=await call(owner,'POST','/biometric/corrections/preview',body);assert.equal(p.status,200,JSON.stringify(p.body));
+ const payload={...body,digest:p.body.digest,selections:[{id:p.body.rows[0].id,decision:'Move'}],reason:'Confirmed separate scanner employee'};
+ assert.equal((await call(owner,'POST','/biometric/corrections/commit',{...payload,selections:[{id:99999999,decision:'Move'}]})).status,409);
+ const [[none]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.employees WHERE code=?`,[body.newProfile.code]);assert.equal(none.n,0);
+ const r=await call(owner,'POST','/biometric/corrections/commit',payload);assert.equal(r.status,201,JSON.stringify(r.body));
+ const [[e]]=await admin.query(`SELECT name,payroll_company_id,payroll_category FROM ${testDatabase}.employees WHERE id=?`,[r.body.targetEmployeeId]);assert.equal(e.name,body.newProfile.name);assert.equal(e.payroll_company_id,2);assert.equal(e.payroll_category,'Office employee');
+ assert.equal((await call(owner,'POST','/biometric/corrections/commit',payload)).status,409);
 });

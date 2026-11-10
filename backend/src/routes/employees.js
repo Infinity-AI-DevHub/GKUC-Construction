@@ -1,3 +1,4 @@
+import {usesSiteTravelPunches,siteTravelSuggestions} from '../lib/site-travel-ot.js';
 import {leaveLimitWarnings} from '../lib/leave-limit-warnings.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -467,7 +468,7 @@ router.get('/:id', auth, permit('hr.view','hr.manage'), wrap(async (req, res) =>
     query(`SELECT o.id,o.work_date workDate,o.overtime_type overtimeType,o.hours,o.rate,o.status,p.name project FROM visible_overtime_records o
       LEFT JOIN projects p ON p.id=o.project_id WHERE o.employee_id=? ORDER BY o.id DESC`, [employee.id]),
     listAttachments('employee', employee.id),
-    query(`SELECT a.id,a.work_date workDate,a.check_in \`in\`,a.check_out \`out\`,a.state,a.source,a.work_location workLocation,a.needs_review needsReview,
+    query(`SELECT a.id,a.work_date workDate,a.check_in \`in\`,a.check_out \`out\`,a.site_stop siteStop,a.state,a.source,a.work_location workLocation,a.needs_review needsReview,
       a.correction_reason correctionReason,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,p.id projectId FROM visible_attendance a
       LEFT JOIN projects p ON p.id=a.project_id WHERE a.employee_id=? OR (a.employee_id IS NULL AND a.employee_name=?
         AND (SELECT COUNT(*) FROM employees namesake WHERE namesake.name=a.employee_name)=1)
@@ -836,10 +837,10 @@ router.post('/:id/overtime', auth, permit('hr.payroll'), validate(z.object({
   const special=await getOne('SELECT * FROM employee_special_pay_rules WHERE employee_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1',[employee.id,req.body.workDate]);
   if(special&&special.mode!=='Standard')employee.special_pay_rule=special;
   if(special?.mode==='Machine operator')employee.special_pay_day=await getOne('SELECT * FROM employee_special_pay_days WHERE employee_id=? AND work_date=? AND active=1',[employee.id,req.body.workDate]);
-  if(req.body.overtimeType==='Travel')return res.status(409).json({error:'Record Travel OT through Payroll Inputs → Travel claim, with departure and return times. Do not infer it from ordinary attendance.'});
+  if(req.body.overtimeType==='Travel')return res.status(409).json({error:'For Labour/Supervisor/Driver use the three-punch Travel suggestion in Payroll Inputs; otherwise record a Travel claim with departure and return times.'});
   const attendance=await getOne('SELECT * FROM visible_attendance WHERE employee_id=? AND work_date=?',[employee.id,req.body.workDate]);
   if(attendance&&['Absent','On leave'].includes(attendance.state))return res.status(409).json({error:'No OT is payable for an absent or leave day. Correct attendance first if it is wrong.'});
-  const suggestion=suggestOvertime(attendance,rulesFor(policy));
+  const suggestion=attendance&&usesSiteTravelPunches(employee,attendance)?siteTravelSuggestions(employee,attendance,policy).Site:suggestOvertime(attendance,rulesFor(policy));
   const intervals=req.body.startTime&&req.body.endTime?[[minutes(req.body.startTime),minutes(req.body.endTime)]]:suggestion.intervals;
   if(!intervals.length||intervals.some(([a,b])=>b<=a))return res.status(400).json({error:'Record valid attended times, or explicit OT start/end times with a correction reason.'});
   if((!attendance||Math.abs(suggestion.hours-req.body.hours)>.001)&&!req.body.reason)return res.status(400).json({error:'Explain why entered OT differs from the attendance suggestion.'});
@@ -852,7 +853,7 @@ router.post('/:id/overtime', auth, permit('hr.payroll'), validate(z.object({
     if(existing.some(o=>o.overtime_type===req.body.overtimeType))throw Object.assign(new Error('OT already exists for this employee, date and type. Review the existing record.'),{status:409});
     const [travel]=await conn.query("SELECT calculation FROM visible_hr_payroll_claims WHERE employee_id=? AND work_date=? AND kind='Travel' AND status<>'Rejected'",[employee.id,req.body.workDate]);
     if(travel.some(c=>intervalsOverlap(intervals,(typeof c.calculation==='string'?JSON.parse(c.calculation):c.calculation).intervals||[])))throw Object.assign(new Error('Site/Office OT overlaps travel. Correct the intervals before saving.'),{status:409});
-    const [r]=await conn.query(`INSERT INTO overtime_records(employee_id,project_id,work_date,overtime_type,hours,rate,policy_id,input_detail) VALUES(?,?,?,?,?,?,?,?)`,[employee.id,req.body.projectId||null,req.body.workDate,req.body.overtimeType,req.body.hours,rate,policy.id,JSON.stringify({intervals,suggestion,reason:req.body.reason,attendanceId:attendance?.id,warnings:[...suggestion.warnings,...(req.body.hours>rulesFor(policy).maxDailyOt?['OT exceeds daily warning threshold.']:[])]})]);return r;
+    const [r]=await conn.query(`INSERT INTO overtime_records(employee_id,project_id,work_date,overtime_type,hours,rate,policy_id,input_detail) VALUES(?,?,?,?,?,?,?,?)`,[employee.id,req.body.projectId||null,req.body.workDate,req.body.overtimeType,req.body.hours,rate,policy.id,JSON.stringify({intervals,suggestion,reason:req.body.reason,attendanceId:attendance?.id,...(attendance&&usesSiteTravelPunches(employee,attendance)?{threePunch:true,siteStop:attendance.site_stop,actualMinutes:!req.body.startTime&&!req.body.endTime&&Math.abs(req.body.hours-Math.round(suggestion.hours*100)/100)<.0001?suggestion.rawMinutes:null}:{}),warnings:[...suggestion.warnings,...(req.body.hours>rulesFor(policy).maxDailyOt?['OT exceeds daily warning threshold.']:[])]})]);return r;
   });
   const row = await getOne('SELECT * FROM visible_overtime_records WHERE id=?', [result.insertId]);
   await audit(pool, req.user.id, 'CREATE', 'overtime', row.id, null, row, req.ip);

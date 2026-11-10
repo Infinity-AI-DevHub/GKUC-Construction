@@ -1,3 +1,4 @@
+import {usesSiteTravelPunches,siteTravelSuggestions} from './site-travel-ot.js';
 import {activeSpecialRule,specialRates,specialInputFor,specialEmployeeFor,specialDayPay} from './special-pay.js';
 import {cents,rulesFor,suggestOvertime,calculateLateDeduction,minutes} from './hr-payroll-rules.js';
 import {resolveLateRate,resolveOvertimeRate,overtimeMinimumMinutes} from './payroll-policy.js';
@@ -57,7 +58,7 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     if(special?.mode==='Work role') {
       const rates=specialRates(special),hr=typeof policy.hr_rules==='string'?JSON.parse(policy.hr_rules):policy.hr_rules||{};
       return {...policy,site_labour_site_ot_rate:rates.siteOt,site_labour_travel_ot_rate:rates.travelOt,
-        hr_rules:{...hr,paidHoursPerDay:rates.paidHours,labourSiteOtMinimumMinutes:30,labourTravelOtMinimumMinutes:31}};
+        hr_rules:{...hr,paidHoursPerDay:rates.paidHours,labourSiteOtMinimumMinutes:30,labourTravelOtMinimumMinutes:hr.labourTravelOtMinimumMinutes??45}};
     }
     return policy;
   };
@@ -89,14 +90,16 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     if(attendance.some(day=>day.work_date===record.work_date&&['Absent','On leave'].includes(day.state)))
       throw new Error(`Review approved OT against the absent/leave attendance on ${record.work_date}.`);
     const policy=policyFor(record.work_date);
+    const evidence=parse(record.input_detail);
+    const reviewedHours=evidence.threePunch&&Number.isFinite(evidence.actualMinutes)?evidence.actualMinutes/60:Number(record.hours);
     const minimumMinutes=overtimeMinimumMinutes(specialEmployeeFor(employee,record.work_date),record.overtime_type,policy);
-    if(Number(record.hours)*60<minimumMinutes) {
+    if(reviewedHours*60<minimumMinutes) {
       detail.warnings.push({workDate:record.work_date,message:`Approved ${record.overtime_type} OT is below its ${minimumMinutes}-minute policy minimum and was not paid.`});
       continue;
     }
-    addOt(record.overtime_type,record.hours,resolveOvertimeRate(specialEmployeeFor(employee,record.work_date),record.overtime_type,policy),{
+    addOt(record.overtime_type,reviewedHours,resolveOvertimeRate(specialEmployeeFor(employee,record.work_date),record.overtime_type,policy),{
       source:'Reviewed OT',sourceId:record.id,projectId:record.project_id,workDate:record.work_date,
-      policyId:policy.id,recordedRate:Number(record.rate),minimumMinutes});
+      policyId:policy.id,recordedRate:Number(record.rate),minimumMinutes,...(evidence.threePunch?{intervals:evidence.intervals,rawMinutes:evidence.actualMinutes,siteStop:evidence.siteStop}:{} )});
   }
   // Count actual attended fractions inside each calendar month. Leave never
   // contributes. The day which takes the running total beyond 25 is paid at
@@ -126,7 +129,7 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     if(['Absent','On leave'].includes(day.state))continue;
     if(day.needs_review&&activeSpecialRule(employee,day.work_date))throw new Error(`Confirm review-required attendance on ${day.work_date} before special daily pay.`);
     if(day.needs_review) {
-      detail.warnings.push({workDate:day.work_date,message:'Attendance needs review; automatic OT and late deduction were not included.'});
+      detail.warnings.push({workDate:day.work_date,...(usesSiteTravelPunches(specialEmployeeFor(employee,day.work_date),day)?{blocksApproval:true,code:'ATTENDANCE_REVIEW_REQUIRED'}:{}),message:'Attendance needs review; automatic OT and late deduction were not included.'});
       // Keep the existing daily earning until HR corrects the attendance; the
       // prior payroll behaviour never silently withheld a worked day here.
       totals.attendance_basic+=Number(employee.daily_rate||0);
@@ -154,12 +157,39 @@ export function calculateAttendancePayroll(employee,attendance,overtime,policies
     totals.late_minutes+=late.lateMinutes;
     totals.late_deduction+=late.amount;
     detail.attendance.push({attendanceId:day.id,workDate:day.work_date,policyId:policy.id,
-      checkIn:day.check_in,checkOut:day.check_out,normalStart:rules.normalStart,normalEnd:rules.normalEnd,
+      checkIn:day.check_in,siteStop:day.site_stop||null,checkOut:day.check_out,normalStart:rules.normalStart,normalEnd:rules.normalEnd,
       dailyRate,paidHoursPerDay:special?8:rules.paidHoursPerDay,
       ...(special?{specialPay:{...special.snapshot,transport:special.transport,earnedBasic:special.earnedBasic}}:{}),
       graceMinutes:rules.lateGraceMinutes,lateMinutes:late.lateMinutes,deductibleMinutes:late.deductibleMinutes||0,
       lateDeduction:late.amount,lateHourlyRate:late.hourlyRate,rateMultiplier:multiplier,shortDay});
     if(operator&&special.snapshot.workKind!=='Standby')continue;
+    if(usesSiteTravelPunches(payEmployee,day)){
+      const split=siteTravelSuggestions(payEmployee,day,policy);
+      detail.attendance[detail.attendance.length-1].otSplit={siteStop:day.site_stop||null,siteMinutes:split.Site.rawMinutes,travelMinutes:split.Travel.rawMinutes,siteMinimum:split.Site.minimumMinutes,travelMinimum:split.Travel.minimumMinutes,siteIntervals:split.Site.intervals,travelIntervals:split.Travel.intervals,needsReview:split.needsReview};
+      const reviewedSite=overtime.filter(record=>record.work_date===day.work_date&&record.overtime_type==='Site');
+      const reviewedTravel=overtime.filter(record=>record.work_date===day.work_date&&record.overtime_type==='Travel');
+      const claims=travelClaims.filter(claim=>claim.work_date===day.work_date&&parse(claim.calculation).method!=='Manual');
+      if(split.needsReview){
+        if(!reviewedSite.length||!reviewedTravel.length&&!claims.length)detail.warnings.push({workDate:day.work_date,code:'SITE_STOP_REQUIRED',blocksApproval:true,message:split.Site.warnings[0]});
+        continue;
+      }
+      const travelEvidence=[...reviewedTravel.filter(row=>row.status!=='Rejected').map(row=>parse(row.input_detail)),...claims.filter(row=>row.status!=='Rejected').map(row=>parse(row.calculation))];
+      if(!reviewedSite.length){
+        if(split.Site.intervals.length&&travelEvidence.some(item=>!Array.isArray(item.intervals)||!item.intervals.length))throw new Error(`Review travel time intervals on ${day.work_date} before calculating Site OT.`);
+        const intervals=subtractIntervals(split.Site.intervals,travelEvidence.flatMap(item=>Array.isArray(item.intervals)?item.intervals:[]));
+        const rawMinutes=intervals.reduce((sum,[a,b])=>sum+b-a,0);
+        if(rawMinutes>=split.Site.minimumMinutes)addOt('Site',rawMinutes/60,resolveOvertimeRate(payEmployee,'Site',policy),{source:'Attendance - three punches',sourceId:day.id,workDate:day.work_date,projectId:day.project_id,policyId:policy.id,siteStop:day.site_stop,intervals,rawMinutes,minimumMinutes:split.Site.minimumMinutes});
+      }
+      if(!reviewedTravel.length&&!claims.length&&split.Travel.hours){
+        const conflicting=reviewedSite.filter(row=>row.status!=='Rejected').some(row=>{
+          const evidence=parse(row.input_detail);return !evidence.intervals?.length||evidence.intervals.some(([a,b])=>split.Travel.intervals.some(([x,y])=>a<y&&x<b));
+        });
+        if(conflicting)detail.warnings.push({workDate:day.work_date,code:'OT_SPLIT_CONFLICT',blocksApproval:true,message:'Reviewed Site OT overlaps or cannot be verified against the site-to-office travel interval. Correct the OT evidence before approval.'});
+        else addOt('Travel',split.Travel.rawMinutes/60,resolveOvertimeRate(payEmployee,'Travel',policy),{source:'Attendance - three punches',sourceId:day.id,workDate:day.work_date,projectId:day.project_id,policyId:policy.id,siteStop:day.site_stop,intervals:split.Travel.intervals,rawMinutes:split.Travel.rawMinutes,minimumMinutes:split.Travel.minimumMinutes});
+      }
+      for(const type of ['Site','Travel'])for(const message of split[type].warnings)detail.warnings.push({workDate:day.work_date,message});
+      continue;
+    }
     if(reviewedDays.has(day.work_date))continue;
     const type=attendanceOvertimeType(payEmployee,day);
     if(!type)continue;

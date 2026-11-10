@@ -29,3 +29,8 @@ test('loss and signed adjustments are retained; empty sources never fabricate a 
   assert.equal(value(result.incomeStatement,'Total direct costs'),0);
   assert.equal(value(result.financialPosition,'Total Assets'),null);
 });
+test('Vehicle source remains a direct project cost in statement totals',()=>{
+ const pack=fixture();pack.sources.monthlyExpenses.push({source:'Vehicle',amount:100});const result=financialStatements(pack);
+ assert.equal(value(result.incomeStatement,'Vehicle'),100);assert.equal(value(result.incomeStatement,'Total direct costs'),600);
+ assert.equal(value(result.incomeStatement,'Total operating expenses'),175);
+});

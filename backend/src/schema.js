@@ -649,6 +649,7 @@ async function createDailyCostTables() {
     CONSTRAINT fk_cost_task_line FOREIGN KEY(line_id) REFERENCES daily_cost_lines(id) ON DELETE CASCADE,
     CONSTRAINT fk_cost_task_task FOREIGN KEY(task_id) REFERENCES tasks(id)
   ) ENGINE=InnoDB`);
+  await modifyColumn('daily_cost_lines','source',"ENUM('Material','Labour','Fuel','Vehicle','Equipment','Subcontractor','Overhead','Other') NOT NULL");
   await addColumn('daily_cost_lines','labour_hours','DECIMAL(8,3) NULL');
   await addColumn('daily_cost_lines','labour_snapshot','JSON NULL');
   await addColumn('daily_cost_lines','fuel_float_id','BIGINT UNSIGNED NULL');
@@ -2318,7 +2319,7 @@ async function createOptionTables() {
     ['boq.unit', 'Units of measure', 'Offered when pricing a BOQ line. Anything may still be typed in.',
       'Quantity Surveying', ['m', 'm2', 'm3', 'kg', 'MT', 'ltr', 'nos', 'item', 'day', 'hour', 'LS']],
     ['expense.source', 'Expense types', 'What a recorded cost was spent on.',
-      'Finance', ['Material', 'Labour', 'Fuel', 'Equipment', 'Subcontractor', 'Overhead', 'Other']],
+      'Finance', ['Material', 'Labour', 'Fuel', 'Vehicle', 'Equipment', 'Subcontractor', 'Overhead', 'Other']],
     ['income.method', 'Payment methods', 'How money was received.',
       'Finance', ['Cash', 'Cheque', 'Bank transfer', 'Card']],
     ['leave.type', 'Leave types', 'The kinds of leave an employee may request.',
@@ -3678,6 +3679,11 @@ export async function migrate() {
   await addForeignKey('supplier_payments','fk_supplier_payment_batch','CONSTRAINT fk_supplier_payment_batch FOREIGN KEY(batch_id) REFERENCES supplier_payment_batches(id)');
   await addForeignKey('supplier_payments','fk_supplier_payment_petty','CONSTRAINT fk_supplier_payment_petty FOREIGN KEY(petty_cash_entry_id) REFERENCES petty_cash_entries(id)');
   await addIndex('supplier_payments','uq_supplier_payment_petty','UNIQUE KEY uq_supplier_payment_petty(petty_cash_entry_id)');
+  await addColumn('attendance','site_stop','TIME NULL');
+  await addColumn('attendance','raw_punches','JSON NULL');
+  await addColumn('attendance','biometric_code','VARCHAR(40) NULL');
+  await addColumn('attendance','identity_archived_at','DATETIME NULL');
+  await addColumn('attendance','identity_archived_employee_id','BIGINT UNSIGNED NULL');
   await migrateEmployeeOtRates({query, transaction});
   await createEmployeeReadViews(query);
   await seedWorkMethods();

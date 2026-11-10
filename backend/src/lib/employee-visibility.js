@@ -16,7 +16,7 @@ export async function createEmployeeReadViews(query) {
     const nameColumn = { attendance: 'employee_name', equipment_assignments: 'assigned_to', vehicle_driver_assignments: 'driver_name' }[table];
     const legacyName = nameColumn ? ` OR (r.employee_id IS NULL AND e.name=r.${nameColumn})` : '';
     await query(`CREATE OR REPLACE SQL SECURITY INVOKER VIEW visible_${table} AS
-      SELECT r.* FROM ${table} r WHERE NOT EXISTS (
+      SELECT r.* FROM ${table} r WHERE ${table==='attendance'?'r.identity_archived_at IS NULL AND ':''}NOT EXISTS (
         SELECT 1 FROM employees e WHERE e.deactivated_at IS NOT NULL
           AND (e.id=r.employee_id${legacyName})
       )`);
