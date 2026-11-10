@@ -39,7 +39,7 @@ export async function managementPack(companyId, period, { includeExpenseSource =
       bill_date date,paid_date paidDate,status FROM operating_bills
       WHERE company_id=? AND bill_date<? AND status<>'Cancelled'`, [companyId,next]),
     query(`SELECT e.id,e.amount,e.entry_date date,e.kind FROM petty_cash_entries e
-      JOIN petty_cash_floats f ON f.id=e.float_id WHERE f.company_id=? AND e.entry_date>=? AND e.entry_date<?`, [companyId,start,next]),
+      JOIN petty_cash_floats f ON f.id=e.float_id WHERE COALESCE(e.company_id,f.company_id)=? AND e.entry_date>=? AND e.entry_date<?`, [companyId,start,next]),
     query(`SELECT id,total,period_end date FROM payroll_runs WHERE company_id=? AND status='Paid'
       AND period_end>=? AND period_end<?`, [companyId,start,next]),
     query(`SELECT a.id,a.category,a.amount,a.explanation,a.reference,a.project_id projectId,a.created_at createdAt,

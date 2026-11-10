@@ -349,3 +349,13 @@ User confirmed retaining existing morning OT, adding Driver to the three-punch s
 ### 2026-11-10 — fingerprint identity correction and attendance transfer
 
 Correct a wrong scanner link and selected historical attendance in one audited transaction. Never infer legacy machine provenance from employee name alone: require explicit HR verification. Resolve same-day alternatives by reversible archival rather than overwrite/deletion. A new target profile is optional and created atomically with the transfer. Preserve existing corrected clock values, locations and site-stop times. Do not migrate salary settings, reviewed OT, claims, leave, site costs or approved/paid payroll; expose review warnings and block stale Draft approval until regeneration.
+
+## 2026-11-10 — shared cash custody, company attribution per payment
+
+User confirmed multiple real petty floats fund both Construction and Readymix. Floats are shared; each movement records its company, independently of which company originally opened/funded the float. Preserve existing balances/IDs instead of merging cash accounts. Project ownership changes must not alter shared cash custody or past payer evidence. Keep existing category-specific Fuel and Salary advance controls.
+
+Mr. Gihan's personal spending is a separate Finance register linked to original petty-cash or direct office payments. He does not repay these amounts: do not show debt, settlements or outstanding balances. A register link is classification metadata, never another payment/project expense. Receipt permissions follow Finance management. Existing project/fuel/salary/supplier payments need their own correction workflows and cannot be silently reclassified through this register. Historical data is not auto-tagged as personal.
+
+### 2026-11-10 — explicitly merge former company-specific petty accounts
+
+User confirmed old Fuel balances were separately recorded because shared floats were unavailable and requested consolidation. Combine existing ledger movements into one active same-category float; do not invent funding/expense adjustments or delete the old accounts. Preserve original payer company and historical membership, archive sources, and require preview/reason before a deliberate merge. This extends the prior shared-float implementation with a manual consolidation action, without merging balances automatically.

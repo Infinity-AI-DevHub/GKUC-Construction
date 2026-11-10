@@ -31,7 +31,7 @@ export function installSupplierBatchPayments(router){
     let float=null;
     if(b.source==='Petty cash'){
       const [[row]]=await connection.execute('SELECT * FROM petty_cash_floats WHERE id=? AND active=1 FOR UPDATE',[b.floatId]);float=row;
-      if(!float||Number(float.company_id)!==b.companyId||float.account_type==='Salary advance')throw fail(400,'Choose an active expense petty cash account for this company.');
+      if(!float||float.account_type==='Salary advance')throw fail(400,'Choose an active expense petty cash account for this company.');
       const [[balance]]=await connection.execute('SELECT COALESCE(SUM(amount),0) amount FROM petty_cash_entries WHERE float_id=?',[float.id]);
       const total=items.reduce((sum,item)=>sum+Math.round(item.amount*100),0)/100;
       if(total>Number(balance.amount)+.001)throw fail(409,'The petty cash account has insufficient funds.');
@@ -53,11 +53,11 @@ export function installSupplierBatchPayments(router){
       if(item.amount>available+.001)throw fail(409,`Payment exceeds the available balance on ${invoice.invoice_no}, including pending cheques.`);
       const [[order]]=invoice.order_id?await connection.execute('SELECT project_id FROM purchase_orders WHERE id=?',[invoice.order_id]):[[null]];
       const projectId=order?.project_id||null;
-      if(float?.project_id&&Number(float.project_id)!==Number(projectId))throw fail(400,'This petty cash account is restricted to another project.');
+      // A shared float can pay either company; the invoice supplies project and company attribution.
       let entryId=null;
       if(float){
-        const [entry]=await connection.execute(`INSERT INTO petty_cash_entries(float_id,kind,amount,entry_date,description,category,project_id,payee,recorded_by)
-          VALUES (?,'Spend',?,?,?,?,?,?,?)`,[float.id,-item.amount,b.paidDate,`Supplier invoice ${invoice.invoice_no}`,'Supplier payment',projectId,supplier.name,req.user.id]);entryId=entry.insertId;
+        const [entry]=await connection.execute(`INSERT INTO petty_cash_entries(float_id,kind,amount,entry_date,description,category,project_id,payee,recorded_by,company_id)
+          VALUES (?,'Spend',?,?,?,?,?,?,?,?)`,[float.id,-item.amount,b.paidDate,`Supplier invoice ${invoice.invoice_no}`,'Supplier payment',projectId,supplier.name,req.user.id,b.companyId]);entryId=entry.insertId;
         await audit(connection,req.user.id,'CREATE','petty_cash_entry',entryId,null,{floatId:float.id,invoiceId:invoice.id,amount:-item.amount,batchId:batch.id},req.ip);
       }
       const paid=Math.round((Number(invoice.paid_amount)+item.amount)*100)/100,status=paid>=Number(invoice.amount)-.001?'Paid':'Partially paid';

@@ -2491,7 +2491,7 @@ test('Finance review links station fuel once and charges reserve fuel to stock, 
     ceiling:5000,lowAt:500
   });
   assert.equal(opened.status,201);
-  const floatId=opened.body.id;
+  let floatId=opened.body.id;
   assert.equal((await call(owner,'POST',`/receivables/petty-cash/${floatId}/entries`,{
     kind:'Top up',amount:5000,entryDate:today(),description:'Daily cost test float'
   })).status,201);
@@ -2525,6 +2525,12 @@ test('Finance review links station fuel once and charges reserve fuel to stock, 
   assert.equal(newStation.status,201,JSON.stringify(newStation.body));
   assert.equal(Number((await call(owner,'GET','/receivables/petty-cash?companyId=1')).body.find(row=>row.id===floatId).balance),4000,
     'QS submission does not spend petty cash before Finance approves');
+  // A pending QS line keeps its historical source ID; review resolves the active merged destination.
+  const destination=await call(owner,'POST','/receivables/petty-cash',{companyId:2,name:`Combined QS fuel ${Date.now()}`,accountType:'Fuel',holderName:'Shared cashier'});assert.equal(destination.status,201);
+  const mergeBody={targetId:destination.body.id,sourceIds:[floatId]};
+  const mergePreview=await call(owner,'POST','/receivables/petty-cash/merge/preview',mergeBody);assert.equal(mergePreview.status,200);
+  const merged=await call(owner,'POST','/receivables/petty-cash/merge/commit',{...mergeBody,digest:mergePreview.body.digest,clientRef:`QS-MERGE-${Date.now()}`,reason:'Combine company fuel cash before approval'});assert.equal(merged.status,201,JSON.stringify(merged.body));
+  floatId=destination.body.id;
   const newStationReview=await call(owner,'POST',`/boq/cost-control/daily-sheets/${newStation.body.id}/review`,{decision:'Approved'});
   assert.equal(newStationReview.status,200,JSON.stringify(newStationReview.body));
   assert.equal(Number((await call(owner,'GET','/receivables/petty-cash?companyId=1')).body.find(row=>row.id===floatId).balance),3500,
@@ -3390,7 +3396,7 @@ test('two companies share resources while commercial records and totals stay sep
   assert.ok((await call(finance, 'GET', '/receivables/cheques?companyId=2')).body.some(row => row.id === receivedCheque.body.id));
   assert.ok(!(await call(finance, 'GET', '/receivables/bonds?companyId=1')).body.some(row => row.id === bond.body.id));
   assert.ok((await call(finance, 'GET', '/receivables/bonds?companyId=2')).body.some(row => row.id === bond.body.id));
-  assert.ok(!(await call(finance, 'GET', '/receivables/petty-cash?companyId=1')).body.some(row => row.id === petty.body.id));
+  assert.ok((await call(finance, 'GET', '/receivables/petty-cash?companyId=1')).body.some(row => row.id === petty.body.id),'shared floats are visible for both companies');
   assert.ok((await call(finance, 'GET', '/receivables/petty-cash?companyId=2')).body.some(row => row.id === petty.body.id));
   assert.ok(!(await call(finance, 'GET', '/purchasing/invoices?companyId=1')).body.some(row => row.id === supplierInvoice.body.id));
   assert.ok((await call(finance, 'GET', '/purchasing/invoices?companyId=2')).body.some(row => row.id === supplierInvoice.body.id));
@@ -4251,7 +4257,7 @@ test('fleet fuel draws one funded float movement and one project expense without
     kind: 'Top up', amount: 10000, entryDate: today(), description: 'Readymix funding'
   })).status, 201);
   const wrongCompany = await call(transport, 'POST', path, {
-    ...fuel(500), odometer: 140, fuelFloatId: otherCompany.body.id
+    ...fuel(500), companyId:2,odometer: 140, fuelFloatId: otherCompany.body.id
   });
   assert.equal(wrongCompany.status, 400);
   assert.match(wrongCompany.body.error, /different company/);
@@ -5914,7 +5920,7 @@ test('petty cash accounts open with audited funding and edit details without rew
   assert.equal((await call(store,'POST','/receivables/petty-cash',body)).status,403);
   assert.equal((await call(owner,'POST','/receivables/petty-cash',{...body,openingDate:'2026-02-30'})).status,400);
   assert.equal((await call(owner,'POST','/receivables/petty-cash',{...body,companyId:999999})).status,400);
-  assert.equal((await call(owner,'POST','/receivables/petty-cash',{...body,projectId:1})).status,400);
+  assert.equal((await call(owner,'POST','/receivables/petty-cash',{...body,projectId:999999})).status,400);
   const saved=await call(owner,'POST','/receivables/petty-cash',body);assert.equal(saved.status,201,JSON.stringify(saved.body));const id=saved.body.id;
   const list=async()=> (await call(owner,'GET','/receivables/petty-cash?companyId=2')).body.find(row=>row.id===id);
   assert.equal(Number((await list()).balance),5000);assert.equal(Number((await list()).transactionCount),1);
@@ -5928,7 +5934,7 @@ test('petty cash accounts open with audited funding and edit details without rew
   assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${id}`,{...details,accountType:'Fuel'})).status,409);
   assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${id}`,{...details,balance:1})).status,400);
   assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${id}`,{...details,companyId:1})).status,400);
-  assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${id}`,{...details,projectId:1})).status,400);
+  assert.equal((await call(owner,'PUT',`/receivables/petty-cash/${id}`,{...details,projectId:999999})).status,400);
   assert.equal((await call(owner,'POST',`/receivables/petty-cash/${id}/entries`,{kind:'Spend',amount:1000,entryDate:'2026-10-02',description:'Office stationery'})).status,201);
   assert.equal(Number((await list()).balance),4000);
   const empty=await call(owner,'POST','/receivables/petty-cash',{...body,name:'Second office account',openingBalance:0});assert.equal(empty.status,201);
@@ -6496,7 +6502,7 @@ test('supplier batch payments settle selected credits through direct or petty ca
   const saved=await call(finance,'POST','/purchasing/invoices',{companyId:1,supplierId:supplier.body.id,invoiceNo:`BATCH-${stamp}-${i}`,amount:1000+i*10,invoiceDate:today(),dueDate:shift(10),creditReminder:{description:'Credit work',startDate:today(),frequency:'Once',userIds:[1]}});assert.equal(saved.status,201,JSON.stringify(saved.body));invoices.push(saved.body.id);
   assert.equal((await call(owner,'POST',`/purchasing/invoices/${saved.body.id}/payment-exception`,{reason:'Independent review of supplier credit evidence'})).status,204);
  }
- const float=await call(owner,'POST','/receivables/petty-cash',{companyId:1,name:`Batch petty ${stamp}`,accountType:'Office expenses',holderName:'Cashier',openingBalance:500,openingDate:today()});assert.equal(float.status,201,JSON.stringify(float.body));
+ const float=await call(owner,'POST','/receivables/petty-cash',{companyId:2,name:`Batch petty ${stamp}`,accountType:'Office expenses',holderName:'Cashier',openingBalance:500,openingDate:today()});assert.equal(float.status,201,JSON.stringify(float.body));
  const cashBefore=(await call(finance,'GET',`/finance/cash-comparison?companyId=1&period=${today().slice(0,7)}`)).body.current.payments;
  const payload={companyId:1,supplierId:supplier.body.id,clientRef:`batch-${stamp}-direct`,source:'Direct',paidDate:today(),method:'Cash',items:[{invoiceId:invoices[0],amount:100},{invoiceId:invoices[1],amount:200}]};
  const direct=await call(finance,'POST','/purchasing/supplier-payments/batch',payload);assert.equal(direct.status,201,JSON.stringify(direct.body));assert.equal(direct.body.payments.length,2);
@@ -6629,4 +6635,99 @@ test('fingerprint correction creates a new profile atomically and rejects invali
  const r=await call(owner,'POST','/biometric/corrections/commit',payload);assert.equal(r.status,201,JSON.stringify(r.body));
  const [[e]]=await admin.query(`SELECT name,payroll_company_id,payroll_category FROM ${testDatabase}.employees WHERE id=?`,[r.body.targetEmployeeId]);assert.equal(e.name,body.newProfile.name);assert.equal(e.payroll_company_id,2);assert.equal(e.payroll_category,'Office employee');
  assert.equal((await call(owner,'POST','/biometric/corrections/commit',payload)).status,409);
+});
+
+test('shared petty cash attributes each movement to its company and MD register links original payments once',async()=>{
+ const owner=await login(),store=await login('store@gkuc.lk'),date='2095-08-20',period=date.slice(0,7),stamp=Date.now();
+ const floating=await call(owner,'POST','/receivables/petty-cash',{companyId:1,name:`Shared MD ${stamp}`,accountType:'Office expenses',holderName:'Shared cashier',openingBalance:10000,openingDate:date});assert.equal(floating.status,201,JSON.stringify(floating.body));const id=floating.body.id,path=`/receivables/petty-cash/${id}/entries`;
+ for(const companyId of [1,2])assert.ok((await call(owner,'GET',`/receivables/petty-cash?companyId=${companyId}`)).body.some(f=>f.id===id&&f.shared===1));
+ assert.equal((await call(owner,'POST',path,{companyId:2,kind:'Top up',amount:5000,entryDate:date,description:'Readymix funding'})).status,201);
+ for(const [companyId,amount] of [[1,1000],[2,2000]])assert.equal((await call(owner,'POST',path,{companyId,kind:'Spend',amount,entryDate:date,description:'Ordinary office spend',projectId:null})).status,201);
+ const personal={companyId:2,kind:'Spend',amount:500,entryDate:date,description:'Mr Gihan household bill',payee:'Household supplier',projectId:null,mdPersonal:true,personalCategory:'Household',personalPaidBy:'QA cashier',clientRef:`MD-RETRY-${stamp}`};
+ const petty=await call(owner,'POST',path,personal);assert.equal(petty.status,201,JSON.stringify(petty.body));assert.equal((await call(owner,'POST',path,personal)).status,200);assert.equal((await call(owner,'POST',path,{...personal,amount:501})).status,409);
+ const direct=await call(owner,'POST','/finance/office-expense-payments',{companyId:2,paymentDate:date,category:'Personal',personalCategory:'Medical',mdPersonal:true,payee:'Clinic',paymentMethod:'Bank transfer',reference:`MD-DIRECT-${stamp}`,description:'Mr Gihan medical spending',amount:700});assert.equal(direct.status,201,JSON.stringify(direct.body));
+ const existingPetty=await call(owner,'POST',path,{companyId:1,kind:'Spend',amount:300,entryDate:date,description:'Personal shopping',projectId:null});assert.equal(existingPetty.status,201);
+ const existingDirect=await call(owner,'POST','/finance/office-expense-payments',{companyId:1,paymentDate:date,category:'Other',payee:'Shop',paymentMethod:'Cash',reference:`MD-OLD-${stamp}`,description:'Personal purchase',amount:200});assert.equal(existingDirect.status,201);
+ const url=`/finance/md-personal-expenses?from=${date}&to=${date}`;
+ const before=(await call(owner,'GET','/receivables/petty-cash')).body.find(f=>f.id===id).balance;assert.equal(before,11200);
+ const candidates=await call(owner,'GET',`/finance/md-personal-expenses/payments?from=${date}&to=${date}`);assert.equal(candidates.status,200,JSON.stringify(candidates.body));const payments=candidates.body;assert.ok(payments.some(p=>p.id===existingPetty.body.id&&p.source==='Petty cash'));
+ for(const [source,paymentId] of [['Petty cash',existingPetty.body.id],['Direct payment',existingDirect.body.id]]){const body={source,paymentId,category:'Shopping',notes:'Finance confirmed personal spending'};assert.equal((await call(owner,'POST','/finance/md-personal-expenses/link',body)).status,201);assert.equal((await call(owner,'POST','/finance/md-personal-expenses/link',body)).status,409);}
+ const pack=await call(owner,'GET',url);assert.equal(pack.status,200,JSON.stringify(pack.body));assert.equal(pack.body.total,1700);assert.equal(pack.body.pettyCash,800);assert.equal(pack.body.direct,900);assert.equal(pack.body.rows.length,4);assert.equal(pack.body.rows.find(r=>r.pettyCashEntryId===petty.body.id).paidBy,'QA cashier');
+ assert.equal((await call(owner,'GET',url+'&companyId=2')).body.total,1200);assert.equal((await call(owner,'GET',url+'&category=Medical')).body.total,700);
+ assert.equal((await call(owner,'GET','/receivables/petty-cash')).body.find(f=>f.id===id).balance,before,'linking must not spend cash twice');
+ const [[projectCost]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.expenses WHERE origin_type='petty_cash' AND origin_id=?`,[String(petty.body.id)]);assert.equal(projectCost.n,0);
+ for(const [companyId,expected,funding] of [[1,1500,10000],[2,3200,5000]]){
+  const daily=await call(owner,'GET',`/finance/daily-expenses?companyId=${companyId}&date=${date}`);assert.equal(daily.status,200,JSON.stringify(daily.body));assert.equal(daily.body.total,expected);assert.equal(daily.body.fundingTotal,funding);
+  const cash=await call(owner,'GET',`/finance/cash-comparison?companyId=${companyId}&period=${period}`);assert.equal(cash.body.current.payments,expected);
+ }
+ assert.equal((await call(store,'GET',url)).status,403);assert.equal((await call(store,'POST','/finance/md-personal-expenses/link',{source:'Petty cash',paymentId:petty.body.id,category:'Private'})).status,403);
+ const selected=pack.body.rows[0];assert.equal((await call(owner,'PUT',`/finance/md-personal-expenses/${selected.id}`,{category:'Reviewed personal',notes:'Receipt checked'})).status,200);
+ const excel=await fetch(`${base}/finance/md-personal-expenses/export.xlsx?from=${date}&to=${date}`,{headers:{Authorization:`Bearer ${owner}`}});assert.equal(excel.status,200);assert.equal(Buffer.from(await excel.arrayBuffer()).subarray(0,2).toString(),'PK');
+ const doc=await fetch(`${base}/finance/md-personal-expenses/document?from=${date}&to=${date}`,{headers:{Authorization:`Bearer ${owner}`}});assert.equal(doc.status,200);assert.match(await doc.text(),/Mr\. Gihan/);
+ const ticket=await call(owner,'POST','/document-download-tickets',{path:`/finance/md-personal-expenses/document?from=${date}&to=${date}&download=pdf`});assert.equal(ticket.status,200,JSON.stringify(ticket.body));
+ const pdf=await fetch(new URL(ticket.body.url,base));assert.equal(pdf.status,200);assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
+ const receipt=new FormData();receipt.append('file',new Blob(['receipt evidence'],{type:'text/plain'}),'receipt.txt');
+ const upload=await fetch(`${base}/uploads/md_personal_expense/${selected.id}`,{method:'POST',headers:{Authorization:`Bearer ${owner}`},body:receipt});assert.equal(upload.status,201,await upload.text());
+ assert.equal((await call(store,'GET',`/uploads/md_personal_expense/${selected.id}`)).status,403);
+ const overdraw=await call(owner,'POST',path,{...personal,clientRef:`MD-OVERDRAW-${stamp}`,amount:12000});assert.equal(overdraw.status,400);assert.equal((await call(owner,'GET','/receivables/petty-cash')).body.find(f=>f.id===id).balance,before);
+ assert.equal((await call(owner,'POST',path,{...personal,clientRef:`MD-PROJECT-${stamp}`,projectId:1})).status,400);
+});
+
+test('shared fuel and salary floats retain the selected company rather than the float creation company',async()=>{
+ const owner=await login(),transport=await login('transport@gkuc.lk'),date='2095-09-10',stamp=Date.now();
+ const fuel=await call(owner,'POST','/receivables/petty-cash',{companyId:1,name:`Shared fuel ${stamp}`,accountType:'Fuel',holderName:'Shared cashier',openingBalance:1000,openingDate:date});assert.equal(fuel.status,201);
+ assert.ok((await call(transport,'GET','/fleet/fuel-floats?companyId=2')).body.some(f=>f.id===fuel.body.id));
+ const vehicle=await call(owner,'POST','/fleet',{vehicle:'Shared fuel vehicle',registration:`SHARED-${stamp}`,status:'Available',renewal:'Insurance',dueDate:date,odometer:10});assert.equal(vehicle.status,201);
+ const paid=await call(transport,'POST',`/fleet/${vehicle.body.id}/fuel`,{companyId:2,fuelFloatId:fuel.body.id,projectId:null,fuelDate:date,litres:1,cost:100,odometer:11});assert.equal(paid.status,201,JSON.stringify(paid.body));
+ const entries=(await call(owner,'GET',`/receivables/petty-cash/${fuel.body.id}/entries`)).body;assert.equal(entries.find(e=>e.fuelRecordId===paid.body.id).companyId,2);assert.equal((await call(owner,'GET','/receivables/petty-cash')).body.find(f=>f.id===fuel.body.id).balance,900);
+ const advance=await call(owner,'POST','/receivables/petty-cash',{companyId:1,name:`Shared advances ${stamp}`,accountType:'Salary advance',holderName:'Shared cashier',openingBalance:1000,openingDate:date});
+ const worker=await call(owner,'POST','/employees',{code:`SHARED-ADV-${stamp}`,name:'Readymix advance worker',joinDate:date,compensationEffectiveFrom:date,payrollCompanyId:2,payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1800});assert.equal(worker.status,201);
+ const body={companyId:2,kind:'Spend',amount:500,entryDate:date,description:'Readymix salary advance',employeeId:worker.body.id};
+ assert.equal((await call(owner,'POST',`/receivables/petty-cash/${advance.body.id}/entries`,body)).status,201);
+ assert.equal((await call(owner,'POST',`/receivables/petty-cash/${advance.body.id}/entries`,{...body,companyId:1})).status,400);
+ assert.equal((await call(owner,'POST','/finance/md-personal-expenses/link',{source:'Petty cash',paymentId:entries.find(e=>e.fuelRecordId===paid.body.id).id,category:'Vehicle'})).status,400);
+});
+
+test('petty cash merge preserves fuel payments, company totals, original IDs and archived history',async()=>{
+ const owner=await login(),store=await login('store@gkuc.lk'),transport=await login('transport@gkuc.lk'),date='2096-02-10',stamp=Date.now();
+ const make=async(companyId,amount,accountType='Fuel')=>{const f=await call(owner,'POST','/receivables/petty-cash',{companyId,name:`Merge fuel ${companyId}-${stamp}`,accountType,holderName:'Cashier',openingBalance:amount,openingDate:date});assert.equal(f.status,201);return f.body.id;};
+ const target=await make(1,1000),source=await make(2,2000),office=await make(1,10,'Office expenses');
+ const vehicle=await call(owner,'POST','/fleet',{vehicle:'Merge vehicle',registration:`MERGE-${stamp}`,status:'Available',renewal:'Insurance',dueDate:date,odometer:10});assert.equal(vehicle.status,201);
+ const fuel=await call(transport,'POST',`/fleet/${vehicle.body.id}/fuel`,{companyId:2,fuelFloatId:source,projectId:null,fuelDate:date,litres:2,cost:200,odometer:11});assert.equal(fuel.status,201);
+ await admin.query(`UPDATE ${testDatabase}.petty_cash_entries SET company_id=NULL WHERE float_id=?`,[source]);
+ const body={targetId:target,sourceIds:[source],name:'Shared fuel petty cash'};
+ assert.equal((await call(store,'POST','/receivables/petty-cash/merge/preview',body)).status,403);
+ for(const sourceIds of [[office],[target],[source,source]])assert.equal((await call(owner,'POST','/receivables/petty-cash/merge/preview',{...body,sourceIds})).status,400);
+ let p=await call(owner,'POST','/receivables/petty-cash/merge/preview',body);assert.equal(p.status,200,JSON.stringify(p.body));assert.equal(p.body.combinedBalance,2800);
+ const payload={...body,digest:p.body.digest,clientRef:`MERGE-FUEL-${stamp}`,reason:'Combine old company-specific fuel balances'};
+ assert.equal((await call(owner,'POST',`/receivables/petty-cash/${source}/entries`,{companyId:2,kind:'Top up',amount:10,entryDate:date,description:'Latest funding'})).status,201);
+ assert.equal((await call(owner,'POST','/receivables/petty-cash/merge/commit',payload)).status,409);
+ p=await call(owner,'POST','/receivables/petty-cash/merge/preview',body);payload.digest=p.body.digest;
+ const before=(await call(owner,'GET',`/receivables/petty-cash/${source}/entries`)).body;
+ const cash=async()=> (await call(owner,'GET',`/finance/cash-comparison?companyId=2&period=${date.slice(0,7)}`)).body.current.payments;
+ const cashBefore=await cash();const r=await call(owner,'POST','/receivables/petty-cash/merge/commit',payload);assert.equal(r.status,201,JSON.stringify(r.body));assert.equal(r.body.combinedBalance,2810);
+ assert.equal((await call(owner,'POST','/receivables/petty-cash/merge/commit',payload)).status,200);assert.equal((await call(owner,'POST','/receivables/petty-cash/merge/commit',{...payload,reason:'Different merge request'})).status,409);
+ const active=(await call(owner,'GET','/receivables/petty-cash')).body;assert.ok(!active.some(f=>f.id===source));assert.equal(active.find(f=>f.id===target).balance,2810);
+ const archived=(await call(owner,'GET','/receivables/petty-cash?includeMerged=1')).body.find(f=>f.id===source);assert.equal(archived.mergedIntoId,target);assert.equal(archived.mergedBalance,1810);
+ const history=(await call(owner,'GET',`/receivables/petty-cash/${source}/entries`)).body;assert.equal(history.length,before.length);assert.deepEqual(history.map(e=>[e.id,e.amount,e.companyId]).sort(),before.map(e=>[e.id,e.amount,e.companyId]).sort());assert.ok(history.every(e=>e.originalFloatId===source));
+ const older=(await call(owner,'GET',`/receivables/petty-cash/${source}/entries?beforeDate=${history[0].entryDate}&beforeId=${history[0].id}`)).body;assert.equal(older.length,2);assert.ok(!older.some(e=>e.id===history[0].id));
+ assert.equal((await call(owner,'GET',`/receivables/petty-cash/${target}/entries`)).body.length,4);
+ const [[linked]]=await admin.query(`SELECT id,float_id FROM ${testDatabase}.petty_cash_entries WHERE fuel_record_id=?`,[fuel.body.id]);assert.equal(linked.float_id,target);assert.equal(linked.id,before.find(e=>e.fuelRecordId===fuel.body.id).id);assert.equal(await cash(),cashBefore);
+ assert.equal((await call(owner,'POST',`/receivables/petty-cash/${source}/entries`,{companyId:2,kind:'Top up',amount:100,entryDate:date,description:'Closed account'})).status,404);
+ assert.equal((await call(owner,'POST','/receivables/petty-cash/merge/preview',body)).status,409);
+ const used=await call(transport,'POST',`/fleet/${vehicle.body.id}/fuel`,{companyId:1,fuelFloatId:target,projectId:null,fuelDate:date,litres:1,cost:100,odometer:12});assert.equal(used.status,201);
+ assert.equal((await call(owner,'GET',`/receivables/petty-cash/${source}/entries`)).body.length,3);
+});
+
+test('repeated petty cash merges retain first origins, MD payment links and old account membership',async()=>{
+ const owner=await login(),date='2096-03-01',ids=[];
+ for(const [index,openingBalance] of [500,1000,200].entries()){const f=await call(owner,'POST','/receivables/petty-cash',{companyId:index===1?2:1,name:`Merge chain ${index}`,accountType:'Office expenses',holderName:'Cashier',openingBalance,openingDate:date});assert.equal(f.status,201);ids.push(f.body.id);}
+ const personal=await call(owner,'POST',`/receivables/petty-cash/${ids[1]}/entries`,{companyId:2,kind:'Spend',amount:100,entryDate:date,description:'Personal spending before merge',mdPersonal:true,personalCategory:'Household',projectId:null});assert.equal(personal.status,201);
+ const merge=async(targetId,sourceId)=>{const body={targetId,sourceIds:[sourceId]};const p=await call(owner,'POST','/receivables/petty-cash/merge/preview',body);assert.equal(p.status,200);const r=await call(owner,'POST','/receivables/petty-cash/merge/commit',{...body,digest:p.body.digest,clientRef:`CHAIN-${targetId}-${sourceId}-${Date.now()}`,reason:'Combine old company accounts'});assert.equal(r.status,201,JSON.stringify(r.body));};
+ await merge(ids[0],ids[1]);await merge(ids[2],ids[0]);
+ const all=(await call(owner,'GET','/receivables/petty-cash?includeMerged=1')).body;assert.equal(all.find(f=>f.id===ids[2]).balance,1600);assert.equal(all.find(f=>f.id===ids[1]).mergedIntoId,ids[2]);
+ assert.equal((await call(owner,'GET',`/receivables/petty-cash/${ids[1]}/entries`)).body.length,2);assert.equal((await call(owner,'GET',`/receivables/petty-cash/${ids[0]}/entries`)).body.length,3);
+ const md=(await call(owner,'GET',`/finance/md-personal-expenses?from=${date}&to=${date}`)).body;assert.equal(md.total,100);assert.equal(md.rows[0].pettyCashEntryId,personal.body.id);
+ const [[entry]]=await admin.query(`SELECT float_id,original_float_id,company_id FROM ${testDatabase}.petty_cash_entries WHERE id=?`,[personal.body.id]);assert.equal(entry.float_id,ids[2]);assert.equal(entry.original_float_id,ids[1]);assert.equal(entry.company_id,2);
+ const [[count]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.petty_cash_entries WHERE float_id=?`,[ids[2]]);assert.equal(count.n,4);
 });

@@ -926,7 +926,7 @@ async function createAttachmentTables() {
     CONSTRAINT fk_upload_user FOREIGN KEY(uploaded_by) REFERENCES users(id),
     INDEX idx_attachment_owner(owner_type,owner_id), INDEX idx_attachment_expiry(expiry_date)
   ) ENGINE=InnoDB`);
-  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter','risk_finding','company_compliance','progress_certificate') NOT NULL");
+  await modifyColumn('attachments','owner_type',"ENUM('task','project','employee','report','vehicle','equipment','candidate','handover','attendance','claim','incoming_letter','risk_finding','company_compliance','progress_certificate','md_personal_expense') NOT NULL");
 }
 
 /** 2.2 payroll and performance, and PID section 3 step 1 (customer inquiry). */
@@ -2881,7 +2881,7 @@ async function migrateExistingInstalls() {
   await query('UPDATE issued_cheques c JOIN supplier_invoices si ON si.id=c.invoice_id SET c.company_id=si.company_id WHERE c.invoice_total IS NULL AND c.company_id IS NULL');
   await query('UPDATE received_cheques c JOIN projects p ON p.id=c.project_id SET c.company_id=p.company_id');
   await query('UPDATE bank_bonds b JOIN projects p ON p.id=b.project_id SET b.company_id=p.company_id');
-  await query('UPDATE petty_cash_floats f JOIN projects p ON p.id=f.project_id SET f.company_id=p.company_id');
+  // Shared float funding provenance must not be rewritten when a project changes company.
   await query('UPDATE subcontractor_quotations q JOIN projects p ON p.id=q.project_id SET q.company_id=p.company_id');
   await addColumn('stock_movements', 'project_id', 'BIGINT UNSIGNED NULL');
   await addColumn('stock_movements', 'destination', 'VARCHAR(180) NULL');
@@ -3684,6 +3684,41 @@ export async function migrate() {
   await addColumn('attendance','biometric_code','VARCHAR(40) NULL');
   await addColumn('attendance','identity_archived_at','DATETIME NULL');
   await addColumn('attendance','identity_archived_employee_id','BIGINT UNSIGNED NULL');
+  await addColumn('petty_cash_entries','company_id','TINYINT UNSIGNED NULL');
+  await addColumn('petty_cash_entries','client_ref','VARCHAR(64) NULL');
+  await addColumn('petty_cash_entries','request_hash','CHAR(64) NULL');
+  await addIndex('petty_cash_entries','uq_petty_client_ref','UNIQUE KEY uq_petty_client_ref(client_ref)');
+  await addForeignKey('petty_cash_entries','fk_petty_entry_company','CONSTRAINT fk_petty_entry_company FOREIGN KEY(company_id) REFERENCES companies(id)');
+  // Preserve the previous company attribution once; float ownership no longer scopes new movements.
+  await query('UPDATE petty_cash_entries e JOIN petty_cash_floats f ON f.id=e.float_id SET e.company_id=f.company_id WHERE e.company_id IS NULL');
+  await query(`CREATE TABLE IF NOT EXISTS md_personal_expenses (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    petty_cash_entry_id BIGINT UNSIGNED NULL,office_payment_id BIGINT UNSIGNED NULL,
+    category VARCHAR(100) NOT NULL,notes VARCHAR(1000) NULL,paid_by VARCHAR(180) NULL,created_by BIGINT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_md_petty(petty_cash_entry_id),UNIQUE KEY uq_md_direct(office_payment_id),
+    FOREIGN KEY(petty_cash_entry_id) REFERENCES petty_cash_entries(id),
+    FOREIGN KEY(office_payment_id) REFERENCES office_expense_payments(id),FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await addColumn('md_personal_expenses','paid_by','VARCHAR(180) NULL');
+  await addColumn('petty_cash_floats','merged_into_id','BIGINT UNSIGNED NULL');
+  await addColumn('petty_cash_floats','merged_at','DATETIME NULL');
+  await addColumn('petty_cash_floats','merged_balance','DECIMAL(15,2) NULL');
+  await addForeignKey('petty_cash_floats','fk_float_merged_into','CONSTRAINT fk_float_merged_into FOREIGN KEY(merged_into_id) REFERENCES petty_cash_floats(id)');
+  await addColumn('petty_cash_entries','original_float_id','BIGINT UNSIGNED NULL');
+  await addForeignKey('petty_cash_entries','fk_petty_original_float','CONSTRAINT fk_petty_original_float FOREIGN KEY(original_float_id) REFERENCES petty_cash_floats(id)');
+  await query(`CREATE TABLE IF NOT EXISTS petty_cash_float_merges (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,target_float_id BIGINT UNSIGNED NOT NULL,
+    client_ref VARCHAR(64) NOT NULL UNIQUE,request_hash CHAR(64) NOT NULL,summary JSON NOT NULL,
+    reason VARCHAR(500) NOT NULL,created_by BIGINT UNSIGNED NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(target_float_id) REFERENCES petty_cash_floats(id),FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS petty_cash_float_merge_entries (
+    merge_id BIGINT UNSIGNED NOT NULL,entry_id BIGINT UNSIGNED NOT NULL,source_float_id BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY(merge_id,entry_id),INDEX idx_merge_history(source_float_id,entry_id),
+    FOREIGN KEY(merge_id) REFERENCES petty_cash_float_merges(id),FOREIGN KEY(entry_id) REFERENCES petty_cash_entries(id),
+    FOREIGN KEY(source_float_id) REFERENCES petty_cash_floats(id)
+  ) ENGINE=InnoDB`);
   await migrateEmployeeOtRates({query, transaction});
   await createEmployeeReadViews(query);
   await seedWorkMethods();

@@ -4,7 +4,7 @@ import {quotationIdentity} from './quotation-presentation.js';
 // Registers which store project ownership; cash payer and payroll company are separate facts.
 export const PROJECT_COMPANY_TABLES = ['tasks','fuel_records','vehicle_maintenance','incomes',
   'operating_bills','inquiries','quotations_client','tenders','client_invoices',
-  'quotation_billing_plans','received_cheques','bank_bonds','petty_cash_floats',
+  'quotation_billing_plans','received_cheques','bank_bonds',
   'subcontractor_quotations','vehicle_odometer_readings','management_adjustments','cash_outflow_plans'];
 const json=value=>typeof value==='string'?JSON.parse(value):value;
 

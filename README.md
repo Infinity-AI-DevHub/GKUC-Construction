@@ -509,3 +509,15 @@ Payroll three-punch attendance (2026-11-10): Labour, Supervisor and Driver site 
 ### Correcting a wrong fingerprint identity
 
 People → Biometric import → **Correct fingerprint identity** previews a saved scanner ID, the wrong employee, date range and the correct existing/new profile. Select attendance days and resolve same-date conflicts by keeping the target or imported record; the alternative is archived, not deleted. Legacy imports lacking a saved machine ID require explicit HR verification. A reason and audit history are retained. Future imports follow the corrected mapping. Existing approved/paid payroll and other HR/site records are not moved or recalculated; affected Draft payrolls must be explicitly regenerated.
+
+### Shared petty cash and MD Personal Expenses
+
+Finance → Petty cash shows the same independently funded floats for both companies. Create as many floats as needed; the balance is the complete float ledger. Each top-up identifies its funding company, and each spend identifies the paying company and optional matching project. Office expenses, Fuel and Salary advance categories retain their existing safeguards. Supplier/Fleet/QS fuel payments can use a shared eligible float and save their own company attribution. Existing float IDs, balances and history are retained; no balances are automatically merged or reset.
+
+Finance sidebar → **MD Personal Expenses** tracks Mr. Gihan’s personal spending across both companies. Record one petty-cash/direct payment, or link an existing eligible office payment; a link never spends cash again. Filter by date range, company, category and source, attach receipts, and export PDF/Excel. There is no repayment, recoverable amount or outstanding balance. Personal spending is identified separately from project costs; existing supplier/project/fuel/salary payments cannot be relabelled as MD expenses through the link action. The page and receipts require Finance management access.
+
+Personal payment details can include an optional Paid by name, separately from the system user who recorded the transaction.
+
+### Combining old company-specific floats
+
+Finance → Petty cash → **Merge accounts** combines selected active floats of the same category into one chosen shared account. Preview each balance and the combined total, name the shared account and enter a reason. Original movements move under the active account without creating cash/expense entries; old accounts are archived and available using **Show merged accounts / history**. Company attribution, entry IDs and linked fuel, supplier, MD and payroll records remain intact. The action is manual, not a startup auto-merge.

@@ -1,3 +1,5 @@
+import {linkMdPersonal} from '../lib/md-personal-expenses.js';
+import {installMdPersonalRoutes} from './md-personal-expenses.js';
 import {outflowWorksheet,outflowWorksheetDocument} from '../lib/outflow-worksheet.js';
 import {sendDocument} from '../lib/document-pdf.js';
 import { Router } from 'express';
@@ -13,6 +15,7 @@ import { cashComparison } from '../lib/cash-comparison.js';
 import { SVAT_LAST_DATE, vatSchedule, vatWorkbook } from '../lib/vat-schedules.js';
 
 const router = Router();
+installMdPersonalRoutes(router);
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const accountPeriod = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 const companyParam = req => {
@@ -152,20 +155,25 @@ router.patch('/expected-outflows/plans/:id/details',auth,permit('finance.expecte
   res.json({id:prior.id});
 }));
 
-router.post('/office-expense-payments',auth,permit('finance.dailyExpenses'),validate(z.object({
+router.post('/office-expense-payments',auth,permit('finance.dailyExpenses','finance.manage'),validate(z.object({
   companyId:z.number().int().positive(),paymentDate:isoDate,category:z.string().trim().min(2).max(100),
   payee:z.string().trim().min(2).max(180),paymentMethod:z.enum(['Bank transfer','Card','Cash','Cheque']),
   description:z.string().trim().min(2).max(400),reference:z.string().trim().min(2).max(120),
-  amount:z.number().positive()
+  amount:z.number().positive().multipleOf(.01),mdPersonal:z.boolean().default(false),personalCategory:z.string().trim().min(2).max(100).optional(),personalNotes:z.string().trim().max(1000).optional(),personalPaidBy:z.string().trim().max(180).optional()
 })),wrap(async(req,res)=>{
   const b=req.body;
+  if(b.mdPersonal&&!req.user.permissions.includes('finance.manage'))return res.status(403).json({error:'MD personal expenses require Finance management access.'});
   if(!await getOne('SELECT id FROM companies WHERE id=?',[b.companyId]))return res.status(404).json({error:'Company not found.'});
   try{
-    const result=await query(`INSERT INTO office_expense_payments
-      (company_id,payment_date,category,payee,payment_method,description,reference,amount,created_by)
-      VALUES (?,?,?,?,?,?,?,?,?)`,[b.companyId,b.paymentDate,b.category,b.payee,b.paymentMethod,b.description,b.reference,b.amount,req.user.id]);
-    await audit(pool,req.user.id,'CREATE','office_expense_payment',result.insertId,null,b,req.ip);
-    res.status(201).json({id:result.insertId});
+    const id=await transaction(async connection=>{
+      const [result]=await connection.execute(`INSERT INTO office_expense_payments
+        (company_id,payment_date,category,payee,payment_method,description,reference,amount,created_by)
+        VALUES (?,?,?,?,?,?,?,?,?)`,[b.companyId,b.paymentDate,b.category,b.payee,b.paymentMethod,b.description,b.reference,b.amount,req.user.id]);
+      if(b.mdPersonal)await linkMdPersonal(connection,req.user,'Direct payment',result.insertId,b.personalCategory||b.category,b.personalNotes,req.ip,b.personalPaidBy);
+      await audit(connection,req.user.id,'CREATE','office_expense_payment',result.insertId,null,b,req.ip);
+      return result.insertId;
+    });
+    res.status(201).json({id});
   }catch(error){if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'That office payment reference is already recorded for this company. Open the existing entry instead of entering it twice.'});throw error;}
 }));
 
@@ -175,12 +183,13 @@ router.get('/daily-expenses',auth,permit('finance.dailyExpenses'),wrap(async(req
   const [company,petty,supplierPayments,bills,direct,office,unverified,funding]=await Promise.all([
     getOne('SELECT id,name FROM companies WHERE id=?',[companyId]),
     query(`SELECT pe.id,pe.entry_date date,ABS(pe.amount) amount,pe.description,pe.category,
-      pe.payee,pf.name floatName,pf.account_type accountType,COALESCE(pe.project_id,pf.project_id) projectId,
+      md.id mdPersonalId,md.category personalCategory,pe.payee,pf.name floatName,pf.account_type accountType,pe.project_id projectId,
       p.name project,pe.fuel_record_id fuelRecordId,fv.vehicle vehicle,fv.registration registration
       FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
-      LEFT JOIN projects p ON p.id=COALESCE(pe.project_id,pf.project_id)
+      LEFT JOIN md_personal_expenses md ON md.petty_cash_entry_id=pe.id
+      LEFT JOIN projects p ON p.id=pe.project_id
       LEFT JOIN fuel_records fr ON fr.id=pe.fuel_record_id LEFT JOIN fleet fv ON fv.id=fr.vehicle_id
-      WHERE pf.company_id=? AND pe.entry_date=? AND pe.kind='Spend' AND pf.account_type<>'Salary advance'`,[companyId,date]),
+      WHERE COALESCE(pe.company_id,pf.company_id)=? AND pe.entry_date=? AND pe.kind='Spend' AND pf.account_type<>'Salary advance'`,[companyId,date]),
     query(`SELECT sp.id,sp.paid_date date,sp.amount,sp.method,sp.reference,si.id invoiceId,
       si.invoice_no invoiceNo,s.name payee,po.project_id projectId,p.name project
       FROM supplier_payments sp JOIN supplier_invoices si ON si.id=sp.invoice_id
@@ -195,26 +204,27 @@ router.get('/daily-expenses',auth,permit('finance.dailyExpenses'),wrap(async(req
       e.reference,e.project_id projectId,p.name project,c.name category
       FROM expenses e JOIN projects p ON p.id=e.project_id LEFT JOIN expense_categories c ON c.id=e.category_id
       WHERE p.company_id=? AND e.paid_date=? AND e.payment_method IS NOT NULL AND e.origin_type IS NULL`,[companyId,date]),
-    query(`SELECT id,payment_date date,amount,description,category,payee,payment_method method,reference
-      FROM office_expense_payments WHERE company_id=? AND payment_date=?`,[companyId,date]),
+    query(`SELECT o.id,o.payment_date date,o.amount,o.description,o.category,o.payee,o.payment_method method,o.reference,md.id mdPersonalId,md.category personalCategory
+      FROM office_expense_payments o LEFT JOIN md_personal_expenses md ON md.office_payment_id=o.id WHERE o.company_id=? AND o.payment_date=?`,[companyId,date]),
     query(`SELECT COUNT(*) count FROM expenses e JOIN projects p ON p.id=e.project_id
       WHERE p.company_id=? AND e.expense_date=? AND e.origin_type IS NULL AND e.payment_method IS NULL`,[companyId,date]),
     query(`SELECT pe.id,pe.entry_date date,pe.amount,pe.description,pe.category,pf.id floatId,
       pf.name account,pf.account_type accountType,pf.holder_name holderName,
-      COALESCE(pe.project_id,pf.project_id) projectId,p.name project
+      pe.project_id projectId,p.name project
       FROM petty_cash_entries pe JOIN petty_cash_floats pf ON pf.id=pe.float_id
-      LEFT JOIN projects p ON p.id=COALESCE(pe.project_id,pf.project_id)
-      WHERE pf.company_id=? AND pe.entry_date=? AND pe.kind='Top up' ORDER BY pe.id`,[companyId,date])
+      LEFT JOIN md_personal_expenses md ON md.petty_cash_entry_id=pe.id
+      LEFT JOIN projects p ON p.id=pe.project_id
+      WHERE COALESCE(pe.company_id,pf.company_id)=? AND pe.entry_date=? AND pe.kind='Top up' ORDER BY pe.id`,[companyId,date])
   ]);
   if(!company)return res.status(404).json({error:'Company not found.'});
-  const location=row=>({locationType:row.projectId?'Project site':'Office',projectId:row.projectId||null,
+  const location=row=>row.mdPersonalId?{locationType:'MD Personal',projectId:null,location:'MD Personal — Mr. Gihan'}:({locationType:row.projectId?'Project site':'Office',projectId:row.projectId||null,
     location:row.project||'Head office'});
   const entries=[
     ...petty.map(row=>({key:`petty:${row.id}`,source:'Petty cash',sourceId:row.id,date:row.date,
-      ...location(row),category:row.category||row.accountType,payee:row.payee||'Not recorded',
+      ...location(row),category:row.mdPersonalId?`MD Personal · ${row.personalCategory}`:row.category||row.accountType,payee:row.payee||'Not recorded',
       paymentMethod:'Petty cash',paymentSource:row.floatName,description:row.description,
       reference:row.fuelRecordId?`Fleet fuel #${row.fuelRecordId}`:`Petty cash #${row.id}`,
-      amount:Number(row.amount),sourceUrl:row.fuelRecordId?`/fleet?section=fuel&record=${row.fuelRecordId}`:'/finance/petty-cash'})),
+      amount:Number(row.amount),sourceUrl:row.mdPersonalId?'/finance/md-personal-expenses':row.fuelRecordId?`/fleet?section=fuel&record=${row.fuelRecordId}`:'/finance/petty-cash'})),
     ...supplierPayments.map(row=>({key:`supplier:${row.id}`,source:'Supplier payment',sourceId:row.id,date:row.date,
       ...location(row),category:'Supplier / material',payee:row.payee,paymentMethod:row.method,
       paymentSource:'Supplier invoice',description:`Payment for ${row.invoiceNo}`,
@@ -228,13 +238,13 @@ router.get('/daily-expenses',auth,permit('finance.dailyExpenses'),wrap(async(req
       paymentMethod:row.method,paymentSource:'Direct payment',description:row.description,
       reference:row.reference||`Expense #${row.id}`,amount:Number(row.amount),sourceUrl:`/finance/expenses?record=${row.id}`})),
     ...office.map(row=>({key:`office:${row.id}`,source:'Direct office payment',sourceId:row.id,date:row.date,
-      locationType:'Office',projectId:null,location:'Head office',category:row.category,payee:row.payee,
+      ...location(row),category:row.mdPersonalId?`MD Personal · ${row.personalCategory}`:row.category,payee:row.payee,
       paymentMethod:row.method,paymentSource:'Office payment',description:row.description,
-      reference:row.reference,amount:Number(row.amount),sourceUrl:'/finance/daily-expenses'}))
+      reference:row.reference,amount:Number(row.amount),sourceUrl:row.mdPersonalId?'/finance/md-personal-expenses':'/finance/daily-expenses'}))
   ].sort((a,b)=>a.location.localeCompare(b.location)||a.source.localeCompare(b.source)||a.sourceId-b.sourceId);
   const fundingEntries=funding.map(row=>({key:`petty-funding:${row.id}`,sourceId:row.id,floatId:row.floatId,
     date:row.date,...location(row),account:row.account,accountType:row.accountType,
-    payee:row.holderName||row.account,category:row.category||row.accountType,
+    payee:row.holderName||row.account,category:row.mdPersonalId?`MD Personal · ${row.personalCategory}`:row.category||row.accountType,
     paymentMethod:'Internal transfer',description:row.description,reference:`Petty cash #${row.id}`,
     sourceUrl:'/finance/petty-cash',amount:Number(row.amount)}));
   res.json({company,date,entries,fundingEntries,
@@ -773,7 +783,7 @@ router.get('/reporting', auth, permit('finance.view','finance.manage'), wrap(asy
   const po = scoped('po.project_id', 'po.order_date');
   const si = scoped('po.project_id', 'si.invoice_date', 'si.company_id');
   const sp = scoped('po.project_id', 'sp.paid_date', 'COALESCE(sp.payment_company_id,si.company_id)');
-  const pc = scoped('COALESCE(pce.project_id,pcf.project_id)', 'pce.entry_date', 'pcf.company_id');
+  const pc = scoped('pce.project_id', 'pce.entry_date', 'COALESCE(pce.company_id,pcf.company_id)');
   const rt = scoped('r.project_id', 'r.held_from');
   const bb = scoped('b.project_id', 'b.issued_date', 'b.company_id');
   const vo = scoped('v.project_id', 'DATE(v.created_at)');
@@ -818,7 +828,7 @@ router.get('/reporting', auth, permit('finance.view','finance.manage'), wrap(asy
       FROM supplier_payments sp JOIN supplier_invoices si ON si.id=sp.invoice_id
       JOIN suppliers s ON s.id=si.supplier_id LEFT JOIN purchase_orders po ON po.id=si.order_id
       LEFT JOIN projects p ON p.id=po.project_id ${sp.where} ORDER BY sp.paid_date,sp.id`, sp.params),
-    query(`SELECT pce.id,COALESCE(pce.project_id,pcf.project_id) projectId,
+    query(`SELECT pce.id,pce.project_id projectId,
       COALESCE(p.name,'Head office') project,pcf.name floatName,pce.kind,pce.entry_date date,
       pcf.account_type accountType,pce.description,pce.category,pce.amount,
       pce.employee_id employeeId,emp.name employee,fr.vehicle_id vehicleId,
@@ -827,7 +837,7 @@ router.get('/reporting', auth, permit('finance.view','finance.manage'), wrap(asy
       LEFT JOIN visible_employees emp ON emp.id=pce.employee_id
       LEFT JOIN fuel_records fr ON fr.id=pce.fuel_record_id
       LEFT JOIN fleet fv ON fv.id=fr.vehicle_id
-      LEFT JOIN projects p ON p.id=COALESCE(pce.project_id,pcf.project_id)
+      LEFT JOIN projects p ON p.id=pce.project_id
       ${pc.where} ORDER BY pce.entry_date,pce.id`, pc.params),
     query(`SELECT r.id,r.project_id projectId,p.name project,r.description,r.amount,r.percent,
       r.held_from heldFrom,r.release_date releaseDate,r.released_amount releasedAmount,r.status
