@@ -1,22 +1,14 @@
+import {quarterBounds,quarterCountdown,vatBusinessToday} from '../vat-quarter.js';
 import React, { useEffect, useState } from 'react';
 import { CircleDollarSign, TrendingUp, Wallet, Plus } from 'lucide-react';
 import { api, fetchDownload, post, rupees, shortDate, slug } from '../api.js';
 import { Badge, Field, FormModal, Row, SelectField, Summary, Table } from '../ui.jsx';
 
-const pad = value => String(value).padStart(2, '0');
-function currentQuarter() {
-  const now = new Date(), first = Math.floor(now.getMonth() / 3) * 3;
-  const next = new Date(now.getFullYear(), first + 3, 1);
-  return {
-    start: `${now.getFullYear()}-${pad(first + 1)}-01`,
-    end: `${next.getFullYear()}-${pad(next.getMonth() + 1)}-01`
-  };
-}
-function priorDay(value) { const date=new Date(`${value}T00:00:00`);date.setDate(date.getDate()-1);return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}`; }
-
 export default function VatSchedules({ companyId, company, can }) {
-  const quarter=currentQuarter();
-  const [start,setStart]=useState(quarter.start),[end,setEnd]=useState(priorDay(quarter.end));
+  const [today,setToday]=useState(vatBusinessToday());
+  useEffect(()=>{const timer=setInterval(()=>setToday(vatBusinessToday()),60000);return()=>clearInterval(timer);},[]);
+  const quarter=quarterBounds(today);
+  const [start,setStart]=useState(quarter.start),[end,setEnd]=useState(quarter.end);
   const [data,setData]=useState(null),[error,setError]=useState(''),[saving,setSaving]=useState(false),[svatOpen,setSvatOpen]=useState(false);
   const [periods,setPeriods]=useState([]),[creating,setCreating]=useState(false),[addingEntry,setAddingEntry]=useState(false);
   const loadPeriods=()=>api(`/finance/vat/periods?companyId=${companyId}`).then(setPeriods);
@@ -29,12 +21,14 @@ export default function VatSchedules({ companyId, company, can }) {
   const save=async()=>{setSaving(true);setError('');try{const result=await api('/finance/vat/period',{method:'PUT',body:JSON.stringify({
     companyId,start,end,...form,outputAdjustment:Number(form.outputAdjustment||0),inputAdjustment:Number(form.inputAdjustment||0)})});setData(result);await loadPeriods();}catch(failure){setError(failure.message);}finally{setSaving(false);}};
   const download=async()=>{const url=await fetchDownload(`/finance/vat/export?companyId=${companyId}&start=${start}&end=${end}`);const link=document.createElement('a');link.href=url;link.download=`VAT-${start}-to-${end}.xlsx`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+  const countdown=quarterCountdown(end,today);
   const template='115px 155px minmax(180px,1.3fr) 145px 125px 125px 125px 110px';
   return <>
     <section className="finance-period-panel">
       <div><p className="eyebrow">Company tax period</p><h3>{company?.name || 'Selected company'} VAT schedules</h3><p>Output and input VAT from source documents, taxable receipts and manual VAT entries.</p></div>
       <div className="finance-period-controls"><label>From<input type="date" value={start} onChange={event=>setStart(event.target.value)}/></label><label>To<input type="date" value={end} onChange={event=>setEnd(event.target.value)}/></label></div>
     </section>
+    {countdown&&<section className="vat-quarter-countdown" aria-label="VAT quarter countdown"><div><strong>{countdown.label} quarter</strong><span>Quarter ends {shortDate(countdown.end)}</span></div><strong>{countdown.state==='Ended'?'Quarter ended':countdown.state==='Ends today'?'Ends today':`${countdown.days} days remaining`}</strong></section>}
     <div className="vat-ledger-actions">
       <label>Saved VAT ledger<select value={String(periods.find(row=>row.start===start&&row.end===end)?.id||'')} onChange={event=>{
         const period=periods.find(row=>String(row.id)===event.target.value);if(period){setStart(period.start);setEnd(period.end);}

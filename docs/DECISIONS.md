@@ -317,3 +317,35 @@ selected supplier batch. Preserve independent payment review controls. The petty
 and supplier settlement are two linked representations of one payment; aggregate cash
 views count the petty movement once and never create another project cost. Retry keys,
 invoice/float locks, cheque reservations and whole-batch rollback protect partial payments.
+
+## 2026-11-09 — inline catalogue creation from Site Today
+
+User requested adding materials from Materials used. Reuse the same Materials form and
+persisted material record; automatically select a successful creation into the existing
+day draft. Preserve store.manage for creating catalogue/stock records and do not infer
+site receipts from opening store stock. Offline users may continue saved-material drafts;
+new catalogue creation needs a connection. No duplicate temporary material or new workflow
+is introduced.
+
+## 2026-11-09 — saved daily-cost summary exports and Vehicle category
+
+Export project-wide daily sheets and individual sheets with status-separated summaries
+and full saved detail. Do not blend returned/review-pending sheets into approved actual
+spend, and do not call quoted recovery revenue. Use existing permission and PDF ticket
+flow with mandatory Infinity AI credit. Vehicle costs are explicit reviewed project costs
+linked to a fleet record, separate from Fuel's stock/cash/record controls; no old costs
+are automatically relabelled. Imports require reviewed vehicle selection for this category.
+
+## 2026-11-09 — count down to VAT quarter end
+
+Use the selected ledger To date's calendar quarter and Sri Lanka calendar date. Count
+days to the quarter end, with Ends today and Quarter ended states. This counter is not
+a filing/payment due-date calculator and does not change any saved VAT period or figures.
+
+### 2026-11-10 — site departure separates OT types
+
+User confirmed retaining existing morning OT, adding Driver to the three-punch split, Driver minimums 31 Site / 30 Travel, and correcting Labour/Supervisor Travel minimum to 45. Do not infer a site departure from a two-punch or ambiguous multi-punch day. Require HR evidence before approving affected newly generated Drafts. Apply configured dated minima rather than changing old saved company policies from application startup; corrected policy values must be saved per company. Existing Approved/Paid snapshots remain immutable.
+
+### 2026-11-10 — fingerprint identity correction and attendance transfer
+
+Correct a wrong scanner link and selected historical attendance in one audited transaction. Never infer legacy machine provenance from employee name alone: require explicit HR verification. Resolve same-day alternatives by reversible archival rather than overwrite/deletion. A new target profile is optional and created atomically with the transfer. Preserve existing corrected clock values, locations and site-stop times. Do not migrate salary settings, reviewed OT, claims, leave, site costs or approved/paid payroll; expose review warnings and block stale Draft approval until regeneration.

@@ -23,6 +23,7 @@ const FIELDS = {
   time: ['time', 'punchtime', 'atttime', 'clock'],
   datetime: ['datetime', 'punch', 'timestamp', 'attendancedatetime', 'logdate', 'recordtime', 'checktime', 'date/time'],
   checkIn: ['in', 'checkin', 'timein', 'intime', 'firstin', 'clockin'],
+  siteStop:['sitestop','siteout','siteend','sitecheckout','workstop'],
   checkOut: ['out', 'checkout', 'timeout', 'outtime', 'lastout', 'clockout'],
   status: ['status', 'state', 'inout', 'punchstate', 'type']
 };
@@ -120,7 +121,7 @@ export function parseBiometricExport(text) {
     if (!code && !name) { problems.push(`Row ${index + 2}: no employee identifier`); return; }
 
     const key = `${code || name}|${date}`;
-    if (!days.has(key)) days.set(key, { code, name, date, punches: [], checkIn: null, checkOut: null });
+    if (!days.has(key)) days.set(key, { code, name, date, punches: [], checkIn: null, checkOut: null, siteStop:undefined });
     const day = days.get(key);
     if (code && !day.code) day.code = code;
     if (name && !day.name) day.name = name;
@@ -128,6 +129,7 @@ export function parseBiometricExport(text) {
     /* A row with explicit in/out columns is already a day; anything else is one punch. */
     const explicitIn = parseTime(pick('checkIn'));
     const explicitOut = parseTime(pick('checkOut'));
+    const siteStop=parseTime(pick('siteStop'));if(siteStop)day.siteStop=siteStop;
     if (explicitIn || explicitOut) {
       if (explicitIn) day.checkIn = day.checkIn ? (explicitIn < day.checkIn ? explicitIn : day.checkIn) : explicitIn;
       if (explicitOut) day.checkOut = day.checkOut ? (explicitOut > day.checkOut ? explicitOut : day.checkOut) : explicitOut;
@@ -158,6 +160,8 @@ export function parseBiometricExport(text) {
       name: day.name || null,
       date: day.date,
       checkIn,
+      ...(day.siteStop?{siteStop:day.siteStop}:{}),
+      punchTimes:[...new Set(punches)],
       checkOut: checkOut && checkOut !== checkIn ? checkOut : null,
       needsReview: ambiguous,
       punches: punches.length || (day.checkIn ? 1 : 0) + (day.checkOut ? 1 : 0)

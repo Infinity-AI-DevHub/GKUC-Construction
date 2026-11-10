@@ -19,13 +19,13 @@ test('morning OT starts only for check-in at 07:00 or earlier and combines with 
   assert.equal(suggestOvertime({state:'On site',check_in:'07:00',check_out:'16:45'},rules,30).hours,0.75);
 });
 
-test('the category policy specifies rates, late rates and 30/31-minute OT thresholds',()=>{
+test('the category policy specifies rates, late rates and 30/31/45-minute OT thresholds',()=>{
   const cases=[
     [{payroll_category:'Office employee'},'Office',225,225,30],
     [{payroll_category:'Site labourer'},'Site',225,225,30],
-    [{payroll_category:'Site labourer'},'Travel',100,225,31],
+    [{payroll_category:'Site labourer'},'Travel',100,225,45],
     [{payroll_category:'Supervisor'},'Site',225,225,30],
-    [{payroll_category:'Supervisor'},'Travel',100,225,31],
+    [{payroll_category:'Supervisor'},'Travel',100,225,45],
     [{payroll_category:'Driver'},'Site',100,100,31],
     [{payroll_category:'Driver'},'Travel',225,100,30]
   ];

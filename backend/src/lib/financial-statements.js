@@ -6,7 +6,7 @@ export function financialStatements(pack) {
   const row = (label, amount = null, style = 'detail') => ({ label, amount, style });
   const heading = label => row(label, null, 'heading');
   const expenses = pack.sources.monthlyExpenses.filter(item => item.originType !== 'operating_bill');
-  const direct = expenses.filter(item => ['Material','Labour','Fuel','Equipment','Subcontractor'].includes(item.source));
+  const direct = expenses.filter(item => ['Material','Labour','Fuel','Vehicle','Equipment','Subcontractor'].includes(item.source));
   const other = expenses.filter(item => !direct.includes(item));
   const revenue = round(pack.accrual.billedWorkRevenue + pack.accrual.revenueAdjustments);
   const directCost = sum(direct);
@@ -20,7 +20,7 @@ export function financialStatements(pack) {
     notes: [
       'Income statement covers the selected date range. Financial position includes recorded balances through the selected end date; later receipts and payments are excluded.',
       'Revenue is issued non-advance work before VAT, plus saved management revenue adjustments. Client receipts are not added again.',
-      'Direct costs use Material, Labour, Fuel, Equipment and Subcontractor project expenses. Other posted project costs and net operating bills form operating expenses; linked operating-bill expenses are excluded to avoid duplication.',
+      'Direct costs use Material, Labour, Fuel, Vehicle, Equipment and Subcontractor project expenses. Other posted project costs and net operating bills form operating expenses; linked operating-bill expenses are excluded to avoid duplication.',
       'Cash/bank, inventory valuation, fixed assets, depreciation, borrowings, capital, retained earnings, interest and tax are not fully available in these sources. Not recorded means unknown, not zero. Totals requiring missing balances are withheld.',
       'This live view is separate from versioned closed management packs. WIP estimates are not recognised as assets or revenue here. Receivable/payable adjustments are the selected months’ saved management adjustments. Monthly adjustments are included in full for each month touched by the selected range; they have no daily allocation.',
       ...pack.caveats.slice(2)
@@ -29,7 +29,7 @@ export function financialStatements(pack) {
       row('Sales / work revenue', pack.accrual.billedWorkRevenue),
       row('Revenue adjustments', pack.accrual.revenueAdjustments), row('Total revenue',revenue,'total'),
       heading('Less: Cost of sales / direct project costs'),
-      ...['Material','Labour','Fuel','Equipment','Subcontractor'].map(source => row(source === 'Material' ? 'Materials' : source, sum(direct.filter(item => item.source === source)))),
+      ...['Material','Labour','Fuel','Vehicle','Equipment','Subcontractor'].map(source => row(source === 'Material' ? 'Materials' : source, sum(direct.filter(item => item.source === source)))),
       row('Total direct costs',directCost,'total'),row('Gross Profit / (Loss)',grossProfit,'total'),
       heading('Less: Operating expenses'), row('Other project expenses',sum(other)),
       row('Operating bills (before VAT)',round(pack.sources.monthlyBills.reduce((sum, item) => sum + Number(item.netAmount || 0),0))),

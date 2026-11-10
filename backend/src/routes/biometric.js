@@ -1,3 +1,5 @@
+import {inferSiteStop,siteStopProblem,usesSiteTravelPunches} from '../lib/site-travel-ot.js';
+import {registerBiometricCorrections} from '../lib/biometric-correction.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, pool, query, transaction } from '../db.js';
@@ -7,6 +9,7 @@ import { resolveScannerRows } from '../lib/biometric-identities.js';
 import { readUpload, readUploadedFile } from '../lib/storage.js';
 
 const router = Router();
+registerBiometricCorrections(router);
 const LATE_AFTER = process.env.ATTENDANCE_LATE_AFTER || '08:00:00';
 
 /**
@@ -79,7 +82,7 @@ router.post('/preview', auth, permit('hr.attendance'), wrap(async (req, res) => 
   /* One line per unrecognised device number, so the mapping is offered once rather than
      once per day that person worked. */
   const unknown = new Map();
-  const employees = await query("SELECT id,code,name,designation FROM visible_employees WHERE status <> 'Left' ORDER BY name");
+  const employees = await query("SELECT id,code,name,designation,payroll_category FROM visible_employees WHERE status <> 'Left' ORDER BY name");
   const normal = value => String(value || '').trim().toLowerCase();
   for (const row of rows) {
     if (row.employeeId || !row.code) continue;
@@ -94,6 +97,12 @@ router.post('/preview', auth, permit('hr.attendance'), wrap(async (req, res) => 
     unknown.set(row.code, entry);
   }
 
+  for(const row of rows){
+    const person=employees.find(employee=>Number(employee.id)===Number(row.employeeId));
+    if(person&&usesSiteTravelPunches(person)){
+      row.siteStop=inferSiteStop(row);row.siteStopReview=Boolean(row.checkIn&&row.checkOut&&!row.siteStop);
+    }
+  }
   res.json({
     filename: file.filename,
     columns: parsed.columns,
@@ -129,6 +138,8 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     checkIn: z.string().regex(/^\d{2}:\d{2}:\d{2}$/).nullable().optional(),
     checkOut: z.string().regex(/^\d{2}:\d{2}:\d{2}$/).nullable().optional(),
+    siteStop:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/).nullable().optional(),
+    punchTimes:z.array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/)).max(100).optional(),
     needsReview: z.boolean().optional(),
     declaredState: z.enum(['Absent', 'On leave', 'Business trip']).nullable().optional(),
     correctionReason: z.string().trim().min(3).max(500).nullable().optional()
@@ -165,15 +176,20 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
   let currentRecord;
 
   await transaction(async connection => {
+    const [lockedMappings]=await connection.query('SELECT b.code,b.employee_id FROM employee_biometric_ids b ORDER BY b.code FOR UPDATE');
+    for(const row of resolved){const mapping=lockedMappings.find(m=>String(m.code).toLowerCase()===String(row.code||'').toLowerCase());
+      if(mapping&&Number(mapping.employee_id)!==Number(row.employeeId))throw Object.assign(new Error('A scanner mapping changed. Refresh the import preview.'),{status:409});}
     // Consistent employee lock order also serializes overlapping imports for the same person.
     const ordered = [...resolved].sort((a, b) => a.employeeId - b.employeeId || a.date.localeCompare(b.date));
     for (const row of ordered) {
       currentRecord = row;
       const employeeId = row.employeeId || null;
-      const [employees] = await connection.execute('SELECT name,designation FROM visible_employees WHERE id=? FOR UPDATE', [employeeId]);
+      const [employees] = await connection.execute('SELECT name,designation,payroll_category FROM visible_employees WHERE id=? FOR UPDATE', [employeeId]);
       const employee = employees[0];
       if (!employee) throw Object.assign(new Error('An employee was deactivated while this import was being reviewed. Refresh the preview.'), { status: 409 });
       const name = employee.name;
+      const siteStop=['Absent','On leave','Business trip'].includes(stateFor(row))?null:row.siteStop!==undefined?row.siteStop:usesSiteTravelPunches(employee)?inferSiteStop(row):null;
+      const boundaryProblem=siteStopProblem(row.checkIn,siteStop,row.checkOut);if(boundaryProblem)throw Object.assign(new Error(boundaryProblem),{status:400});
 
       const state = stateFor(row);
       const checkIn = ['Absent', 'On leave', 'Business trip'].includes(state) ? null : row.checkIn || null;
@@ -184,7 +200,7 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
         const [namesakes] = await connection.execute('SELECT id FROM employees WHERE name=?', [name]);
         if (namesakes.length === 1) {
           const [legacy] = await connection.execute(
-            'SELECT * FROM attendance WHERE employee_id IS NULL AND employee_name=? AND work_date=? ORDER BY id LIMIT 2 FOR UPDATE',
+            'SELECT * FROM attendance WHERE identity_archived_at IS NULL AND employee_id IS NULL AND employee_name=? AND work_date=? ORDER BY id LIMIT 2 FOR UPDATE',
             [name, row.date]);
           if (legacy.length === 1) existing.push(legacy[0]);
         }
@@ -202,19 +218,19 @@ router.post('/commit', auth, permit('hr.attendance'), validate(z.object({
         }
         await connection.execute(
           `UPDATE attendance SET employee_name=?,role=?,project_id=?,work_location=?,check_in=?,check_out=?,state=?,employee_id=COALESCE(?,employee_id),
-             needs_review=?,source='Biometric',correction_reason=COALESCE(?,correction_reason),confirmed_by=? WHERE id=?`,
+             site_stop=?,raw_punches=?,biometric_code=?,needs_review=?,source='Biometric',correction_reason=COALESCE(?,correction_reason),confirmed_by=? WHERE id=?`,
           [name, employee.designation || 'Worker', projectId, workLocation, checkIn, checkOut, state, employeeId,
-            row.needsReview ? 1 : 0, row.correctionReason || null, req.user.id, existing[0].id]);
+            siteStop,JSON.stringify(row.punchTimes||[]),row.code||null,row.needsReview ? 1 : 0, row.correctionReason || null, req.user.id, existing[0].id]);
         if (row.correctionReason) await audit(connection, req.user.id, 'IMPORT_CORRECTION', 'attendance', existing[0].id,
           existing[0], { ...row, state, correctionReason: row.correctionReason }, req.ip);
         updated += 1;
       } else {
         const [created] = await connection.execute(
           `INSERT INTO attendance (employee_name,role,project_id,work_location,employee_id,work_date,check_in,check_out,state,
-             needs_review,source,correction_reason,confirmed_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,'Biometric',?,?)`,
+             needs_review,source,correction_reason,confirmed_by,site_stop,raw_punches,biometric_code)
+           VALUES (?,?,?,?,?,?,?,?,?,?,'Biometric',?,?,?,?,?)`,
           [name, employee.designation || 'Worker', projectId, workLocation, employeeId, row.date,
-            checkIn, checkOut, state, row.needsReview ? 1 : 0, row.correctionReason || null, req.user.id]);
+            checkIn, checkOut, state, row.needsReview ? 1 : 0, row.correctionReason || null, req.user.id,siteStop,JSON.stringify(row.punchTimes||[]),row.code||null]);
         if (row.correctionReason) await audit(connection, req.user.id, 'IMPORT_CORRECTION', 'attendance', created.insertId,
           null, { ...row, state, correctionReason: row.correctionReason }, req.ip);
         inserted += 1;

@@ -58,12 +58,12 @@ export function resolveOvertimeRate(employee, type, policy) {
 
 export function overtimeMinimumMinutes(employee, type, policy) {
   if(employee.special_pay_rule?.mode==='Machine operator'&&type==='Site'&&employee.special_pay_day?.work_kind==='Standby')return 30;
-  if(employee.special_pay_rule?.mode==='Work role')return type==='Travel'?31:30;
+  if(employee.special_pay_rule?.mode==='Work role')return type==='Travel'?Number((typeof policy?.hr_rules==='string'?JSON.parse(policy.hr_rules):policy?.hr_rules||{}).labourTravelOtMinimumMinutes??45):30;
   const rules = typeof policy?.hr_rules === 'string' ? JSON.parse(policy.hr_rules) : (policy?.hr_rules || {});
   const category = employee.payroll_category;
   if (category === 'Office employee') return Number(rules.officeOtMinimumMinutes ?? 30);
-  if (category === 'Site labourer') return Number(type === 'Travel' ? rules.labourTravelOtMinimumMinutes ?? 31 : rules.labourSiteOtMinimumMinutes ?? 30);
-  if (category === 'Supervisor') return Number(type === 'Travel' ? rules.supervisorTravelOtMinimumMinutes ?? 31 : rules.supervisorSiteOtMinimumMinutes ?? 30);
+  if (category === 'Site labourer') return Number(type === 'Travel' ? rules.labourTravelOtMinimumMinutes ?? 45 : rules.labourSiteOtMinimumMinutes ?? 30);
+  if (category === 'Supervisor') return Number(type === 'Travel' ? rules.supervisorTravelOtMinimumMinutes ?? 45 : rules.supervisorSiteOtMinimumMinutes ?? 30);
   if (category === 'Driver') return Number(type === 'Travel' ? rules.driverTravelOtMinimumMinutes ?? 30 : rules.driverSiteOtMinimumMinutes ?? 31);
   return Number(type === 'Office' ? rules.officeOtMinimumMinutes ?? 30 : rules.labourSiteOtMinimumMinutes ?? 30);
 }

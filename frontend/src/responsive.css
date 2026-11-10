@@ -2899,3 +2899,5 @@ table.register thead .register-name { background: #f3f6f7 }
 .supplier-payment-check{display:flex!important;align-items:center;gap:7px}.supplier-payment-check input[type=checkbox]{width:auto;margin:0}
 .supplier-payment-option .invoice-note{grid-column:1/-1}.supplier-payment-option input[type=number]{width:100%}
 @media(max-width:600px){.supplier-payment-option{grid-template-columns:1fr}}
+
+.vat-quarter-countdown{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 22px;margin:0 0 18px;border:1px solid #cbdde9;border-radius:14px;background:#eff6fb;color:#173650}.vat-quarter-countdown div{display:grid;gap:4px}.vat-quarter-countdown span{font-size:12px;color:#607787}.vat-quarter-countdown>strong{font-size:20px}@media(max-width:600px){.vat-quarter-countdown{align-items:flex-start;flex-direction:column}}

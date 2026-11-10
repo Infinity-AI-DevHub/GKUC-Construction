@@ -5,7 +5,7 @@ const worked=new Set(['On site','Late','Checked out','Business trip','Worked (sa
 export function payslipDetail(run,slip) {
   const detail=parse(slip.calculationDetail);
   const complete=Array.isArray(detail.sourceAttendance);
-  const sources=complete?detail.sourceAttendance:(detail.attendance||[]).map(row=>({workDate:row.workDate,state:'Worked (saved)',checkIn:row.checkIn,checkOut:row.checkOut}));
+  const sources=complete?detail.sourceAttendance:(detail.attendance||[]).map(row=>({workDate:row.workDate,state:'Worked (saved)',checkIn:row.checkIn,siteStop:row.siteStop,checkOut:row.checkOut}));
   const rate=detail.salary?.dailyRate??detail.leave?.dailyRate??detail.attendance?.[0]?.dailyRate??null;
   const components=(slip.components||[]).map(row=>{
     const data=parse(row.calculationDetail);

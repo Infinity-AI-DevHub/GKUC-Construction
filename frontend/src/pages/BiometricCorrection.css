@@ -1,0 +1,6 @@
+.biometric-correction-table{width:100%;min-width:780px;border-collapse:collapse;text-align:left;font-size:.9rem}
+.biometric-correction-table th,.biometric-correction-table td{padding:12px 14px;vertical-align:top;border-bottom:1px solid var(--line,#dbe4ed)}
+.biometric-correction-table th{background:var(--surface-soft,#f4f7fa);font-size:.8rem}
+.biometric-correction-table small{display:block;margin-top:6px;color:var(--muted,#64748b);font-size:.75rem;line-height:1.5}
+.biometric-correction-table td:first-child{min-width:150px;white-space:nowrap}
+.biometric-correction-table select{min-width:235px;width:100%;font-size:.8rem}

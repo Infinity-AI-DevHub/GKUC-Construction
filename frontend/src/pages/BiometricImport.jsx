@@ -1,3 +1,4 @@
+import BiometricCorrection from './BiometricCorrection.jsx';
 import React, { useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Link2, PencilLine, UserPlus, Upload } from 'lucide-react';
 import { api, post, shortDate, slug } from '../api.js';
@@ -16,6 +17,7 @@ const seconds = value => value && value.length === 5 ? `${value}:00` : value || 
  * in a wage dispute.
  */
 export default function BiometricImport({ data, projects = data.projects, can, reload }) {
+  const [correctingIdentity,setCorrectingIdentity]=useState(false);
   const [preview, setPreview] = useState(null);
   const [personLocations, setPersonLocations] = useState({});
   const [busy, setBusy] = useState(false);
@@ -117,7 +119,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
         filename: preview.filename,
         rows: usable.map(row => ({
           employeeId: row.employeeId, code: row.code, name: row.name,
-          date: row.date, checkIn: row.checkIn, checkOut: row.checkOut,
+          date: row.date, checkIn: row.checkIn, checkOut: row.checkOut,siteStop:row.siteStop,punchTimes:row.punchTimes||[],
           needsReview: Boolean(row.needsReview), declaredState: row.declaredState || null,
           correctionReason: row.correctionReason || null,
           ...locationPayload(locationFor(row))
@@ -139,7 +141,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
 
   if (!can.hrImport) return <p className="empty-state">You do not have permission to import attendance.</p>;
 
-  const template = 'minmax(160px,1.3fr) 120px 100px 100px 130px minmax(130px,1fr) 110px';
+  const template = 'minmax(160px,1.3fr) 120px 100px 100px 100px 130px minmax(130px,1fr) 110px';
   const matched = preview?.rows.filter(row => row.employeeId).length || 0;
   const editedRows = preview?.rows?.map(row => ({ ...row, ...edits[keyFor(row)], originalKey: keyFor(row) })) || [];
   const locationFor = row => ['Absent', 'On leave'].includes(row.declaredState) || (!row.declaredState && !row.checkIn && !row.checkOut)
@@ -172,6 +174,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
     setEdits(current => ({ ...current, [originalKey]: {
       date, checkIn: declaredState ? null : seconds(values.checkIn),
       checkOut: declaredState ? null : seconds(values.checkOut),
+      siteStop:declaredState?null:seconds(values.siteStop),
       declaredState, needsReview: values.reviewStatus === 'Needs review',
       correctionReason: values.reason.trim(), locationKey: values.locationKey || ''
     } }));
@@ -179,6 +182,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
   };
 
   return <>
+    {correctingIdentity&&<BiometricCorrection data={data} reload={reload} onDone={changed=>{setCorrectingIdentity(false);if(changed)setPreview(null);}}/>}
     <div className="import-panel">
       <div>
         <h2>Upload the biometric export</h2>
@@ -188,6 +192,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
           until you have seen what the file contains.
         </p>
       </div>
+      <button type="button" className="secondary" onClick={()=>setCorrectingIdentity(true)} disabled={busy}>Correct fingerprint identity</button>
       <label className="primary import-choose">
         <Upload size={16} />{busy ? 'Reading…' : 'Choose export file'}
         <input ref={input} type="file" onChange={choose} disabled={busy} hidden />
@@ -298,7 +303,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
         {commitError && <p className="form-error" role="alert">{commitError}</p>}
       </div>
 
-      <Table columns={['Employee', 'Date', 'In', 'Out', 'Reads as', 'Work location', 'Match', 'Edit']}
+      <Table columns={['Employee', 'Date', 'In', 'Site stop', 'Office out', 'Reads as', 'Work location', 'Match', 'Edit']}
         template={`${template} 66px`}
         title={`Attendance preview — ${previewRows.length} of ${searchedRows.length} days`}
         tools={<input className="import-preview-search" type="search" value={search}
@@ -309,7 +314,7 @@ export default function BiometricImport({ data, projects = data.projects, can, r
             <div><strong>{row.employee || row.name || row.code}</strong><small>{row.code || '—'}{row.correctionReason ? ' · Edited for this import' : ''}</small></div>
             <span>{shortDate(row.date)}</span>
             <span>{row.checkIn || '—'}</span>
-            <span>{row.checkOut || '—'}</span>
+            <span>{row.siteStop || '—'}{row.siteStopReview&&!row.siteStop&&<small>Confirm site stop</small>}</span><span>{row.checkOut || '—'}</span>
             <div>
               <Badge tone={slug(row.declaredState || row.state)}>{row.correctionReason ? 'Edited' : row.state}</Badge>
               {row.needsReview && <small className="needs-review">One punch only — confirm</small>}
@@ -330,9 +335,11 @@ export default function BiometricImport({ data, projects = data.projects, can, r
       <p className="import-preview-note">Single-punch days and overlapping records are shown first. Edit any day's date, times, work location or review status before importing. Changes here are not saved until import.</p>
       {editingRow && <FormModal title={`Edit import day — ${editingRow.employee || editingRow.name || editingRow.code}`}
         close={() => setEditing(null)} label="Apply to preview" onSubmit={values => saveEdit(editingRow.originalKey, values)}>
+        <p className="form-note wide">Scanner punches: {(editingRow.punchTimes || []).join(" · ") || "No individual punches supplied"}. Confirm the site departure when there are extra punches.</p>
         <Field name="date" label="Work date" type="date" defaultValue={editingRow.date} />
         <Field name="checkIn" label="Check in" type="time" step="1" required={false} defaultValue={editingRow.checkIn || ''} />
-        <Field name="checkOut" label="Check out" type="time" step="1" required={false} defaultValue={editingRow.checkOut || ''} />
+        <Field name="siteStop" label="Site stop (Labour / Supervisor / Driver)" type="time" step="1" required={false} defaultValue={editingRow.siteStop || ''} />
+        <Field name="checkOut" label="Office check out / final out" type="time" step="1" required={false} defaultValue={editingRow.checkOut || ''} />
         <SelectField name="declaredState" label="How should this day read?"
           options={[["", 'Use the recorded times'], ['Absent', 'Absent'], ['On leave', 'On leave'], ['Business trip', 'Business trip']]}
           defaultValue={editingRow.declaredState || ''} />

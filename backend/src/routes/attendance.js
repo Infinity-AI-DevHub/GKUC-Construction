@@ -1,3 +1,4 @@
+import {siteStopProblem} from '../lib/site-travel-ot.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, clock, getOne, pool, query, today, transaction } from '../db.js';
@@ -7,7 +8,7 @@ const router = Router();
 const LATE_AFTER = process.env.ATTENDANCE_LATE_AFTER || '08:00:00';
 const attendanceTime = z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?$/, 'Enter a time between 00:00 and 23:59');
 
-const select = `SELECT a.id,a.employee_name name,a.role,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,a.project_id projectId,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,
+const select = `SELECT a.id,a.employee_name name,a.role,CASE WHEN a.work_location='Not working' THEN 'Not working' ELSE COALESCE(p.name,'Head office') END site,a.project_id projectId,a.work_location workLocation,a.check_in \`in\`,a.check_out \`out\`,a.site_stop siteStop,
   a.state,a.work_date workDate,a.employee_id employeeId FROM visible_attendance a LEFT JOIN projects p ON p.id=a.project_id`;
 
 router.get('/site-submissions',auth,permit('hr.attendance','hr.manage'),wrap(async(req,res)=>{
@@ -164,6 +165,7 @@ router.post('/', auth, permit('hr.attendance'), validate(z.object({
   state: z.enum(['On site', 'Late', 'Checked out', 'Absent', 'On leave', 'Business trip']).default('On site'),
   checkIn: attendanceTime.nullable().optional(),
   checkOut: attendanceTime.nullable().optional(),
+  siteStop: attendanceTime.nullable().optional(),
   informationSource:z.enum(['Biometric','Attendance sheet','WhatsApp','Signed timesheet','Management instruction','Other']).default('Other'),
   sourceNotes:z.string().trim().max(2000).default('')
 }).refine(value => value.workLocation !== 'Site' || Boolean(value.projectId), {
@@ -176,10 +178,12 @@ router.post('/', auth, permit('hr.attendance'), validate(z.object({
     if(!employee)return res.status(404).json({error:'Employee not found. Refresh the employee list.'});
     const checkIn = ['Absent', 'On leave'].includes(body.state) ? null : (body.checkIn || null);
     const checkOut = ['Absent', 'On leave'].includes(body.state) ? null : (body.checkOut || null);
+    const siteStop=['Absent','On leave'].includes(body.state)?null:body.siteStop||null;
+    const problem=siteStopProblem(checkIn,siteStop,checkOut);if(problem)return res.status(400).json({error:problem});
     const state = body.state === 'On site' && checkIn > LATE_AFTER ? 'Late' : body.state;
     const projectId = body.workLocation === 'Office' ? null : body.projectId;
-    const result = await query(`INSERT INTO attendance (employee_name,role,project_id,work_location,employee_id,work_date,check_in,check_out,state,confirmed_by,source)
-      VALUES (?,?,?,?,?,?,?,?,?,?,'Manual')`, [employee.name, employee.designation?.trim() || 'Employee', projectId, body.workLocation, body.employeeId, body.date, checkIn, checkOut, state, req.user.id]);
+    const result = await query(`INSERT INTO attendance (employee_name,role,project_id,work_location,employee_id,work_date,check_in,check_out,site_stop,state,confirmed_by,source)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,'Manual')`, [employee.name, employee.designation?.trim() || 'Employee', projectId, body.workLocation, body.employeeId, body.date, checkIn, checkOut,siteStop, state, req.user.id]);
     await query('UPDATE attendance SET employee_name=?,source=?,source_notes=? WHERE id=?',[employee.name,body.informationSource,body.sourceNotes,result.insertId]);
     const row = await getOne(`${select} WHERE a.id=?`, [result.insertId]);
     await audit(pool, req.user.id, 'CREATE', 'attendance', row.id, null, row, req.ip);
@@ -199,7 +203,7 @@ router.post('/bulk', auth, permit('hr.attendance'), validate(z.object({
   entries:z.array(z.object({
     employeeId:z.number().int().positive(),
     state:z.enum(['On site','Late','Checked out','Absent','On leave','Business trip']),
-    checkIn:attendanceTime.nullable().optional(),checkOut:attendanceTime.nullable().optional()
+    checkIn:attendanceTime.nullable().optional(),checkOut:attendanceTime.nullable().optional(),siteStop:attendanceTime.nullable().optional()
   })).min(1).max(300)
 })), wrap(async(req,res)=>{
   const b=req.body;
@@ -222,10 +226,13 @@ router.post('/bulk', auth, permit('hr.attendance'), validate(z.object({
       const employee=byId.get(entry.employeeId);
       const checkIn=['Absent','On leave'].includes(entry.state)?null:(entry.checkIn||null);
       const checkOut=['Absent','On leave'].includes(entry.state)?null:(entry.checkOut||null);
+      const siteStop=['Absent','On leave'].includes(entry.state)?null:entry.siteStop||null;
+      const problem=siteStopProblem(checkIn,siteStop,checkOut);if(problem)throw Object.assign(new Error(problem),{status:400});
       const state=entry.state==='On site'&&checkIn>LATE_AFTER?'Late':entry.state;
       const [write]=await connection.query(`INSERT INTO attendance
         (employee_name,role,project_id,work_location,employee_id,work_date,check_in,check_out,state,confirmed_by,source,source_notes)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,[employee.name,employee.designation?.trim()||'Employee',b.workLocation==='Site'?b.projectId:null,b.workLocation,employee.id,b.date,checkIn,checkOut,state,req.user.id,b.informationSource,b.sourceNotes]);
+      await connection.query('UPDATE attendance SET site_stop=? WHERE id=?',[siteStop,write.insertId]);
       created.push({id:write.insertId,employeeId:employee.id,name:employee.name});
       await audit(connection,req.user.id,'CREATE','attendance',write.insertId,null,{employeeId:employee.id,date:b.date,state,source:b.informationSource},req.ip);
     }
@@ -244,7 +251,7 @@ router.post('/:id/toggle', auth, permit('hr.attendance'), wrap(async (req, res) 
     await query("UPDATE attendance SET check_out=?,state='Checked out',confirmed_by=? WHERE id=?", [now, req.user.id, before.id]);
   } else {
     const state = now > LATE_AFTER ? 'Late' : 'On site';
-    await query('UPDATE attendance SET check_in=?,check_out=NULL,state=?,confirmed_by=? WHERE id=?', [now, state, req.user.id, before.id]);
+    await query('UPDATE attendance SET check_in=?,check_out=NULL,site_stop=NULL,state=?,confirmed_by=? WHERE id=?', [now, state, req.user.id, before.id]);
   }
   const after = await getOne('SELECT * FROM visible_attendance WHERE id=?', [before.id]);
   await audit(pool, req.user.id, 'UPDATE', 'attendance', after.id, before, after, req.ip);
@@ -256,6 +263,7 @@ router.patch('/:id', auth, permit('hr.attendance','hr.manage'), validate(z.objec
   state: z.enum(['On site', 'Late', 'Checked out', 'Absent', 'On leave', 'Business trip']).optional(),
   checkIn: attendanceTime.nullable().optional(),
   checkOut: attendanceTime.nullable().optional(),
+  siteStop: attendanceTime.nullable().optional(),
   workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   projectId: z.number().int().positive().nullable().optional(),
   workLocation: z.enum(['Office', 'Site', 'Not working']).optional(),
@@ -264,12 +272,15 @@ router.patch('/:id', auth, permit('hr.attendance','hr.manage'), validate(z.objec
 })), wrap(async (req, res) => {
   const before = await getOne('SELECT * FROM visible_attendance WHERE id=?', [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Attendance record not found' });
-  const columns = { state: 'state', checkIn: 'check_in', checkOut: 'check_out', workDate: 'work_date', projectId: 'project_id', workLocation: 'work_location',informationSource:'source',sourceNotes:'source_notes' };
+  const columns = { state: 'state', checkIn: 'check_in', checkOut: 'check_out', siteStop:'site_stop', workDate: 'work_date', projectId: 'project_id', workLocation: 'work_location',informationSource:'source',sourceNotes:'source_notes' };
   const body = { ...req.body };
   if (body.workLocation === 'Office' || body.workLocation === 'Not working') body.projectId = null;
   if (body.workLocation === 'Not working' && !['Absent', 'On leave'].includes(body.state || before.state)) {
     return res.status(400).json({ error: 'Not working is only for absent or leave days. Choose Office or a project site for worked days.' });
   }
+  if(['Absent','On leave'].includes(body.state)){body.checkIn=null;body.checkOut=null;body.siteStop=null;}
+  const problem=siteStopProblem(body.checkIn===undefined?before.check_in:body.checkIn,body.siteStop===undefined?before.site_stop:body.siteStop,body.checkOut===undefined?before.check_out:body.checkOut);
+  if(problem)return res.status(400).json({error:problem});
   const changes = Object.entries(body).filter(([key]) => key !== 'reason');
   try {
     await query(`UPDATE attendance SET ${changes.map(([key]) => `${columns[key]}=?`).join(',')}${changes.length ? ',' : ''}

@@ -482,8 +482,8 @@ export function PolicyForm({ companyId, policy, editing=false, close, reload }) 
     <div className="payroll-policy-heading wide"><span>02</span><div><strong>Earned salary and contributions</strong><p>Salary starts with daily rate × (worked days + approved paid-leave days), less any short-day salary reduction. EPF and ETF use the separate statutory salary basis only.</p></div></div>
     <SelectField name="permanentOnly" label="GKUC EPF / ETF policy — permanent employees only" options={[[true,'Yes'],[false,'No']]} defaultValue={String((typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.permanentOnly ?? true)} />
     <Field name="minimumMonthlySalary" label="Minimum monthly EPF/ETF salary basis (LKR)" type="number" min="0" step="0.01" defaultValue={(typeof policy?.statutoryRules==='string'?JSON.parse(policy.statutoryRules):policy?.statutoryRules)?.minimumMonthlySalary ?? 30000} />
-    <div className="payroll-policy-heading wide"><span>03</span><div><strong>Working hours and overtime</strong><p>OT uses exact minutes. Morning OT requires check-in at or before the configured time; travel OT requires an approved claim.</p></div></div>
-    {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],earlyOtLatestCheckIn:['Latest check-in for morning OT','07:00','time'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number'],officeOtMinimumMinutes:['Office OT minimum (minutes)',30,'number'],labourSiteOtMinimumMinutes:['Labour site OT minimum (minutes)',30,'number'],labourTravelOtMinimumMinutes:['Labour travel OT minimum (minutes)',31,'number'],supervisorSiteOtMinimumMinutes:['Supervisor site OT minimum (minutes)',30,'number'],supervisorTravelOtMinimumMinutes:['Supervisor travel OT minimum (minutes)',31,'number'],driverSiteOtMinimumMinutes:['Driver site OT minimum (minutes)',31,'number'],driverTravelOtMinimumMinutes:['Driver travel OT minimum (minutes)',30,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
+    <div className="payroll-policy-heading wide"><span>03</span><div><strong>Working hours and overtime</strong><p>OT uses exact minutes. Morning OT requires check-in at or before the configured time; Labour, Supervisor and Driver Site/Travel OT use check-in, site stop and final office check-out. Save Labour/Supervisor/Driver travel minimum as 45 minutes and Driver Site/Travel minimums as 31/30 minutes in each company’s dated policy.</p></div></div>
+    {Object.entries({normalStart:['Normal work starts','07:30','time'],normalEnd:['Normal work ends','16:30','time'],earlyOtLatestCheckIn:['Latest check-in for morning OT','07:00','time'],maxDailyOt:['Daily OT warning threshold (hours)',6,'number'],officeOtMinimumMinutes:['Office OT minimum (minutes)',30,'number'],labourSiteOtMinimumMinutes:['Labour site OT minimum (minutes)',30,'number'],labourTravelOtMinimumMinutes:['Labour travel OT minimum (minutes)',45,'number'],supervisorSiteOtMinimumMinutes:['Supervisor site OT minimum (minutes)',30,'number'],supervisorTravelOtMinimumMinutes:['Supervisor travel OT minimum (minutes)',45,'number'],driverSiteOtMinimumMinutes:['Driver site OT minimum (minutes)',31,'number'],driverTravelOtMinimumMinutes:['Driver travel OT minimum (minutes)',30,'number']}).map(([name,[label,fallback,type]])=><Field key={name} name={name} label={label} type={type} step={type==='number'?'0.01':undefined} min={type==='number'?'0':undefined} defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.[name]??fallback}/>)}
     <div className="payroll-policy-heading wide"><span>04</span><div><strong>Late-arrival deductions</strong><p>The first 15 minutes are free. From the next minute, each minute deducts 1/60 of the employee category's OT hourly rate.</p></div></div>
     <Field name="paidHoursPerDay" label="Paid working hours used to calculate hourly rate" type="number" min="0.01" max="24" step="0.01" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.paidHoursPerDay??8}/>
     <Field name="lateGraceMinutes" label="No deduction through (minutes)" type="number" min="0" step="1" defaultValue={(typeof policy?.hrRules==='string'?JSON.parse(policy.hrRules):policy?.hrRules)?.lateGraceMinutes??15}/>
@@ -759,8 +759,8 @@ function ReviewForm({ data, close, reload }) {
   </FormModal>;
 }
 
-const ATTENDANCE_COLUMNS = ['Employee', 'Site', 'Check in', 'Check out', 'Status', ''];
-const ATTENDANCE_TEMPLATE = 'minmax(170px,1.3fr) minmax(160px,1fr) 90px 90px 110px 90px';
+const ATTENDANCE_COLUMNS = ['Employee', 'Site', 'Check in', 'Site stop', 'Office check out', 'Status', ''];
+const ATTENDANCE_TEMPLATE = 'minmax(170px,1.3fr) minmax(160px,1fr) 90px 90px 90px 110px 90px';
 
 function Attendance({ data, projects, reload, can, initialDate, onDateChange }) {
   const [correcting, setCorrecting] = useState(null);
@@ -803,7 +803,7 @@ function Attendance({ data, projects, reload, can, initialDate, onDateChange }) 
         <div className="person"><Avatar name={row.name} /><div><strong>{row.name}</strong><small>{row.role}</small></div></div>
         <span>{row.site}</span>
         <span>{row.in || '—'}</span>
-        <span>{row.out || '—'}</span>
+        <span>{row.siteStop || '—'}</span><span>{row.out || '—'}</span>
         <Badge tone={slug(row.state)}>{row.state}</Badge>
         {canCorrect
           ? <span className="row-actions">
@@ -978,14 +978,14 @@ function AttendanceForm({ data, close, reload, initialDate }) {
   const visible=employees.filter(row=>`${row.name} ${row.code||''} ${row.designation||''}`.toLowerCase().includes(search.toLowerCase()));
   const chosen=employees.filter(row=>selected[row.id]);
   const update=(id,patch)=>setSelected(rows=>({...rows,[id]:{...rows[id],...patch}}));
-  const toggle=id=>setSelected(rows=>{const next={...rows};if(next[id])delete next[id];else next[id]={state:'On site',checkIn:'',checkOut:''};return next;});
-  const selectVisible=()=>setSelected(rows=>{const next={...rows};for(const employee of visible)next[employee.id]??={state:'On site',checkIn:'',checkOut:''};return next;});
+  const toggle=id=>setSelected(rows=>{const next={...rows};if(next[id])delete next[id];else next[id]={state:'On site',checkIn:'',siteStop:'',checkOut:''};return next;});
+  const selectVisible=()=>setSelected(rows=>{const next={...rows};for(const employee of visible)next[employee.id]??={state:'On site',checkIn:'',siteStop:'',checkOut:''};return next;});
   const submit=async event=>{
     event.preventDefault();setError('');setBusy(true);
     try{
       if(!chosen.length)throw new Error('Select at least one employee.');
       await post('/attendance/bulk',{workLocation,projectId:workLocation==='Site'?Number(projectId):null,date,informationSource:source,sourceNotes:notes,
-        entries:chosen.map(employee=>({employeeId:Number(employee.id),state:selected[employee.id].state,checkIn:selected[employee.id].checkIn||null,checkOut:selected[employee.id].checkOut||null}))});
+        entries:chosen.map(employee=>({employeeId:Number(employee.id),state:selected[employee.id].state,checkIn:selected[employee.id].checkIn||null,siteStop:selected[employee.id].siteStop||null,checkOut:selected[employee.id].checkOut||null}))});
       await reload();close();
     }catch(failure){setError(failure.message);}finally{setBusy(false);}
   };
@@ -1004,7 +1004,7 @@ function AttendanceForm({ data, close, reload, initialDate }) {
         <div className="attendance-batch-picker-actions"><button type="button" className="status-button" onClick={selectVisible} disabled={!visible.length}>Select all shown</button><button type="button" className="status-button" onClick={()=>setSelected({})} disabled={!chosen.length}>Clear selection</button></div>
         <div className="attendance-batch-options">{visible.map(employee=><label key={employee.id}><input type="checkbox" checked={!!selected[employee.id]} onChange={()=>toggle(employee.id)}/><span>{employee.name}<small>{employee.code||employee.designation||'Employee'}</small></span></label>)}</div>
       </div>
-      {chosen.length>0&&<section className="attendance-batch-selected"><h3>Review {chosen.length} attendance record{chosen.length===1?'':'s'}</h3>{chosen.map(employee=>{const entry=selected[employee.id];return <div className="attendance-batch-row" key={employee.id}><strong>{employee.name}</strong><label>Status<select value={entry.state} onChange={event=>update(employee.id,{state:event.target.value})}>{['On site','Late','Checked out','Absent','On leave','Business trip'].map(value=><option key={value}>{value}</option>)}</select></label><label>Check in<input type="time" disabled={['Absent','On leave'].includes(entry.state)} value={entry.checkIn} onChange={event=>update(employee.id,{checkIn:event.target.value})}/></label><label>Check out<input type="time" disabled={['Absent','On leave'].includes(entry.state)} value={entry.checkOut} onChange={event=>update(employee.id,{checkOut:event.target.value})}/></label></div>})}</section>}
+      {chosen.length>0&&<section className="attendance-batch-selected"><h3>Review {chosen.length} attendance record{chosen.length===1?'':'s'}</h3>{chosen.map(employee=>{const entry=selected[employee.id];return <div className="attendance-batch-row" key={employee.id}><strong>{employee.name}</strong><label>Status<select value={entry.state} onChange={event=>update(employee.id,{state:event.target.value})}>{['On site','Late','Checked out','Absent','On leave','Business trip'].map(value=><option key={value}>{value}</option>)}</select></label><label>Check in<input type="time" disabled={['Absent','On leave'].includes(entry.state)} value={entry.checkIn} onChange={event=>update(employee.id,{checkIn:event.target.value})}/></label><label>Site stop (Labour / Supervisor / Driver)<input type="time" disabled={['Absent','On leave'].includes(entry.state)} value={entry.siteStop||''} onChange={event=>update(employee.id,{siteStop:event.target.value})}/></label><label>Check out<input type="time" disabled={['Absent','On leave'].includes(entry.state)} value={entry.checkOut} onChange={event=>update(employee.id,{checkOut:event.target.value})}/></label></div>})}</section>}
       {error&&<p className="form-error" role="alert">{error}</p>}
       <div className="form-actions"><button type="button" className="secondary" onClick={close}>Cancel</button><button className="primary" disabled={busy||!chosen.length}>{busy?'Recording…':`Record ${chosen.length} employee${chosen.length===1?'':'s'}`}</button></div>
     </form>

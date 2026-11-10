@@ -1,3 +1,4 @@
+import {installDailyCostDocuments} from './daily-cost-documents.js';
 import {boqAdjustmentsSchema,calculateBoqFinancials,refreshBoqFinancials} from '../lib/boq-financials.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -15,6 +16,7 @@ import { withTaskAssignees } from '../lib/task-assignees.js';
 import { labourReservations, readLabourDay, splitLabourCost } from '../lib/labour-day-cost.js';
 
 const router = Router();
+installDailyCostDocuments(router);
 /* Kept only as the fallback grouping for the cost comparison below; the values people
    may choose come from the option list, which the company maintains itself. */
 const CATEGORIES = ['Material', 'Labour', 'Equipment', 'Subcontract', 'Overhead'];
@@ -180,7 +182,7 @@ const dailyLineSchema = z.object({
   taskId: z.number().int().positive().optional(),
   taskIds: z.array(z.number().int().positive()).min(1).max(100).optional(),
   boqItemId: z.number().int().positive().nullable().optional(),
-  source: z.enum(['Material','Labour','Fuel','Equipment','Subcontractor','Overhead','Other']),
+  source: z.enum(['Material','Labour','Fuel','Vehicle','Equipment','Subcontractor','Overhead','Other']),
   costType: z.enum(['Expected','Variation','Unexpected']).default('Expected'),
   description: z.string().trim().min(2).max(400),
   quantity: z.number().positive().nullable().optional(), unit: z.string().trim().max(30).nullable().optional(),
@@ -198,10 +200,11 @@ const dailyLineSchema = z.object({
 const costError = (message, status = 400) => Object.assign(new Error(message), { status });
 
 const importedCostLineSchema = z.object({
+  vehicleId:z.number().int().positive().nullable().optional(),
   workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   taskId: z.number().int().positive().nullable().optional(),
   workTask: z.string().trim().min(2).max(220),
-  source: z.enum(['Material','Labour','Fuel','Equipment','Subcontractor','Overhead','Other']),
+  source: z.enum(['Material','Labour','Fuel','Vehicle','Equipment','Subcontractor','Overhead','Other']),
   costType: z.enum(['Expected','Variation','Unexpected']).default('Expected'),
   description: z.string().trim().min(2).max(400),
   quantity: z.number().positive().nullable().optional(),
@@ -238,6 +241,10 @@ router.post('/cost-control/import', auth, permit('qs.costControl'), validate(z.o
 
     for (let index = 0; index < rows.length; index++) {
       const row = rows[index];
+      if(row.source==='Vehicle'){
+        const [[vehicle]]=await connection.execute("SELECT id FROM fleet WHERE id=? AND status<>'Inactive'",[row.vehicleId||0]);
+        if(!vehicle)throw costError(`Imported line ${index+1}: choose an active vehicle.`);
+      }
       let taskId = row.taskId || null;
       if (taskId) {
         const [[task]] = await connection.execute('SELECT id FROM tasks WHERE id=? AND project_id=?',[taskId,projectId]);
@@ -274,9 +281,9 @@ router.post('/cost-control/import', auth, permit('qs.costControl'), validate(z.o
         sheets.set(row.workDate,sheetId);
       }
       await connection.execute(`INSERT INTO daily_cost_lines
-        (sheet_id,task_id,source,cost_type,description,quantity,unit,unit_rate,amount,reference,quoted_recovery)
-        VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
-      [sheetId,taskId,row.source,row.costType,row.description,row.quantity || null,row.unit || null,row.unitRate ?? null,row.amount,row.reference || null]);
+        (sheet_id,task_id,source,cost_type,description,quantity,unit,unit_rate,amount,reference,quoted_recovery,vehicle_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,0,?)`,
+      [sheetId,taskId,row.source,row.costType,row.description,row.quantity || null,row.unit || null,row.unitRate ?? null,row.amount,row.reference || null,row.source==='Vehicle'?row.vehicleId:null]);
     }
     await audit(connection,req.user.id,'IMPORT','daily_cost_sheet','bulk',null,
       { projectId,filename:req.body.filename || null,lineCount:rows.length,sheetIds:[...sheets.values()] },req.ip);
@@ -490,6 +497,11 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
         }
       } else if (line.labourHours != null) {
         throw costError('Labour allocation hours require a selected employee on a Labour line.');
+      }
+      if(line.source==='Vehicle'){
+        if(!line.vehicleId)throw costError('Select a vehicle for vehicle costs.');
+        const [[vehicle]]=await connection.execute("SELECT id FROM fleet WHERE id=? AND status<>'Inactive'",[line.vehicleId]);
+        if(!vehicle)throw costError('Choose an active vehicle for this cost.');
       }
       if (line.source === 'Fuel') {
         if (!line.vehicleId || !line.fuelOrigin) throw costError('Fuel needs a vehicle and a source: station or company reserve.');

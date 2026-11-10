@@ -12,6 +12,7 @@ export default function AttendanceCorrection({ record, projects, close, reload }
         state: values.state,
         checkIn: values.checkIn || null,
         checkOut: values.checkOut || null,
+        siteStop: values.siteStop || null,
         workDate: values.workDate,
         workLocation,
         projectId: workLocation === 'Site' ? Number(values.projectId) : null,
@@ -29,7 +30,8 @@ export default function AttendanceCorrection({ record, projects, close, reload }
       options={[["", 'Choose a site…'], ...projects.map(project => [project.id, project.name])]}
       defaultValue={record.projectId || ''} />}
     <Field name="checkIn" label="Check in" type="time" step="1" required={false} defaultValue={record.in || ''} />
-    <Field name="checkOut" label="Check out" type="time" step="1" required={false} defaultValue={record.out || ''} />
+    <Field name="siteStop" label="Site stop (Labour / Supervisor / Driver)" type="time" step="1" required={false} defaultValue={record.siteStop || ''} />
+    <Field name="checkOut" label="Office check out / final out" type="time" step="1" required={false} defaultValue={record.out || ''} />
     <TextArea name="reason" label="Reason for the correction" placeholder="Why is this record changing? This is kept in the audit history." />
     <p className="form-note wide">This updates attendance history. If a salary run for this date has already been prepared or approved, ask Payroll to review that run separately.</p>
   </FormModal>;

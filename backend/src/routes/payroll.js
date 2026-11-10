@@ -75,7 +75,7 @@ const policySchema = z.object({
     permanentOnly: z.boolean(), minimumMonthlySalary: z.number().nonnegative(),
     weeklyWeeksPerMonth: z.number().positive(), dailyDaysPerMonth: z.number().positive()
   }).default(DEFAULT_STATUTORY_RULES),
-  hrRules:z.object({normalStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),normalEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),paidHoursPerDay:z.number().positive().max(24).default(8),otInterval:z.number().positive().max(4),minimumOt:z.number().nonnegative().max(24),otGraceMinutes:z.number().int().min(0).max(240).default(0),maxDailyOt:z.number().positive().max(24),earlyOtLatestCheckIn:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('07:00'),officeOtMinimumMinutes:z.number().int().min(0).max(240).default(30),labourSiteOtMinimumMinutes:z.number().int().min(0).max(240).default(30),labourTravelOtMinimumMinutes:z.number().int().min(0).max(240).default(31),supervisorSiteOtMinimumMinutes:z.number().int().min(0).max(240).default(30),supervisorTravelOtMinimumMinutes:z.number().int().min(0).max(240).default(31),driverSiteOtMinimumMinutes:z.number().int().min(0).max(240).default(31),driverTravelOtMinimumMinutes:z.number().int().min(0).max(240).default(30),lateGraceMinutes:z.number().int().nonnegative().default(15),monthlyOvertimeDayThreshold:z.number().positive().max(366).default(25),monthlyOvertimeMultiplier:z.number().positive().max(10).default(1.5),transportDivisor:z.number().positive().max(366),fullTransportDays:z.number().int().min(0).max(366).nullable(),fullTransportComparison:z.enum(['At least','More than']),longDistanceKm:z.number().nonnegative(),longDistancePayment:z.number().nonnegative(),supervisorSiteCharge:z.number().nonnegative().default(500),mileageRate:z.number().nonnegative(),fixedTravelPayment:z.number().nonnegative(),allowMileageAndFixed:z.boolean(),countLeaveForTransport:z.boolean(),countAbsenceForTransport:z.boolean(),separateApproval:z.boolean().default(false)}).refine(r=>r.normalEnd>r.normalStart,'Normal shift end must be after its start').default(INITIAL_HR_RULES)
+  hrRules:z.object({normalStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),normalEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),paidHoursPerDay:z.number().positive().max(24).default(8),otInterval:z.number().positive().max(4),minimumOt:z.number().nonnegative().max(24),otGraceMinutes:z.number().int().min(0).max(240).default(0),maxDailyOt:z.number().positive().max(24),earlyOtLatestCheckIn:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('07:00'),officeOtMinimumMinutes:z.number().int().min(0).max(240).default(30),labourSiteOtMinimumMinutes:z.number().int().min(0).max(240).default(30),labourTravelOtMinimumMinutes:z.number().int().min(0).max(240).default(45),supervisorSiteOtMinimumMinutes:z.number().int().min(0).max(240).default(30),supervisorTravelOtMinimumMinutes:z.number().int().min(0).max(240).default(45),driverSiteOtMinimumMinutes:z.number().int().min(0).max(240).default(31),driverTravelOtMinimumMinutes:z.number().int().min(0).max(240).default(30),lateGraceMinutes:z.number().int().nonnegative().default(15),monthlyOvertimeDayThreshold:z.number().positive().max(366).default(25),monthlyOvertimeMultiplier:z.number().positive().max(10).default(1.5),transportDivisor:z.number().positive().max(366),fullTransportDays:z.number().int().min(0).max(366).nullable(),fullTransportComparison:z.enum(['At least','More than']),longDistanceKm:z.number().nonnegative(),longDistancePayment:z.number().nonnegative(),supervisorSiteCharge:z.number().nonnegative().default(500),mileageRate:z.number().nonnegative(),fixedTravelPayment:z.number().nonnegative(),allowMileageAndFixed:z.boolean(),countLeaveForTransport:z.boolean(),countAbsenceForTransport:z.boolean(),separateApproval:z.boolean().default(false)}).refine(r=>r.normalEnd>r.normalStart,'Normal shift end must be after its start').default(INITIAL_HR_RULES)
 });
 
 const policySelect = `SELECT p.id,p.company_id companyId,c.name company,p.effective_from effectiveFrom,p.office_ot_rate officeOtRate,
@@ -424,7 +424,7 @@ async function buildPayroll(req,connection){
             department:departments.find(department=>Number(department.id)===Number(row.department_id))?.name||null,
             employmentType:row.employment_type,joinDate:row.join_date};
           row.calculation_detail.sourceAttendance=days.map(day=>({id:day.id,workDate:day.work_date,state:day.state,
-            checkIn:day.check_in,checkOut:day.check_out,workLocation:day.work_location,projectId:day.project_id,
+            checkIn:day.check_in,siteStop:day.site_stop||null,checkOut:day.check_out,workLocation:day.work_location,projectId:day.project_id,
             needsReview:Boolean(day.needs_review),source:day.source,
             payrollOnly:Boolean(day.payroll_only),specialPayInputId:day.special_pay_input_id||null}));
         } catch(error) {throw fail(409,`${row.name}: ${error.message}`);}
@@ -502,9 +502,17 @@ async function buildPayroll(req,connection){
         for (const component of employeeComponents) await connection.execute(`INSERT INTO payslip_components
           (payslip_id,source_component_id,name,kind,amount,calculation_detail,claim_id) VALUES (?,?,?,?,?,?,?)`,
         [slip.insertId, component.id, component.name, component.kind, component.amount,component.formula,component.claimId||null]);
-        for(const o of employee.calculation_detail.overtime.filter(o=>o.projectId))
+        // One attendance source can supply both Site and Travel OT. Allocate its
+        // combined cost once while preserving the separate saved payslip lines.
+        const otAllocations=new Map();
+        for(const o of employee.calculation_detail.overtime.filter(o=>o.projectId)){
+          const sourceType=o.source.startsWith('Attendance')?'Attendance OT':'Overtime';
+          const key=`${sourceType}:${o.sourceId}`,previous=otAllocations.get(key);
+          otAllocations.set(key,{...o,sourceType,amount:money((previous?.amount||0)+o.amount)});
+        }
+        for(const o of otAllocations.values())
           await connection.query('INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,?,?,?)',
-            [slip.insertId,o.projectId,employee.id,o.workDate,o.source==='Attendance'?'Attendance OT':'Overtime',o.sourceId,o.amount]);
+            [slip.insertId,o.projectId,employee.id,o.workDate,o.sourceType,o.sourceId,o.amount]);
         for(const c of claims.filter(c=>c.project_id)){
           const component=employeeComponents.find(p=>p.claimId===c.id);
           await connection.query("INSERT INTO payroll_project_allocations(payslip_id,project_id,employee_id,work_date,source_type,source_id,amount) VALUES(?,?,?,?,'Claim',?,?)",[slip.insertId,c.project_id,employee.id,c.work_date,c.id,component.amount]);
@@ -552,6 +560,11 @@ router.patch('/:id', auth, permit('hr.payroll'), validate(z.object({ status: z.e
     const before = await lockPayrollRun(connection,req.params.id);
     const allowed={Draft:['Approved'],Approved:['Paid'],Paid:[]};
     if(!allowed[before.status].includes(req.body.status))throw fail(409,'Payroll can only move from Draft to Approved, then Paid. Approved or paid salary snapshots cannot be reopened or changed.');
+    if(req.body.status==='Approved'){
+      const [slips]=await connection.execute('SELECT calculation_detail FROM payslips WHERE run_id=?',[before.id]);
+      for(const slip of slips){const detail=typeof slip.calculation_detail==='string'?JSON.parse(slip.calculation_detail):slip.calculation_detail;
+        if(detail?.warnings?.some(row=>row.blocksApproval))throw fail(409,'Resolve missing site-stop or overlapping Site/Travel OT evidence, then explicitly regenerate this Draft before approval.');}
+    }
     await connection.execute('UPDATE payroll_runs SET status=?,approved_by=? WHERE id=?',
       [req.body.status, req.body.status === 'Draft' ? null : req.user.id, before.id]);
     await audit(connection, req.user.id, req.body.status.toUpperCase(), 'payroll_run', before.id, before, { status: req.body.status }, req.ip);

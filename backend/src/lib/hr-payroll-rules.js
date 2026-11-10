@@ -3,8 +3,8 @@ export const INITIAL_HR_RULES={normalStart:'07:30',normalEnd:'16:30',paidHoursPe
   // dated policies can still be read, but are not used by the new GKUC rules.
   otInterval:0.25,minimumOt:0.25,otGraceMinutes:0,maxDailyOt:6,
   earlyOtLatestCheckIn:'07:00',officeOtMinimumMinutes:30,
-  labourSiteOtMinimumMinutes:30,labourTravelOtMinimumMinutes:31,
-  supervisorSiteOtMinimumMinutes:30,supervisorTravelOtMinimumMinutes:31,
+  labourSiteOtMinimumMinutes:30,labourTravelOtMinimumMinutes:45,
+  supervisorSiteOtMinimumMinutes:30,supervisorTravelOtMinimumMinutes:45,
   driverSiteOtMinimumMinutes:31,driverTravelOtMinimumMinutes:30,
   lateGraceMinutes:15,monthlyOvertimeDayThreshold:25,monthlyOvertimeMultiplier:1.5,
   transportDivisor:25,fullTransportDays:null,fullTransportComparison:'At least',longDistanceKm:50,longDistancePayment:500,supervisorSiteCharge:500,mileageRate:17,fixedTravelPayment:300,allowMileageAndFixed:false,countLeaveForTransport:false,countAbsenceForTransport:false,separateApproval:false};

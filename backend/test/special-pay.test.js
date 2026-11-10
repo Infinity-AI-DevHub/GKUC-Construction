@@ -8,7 +8,7 @@ import {INITIAL_HR_RULES} from '../src/lib/hr-payroll-rules.js';
 import {calculatePayrollLeave} from '../src/lib/payroll-leave.js';
 import {operatorPayrollDays,SPECIAL_PAY_RATES} from '../src/lib/special-pay.js';
 const policy={id:1,company_id:1,effective_from:'2025-01-01',site_labour_site_ot_rate:999,site_labour_travel_ot_rate:999,hr_rules:INITIAL_HR_RULES};
-const day=(date='2026-01-01',extra={})=>({id:Number(date.slice(-2)),work_date:date,state:'Checked out',check_in:'07:30:00',check_out:'16:30:00',work_location:'Site',...extra});
+const day=(date='2026-01-01',extra={})=>({id:Number(date.slice(-2)),work_date:date,state:'Checked out',check_in:'07:30:00',check_out:'16:30:00',work_location:'Site',site_stop:extra.site_stop??extra.check_out??'16:30:00',...extra});
 const emp=(mode,inputs=[])=>({id:1,daily_rate:1000,payroll_company_id:1,payroll_category:'Site labourer',worker_type:'Site',
   special_pay_rules:[{id:1,mode,effective_from:'2026-01-01',rates:{...SPECIAL_PAY_RATES}}],special_pay_days:inputs});
 const input=(work_date,work_kind,extra={})=>({id:1,work_date,work_kind,recorded_by:7,reason:'HR checked',...extra});
@@ -46,12 +46,13 @@ test('extra monthly days use role rate times 1.5 and fixed 2700 operator basic; 
   const feb=day('2026-02-01');
   assert.equal(calc(emp('Machine operator',[...inputs,input(feb.work_date,'Machine',{start_meter:106,end_meter:112})]),[feb],[],[...days,feb]).attendance_basic,3900);
 });
-test('role Travel OT retains the 31 minute threshold and 100 hourly rate',()=>{
+test('role Travel OT follows the 45 minute threshold and 100 hourly rate',()=>{
   const employee=emp('Work role',[input('2026-01-01','Bass')]);
   const ot=minutes=>[{work_date:'2026-01-01',overtime_type:'Travel',hours:minutes/60,status:'Approved'}];
   assert.equal(calc(employee,[day(undefined,{check_out:'17:01:00'})]).site_ot_pay,116.25);
   assert.equal(calc(employee,[day()],ot(30)).travel_ot_pay,0);
-  assert.equal(calc(employee,[day()],ot(31)).travel_ot_pay,51.67);
+  assert.equal(calc(employee,[day()],ot(44)).travel_ot_pay,0);
+  assert.equal(calc(employee,[day()],ot(45)).travel_ot_pay,75);
 });
 test('saved special earnings, transport and advance reconcile in exports without current inputs',()=>{
   const employee=emp('Machine operator',[input('2026-01-01','Machine',{start_meter:10,end_meter:16})]);
