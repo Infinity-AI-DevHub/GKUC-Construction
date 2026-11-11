@@ -1,3 +1,4 @@
+import FuelSubmissions from './FuelSubmissions.jsx';
 import MdPersonalExpenses from './MdPersonalExpenses.jsx';
 import Retention from './Retention.jsx';
 import React, { useEffect, useState } from 'react';
@@ -20,8 +21,9 @@ import ProgressClaims from './ProgressClaims.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
-const TABS = ['Financial reports','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Retention','Progress claims','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Credit purchases','Supplier invoices','Supplier statements','Categories','MD Personal Expenses'];
+const TABS = ['Financial reports','Fuel submissions','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Retention','Progress claims','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Credit purchases','Supplier invoices','Supplier statements','Categories','MD Personal Expenses'];
 const TAB_PERMISSIONS = {
+  'Fuel submissions':['finance.view','finance.manage','fuel.view','fuel.review'],
   'MD Personal Expenses':['finance.manage'],
   Retention:['finance.view','finance.manage','qs.retention'],
   'Progress claims':['finance.view','finance.invoice'],
@@ -36,7 +38,7 @@ const TAB_PERMISSIONS = {
   'Supplier invoices':['finance.pay'], 'Credit purchases':['finance.pay'], Categories:['finance.manage']
 };
 const TAB_GROUPS = [
-  { label: 'Overview & review', tabs: ['Financial reports', 'Management accounts', 'Cash comparison', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
+  { label: 'Overview & review', tabs: ['Fuel submissions', 'Financial reports', 'Management accounts', 'Cash comparison', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
   { label: 'Money in', tabs: ['Invoices', 'Retention', 'Progress claims', 'Income', 'VAT ledger'] },
   { label: 'Money out', tabs: ['Expected outflows', 'Bills', 'Credit purchases', 'Supplier invoices', 'Supplier statements', 'Expenses', 'Petty cash', 'Credit cards'] },
   { label: 'Controls', tabs: ['VAT clearance', 'Cheques', 'Bonds', 'Categories'] },
@@ -44,7 +46,7 @@ const TAB_GROUPS = [
 ];
 
 /** PID 2.10 — costs, payments and profitability in one view, watched continuously. */
-export default function Finance({ data, reload, can, companyId, company }) {
+export default function Finance({ user, data, reload, can, companyId, company }) {
   const [tab, setTab] = useState(() => window.location.pathname.split('/')[2] === 'daily-expenses' ? 'Expenses' : TABS.find(section => slug(section) === window.location.pathname.split('/')[2]) || TABS[0]);
   const [open, setOpen] = useState('');
   const [summary, setSummary] = useState(null);
@@ -89,6 +91,7 @@ export default function Finance({ data, reload, can, companyId, company }) {
     <Tabs tabs={visibleTabs} active={tab} onChange={setTab} groups={visibleGroups} />
 
     <>
+    {tab === 'Fuel submissions' && <FuelSubmissions key={companyId} {...{can,companyId,user,reload}} />}
     {tab === 'Retention' && <Retention key={companyId} can={can} companyId={companyId} data={data} />}
     {tab === 'Financial reports' && <FinanceReports projects={data.projects} companyId={companyId} company={company} />}
     {tab === 'Management accounts' && <ManagementAccounts projects={data.projects.filter(project => Number(project.companyId) === Number(companyId))} companyId={companyId} company={company} can={featureCan('finance.managementAccountsManage')} />}

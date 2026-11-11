@@ -1,3 +1,4 @@
+import FuelSubmissions from './FuelSubmissions.jsx';
 import BoqAdjustments from '../BoqAdjustments.jsx';
 import {projectDeliveryStatus} from '../ProjectDeadlines.jsx';
 import React, { useEffect, useState } from 'react';
@@ -9,12 +10,12 @@ import ClientDirectory from './ClientDirectory.jsx';
 import { refreshOptions, useOptions } from '../options.js';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
-const TABS = ['Projects', 'Clients', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquiries'];
+const TABS = ['Projects', 'Clients', 'Milestones', 'BOQ & estimates', 'Variations', 'Inquiries', 'Fuel submissions'];
 const PROJECT_STAGES = ['Not started', 'Mid-way', 'Completed'];
 const healthTone = health => (health === 'Completed' ? 'completed' : health === 'On track' ? 'on-track' : health === 'At risk' ? 'at-risk' : 'watch');
 
 /** PID 2.4 / 2.5 — projects, their milestones, and the estimates the budget comes from. */
-export default function Projects({ data, reload, can, companyId, company, companies, setCompanyId, navigate }) {
+export default function Projects({ user, data, reload, can, companyId, company, companies, setCompanyId, navigate }) {
   const tabs=TABS.filter(section=>section!=='Clients'||can.has('clients.view'));
   const [selectedTab, setTab] = useState(window.location.pathname.startsWith('/projects/clients/') ? 'Clients' : TABS.find(section=>slug(section)===decodeURIComponent(window.location.pathname.split('/')[2]||'')) || TABS[0]);
   const tab=tabs.includes(selectedTab)?selectedTab:tabs[0];
@@ -64,6 +65,7 @@ export default function Projects({ data, reload, can, companyId, company, compan
         window.history.pushState({}, '', '/projects');
       setTab(next);
     }} />
+    {tab === 'Fuel submissions' && <FuelSubmissions key={companyId} {...{can,companyId,user,reload}} />}
 
     {tab === 'Projects' && <ProjectCards data={data} onOpen={openProject} onOpenClient={id => {
       window.history.pushState({}, '', `/projects/clients/${id}`); setTab('Clients');

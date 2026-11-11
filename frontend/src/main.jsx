@@ -28,6 +28,8 @@ const Tasks = lazy(() => import('./pages/Tasks.jsx'));
 const People = lazy(() => import('./pages/People.jsx'));
 const Materials = lazy(() => import('./pages/Materials.jsx'));
 const Inventory = lazy(() => import('./pages/Inventory.jsx'));
+const FuelSubmissions = lazy(() => import('./pages/FuelSubmissions.jsx'));
+const Reminders = lazy(() => import('./pages/Reminders.jsx'));
 const Fleet = lazy(() => import('./pages/Fleet.jsx'));
 const Finance = lazy(() => import('./pages/Finance.jsx'));
 const DailyReports = lazy(() => import('./pages/DailyReports.jsx'));
@@ -55,7 +57,7 @@ const ADMIN_TABS = ['Users', 'Access control', 'Company', 'Documents', 'Import c
 const NAV = [
   ['Dashboard', LayoutDashboard],['Coordination', Radar],['Projects', Building2],['Tasks', ClipboardCheck],
   ['Quantity Surveying', Calculator],['People', Users],['Materials', Warehouse],['Stock locations', Warehouse],
-  ['Fleet', Truck],['Finance', CircleDollarSign],['Daily reports', FileText],['Site Today', ClipboardList],
+  ['Fleet', Truck],['Fuel submissions', Truck],['Reminders', ClipboardList],['Finance', CircleDollarSign],['Daily reports', FileText],['Site Today', ClipboardList],
   ['Chat', MessageSquare],['Drive', HardDrive],['Reports', ClipboardList],['Administration', ShieldCheck]
 ];
 
@@ -522,6 +524,8 @@ function App() {
     Materials: <Materials {...shared} />,
     'Stock locations': <Inventory {...shared} />,
     Fleet: <Fleet {...shared} />,
+    'Fuel submissions': <FuelSubmissions key={companyId} {...shared} />,
+    Reminders: <Reminders user={user} />,
     Finance: <Finance {...shared} />,
     'Daily reports': <DailyReports {...shared} />,
     'Site Today': <SiteToday {...shared} />,
@@ -549,12 +553,12 @@ function App() {
       <DocumentSearchButton onOpen={openGlobalSearch}
         label={activePage === 'People' ? 'Search employees' : 'Search scanned documents'} />
       <SoundToggle />
-      <NotificationBell notifications={data.notifications} reload={reload} onViewAll={openNotifications} placement={placement} />
+      <NotificationBell notifications={data.notifications} reminders={data.reminderNotifications} reload={reload} onViewAll={openNotifications} onViewReminders={() => goTo('Reminders')} placement={placement} />
     </span>
   );
 
   return <div className="app">
-    <Banners items={banners.items} onDismiss={banners.dismiss} onOpen={openNotifications} />
+    <Banners items={banners.items} onDismiss={banners.dismiss} onOpen={item => item.referenceType === 'personal_reminder' ? goTo('Reminders') : openNotifications()} />
     <DocumentSearch open={searching} onClose={() => setSearching(false)} />
     {tourOpen && <Tour user={user} can={can} onNavigate={goTo}
       onClose={() => { setTourOpen(false); setUser(current => ({ ...current, tourSeenAt: new Date().toISOString() })); }} />}

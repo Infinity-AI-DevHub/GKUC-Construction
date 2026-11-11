@@ -6,7 +6,7 @@ export const REPORT_PERMISSIONS={
   progress:['projects.view','site.reports']
 };
 export const MODULE_PERMISSIONS={
-  Dashboard:[],Coordination:['projects.view','resources.view','resources.reassign','projects.schedule','enquiries.manage'],Projects:['projects.view'],Tasks:['projects.view','site.tasks'],
+  Dashboard:[],Reminders:[],'Fuel submissions':['fuel.submit','fuel.review','fuel.view'],Coordination:['projects.view','resources.view','resources.reassign','projects.schedule','enquiries.manage'],Projects:['projects.view'],Tasks:['projects.view','site.tasks'],
   'Quantity Surveying':['qs.view','qs.costControl','qs.boq','qs.boqAmend','qs.quotation','qs.quotationRevise','qs.quotationFinalize','qs.tender','qs.retention','qs.templates','qs.approve','subcontractors.manage'],
   People:['hr.view','hr.manage','hr.attendance','hr.leave','hr.payroll','hr.settings','hr.conduct','hr.hiring','hr.insurance','hr.assets'],
   Materials:['store.view','store.manage','projects.manage','finance.pay'],
@@ -30,12 +30,12 @@ const departmentOrders=[
   [/\b(administration|administrator|admin)\b/,['Administration']]
 ];
 const identityOrder=text=>departmentOrders.find(([pattern])=>pattern.test(String(text||'').toLowerCase()))?.[1]||[];
-const ownPrefixes={Finance:'finance.',People:'hr.','Quantity Surveying':'qs.',Fleet:'transport.',Materials:'store.',
+const ownPrefixes={'Fuel submissions':'fuel.',Finance:'finance.',People:'hr.','Quantity Surveying':'qs.',Fleet:'transport.',Materials:'store.',
   Coordination:'resources.',Projects:'projects.',Administration:'admin.','Site Today':'site.'};
 
 export function navigationItems(items,user){
   const held=new Set(user?.permissions||[]);
-  const visible=items.filter(([name])=>name==='Dashboard'||(MODULE_PERMISSIONS[name]||[]).some(key=>held.has(key)));
+  const visible=items.filter(([name])=>['Dashboard','Reminders'].includes(name)||(MODULE_PERMISSIONS[name]||[]).some(key=>held.has(key)));
   const preferred=[...identityOrder(user?.department),...identityOrder(user?.role)];
   const primary=preferred.find(name=>visible.some(([label])=>label===name));
   // Roles and departments affect order only. Access always comes from explicit grants.

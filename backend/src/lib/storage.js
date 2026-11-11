@@ -71,7 +71,7 @@ export const FOLDERS = [
   'md_personal_expense','attendance', 'claim', 'handover', 'candidate', 'task', 'project', 'employee', 'report',
   'vehicle', 'equipment', 'incoming_letter', 'risk_finding', 'company_compliance', 'progress_certificate',
   /* Files managed by their own modules. */
-  'gallery', 'boq', 'subcontract-quotation', 'tender', 'drive'
+  'fuel-submission', 'gallery', 'boq', 'subcontract-quotation', 'tender', 'drive'
 ];
 
 export const isAllowedType = mime => ALLOWED.has(mime);

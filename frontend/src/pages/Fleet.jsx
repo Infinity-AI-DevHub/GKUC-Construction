@@ -1,3 +1,4 @@
+import FuelSubmissions from './FuelSubmissions.jsx';
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, CalendarDays, Fuel, Gauge, QrCode, Truck, Users, Wrench } from 'lucide-react';
 import { api, openRecord, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
@@ -15,6 +16,7 @@ const TABS = [
   ['Maintenance', ['transport.view', 'transport.manage']],
   ['Compliance', ['transport.view', 'transport.manage']],
   ['Fuel & service', ['transport.view', 'transport.manage']],
+  ['Fuel submissions', ['transport.view','transport.manage','fuel.view','fuel.review']],
   ['Equipment', ['store.view', 'store.manage', 'store.lending']]
 ];
 
@@ -28,7 +30,7 @@ function QrCodeImage({ value }) {
 }
 
 /** PID 2.8 and 2.9 — vehicles with their compliance dates, and equipment with its whereabouts. */
-export default function Fleet({ data, reload, can, companyId, company }) {
+export default function Fleet({ user, data, reload, can, companyId, company }) {
   const tabs = allowedTabs(TABS, can);
   const [tab, setTab] = useState(() => {
     const section = window.location.pathname.split('/')[2];
@@ -53,6 +55,7 @@ export default function Fleet({ data, reload, can, companyId, company }) {
     <FleetPulse vehicles={vehicles} />
     <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
+    {tab === 'Fuel submissions' && <FuelSubmissions key={companyId} {...{can,companyId,user,reload}} />}
     {tab === 'Vehicles' && <Vehicles data={fleetData} can={can} reload={reload} />}
     {tab === 'Maintenance' && <MaintenanceReminders data={fleetData} can={can} />}
     {tab === 'Compliance' && <Compliance />}

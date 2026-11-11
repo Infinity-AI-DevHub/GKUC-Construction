@@ -1,3 +1,5 @@
+import reminderRoutes from './routes/reminders.js';
+import fuelSubmissionRoutes from './routes/fuel-submissions.js';
 import { storageConfigurationSummary } from './lib/storage.js';
 import 'dotenv/config';
 import path from 'node:path';
@@ -261,6 +263,8 @@ app.use('/api/attendance', attendanceRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/purchasing', purchasingRoutes);
 app.use('/api/fleet', fleetRoutes);
+app.use('/api/fuel-submissions', fuelSubmissionRoutes);
+app.use('/api/reminders', reminderRoutes);
 app.use('/api/equipment', equipmentRoutes);
 app.use('/api', optionRoutes);
 app.use('/api', chatRoutes);

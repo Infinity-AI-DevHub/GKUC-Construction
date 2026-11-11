@@ -1,0 +1,18 @@
+.reminder-recipients {
+  max-height: 15rem;
+  overflow-y: auto;
+}
+
+.reminder-recipients > label {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .3rem;
+}
+
+.reminder-list {
+  display: grid;
+  gap: .8rem;
+  padding-inline-start: 1.25rem;
+  overflow-wrap: anywhere;
+}

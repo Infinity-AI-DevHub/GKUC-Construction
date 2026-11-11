@@ -15,9 +15,10 @@ test('linked employee department takes priority over a generic or conflicting ro
   assert.equal(names({role:'HR Department Head',department:'Finance',permissions:['hr.view','finance.view']})[1],'Finance');
 });
 test('role labels never grant permissions and denied modules cannot enter the menu',()=>{
-  assert.deepEqual(names({role:'Managing Director',permissions:[]}),['Dashboard']);
-  assert.deepEqual(names({role:'Finance Department Head',permissions:['chat.use']}),['Dashboard','Chat']);
+  assert.deepEqual(names({role:'Managing Director',permissions:[]}),['Dashboard','Reminders']);
+  assert.deepEqual(names({role:'Finance Department Head',permissions:['chat.use']}),['Dashboard','Reminders','Chat']);
   assert.ok(!names({permissions:['qs.boq']}).includes('Administration'));
+  assert.deepEqual(names({role:'Fuel Recorder',permissions:['fuel.submit']}),['Dashboard','Fuel submissions','Reminders']);
   assert.ok(!names({permissions:['finance.vatSchedules']}).includes('Reports'));
   assert.ok(!names({permissions:['unknown.permission']}).includes('Finance'));
 });

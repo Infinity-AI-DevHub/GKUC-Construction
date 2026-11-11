@@ -18,7 +18,7 @@
 export const PRIVILEGED_KEYS = [
   'hr.settings','hr.conduct','finance.costReview','admin.company','admin.documents',
   'admin.users', 'admin.roles', 'admin.audit', 'admin.notifications',
-  'finance.pay', 'finance.invoice', 'hr.payroll',
+  'finance.pay', 'finance.invoice', 'hr.payroll', 'fuel.review',
   'finance.managementAccountsManage', 'finance.cashComparison', 'finance.expectedOutflows',
   'finance.vatSchedules', 'finance.vatClearance', 'admin.integrity', 'admin.importCentre',
   'messages.send', 'qs.boqAmend', 'admin.lists'
@@ -99,6 +99,9 @@ export const PERMISSIONS = [
 
   /* Transport */
   { key: 'transport.view', department: 'Transport', label: 'View vehicles and fuel' },
+  { key: 'fuel.submit', department: 'Transport', label: 'Submit vehicle fuel entries and view own submissions' },
+  { key: 'fuel.view', department: 'Transport', label: 'View all fuel submissions and their photos' },
+  { key: 'fuel.review', department: 'Transport', label: 'Approve or reject fuel submissions and post approved fuel' },
   { key: 'transport.manage', department: 'Transport', label: 'Manage vehicles, drivers, odometer, fuel, services, repairs, insurance and licences' },
 
   /* Stores */

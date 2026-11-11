@@ -46,8 +46,8 @@ try{
     }
     await page.screenshot({path:'/tmp/gkuc-navigation-'+width+'.png'});
     await page.evaluate(()=>window.setNavUser({role:'Finance Department Head',permissions:[]}));
-    await page.waitForFunction(()=>document.querySelectorAll('[data-nav-item]').length===1);
-    assert.equal(await page.locator('[data-nav-item]').innerText(),'Dashboard');
+    await page.waitForFunction(()=>document.querySelectorAll('[data-nav-item]').length===2);
+    assert.deepEqual(await page.locator('[data-nav-item]').allTextContents(),['Dashboard','Reminders']);
     assert.equal(await page.getByRole('menuitem').count(),0);
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     await page.close();console.log(width+': department priority, More menu, selection and permission revocation passed');
