@@ -59,6 +59,13 @@ try{
     await page.getByRole('button',{name:'Acknowledge',exact:true}).waitFor({state:'detached'});
     assert.equal(await cards.count(),7);
     assert.equal(await page.getByRole('button',{name:'Remind me daily',exact:true}).count(),7);
+    reminders.push({...reminders[0],id:88,invoiceNo:'CR-88'});
+    await page.reload();
+    await page.getByText(/2 invoices · LKR 70,000.00 outstanding/).waitFor();
+    assert.equal(await cards.count(),7);
+    await page.getByText(/2 invoices · LKR 70,000.00 outstanding/).click();
+    await page.getByText('CR-88 · Credit purchase',{exact:true}).waitFor();
+
     await page.screenshot({path:'/tmp/gkuc-dashboard-checkouts-'+width+'.png'});
     await page.getByRole('button',{name:'Resolve immediately',exact:true}).click();
     await page.getByText('2 employees · 3 overdue records',{exact:true}).waitFor();

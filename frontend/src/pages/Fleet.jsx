@@ -87,8 +87,10 @@ function Vehicles({ data, can, reload }) {
   };
   useEffect(() => {
     const id=Number(new URLSearchParams(window.location.search).get('record'));
-    if(id&&data.fleet.some(vehicle=>Number(vehicle.id)===id))
-      api(`/fleet/${id}`).then(setDetail).catch(()=>{});
+    if (id > 0) {
+      const fuel=Number(new URLSearchParams(window.location.search).get('fuel'));
+      openRecord('/fleet/'+id+(fuel>0?'?fuel='+fuel:''),setDetail);
+    }
   }, []);
   return <>
     <div className="fleet-grid">
@@ -119,6 +121,14 @@ function Vehicles({ data, can, reload }) {
 }
 
 function VehicleDetail({ vehicle, initialAction = '', data, close, can, refresh }) {
+  const link = new URLSearchParams(window.location.search);
+  const linkedVehicle = Number(link.get('record'))===Number(vehicle.id);
+  const linked = (type,id) => linkedVehicle && Number(link.get(type))===Number(id);
+  useEffect(()=>{
+    if (!linkedVehicle) return;
+    const type=['fuel','maintenance','document','renewal'].find(key=>Number(link.get(key))>0);
+    if(type) document.getElementById('vehicle-'+type+'-'+Number(link.get(type)))?.scrollIntoView({block:'center'});
+  },[vehicle.id]);
   const [action,setAction]=useState(initialAction);
   const fuelMax=Math.max(1,...vehicle.fuel.slice(0,8).map(row=>Number(row.cost)));
   return <Modal title={`${vehicle.vehicle} — ${vehicle.reg}`} close={close} wide>
@@ -159,7 +169,7 @@ function VehicleDetail({ vehicle, initialAction = '', data, close, can, refresh 
       <div className="wide">
         <Table columns={['Document', 'Reference', 'Expiry', 'Status']} template="150px minmax(140px,1fr) 130px 140px"
           title="Compliance" empty="No documents tracked.">
-          {vehicle.documents.map(document => <Row template="150px minmax(140px,1fr) 130px 140px" key={document.id}>
+          {vehicle.documents.map(document => <Row template="150px minmax(140px,1fr) 130px 140px" key={document.id} id={'vehicle-document-'+document.id} className={linked('document',document.id)?'linked-record':''}>
             <strong>{document.docType}</strong>
             <span>{document.reference || '—'}</span>
             <span>{shortDate(document.expiryDate)}</span>
@@ -171,7 +181,7 @@ function VehicleDetail({ vehicle, initialAction = '', data, close, can, refresh 
       <div className="wide">
         <Table columns={['Date', 'Litres', 'Cost', 'Odometer', 'Project']} template="130px 90px 120px 110px minmax(140px,1fr)"
           title="Fuel records" empty="No fuel recorded.">
-          {vehicle.fuel.map(row => <Row template="130px 90px 120px 110px minmax(140px,1fr)" key={row.id}>
+          {[...(vehicle.linkedFuelRecord?[vehicle.linkedFuelRecord]:[]),...vehicle.fuel].map(row => <Row template="130px 90px 120px 110px minmax(140px,1fr)" key={row.id} id={'vehicle-fuel-'+row.id} className={linked('fuel',row.id)?'linked-record':''}>
             <span>{shortDate(row.fuelDate)}</span><span>{row.litres ?? '—'}</span><span>{rupees(row.cost)}</span>
             <span>{row.odometer}</span><span>{row.project || '—'}{row.fuelFloat ? <small>Paid from {row.fuelFloat}</small> : null}</span>
           </Row>)}
@@ -182,14 +192,14 @@ function VehicleDetail({ vehicle, initialAction = '', data, close, can, refresh 
           title="Services and repairs"
           tools={can?.transport ? <button className="secondary" onClick={() => setAction('work')}><Wrench size={14} /> Log work</button> : null}
           empty="No maintenance recorded.">
-          {vehicle.maintenance.map(row => <Row template="110px 100px minmax(200px,2fr) minmax(140px,1fr) 140px 100px 120px" key={row.id}>
+          {vehicle.maintenance.map(row => <Row template="110px 100px minmax(200px,2fr) minmax(140px,1fr) 140px 100px 120px" key={row.id} id={'vehicle-maintenance-'+row.id} className={linked('maintenance',row.id)?'linked-record':''}>
             <span>{shortDate(row.serviceDate)}</span><Badge tone={slug(row.kind)}>{row.kind}</Badge><span>{row.description}{Array.isArray(row.completedSchedules) && row.completedSchedules.length > 0 && <small>Completed: {row.completedSchedules.map(item => item.name).join(', ')}</small>}</span>
             <span>{row.garage || '—'}</span><span>{row.project||'Company fleet'}</span><span>{row.odometer} km</span><span>{rupees(row.cost)}</span>
           </Row>)}
         </Table>
       </div>
       <div className="wide"><Table columns={['Reading date','Odometer','Source','Notes']} template="130px 130px 120px minmax(200px,1fr)" title="Odometer history" empty="No dated odometer readings.">{vehicle.readings.map(row=><Row template="130px 130px 120px minmax(200px,1fr)" key={row.id}><span>{shortDate(row.readingDate)}</span><strong>{Number(row.odometer).toLocaleString('en-LK')} km</strong><span>{row.source}</span><span>{row.notes||'—'}</span></Row>)}</Table></div>
-      <div className="wide"><Table columns={['Document','Renewed','Expiry','Reference','Cost']} template="150px 120px 120px minmax(160px,1fr) 120px" title="Renewal history" empty="No dated renewals yet; current dates appear above.">{vehicle.renewals.map(row=><Row template="150px 120px 120px minmax(160px,1fr) 120px" key={row.id}><strong>{row.docType}</strong><span>{shortDate(row.renewedOn)}</span><span>{shortDate(row.expiryDate)}</span><span>{row.reference||'—'}</span><span>{rupees(row.cost)}</span></Row>)}</Table></div>
+      <div className="wide"><Table columns={['Document','Renewed','Expiry','Reference','Cost']} template="150px 120px 120px minmax(160px,1fr) 120px" title="Renewal history" empty="No dated renewals yet; current dates appear above.">{vehicle.renewals.map(row=><Row template="150px 120px 120px minmax(160px,1fr) 120px" key={row.id} id={'vehicle-renewal-'+row.id} className={linked('renewal',row.id)?'linked-record':''}><strong>{row.docType}</strong><span>{shortDate(row.renewedOn)}</span><span>{shortDate(row.expiryDate)}</span><span>{row.reference||'—'}</span><span>{rupees(row.cost)}</span></Row>)}</Table></div>
       <div className="form-actions"><button type="button" className="secondary" onClick={close}>Close</button></div>
     </div>
     {action==='details'&&<MachineDetailsForm vehicle={vehicle} close={()=>setAction('')} reload={refresh}/>}

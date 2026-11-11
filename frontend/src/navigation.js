@@ -13,7 +13,7 @@ export const MODULE_PERMISSIONS={
   'Stock locations':['store.view','store.manage','projects.view'],
   Fleet:['transport.view','transport.manage','store.view','store.manage','store.lending'],
   Finance:['finance.view','finance.manage','finance.invoice','finance.pay','finance.costReview','finance.reports','finance.managementAccounts','finance.managementAccountsManage','finance.cashComparison','finance.dailyExpenses','finance.vehicleExpenses','finance.expectedOutflows','finance.vatSchedules','finance.vatClearance','finance.supplierStatements'],
-  'Daily reports':['projects.view'],'Site Today':['site.reports'],Chat:['chat.use'],Drive:['drive.use'],
+  'Daily reports':['projects.view','site.reports'],'Site Today':['site.reports'],Chat:['chat.use'],Drive:['drive.use'],
   Reports:[...new Set(Object.values(REPORT_PERMISSIONS).flat())],
   Administration:['admin.users','admin.roles','admin.audit','admin.integrity','admin.importCentre','admin.lists','admin.notifications','admin.company','admin.documents','messages.send']
 };

@@ -440,6 +440,17 @@ router.get('/invoices', auth, permit('finance.view','finance.pay'), wrap(async (
     ${companyId ? 'WHERE i.company_id=?' : ''} ORDER BY i.id DESC`, companyId ? [companyId] : []));
 }));
 
+router.get('/invoices/:id/payments/:paymentId', auth, permit('finance.pay'), wrap(async (req,res)=>{
+  const payment=await getOne(`SELECT sp.id,sp.amount,sp.paid_date paidDate,sp.reference,i.invoice_no invoiceNo,s.name supplier,c.name company,
+    IF(sp.petty_cash_entry_id IS NULL,sp.method,'Petty cash') method
+    FROM supplier_payments sp JOIN supplier_invoices i ON i.id=sp.invoice_id
+    JOIN suppliers s ON s.id=i.supplier_id JOIN companies c ON c.id=COALESCE(sp.payment_company_id,i.company_id)
+    LEFT JOIN purchase_orders o ON o.id=i.order_id LEFT JOIN projects p ON p.id=o.project_id
+    WHERE sp.id=? AND i.id=? AND (p.id IS NULL OR p.active=1)`,[req.params.paymentId,req.params.id]);
+  if (!payment) return res.status(404).json({error:'Supplier payment not found.'});
+  res.json(payment);
+}));
+
 router.post('/invoices/:id/payment-exception',auth,permit('finance.manage'),validate(z.object({
   reason:z.string().trim().min(10).max(500)
 })),wrap(async(req,res)=>{

@@ -34,7 +34,7 @@ main .page-heading p{font-size:13px;color:var(--workspace-muted);margin-top:8px;
 .report-definition small{display:block;color:#597186;font-size:11px}
 .report-kpis article small{display:block;color:#65788b;font-size:10px;line-height:1.4;margin-top:6px}
 .finance-report-filters>button{align-self:end;min-height:38px}
-.table-row.linked-record{background:#fff7e8;box-shadow:inset 3px 0 #bc761d}
+.table-row.linked-record,tr.linked-record{background:#fff7e8;box-shadow:inset 3px 0 #bc761d}
 .module-layout{display:grid;grid-template-columns:232px minmax(0,1fr);gap:28px;align-items:start}
 .module-navigation{position:sticky;top:var(--workspace-nav-offset);background:#fff;border:1px solid var(--workspace-line);border-radius:18px;padding:20px 10px;box-shadow:0 6px 24px #102a4305;min-width:0}
 .module-navigation{display:flex;flex-direction:column;min-height:0;max-height:calc(100vh - var(--workspace-nav-offset) - 24px);max-height:calc(100dvh - var(--workspace-nav-offset) - 24px);overflow:hidden}
@@ -563,3 +563,27 @@ body:has(.workflow-page) .modal-backdrop{z-index:1200}
 .credit-reminder-heading svg { flex:none; }
 .credit-reminder-card p { margin:0;font-size:12px;line-height:1.45; }
 .credit-reminder-card button { align-self:flex-start;margin-top:auto;max-width:100%;white-space:normal; }
+
+.my-work-quick-actions { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+.my-work-quick-actions a { display:inline-flex;align-items:center;gap:6px;text-decoration:none; }
+.credit-reminder-card details summary { cursor:pointer; }
+.credit-reminder-detail { display:grid;gap:5px; }
+.credit-reminder-card details .credit-reminder-detail { padding:8px 0; border-top:1px solid #e3ad73; }
+.credit-reminder-detail .row-actions { display:flex;flex-wrap:wrap;gap:6px; }
+
+.bell-case-actions { display:flex;flex-wrap:wrap;gap:5px;margin-top:6px; }
+.bell-case-actions button { padding:5px 8px;min-height:32px;font-size:11px; }
+.docsearch-recent { padding:12px; }
+.docsearch-recent h3 { margin:0 0 5px; }
+
+.labour-boq-allocation { grid-column:1/-1;display:grid;gap:10px;min-width:0;padding:12px;border:1px solid #d8e3eb;border-radius:10px;background:#fff; }
+.labour-boq-allocation h3,.labour-boq-allocation p { margin:0; }
+.labour-boq-row { display:grid;grid-template-columns:minmax(0,2fr) minmax(85px,1fr) auto auto;align-items:end;gap:8px;padding:10px 0;border-top:1px solid #e4ebf1; }
+.labour-boq-row output { padding:8px 0;font-weight:700;white-space:nowrap; }
+.labour-boq-row .form-error,.labour-boq-quotation { grid-column:1/-1; }
+.labour-boq-quotation summary { cursor:pointer; }
+@media(max-width:650px) {
+  .labour-boq-row { grid-template-columns:minmax(0,1fr) auto; }
+  .labour-boq-row > label:first-child { grid-column:1/-1; }
+  .labour-boq-row > button { justify-self:start; }
+}

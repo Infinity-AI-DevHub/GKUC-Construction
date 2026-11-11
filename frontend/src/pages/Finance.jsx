@@ -4,7 +4,7 @@ import Retention from './Retention.jsx';
 import React, { useEffect, useState } from 'react';
 import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
 import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { askText, Badge, Field, FormModal, Page, Progress, Row, SelectField, Summary, Table, Tabs, useLiveList } from '../ui.jsx';
+import { askText, Badge, Field, FormModal, Modal, Page, Progress, Row, SelectField, Summary, Table, Tabs, useLiveList } from '../ui.jsx';
 import { useOptions } from '../options.js';
 import { Bonds, ClientInvoices, PettyCash } from '../Receivables.jsx';
 import FinanceReports from './FinanceReports.jsx';
@@ -19,6 +19,7 @@ import VehicleExpenseReport from './VehicleExpenseReport.jsx';
 import VatSchedules from './VatSchedules.jsx';
 import ProgressClaims from './ProgressClaims.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
+import {useRegisterScroll,useRegisterView} from '../register-view.js';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS = ['Financial reports','Fuel submissions','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Retention','Progress claims','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Credit purchases','Supplier invoices','Supplier statements','Categories','MD Personal Expenses'];
@@ -33,9 +34,9 @@ const TAB_PERMISSIONS = {
   'VAT ledger':['finance.vatSchedules'], 'VAT clearance':['finance.vatClearance'],
   'Supplier statements':['finance.supplierStatements'], 'Daily cost review':['finance.costReview'],
   'Budget monitoring':['finance.view'], Invoices:['finance.view','finance.invoice'], Cheques:['finance.invoice'],
-  Bonds:['finance.invoice'], 'Petty cash':['finance.manage'], Bills:['finance.manage'],
+  Bonds:['finance.invoice'], 'Petty cash':['finance.manage'], Bills:['finance.view','finance.manage'],
   'Credit cards':['finance.manage'], Expenses:['finance.manage','finance.dailyExpenses'], Income:['finance.manage'],
-  'Supplier invoices':['finance.pay'], 'Credit purchases':['finance.pay'], Categories:['finance.manage']
+  'Supplier invoices':['finance.view','finance.pay'], 'Credit purchases':['finance.pay'], Categories:['finance.manage']
 };
 const TAB_GROUPS = [
   { label: 'Overview & review', tabs: ['Fuel submissions', 'Financial reports', 'Management accounts', 'Cash comparison', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
@@ -110,7 +111,7 @@ export default function Finance({ user, data, reload, can, companyId, company })
     {tab === 'MD Personal Expenses'&&<MdPersonalExpenses data={data}/>}
     {tab === 'Petty cash' && <PettyCash data={data} can={can} companyId={companyId} />}
     {tab === 'Expenses' && <div className="expenses-workspace">
-      {can.has('finance.dailyExpenses') && <DailyExpenses companyId={companyId} company={company} can={featureCan('finance.dailyExpenses')} />}
+      {can.has('finance.dailyExpenses') && <DailyExpenses key={user.id+':'+companyId} userId={user.id} companyId={companyId} company={company} can={featureCan('finance.dailyExpenses')} />}
       {can.has('finance.manage') && <section className="expenses-ledger-section" aria-label="Project expense ledger">
         <h2>Project expense ledger</h2>
         <p>Recorded project costs, including unpaid expenses. Recording payment details updates the existing expense without creating another cost.</p>
@@ -119,8 +120,8 @@ export default function Finance({ user, data, reload, can, companyId, company })
     </div>}
     {tab === 'Income' && <Income companyId={companyId} />}
     {tab === 'Progress claims' && <ProgressClaims companyId={companyId} can={can}/>}
-    {tab === 'Supplier invoices' && <Invoices key="invoices" can={can} refresh={refresh} companyId={companyId} />}
-    {tab === 'Credit purchases' && <Invoices key="credit" creditOnly can={can} refresh={refresh} companyId={companyId} />}
+    {tab === 'Supplier invoices' && <Invoices key={'invoices-'+companyId} userId={user.id} can={can} refresh={refresh} companyId={companyId} />}
+    {tab === 'Credit purchases' && <Invoices key={'credit-'+companyId} userId={user.id} creditOnly can={can} refresh={refresh} companyId={companyId} />}
     {tab === 'Supplier statements' && <SupplierStatements companyId={companyId} />}
     {tab === 'Categories' && <Categories companyId={companyId} />}
 
@@ -147,12 +148,14 @@ function DailyCostReview({ companyId, can }) {
 function Bills({data,can,companyId,open,close}){
   const [rows,setRows]=useState([]),[paying,setPaying]=useState(null);
   const load=()=>api(`/finance/bills?companyId=${companyId}`).then(setRows).catch(()=>setRows([]));useLiveList(load);useEffect(()=>{load();},[companyId]);
+  const linked = Number(new URLSearchParams(window.location.search).get('record'));
+  useEffect(()=>{ if(linked) document.getElementById('operating-bill-'+linked)?.scrollIntoView({block:'center'}); },[rows,linked]);
   const template='130px minmax(180px,1.4fr) minmax(140px,1fr) 120px 130px 120px 110px';
   return <><div className="attendance-summary"><Summary label="Unpaid bills" value={rows.filter(r=>r.status==='Unpaid').length} icon={Wallet}/>
     <Summary label="Due within 5 days" value={rows.filter(r=>r.status==='Unpaid'&&r.daysUntil>=0&&r.daysUntil<=5).length} icon={CircleDollarSign}/>
     <Summary label="Overdue" value={rows.filter(r=>r.status==='Unpaid'&&r.daysUntil<0).length} icon={TrendingUp}/></div>
     <Table columns={['Type','Provider / reference','Project','Due','Total','Status','']} template={template} title="Electricity, water and operating bills" empty="No operating bills for this company yet. Record a bill when the provider's statement is received." emptyAction={can.finance ? () => document.querySelector('.page-heading .primary')?.click() : undefined} emptyActionLabel="Record a bill">
-      {rows.map(r=><Row template={template} key={r.id}><Badge tone={slug(r.billType)}>{r.billType}</Badge><div><strong>{r.provider}</strong><small>{r.reference}</small></div>
+      {rows.map(r=><Row template={template} key={r.id} id={'operating-bill-'+r.id} className={linked===Number(r.id)?'linked-record':''}><Badge tone={slug(r.billType)}>{r.billType}</Badge><div><strong>{r.provider}</strong><small>{r.reference}</small></div>
         <span>{r.project||'Company office'}</span><span className={r.status==='Unpaid'&&r.daysUntil<0?'overdue':''}>{shortDate(r.dueDate)}</span><strong>{rupees(r.totalAmount)}</strong>
         <Badge tone={slug(r.status)}>{r.status}</Badge>{can.finance&&r.status==='Unpaid'?<button className="status-button" onClick={()=>setPaying(r)}>Pay</button>:<span>—</span>}</Row>)}</Table>
     {open&&<BillForm data={data} companyId={companyId} close={close} reload={load}/>} {paying&&<BillPayment bill={paying} close={()=>setPaying(null)} reload={load}/>}</>;
@@ -269,14 +272,24 @@ function Income({ companyId }) {
 const INVOICE_COLUMNS = ['Invoice','Supplier','Order','Due date','Net / VAT','Total','Outstanding','Status',''];
 const INVOICE_TEMPLATE = 'minmax(130px,1fr) minmax(160px,1.2fr) 130px 120px 140px 125px 130px 120px 110px';
 
-function Invoices({ can, refresh, companyId, creditOnly=false }) {
-  const [rows, setRows] = useState([]);
+function Invoices({ can, refresh, companyId, creditOnly=false, userId }) {
+  const [rows,setRows] = useState([]);
+  const [ready,setReady] = useState(false);
   const [paying, setPaying] = useState(null);
   const [error, setError] = useState('');
-  const load = () => api(`/purchasing/invoices?companyId=${companyId}`).then(result=>setRows(result.filter(row=>creditOnly?Boolean(row.creditDescription):!row.creditDescription))).catch(failure => {setRows([]);setError(failure.message);});
+  const link = new URLSearchParams(window.location.search);
+  const linked = creditOnly ? 0 : Number(link.get('record')), paymentId = Number(link.get('payment'));
+  const [payment,setPayment] = useState(null);
+  const load = () => api(`/purchasing/invoices?companyId=${companyId}`).then(result=>setRows(result.filter(row=>Number(row.id)===linked || (creditOnly?Boolean(row.creditDescription):!row.creditDescription)))).then(()=>setReady(true)).catch(failure => {setRows([]);setError(failure.message);});
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
 
+  const [view,updateView]=useRegisterView('gkuc:supplier-invoices:'+userId+':'+companyId+':'+creditOnly,{search:'',status:''});
+  useRegisterScroll('gkuc:supplier-invoice-scroll:'+userId+':'+companyId+':'+creditOnly,ready,Boolean(linked));
+  const visibleRows=rows.filter(row=>Number(row.id)===linked || (
+    (!view.status || row.status===view.status) &&
+    [row.invoiceNo,row.supplier,row.orderReference,row.creditDescription].some(value=>String(value||'').toLowerCase().includes(view.search.trim().toLowerCase()))
+  ));
   const approveException = async row => {
     const reason = await askText(`This supplier invoice has no purchase order or goods receipt. Explain why payment may proceed for ${row.invoiceNo}:`);
     if (!reason) return;
@@ -294,15 +307,21 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
   const template = creditOnly ? 'minmax(170px,1.4fr) 130px 120px 140px 125px 130px 120px 200px' : INVOICE_TEMPLATE;
   const columns = creditOnly ? INVOICE_COLUMNS.filter(column => column !== 'Supplier') : INVOICE_COLUMNS;
   const supplierGroups = new Map();
-  if (creditOnly) for (const row of rows) {
+  if (creditOnly) for (const row of visibleRows) {
     const key = row.supplierId != null ? `supplier-${row.supplierId}` : `name-${row.supplier || ''}`;
     if (!supplierGroups.has(key)) supplierGroups.set(key, { key, name: row.supplier || 'Unknown supplier', rows: [] });
     supplierGroups.get(key).rows.push(row);
   }
-  const groups = creditOnly && rows.length
+  const groups = creditOnly && visibleRows.length
     ? [...supplierGroups.values()].sort((a,b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }))
-    : [{ key: 'all', name: creditOnly ? 'Credit purchases' : 'Supplier invoices', rows }];
-  const renderInvoice = row => <Row template={template} key={row.id}>
+    : [{ key: 'all', name: creditOnly ? 'Credit purchases' : 'Supplier invoices', rows:visibleRows }];
+  useEffect(()=>{
+    if(linked) document.getElementById('supplier-invoice-'+linked)?.scrollIntoView({block:'center'});
+  },[rows,linked]);
+  useEffect(()=>{
+    if(linked && paymentId) api('/purchasing/invoices/'+linked+'/payments/'+paymentId).then(setPayment).catch(failure=>setError(failure.message));
+  },[linked,paymentId]);
+  const renderInvoice = row => <Row template={template} key={row.id} id={'supplier-invoice-'+row.id} className={linked===Number(row.id)?'linked-record':''}>
         <div><strong>{row.invoiceNo}</strong>{row.creditDescription&&<small>Credit · {row.creditDescription} · {row.reminderFrequency} reminders</small>}</div>
         {!creditOnly && <span>{row.supplier}</span>}
         <span>{row.orderReference || '—'}</span>
@@ -318,6 +337,13 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
       </Row>;
   return <>
     {error && <p className="form-error">{error}</p>}
+    <div className="progress-claim-toolbar">
+      <label>Find supplier, invoice or order<input type="search" value={view.search}
+        onChange={event=>updateView('search',event.target.value)} /></label>
+      <label>Status<select value={view.status} onChange={event=>updateView('status',event.target.value)}>
+        <option value="">All statuses</option>{['Unpaid','Partially paid','Paid'].map(status=><option key={status}>{status}</option>)}
+      </select></label>
+    </div>
     <div className="supplier-credit-groups">
       {groups.map(group => <Table key={group.key} columns={columns} template={template} title={group.name}
         tools={creditOnly && group.rows.length ? <div className="supplier-credit-summary"><span>{group.rows.length} {group.rows.length === 1 ? 'purchase' : 'purchases'}</span><strong>Outstanding {rupees(group.rows.reduce((sum,row) => sum + Number(row.amount) - Number(row.paidAmount),0))}</strong>{can.supplierPay && group.rows.some(row=>row.status!=='Paid') && <button type="button" className="status-button" onClick={()=>setPaying({invoices:group.rows.filter(row=>row.status!=='Paid')})}>Pay supplier</button>}</div> : null}
@@ -325,6 +351,11 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
         {group.rows.map(renderInvoice)}
       </Table>)}
     </div>
+    {payment && <Modal title={'Supplier payment · '+payment.invoiceNo} close={()=>setPayment(null)}>
+      <dl><dt>Supplier</dt><dd>{payment.supplier}</dd><dt>Amount</dt><dd>{rupees(payment.amount)}</dd>
+        <dt>Date</dt><dd>{shortDate(payment.paidDate)}</dd><dt>Method</dt><dd>{payment.method}</dd>
+        <dt>Reference</dt><dd>{payment.reference||'—'}</dd><dt>Paying company</dt><dd>{payment.company}</dd></dl>
+    </Modal>}
     {paying && <PaymentForm {...paying} companyId={companyId} close={() => setPaying(null)}
       reload={async () => { await load(); await refresh(); }} />}
   </>;

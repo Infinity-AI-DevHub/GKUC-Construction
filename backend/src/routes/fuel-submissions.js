@@ -15,6 +15,7 @@ const positiveId = z.number().int().positive();
 const odometer = positiveId.max(4294967295);
 const submission = z.object({
   clientRef: z.string().uuid(),
+  replacesId: positiveId.optional(),
   vehicleId: positiveId,
   companyId: positiveId,
   projectId: positiveId.nullable().default(null),
@@ -45,13 +46,17 @@ router.get('/', permit('fuel.submit', ...readers), wrap(async (req, res) => {
   if (!Number.isSafeInteger(companyId) || companyId < 1) throw fail(400, 'Choose a company.');
   const rows = await query(`SELECT s.id,s.details,s.vehicle_id vehicleId,s.company_id companyId,s.project_id projectId,s.status,s.photo IS NOT NULL hasPhoto,s.created_at createdAt,
     s.reviewed_at reviewedAt,s.review_note reviewNote,s.fuel_record_id fuelRecordId,s.submitted_by submittedById,
+    s.replaces_id replacesId,next.id replacementId,prior.details previousDetails,
+    assignee.name assignedTo,s.assigned_to assignedToId,
+    DATE_FORMAT(DATE_ADD(s.created_at,INTERVAL 1 DAY),'%Y-%m-%d') reviewDue,
     f.vehicle,f.registration,u.name submittedBy,r.name reviewedBy,p.name project
     FROM fuel_submissions s JOIN fleet f ON f.id=s.vehicle_id JOIN users u ON u.id=s.submitted_by
-    LEFT JOIN users r ON r.id=s.reviewed_by
+    LEFT JOIN users r ON r.id=s.reviewed_by LEFT JOIN users assignee ON assignee.id=s.assigned_to AND assignee.active=1
+    LEFT JOIN fuel_submissions prior ON prior.id=s.replaces_id LEFT JOIN fuel_submissions next ON next.replaces_id=s.id
     LEFT JOIN projects p ON p.id=s.project_id
     WHERE s.company_id=? ${viewAll(req) ? '' : 'AND s.submitted_by=?'}
     ORDER BY (s.status='Pending') DESC,s.id DESC`, viewAll(req) ? [companyId] : [companyId,req.user.id]);
-  res.json(rows.map(({details, ...row}) => ({...json(details), ...row})));
+  res.json(rows.map(({details,previousDetails,...row}) => ({...json(details),...row,previousDetails:json(previousDetails)})));
 }));
 
 router.get('/:id/photo', permit('fuel.submit', ...readers), wrap(async (req, res) => {
@@ -81,7 +86,7 @@ router.post('/', permit('fuel.submit'), wrap(async (req, res) => {
     }
     const parsed = submission.safeParse(input);
     if (!parsed.success) return res.status(400).json({error:'Invalid fuel details', issues:parsed.error.flatten()});
-    const {clientRef, vehicleId, companyId, projectId, ...details} = parsed.data;
+    const {clientRef, replacesId, vehicleId, companyId, projectId, ...details} = parsed.data;
     const existing = await getOne('SELECT id,status FROM fuel_submissions WHERE submitted_by=? AND client_ref=?', [req.user.id,clientRef]);
     if (existing) return res.json(existing);
     if (!await getOne("SELECT id FROM fleet WHERE id=? AND status<>'Inactive'", [vehicleId])) throw fail(400, 'Choose an active vehicle.');
@@ -95,10 +100,20 @@ router.post('/', permit('fuel.submit'), wrap(async (req, res) => {
         const [[project]] = await connection.execute('SELECT id FROM projects WHERE id=? AND company_id=? AND active=1 FOR UPDATE', [projectId,companyId]);
         if (!project) throw fail(400, 'Choose a project belonging to this company.');
       }
+      let savedPhoto = photo;
+      if (replacesId) {
+        const [[previous]] = await connection.execute(
+          'SELECT id,photo FROM fuel_submissions WHERE id=? AND company_id=? AND submitted_by=? AND status=\'Rejected\' FOR UPDATE',
+          [replacesId,companyId,req.user.id]);
+        if (!previous) throw fail(404,'Returned fuel entry not found.');
+        const [[replacement]] = await connection.execute('SELECT id FROM fuel_submissions WHERE replaces_id=?',[replacesId]);
+        if (replacement) throw fail(409,'This fuel entry has already been resubmitted.');
+        savedPhoto ||= json(previous.photo);
+      }
       const [result] = await connection.execute(`INSERT INTO fuel_submissions
-        (vehicle_id,company_id,project_id,submitted_by,client_ref,details,photo) VALUES (?,?,?,?,?,?,?)`,
-      [vehicleId,companyId,projectId,req.user.id,clientRef,JSON.stringify(details),photo ? JSON.stringify(photo) : null]);
-      await audit(connection,req.user.id,'SUBMIT','fuel_submission',result.insertId,null,{vehicleId,companyId,projectId,...details,hasPhoto:!!photo},req.ip);
+        (vehicle_id,company_id,project_id,submitted_by,client_ref,details,photo,replaces_id) VALUES (?,?,?,?,?,?,?,?)`,
+      [vehicleId,companyId,projectId,req.user.id,clientRef,JSON.stringify(details),savedPhoto ? JSON.stringify(savedPhoto) : null,replacesId||null]);
+      await audit(connection,req.user.id,'SUBMIT','fuel_submission',result.insertId,null,{vehicleId,companyId,projectId,replacesId,...details,hasPhoto:!!savedPhoto},req.ip);
       return result.insertId;
     });
     photo = null;
@@ -111,6 +126,22 @@ router.post('/', permit('fuel.submit'), wrap(async (req, res) => {
   } finally {
     if (upload) await upload.discard();
   }
+}));
+
+router.post('/:id/claim',permit('fuel.review'),wrap(async(req,res)=>{
+  await transaction(async connection=>{
+    const [[row]]=await connection.execute(`SELECT s.status,s.submitted_by,assignee.id owner
+      FROM fuel_submissions s LEFT JOIN users assignee ON assignee.id=s.assigned_to AND assignee.active=1 WHERE s.id=? FOR UPDATE`,[req.params.id]);
+    if (!row || row.status!=='Pending') throw fail(404,'Pending fuel entry not found.');
+    if (Number(row.submitted_by)===Number(req.user.id)) throw fail(403,'Another reviewer must handle your submission.');
+    if (row.owner && Number(row.owner)!==Number(req.user.id)) throw fail(409,'Another reviewer already owns this entry.');
+    if (!row.owner) {
+      await connection.execute('UPDATE fuel_submissions SET assigned_to=? WHERE id=?',[req.user.id,req.params.id]);
+      await audit(connection,req.user.id,'ASSIGN','fuel_submission',req.params.id,null,{assignedTo:req.user.id},req.ip);
+    }
+  });
+  publishChange('fuel-submissions');
+  res.status(204).end();
 }));
 
 router.post('/:id/review', permit('fuel.review'), validate(z.object({

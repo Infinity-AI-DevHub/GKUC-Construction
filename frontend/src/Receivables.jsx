@@ -167,6 +167,10 @@ function InvoicePayments({ invoice, close, onPayment, canRecord }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
   const [numberEdit,setNumberEdit]=useState(null);
+  const linkedReceipt=Number(new URLSearchParams(window.location.search).get('receipt'));
+  useEffect(()=>{
+    if (linkedReceipt && detail) document.getElementById('client-receipt-'+linkedReceipt)?.scrollIntoView({block:'center'});
+  },[linkedReceipt,detail]);
   useEffect(() => { api(`/receivables/invoices/${invoice.id}`).then(setDetail).catch(failure => setError(failure.message)); }, [invoice.id]);
   return <Modal title={`${invoice.reference} — payments`} close={close} wide>
     {numberEdit&&<NumberEdit type="RCPT" record={{id:numberEdit.id,reference:numberEdit.receiptNumber}} close={()=>setNumberEdit(null)} reload={async()=>setDetail(await api(`/receivables/invoices/${invoice.id}`))}/>}
@@ -181,9 +185,10 @@ function InvoicePayments({ invoice, close, onPayment, canRecord }) {
       <Summary label="Still due" value={invoice.status === 'Draft' ? 'Not issued' : rupees(invoice.outstanding)} icon={TriangleAlert} />
     </div>
     <div className="invoice-payments-history"><div className="invoice-payments-history-heading"><h3>Payment history</h3><span>{detail ? `${detail.receipts.length} recorded` : 'Loading'}</span></div>
+    {detail && <p hidden={!detail.receipts.some(row=>Number(row.id)===linkedReceipt)}>Selected receipt is highlighted below.</p>}
     {!detail ? <p className="invoice-payments-empty">Loading payments…</p> : detail.receipts.length ? <div className="table-wrap"><table className="invoice-payments-table">
       <thead><tr><th scope="col">Date</th><th scope="col">Method</th><th scope="col">Reference</th><th scope="col">Amount</th><th scope="col">Receipt</th><th scope="col">Receipt number</th></tr></thead>
-      <tbody>{detail.receipts.map(receipt => <tr key={receipt.id}>
+      <tbody>{detail.receipts.map(receipt => <tr key={receipt.id} id={'client-receipt-'+receipt.id} className={Number(receipt.id)===linkedReceipt?'linked-record':''}>
         <td>{shortDate(receipt.receivedDate)}</td><td>{receipt.method}</td>
         <td className="payment-reference">{receipt.reference || '—'}</td><td className="payment-amount"><strong>{rupees(receipt.amount)}</strong></td>
         <td><button type="button" className="status-button" onClick={() => openDocument(`/receivables/receipts/${receipt.id}/document`)}>View receipt</button></td>

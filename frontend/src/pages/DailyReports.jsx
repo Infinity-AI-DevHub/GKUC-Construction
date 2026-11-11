@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertTriangle, ChevronRight, HardHat, Users } from 'lucide-react';
 import { openRecord, post, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, Modal, Page, Row, SelectField, Table, TextArea } from '../ui.jsx';
@@ -9,6 +9,10 @@ import WorkflowChecklist from '../WorkflowChecklist.jsx';
 export default function DailyReports({ data, reload, can }) {
   const [creating, setCreating] = useState(() => can.site && new URLSearchParams(window.location.search).get('new') === '1');
   const [detail, setDetail] = useState(null);
+  useEffect(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('record'));
+    if (id > 0) openRecord('/reports/'+id,setDetail);
+  }, []);
 
   return <Page title="Daily site reports" subtitle="Capture workforce, completed work, materials, delays, and site evidence."
     action={can.site ? 'New report' : null} onAction={() => setCreating(true)}>

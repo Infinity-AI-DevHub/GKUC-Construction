@@ -1502,3 +1502,23 @@ Verified the overview, project filter, detail action, and full claim workflow in
 - Search results open the matching record or version in its company. Older invoice links request priority in the existing register and open payments and the PDF action. The Project Commercial view can browse its linked records by project ID.
 - Replaced dashboard credit payment reminder bars with responsive rectangular cards. Supplier, invoice, amount, due date, frequency and existing acknowledgement/rescheduling actions remain available.
 - Node 20 backend suite passed 390 tests with four skipped. Frontend suite passed 41 tests and the production build completed. Chrome fixtures verified search and cross-company links at 320, 390 and 1440px, progress claim links at 390 and 1440px, and the credit reminder grid from 320 to 1920px at six widths. Desktop and mobile reminder layouts were also visually checked. No deployment or live database write.
+
+### 2026-11-12 — Extended SiteOps search
+
+- Added supplier and operating bills, supplier settlements, client receipts, direct office and project payments, petty-cash spending, daily site reports, and fleet vehicle, fuel, maintenance, compliance and renewal records. Existing module permissions control visibility. Supplier payment links use the invoice company for navigation and retain the paying company in results.
+- Attachment search matches filenames, titles, categories and indexed content. Company and project filters use the linked owner where available, and date filters use upload date. Results open the authorized file directly.
+- Verified the full backend suite (391 passed, four skipped), then ran three focused search tests after tightening supplier payment permissions. Verified an older fuel entry beyond the 50-entry register without changing running totals, unauthorized bill/payment/attachment visibility, and a filename match before OCR. Frontend tests (41), production build, and Chrome search fixtures at 320, 390, and 1440px passed. No deployment or live database writes.
+
+### 2026-11-12 — Five SiteOps UX improvements
+
+- Added role-based Dashboard quick actions, fuel review and correction queues, and supplier invoice follow-up with direct record links. Fuel review targets default to the next calendar day.
+- Added a review view with receipt evidence and previous values, plus a linked correction/resubmission flow. The original and receipt stay in history. Fuel drafts including photos persist on the current device and are submitted explicitly after reconnection.
+- Search restores query, filters and scroll and offers named saved filters and permission-checked recent records. Supplier invoices and Daily Expenses remember their filter and scroll state.
+- Grouped credit reminders by supplier and added invoice links, ownership and per-recipient snooze. Added claim, 24-hour snooze and supported record links to the notification bell.
+- Backend suite passed 391 tests with four skipped. Four focused tests passed after extending the receipt inheritance check. Frontend suite passed 41 tests and the build passed. Chrome fixtures checked fuel draft, offline retry, evidence and correction at 390px and 1440px, search state and saved filters at 320px, 390px and 1440px, and dashboard grouping and existing reminder actions. No live deployment or database writes.
+
+### 2026-11-12 — Multiple BOQ items in one employee labour block
+
+QS can select the employee once, then add BOQ items with individual hours and optional quotation recovery. The form displays item costs and prevents submitting more than the available worked hours. Each allocation uses the existing daily-cost line contract so Finance receives separate BOQ costs and the server remains authoritative.
+
+Chrome fixtures at 390px and 1440px verified two allocations from one employee block, exact LKR 880.00 and LKR 1,320.00 previews, over-allocation prevention, and the submitted line payload. Two labour calculation tests, the focused returned-manpower API test, 41 frontend tests, the production build and diff checks passed. No deployment or live database writes.

@@ -170,14 +170,16 @@ router.get('/:id', auth, permit('transport.view','transport.manage'), wrap(async
   const vehicle = await getOne(`${select} WHERE f.id=?`, [req.params.id]);
   if (!vehicle) return res.status(404).json({ error: 'Asset not found' });
   const schedules = (await query(`${scheduleSelect} WHERE s.vehicle_id=? ORDER BY s.name`,[vehicle.id])).map(row => maintenanceDue(row,vehicle.odometer));
-  const [documents, fuel, maintenance, running, drivers, readings, renewals] = await Promise.all([
+  const requestedFuel = Number(req.query.fuel);
+  const linkedFuel = Number.isSafeInteger(requestedFuel) && requestedFuel > 0;
+  const fuelSelect = `SELECT f.id,f.fuel_date fuelDate,f.litres,f.cost,f.odometer,f.driver,p.name project,
+    pcf.name fuelFloat FROM fuel_records f
+    LEFT JOIN projects p ON p.id=f.project_id
+    LEFT JOIN petty_cash_entries pce ON pce.fuel_record_id=f.id
+    LEFT JOIN petty_cash_floats pcf ON pcf.id=pce.float_id WHERE f.vehicle_id=?`;
+  const [documents, fuel, maintenance, running, drivers, readings, renewals, linkedFuelRecord] = await Promise.all([
     query('SELECT id,doc_type docType,reference,expiry_date expiryDate,cost FROM vehicle_documents WHERE vehicle_id=? ORDER BY expiry_date', [vehicle.id]),
-    query(`SELECT f.id,f.fuel_date fuelDate,f.litres,f.cost,f.odometer,f.driver,p.name project,
-      pcf.name fuelFloat FROM fuel_records f
-      LEFT JOIN projects p ON p.id=f.project_id
-      LEFT JOIN petty_cash_entries pce ON pce.fuel_record_id=f.id
-      LEFT JOIN petty_cash_floats pcf ON pcf.id=pce.float_id
-      WHERE f.vehicle_id=? ORDER BY f.fuel_date DESC LIMIT 50`, [vehicle.id]),
+    query(fuelSelect+' ORDER BY f.fuel_date DESC,f.id DESC LIMIT 50',[vehicle.id]),
     query(`SELECT m.id,m.service_date serviceDate,m.maintenance_kind kind,m.description,m.cost,m.garage,m.odometer,m.completed_schedules completedSchedules,
       p.name project FROM vehicle_maintenance m LEFT JOIN projects p ON p.id=m.project_id
       WHERE m.vehicle_id=? ORDER BY m.service_date DESC,m.id DESC`, [vehicle.id]),
@@ -190,7 +192,8 @@ router.get('/:id', auth, permit('transport.view','transport.manage'), wrap(async
     query(`SELECT id,reading_date readingDate,odometer,source,notes FROM vehicle_odometer_readings
       WHERE vehicle_id=? ORDER BY reading_date DESC,id DESC LIMIT 100`,[vehicle.id]),
     query(`SELECT id,doc_type docType,reference,renewed_on renewedOn,expiry_date expiryDate,cost
-      FROM vehicle_document_renewals WHERE vehicle_id=? ORDER BY renewed_on DESC,id DESC`,[vehicle.id])
+      FROM vehicle_document_renewals WHERE vehicle_id=? ORDER BY renewed_on DESC,id DESC`,[vehicle.id]),
+    linkedFuel ? getOne(fuelSelect+' AND f.id=?',[vehicle.id,requestedFuel]) : null
   ]);
   const measured=fuel.filter(row=>Number(row.odometer)>0).sort((a,b)=>Number(a.odometer)-Number(b.odometer));
   const distance=measured.length>1?Number(measured.at(-1).odometer)-Number(measured[0].odometer):0;
@@ -201,6 +204,7 @@ router.get('/:id', auth, permit('transport.view','transport.manage'), wrap(async
     service: serviceDue(vehicle),
     documents: documents.map(document => ({ ...document, due: dueLabel(document.expiryDate) })),
     fuel,
+    ...(linkedFuelRecord && !fuel.some(row=>row.id===linkedFuelRecord.id) ? {linkedFuelRecord} : {}),
     maintenance,
     maintenanceSchedules: schedules,
     drivers,readings,renewals,

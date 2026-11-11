@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, hashPassword, pool, query, transaction, verifyPassword } from '../db.js';
-import { auth, can, permissionsFor, permit, validate, wrap } from '../lib/http.js';
+import { auth, can, fail, permissionsFor, permit, validate, wrap } from '../lib/http.js';
 import { PRIVILEGED_KEYS } from '../lib/permissions.js';
 import { passwordProblems, strongPassword } from '../lib/passwords.js';
 import { runAlertScan } from '../alerts.js';
@@ -382,7 +382,7 @@ router.get('/notification-cases/:id',auth,wrap(async(req,res)=>{
     FROM alert_case_events e LEFT JOIN users u ON u.id=e.user_id WHERE e.case_id=? ORDER BY e.id`,[req.params.id]);
   res.json({...rows[0],events});
 }));
-const caseAction=z.object({action:z.enum(['acknowledge','assign','start','snooze','note','resolve']),
+const caseAction=z.object({action:z.enum(['acknowledge','assign','claim','start','snooze','note','resolve']),
   assigneeId:z.number().int().positive().optional(),until:z.string().datetime({offset:true}).optional(),
   note:z.string().trim().max(4000).optional(),evidence:z.string().trim().max(4000).optional()});
 router.post('/notification-cases/:id/actions',auth,validate(caseAction),wrap(async(req,res)=>{
@@ -392,8 +392,8 @@ router.post('/notification-cases/:id/actions',auth,validate(caseAction),wrap(asy
   if(!current)return res.status(404).json({error:'Case not found or not available to you'});
   const {action,assigneeId,until,note,evidence}=req.body;
   if(current.state==='Resolved')return res.status(409).json({error:'This case is resolved. A recurring condition will reopen it if it remains outstanding.'});
-  if(action==='assign'){
-    const target=assigneeId||req.user.id;
+  if(action==='assign'||action==='claim'){
+    const target=action==='claim'?req.user.id:assigneeId||req.user.id;
     const user=(await query('SELECT id,role_id roleId,active FROM users WHERE id=?',[target]))[0];
     if(!user?.active)return res.status(400).json({error:'Choose an active employee with system access.'});
     const permissions=await permissionsFor(user.id,user.roleId);
@@ -405,18 +405,19 @@ router.post('/notification-cases/:id/actions',auth,validate(caseAction),wrap(asy
   if(action==='resolve'&&(!note||!evidence))return res.status(400).json({error:'Explain the resolution and provide an evidence reference.'});
   if(action==='acknowledge'&&current.state!=='New')return res.status(409).json({error:'Only a new case can be acknowledged.'});
   if(action==='start'&&!['Acknowledged','Assigned'].includes(current.state))return res.status(409).json({error:'Acknowledge or assign this case before starting work.'});
-  const target=assigneeId||req.user.id;
+  const target=action==='claim'?req.user.id:assigneeId||req.user.id;
   const changes={acknowledge:["state='Acknowledged'",[]],assign:["state='Assigned',assigned_user_id=?",[target]],
+    claim:["state='Assigned',assigned_user_id=?",[target]],
     start:["state='In progress'",[]],snooze:["snoozed_until=?",[until?new Date(until):null]],
     note:["last_seen_at=last_seen_at",[]],resolve:["state='Resolved',resolved_at=NOW(),resolution_note=?,resolution_evidence=?",[note,evidence]]};
   await transaction(async connection=>{
-    const [result]=await connection.execute(`UPDATE alert_cases SET ${changes[action][0]} WHERE id=? AND state<>'Resolved'`,
-      [...changes[action][1],current.id]);
-    if(!result.affectedRows)throw new Error('Case changed while you were editing it. Refresh and try again.');
+    const [result]=await connection.execute(`UPDATE alert_cases SET ${changes[action][0]} WHERE id=? AND state<>'Resolved' ${action==='claim'?'AND (assigned_user_id IS NULL OR assigned_user_id=?)':''}`,
+      [...changes[action][1],current.id,...(action==='claim'?[target]:[])]);
+    if(!result.affectedRows)throw fail(409,'Case changed while you were editing it. Refresh and try again.');
     await connection.execute(`INSERT INTO alert_case_events(case_id,user_id,action,note,evidence) VALUES (?,?,?,?,?)`,
       [current.id,req.user.id,action,note||null,evidence||null]);
     await audit(connection,req.user.id,action.toUpperCase(),'alert_case',current.id,current,
-      {assigneeId:action==='assign'?target:undefined,until,note,evidence},req.ip);
+      {assigneeId:['assign','claim'].includes(action)?target:undefined,until,note,evidence},req.ip);
   });
   res.json((await query(`${CASE_SELECT} WHERE c.id=?`,[current.id]))[0]);
 }));

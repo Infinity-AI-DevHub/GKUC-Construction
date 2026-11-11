@@ -6,7 +6,7 @@ const source=`import React from 'react';import {createRoot} from 'react-dom/clie
 import DocumentSearch from '/src/DocumentSearch.jsx';
 import '/src/styles.css';import '/src/theme.css';import '/src/reference.css';import '/src/responsive.css';import '/src/workspace.css';
 const project=location.search.includes('project')?{id:4,name:'Bridge Works'}:null;
-createRoot(document.getElementById('root')).render(React.createElement(DocumentSearch,{open:true,onClose:()=>{},project,companies:[{id:2,name:'GKUC Readymix'}]}));`;
+createRoot(document.getElementById('root')).render(React.createElement(DocumentSearch,{open:true,onClose:()=>{},project,userId:91,companies:[{id:2,name:'GKUC Readymix'}]}));`;
 const server=await createServer({root:new URL('..',import.meta.url).pathname,server:{host:'127.0.0.1',port:0},plugins:[{
   name:'record-search-fixture',resolveId:path=>path==='/__record-search.js'?id:null,load:path=>path===id?source:null,
   configureServer(dev){dev.middlewares.use(async(req,res,next)=>{
@@ -27,13 +27,25 @@ try {
       const params=new URL(route.request().url()).searchParams;
       queries.push(params);
       const second=params.get('page')==='2';
+      if(params.get('type')==='supplierPayment') return route.fulfill({json:{results:[{
+        id:10,type:'supplierPayment',reference:'PAY-QA',title:'Aggregate supplier',
+        companyId:1,targetCompanyId:2,company:'GKUC Construction',amount:125.50,
+        path:'/finance/supplier-invoices?record=20&payment=10'
+      }]}});
+
       return route.fulfill({json:{hasMore:!second,results:[{
         id:second?35:21,type:'boq',reference:second?'BOQ-OLD':'BOQ-42',title:'Bridge works',
         version:2,companyId:2,company:'GKUC Readymix',status:'Approved',recordDate:'2026-01-20',
         path:'/quantity-surveying/bills-of-quantities?record=21'
       }]}});
     });
-    await page.route('**/api/uploads/search/documents?**',route=>route.fulfill({json:{results:[{id:9,title:'Scanned bridge plan',filename:'plan.pdf'}]}}));
+    const scanQueries=[];
+    await page.route('**/api/uploads/search/documents?**',route=>{
+      const params=new URL(route.request().url()).searchParams;
+      scanQueries.push(params);
+      return route.fulfill({json:{results:[{id:9,title:'Scanned bridge plan',filename:'plan.pdf',company:'GKUC Readymix'}]}});
+    });
+    await page.route('**/finance/supplier-invoices?**',route=>route.fulfill({body:'Supplier payment destination'}));
     await page.route('**/quantity-surveying/bills-of-quantities?**',route=>route.fulfill({body:'BOQ destination'}));
     await page.goto(base+'/__record-search?global');
     await page.getByRole('searchbox',{name:'Search SiteOps'}).fill('bridge');
@@ -42,7 +54,15 @@ try {
     await page.getByLabel('Company').selectOption('2');
     await page.getByText('BOQ-42 · Bridge works',{exact:true}).waitFor();
     assert.equal(queries.at(-1).get('companyId'),'2');
-    assert.equal(await page.getByText('Scanned bridge plan',{exact:true}).count(),0);
+    await page.getByText('Scanned bridge plan',{exact:true}).waitFor();
+    assert.equal(scanQueries.at(-1).get('companyId'),'2');
+    await page.getByLabel('Save this search as').fill('Readymix bridge');
+    await page.getByRole('button',{name:'Save filter',exact:true}).click();
+    await page.getByLabel('Company').selectOption('');
+    await page.getByLabel('Saved filters').selectOption('');
+    await page.getByLabel('Saved filters').selectOption('Readymix bridge');
+    await page.getByText('BOQ-42 · Bridge works',{exact:true}).waitFor();
+    assert.equal(await page.getByLabel('Company').inputValue(),'2');
     await page.getByRole('button',{name:'Load more records'}).click();
     await page.getByText('BOQ-OLD · Bridge works',{exact:true}).waitFor();
     assert.equal(queries.at(-1).get('page'),'2');
@@ -50,10 +70,22 @@ try {
     await page.getByRole('button',{name:/BOQ-42/}).click();
     await page.waitForURL('**/quantity-surveying/bills-of-quantities?record=21');
     assert.equal(await page.evaluate(()=>localStorage.getItem('gkuc:company-id')),'2');
+    await page.goto(base+'/__record-search?global');
+    assert.equal(await page.getByRole('searchbox',{name:'Search SiteOps'}).inputValue(),'bridge');
+    assert.equal(await page.getByLabel('Company').inputValue(),'2');
+    await page.waitForResponse(response=>response.url().includes('throughPage=2'));
+    await page.getByRole('searchbox',{name:'Search SiteOps'}).clear();
+    await page.getByRole('heading',{name:'Recently opened'}).waitFor();
+    await page.getByRole('button',{name:'BOQ-42 · BOQ',exact:true}).waitFor();
     await page.goto(base+'/__record-search?project');
     await page.getByText('BOQ-42 · Bridge works',{exact:true}).waitFor();
     assert.equal(queries.at(-1).get('projectId'),'4');
     assert.equal(queries.at(-1).get('q'),'');
+    await page.getByLabel('Record type').selectOption('supplierPayment');
+    await page.getByRole('button',{name:/PAY-QA/}).click();
+    await page.waitForURL('**/finance/supplier-invoices?record=20&payment=10');
+    assert.equal(await page.evaluate(()=>localStorage.getItem('gkuc:company-id')),'2');
+
     await page.close();
     console.log(width+': search, scanned results, filters, pagination, company link and project context passed');
   }

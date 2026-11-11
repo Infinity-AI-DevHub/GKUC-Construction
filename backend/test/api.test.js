@@ -2320,7 +2320,10 @@ test('repeated alerts remain one actionable case with access controls and eviden
     assert.equal((await call('', 'GET',`/notification-cases/${first.id}`)).status,401);
     assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'resolve',note:'Checked'})).status,400);
     assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'acknowledge'})).status,200);
-    assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'assign'})).status,200);
+    assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'claim'})).status,200);
+    const snoozed=await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'snooze',until:new Date(Date.now()+86400000).toISOString()});
+    assert.equal(snoozed.status,200);
+    assert.ok(snoozed.body.snoozedUntil);
     assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'start'})).status,200);
     assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,
       {action:'resolve',note:'Client paid outside system; recorded separately',evidence:'BANK-CASE-QA'})).status,200);
@@ -4935,6 +4938,14 @@ test('credit purchase reminders are targeted, recurring, company scoped and stop
   assert.equal((await reminders(site)).some(row=>row.id===id),false);
   assert.equal((await reminders(owner,2)).some(row=>row.id===id),false);
   assert.equal((await call(site,'POST',`/dashboard/credit-reminders/${id}/acknowledge`,{})).status,404);
+  assert.equal((await call(site,'POST',`/dashboard/credit-reminders/${id}/claim`,{})).status,404);
+  assert.equal((await call(owner,'POST',`/dashboard/credit-reminders/${id}/claim`,{})).status,204);
+  assert.ok((await reminders(owner)).find(row=>row.id===id).assignedTo);
+  assert.equal((await call(owner,'POST',`/dashboard/credit-reminders/${id}/snooze`,{})).status,204);
+  assert.ok(!(await reminders(owner)).some(row=>row.id===id));
+  await admin.query(`UPDATE ${testDatabase}.supplier_credit_reminder_users SET snoozed_until='2000-01-01' WHERE invoice_id=?`,[id]);
+  assert.ok((await reminders(owner)).some(row=>row.id===id));
+
   assert.equal((await call(owner,'POST',`/dashboard/credit-reminders/${id}/acknowledge`,{})).status,204);
   assert.equal((await reminders(owner)).some(row=>row.id===id),false);
   assert.equal((await call(owner,'POST',`/dashboard/credit-reminders/${id}/acknowledge`,{})).status,404);
@@ -6782,6 +6793,12 @@ test('fuel submissions keep photos private and post fuel only on authorized appr
     assert.deepEqual(Buffer.from(await permittedPhoto.arrayBuffer()),png);
     assert.equal((await photo(outsider)).status,404);
     assert.ok(!(await call(outsider,'GET','/fuel-submissions?companyId=2')).body.some(row=>row.id===id));
+    const queue = async (token,companyId) => (await call(token,'GET','/dashboard/queue?companyId='+companyId)).body.fuel;
+    assert.ok((await queue(owner,2)).some(row=>row.id===id&&row.reviewDue));
+    assert.ok(!(await queue(recorder,2)).some(row=>row.id===id));
+    assert.equal((await call(recorder,'POST','/fuel-submissions/'+id+'/claim')).status,403);
+    assert.equal((await call(owner,'POST','/fuel-submissions/'+id+'/claim')).status,204);
+    assert.ok((await queue(owner,2)).some(row=>row.id===id&&row.assignedTo));
     const review = (token,body) => call(token,'POST',`/fuel-submissions/${id}/review`,body);
     assert.equal((await review(recorder,{decision:'Approved',odometer:999999})).status,403);
     assert.equal((await review(owner,{decision:'Approved'})).status,400);
@@ -6796,9 +6813,27 @@ test('fuel submissions keep photos private and post fuel only on authorized appr
     assert.equal(fuel.project_id,project.body.id);
     assert.equal((await review(owner,{decision:'Approved'})).status,409);
     assert.equal(await count(),initialCount+1);
-    const rejected = await call(recorder,'POST','/fuel-submissions',{...details,companyId:1,clientRef:crypto.randomUUID()});
-    assert.equal(rejected.status,201);
+    const returnedForm=new FormData();
+    returnedForm.append('details',JSON.stringify({...details,companyId:1,clientRef:crypto.randomUUID()}));
+    returnedForm.append('file',new Blob([png],{type:'image/png'}),'returned.png');
+    const originalResponse=await fetch(`${base}/fuel-submissions`,{method:'POST',headers:{authorization:`Bearer ${recorder}`},body:returnedForm});
+    assert.equal(originalResponse.status,201);
+    const rejected={body:await originalResponse.json()};
     assert.equal((await call(owner,'POST',`/fuel-submissions/${rejected.body.id}/review`,{decision:'Rejected',note:'Duplicate receipt'})).status,200);
+    assert.ok((await queue(recorder,1)).some(row=>row.id===rejected.body.id&&row.reviewNote==='Duplicate receipt'));
+    const retry={...details,companyId:1,clientRef:crypto.randomUUID(),replacesId:rejected.body.id,litres:10};
+    assert.equal((await call(outsider,'POST','/fuel-submissions',retry)).status,404);
+    const replacement=await call(recorder,'POST','/fuel-submissions',retry);
+    assert.equal(replacement.status,201,JSON.stringify(replacement.body));
+    assert.equal((await call(recorder,'POST','/fuel-submissions',retry)).body.id,replacement.body.id);
+    assert.equal((await call(recorder,'POST','/fuel-submissions',{...retry,clientRef:crypto.randomUUID()})).status,409);
+    const revised=(await call(recorder,'GET','/fuel-submissions?companyId=1')).body.find(row=>row.id===replacement.body.id);
+    assert.equal(revised.previousDetails.litres,12.25);
+    const inherited=await fetch(`${base}/fuel-submissions/${replacement.body.id}/photo`,{headers:{authorization:`Bearer ${recorder}`}});
+    assert.deepEqual(Buffer.from(await inherited.arrayBuffer()),png);
+
+    assert.ok(!(await queue(recorder,1)).some(row=>row.id===rejected.body.id));
+
     assert.equal(await count(),initialCount+1);
   } finally {
     for (const user of [storeUser,otherUser]) {
@@ -6880,6 +6915,8 @@ test('global record search finds commercial records and enforces source permissi
   assert.deepEqual(items.map(row=>row.id),[boq.id]);
   const linked=await search(owner,{projectId:project.id});
   assert.deepEqual(new Set(linked.map(row=>row.type)),new Set(['boq','quotation','retention','claim']));
+  assert.equal((await search(owner,{type:'quotation',recordId:quote.id}))[0].id,quote.id);
+  assert.ok((await search(owner,{type:'quotation',companyId:2})).some(row=>row.id===quote.id));
   const exact=await search(owner,{q:quote.reference});
   assert.equal(exact[0].type,'quotation');
   assert.equal(exact[0].id,quote.id);
@@ -6888,4 +6925,71 @@ test('global record search finds commercial records and enforces source permissi
   assert.equal((await call(owner,'GET','/search?q=Searchneedle&from=2040-02-31')).status,400);
   const selected=await call(owner,'GET','/receivables/invoices?companyId=2&record='+invoice.id);
   assert.equal(selected.body[0].id,invoice.id);
+});
+
+test('expanded search finds historical payables, site reports, fleet history and document metadata', async () => {
+  const owner=await login();
+  const role=await call(owner,'POST','/access/roles',{name:'Search limited test',permissions:['store.view']});
+  assert.equal(role.status,201);
+  const account={email:'search.limited.test@gkuc.lk',password:'AccessCheck!2026'};
+  assert.equal((await call(owner,'POST','/users',{...account,name:'Search Limited Test',roleId:role.body.id})).status,201);
+  const loginLimited=await call('','POST','/auth/login',account);
+  assert.equal(loginLimited.status,200);
+  const store=loginLimited.body.token;
+  const project=await call(owner,'POST','/projects',{companyId:2,name:'Searchwide Bridge',client:'QA Client',manager:'Project Manager',site:'QA site',stage:'Planning'});
+  assert.equal(project.status,201);
+  const projectId=project.body.id;
+  const [supplier]=await admin.query(`INSERT INTO ${testDatabase}.suppliers(name) VALUES ('Searchwide Aggregates')`);
+  const [invoice]=await admin.query(`INSERT INTO ${testDatabase}.supplier_invoices(company_id,supplier_id,invoice_no,amount,invoice_date,recorded_by)
+    VALUES (2,?,'SW-BILL-007',175,'2041-01-01',1)`,[supplier.insertId]);
+  const [payment]=await admin.query(`INSERT INTO ${testDatabase}.supplier_payments(invoice_id,payment_company_id,amount,paid_date,method,reference,created_by)
+    VALUES (?,1,175,'2041-01-02','Bank transfer','SW-PAY-008',1)`,[invoice.insertId]);
+  const [report]=await admin.query(`INSERT INTO ${testDatabase}.daily_reports(project_id,supervisor,report_date,workforce,work_completed,issue,weather,created_by)
+    VALUES (?,'QA Supervisor','2041-01-03',3,'Searchwide shuttering work','Drainage blockage','Rain',1)`,[projectId]);
+  const [vehicle]=await admin.query(`INSERT INTO ${testDatabase}.fleet(vehicle,registration,status,renewal_type,due_date)
+    VALUES ('Searchwide truck','SW-TRUCK-1','Available','Insurance','2042-01-01')`);
+  const vehicleId=vehicle.insertId;
+  const [fuel]=await admin.query(`INSERT INTO ${testDatabase}.fuel_records(vehicle_id,company_id,project_id,fuel_date,litres,cost,odometer,created_by)
+    VALUES (?,2,?,'2040-01-01',20,1000,100,1)`,[vehicleId,projectId]);
+  await admin.query(`INSERT INTO ${testDatabase}.fuel_records(vehicle_id,company_id,project_id,fuel_date,litres,cost,odometer,created_by) VALUES ?`,
+    [Array.from({length:50},(_,index)=>[vehicleId,2,projectId,'2041-01-01',20,1000,101+index,1])]);
+  const [maintenance]=await admin.query(`INSERT INTO ${testDatabase}.vehicle_maintenance(vehicle_id,company_id,project_id,service_date,description,cost,created_by)
+    VALUES (?,2,?,'2041-01-04','Searchwide bearing replacement',250,1)`,[vehicleId,projectId]);
+  const [scan]=await admin.query(`INSERT INTO ${testDatabase}.attachments(owner_type,owner_id,storage_key,url,filename,title,mime,size_bytes,uploaded_by)
+    VALUES ('report',?,'test/searchwide','/not-served','searchwide-scan.pdf','Searchwide QA record','application/pdf',100,1)`,[report.insertId]);
+  const search=async (token,params,endpoint='/search')=>{
+    const result=await call(token,'GET',endpoint+'?'+new URLSearchParams(params));
+    assert.equal(result.status,200,JSON.stringify(result.body));
+    return result.body.results;
+  };
+  const [bill]=await search(owner,{q:'SW-BILL-007',type:'supplierBill'});
+  assert.equal(bill.path,'/finance/supplier-invoices?record='+invoice.insertId);
+  const [paid]=await search(owner,{q:'SW-PAY-008',type:'supplierPayment',companyId:1});
+  assert.equal(paid.targetCompanyId,2);
+  assert.equal(paid.path,'/finance/supplier-invoices?record='+invoice.insertId+'&payment='+payment.insertId);
+  assert.deepEqual(await search(store,{q:'SW-PAY-008',type:'supplierPayment'}),[]);
+  const detailPath='/purchasing/invoices/'+invoice.insertId+'/payments/'+payment.insertId;
+  assert.equal((await call(owner,'GET',detailPath)).body.invoiceNo,'SW-BILL-007');
+  assert.equal((await call(store,'GET',detailPath)).status,403);
+  assert.equal((await search(owner,{q:'shuttering blockage',type:'siteReport'}))[0].id,report.insertId);
+  assert.equal((await search(owner,{q:'SW-TRUCK-1',type:'vehicle',companyId:2}))[0].id,vehicleId);
+  assert.equal((await search(owner,{q:'bearing replacement',type:'maintenance'}))[0].id,maintenance.insertId);
+  assert.equal((await search(owner,{q:'SW-TRUCK-1',type:'fuel',to:'2040-01-02'}))[0].id,fuel.insertId);
+  const standard=(await call(owner,'GET','/fleet/'+vehicleId)).body;
+  const linked=(await call(owner,'GET','/fleet/'+vehicleId+'?fuel='+fuel.insertId)).body;
+  assert.equal(linked.linkedFuelRecord.id,fuel.insertId);
+  assert.deepEqual(linked.running,standard.running);
+  assert.equal(linked.fuel.length,50);
+  const scanEndpoint='/uploads/search/documents';
+  const files=await search(owner,{q:'searchwide-scan',companyId:2,project:'Searchwide'},scanEndpoint);
+  assert.deepEqual(files.map(row=>row.id),[scan.insertId]);
+  assert.equal(files[0].source,null);
+  assert.deepEqual(await search(owner,{q:'searchwide-scan',companyId:1},scanEndpoint),[]);
+  assert.deepEqual(await search(store,{q:'searchwide-scan'},scanEndpoint),[]);
+  assert.equal((await call(owner,'PATCH','/access/roles/'+role.body.id+'/permissions',{permission:'finance.view',granted:true})).status,200);
+  const viewer=(await call('','POST','/auth/login',account)).body.token;
+  assert.equal((await search(viewer,{q:'SW-BILL-007',type:'supplierBill'}))[0].id,invoice.insertId);
+  assert.deepEqual(await search(viewer,{q:'SW-PAY-008',type:'supplierPayment'}),[]);
+  assert.equal((await call(viewer,'GET',detailPath)).status,403);
+
 });
