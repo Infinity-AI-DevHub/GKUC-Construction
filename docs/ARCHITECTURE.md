@@ -643,3 +643,9 @@ Approval locks the submission and uses the same posting transaction as direct Fl
 The authenticated `/reminders` API stores one-time reminders and individual recipient records. The recipient directory exposes active account names and IDs. Only the creator and selected recipients can read a reminder. Dashboard lists reminders addressed to the signed-in user.
 
 The alert scheduler checks due times every minute. It records one targeted in-app notification per recipient and marks that recipient notified in the same transaction. The realtime event goes to that recipient, and unread reminder notifications persist in the bell for users who were signed out. Due times are stored in UTC and entered and displayed in Sri Lanka time.
+
+### SiteOps record search
+
+The authenticated `GET /api/search` endpoint searches existing Projects, Quotations, BOQs, Client Invoices, Retention and Progress Claims across active operating companies. Each source checks the permissions required to open that record before querying it. Completed and released records and saved quotation and BOQ versions are included. Project tombstones and their linked rows follow the Deleted projects recovery workflow.
+
+The endpoint searches references, project and client names, titles, and relevant line descriptions or remarks. Exact and prefix reference matches rank ahead of other matches. Validated filters cover record type, company, project, status and record date, with a stable paginated result order. The Project Commercial view can open the same search scoped to a specific project ID without a keyword. Results link to the saved record or version, including older invoices outside the default register window. The frontend keeps the existing permission-checked scanned-document OCR endpoint available in the same dialog. Company, project, status and date filters apply to structured records.

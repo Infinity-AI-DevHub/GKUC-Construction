@@ -21,7 +21,7 @@ const TAB_GROUPS = [
 ];
 
 /** A project is a workspace, not a form dialog: every operational record converges here. */
-export default function ProjectDetail({ projectId, data, close, reload, can, companies, setCompanyId, navigate }) {
+export default function ProjectDetail({ projectId, data, close, reload, can, companies, setCompanyId, navigate, onSearchProject }) {
   const [tab, setTab] = useState(TABS[0]);
   const [project, setProject] = useState(null);
   const [adding, setAdding] = useState('');
@@ -54,7 +54,10 @@ export default function ProjectDetail({ projectId, data, close, reload, can, com
     {tab === 'Activity & issues' && <ProjectActivity project={project} can={can} refresh={refresh} onAdd={setAdding} onEditTask={setEditingTask} />}
     {tab === 'Reports' && <ProjectReports project={project} />}
     {tab === 'Programme' && <Programme project={project} can={can} refresh={refresh} onAdd={() => setAdding('milestone')} />}
-    {tab === 'Commercial' && <Commercial project={project} />}
+    {tab === 'Commercial' && <>
+      {onSearchProject && <div><button type="button" className="secondary" onClick={() => onSearchProject(project)}>Find linked records</button></div>}
+      <Commercial project={project} />
+    </>}
     {tab === 'Subcontractors' && <ProjectSubcontractors project={project} can={can} onAdd={()=>setAdding('rate')} onAward={()=>setAdding('award')} />}
     {tab === 'Team' && <Team project={project} can={can} onAdd={() => setAdding('team')} onManage={() => setAdding('manager')} />}
     {tab === 'Gallery' && <section className="workspace-surface"><ProjectGallery projectId={project.id} canManage={can.gallery} /></section>}
@@ -120,14 +123,16 @@ function ProjectRateForm({projectId,close,reload}){const [subs,setSubs]=useState
 function ProjectHero({ project, close, onEdit, onDelete }) {
   return <section className="project-hero">
     <img src="/construction-site.jpg" alt="" className="project-hero-image" /><div className="project-hero-shade" />
-    <button className="project-back" onClick={close}><ArrowLeft size={17} />All projects</button>
-    {(onEdit || onDelete) && <div className="project-hero-actions">
-      {onDelete && <button className="secondary project-delete-button" onClick={onDelete}><Trash2 size={15} />Delete project</button>}
-      {onEdit && <button className="secondary project-edit-button" onClick={onEdit}>Edit project</button>}
-    </div>}
+    <div className="project-hero-toolbar">
+      <button className="project-back" onClick={close}><ArrowLeft size={17} />All projects</button>
+      {(onEdit || onDelete) && <div className="project-hero-actions">
+        {onDelete && <button className="secondary project-delete-button" onClick={onDelete}><Trash2 size={15} />Delete project</button>}
+        {onEdit && <button className="secondary project-edit-button" onClick={onEdit}>Edit project</button>}
+      </div>}
+    </div>
     <div className="project-hero-content">
       <div className="project-kicker"><Badge tone={project.health === 'Completed' ? 'completed' : project.health === 'On track' ? 'on-track' : project.health === 'At risk' ? 'at-risk' : 'watch'}>{project.health}</Badge><span>{project.company} · {project.stage}</span></div>
-      <Badge tone={projectDeliveryStatus(project)==='Completed'?'completed':'watch'}>{projectDeliveryStatus(project)}</Badge><h1>{project.name}</h1><p><MapPin size={16} />{project.site}<span /><Building2 size={16} />{project.client}</p>
+      <Badge tone={projectDeliveryStatus(project)==='Completed'?'completed':'watch'}>{projectDeliveryStatus(project)}</Badge><h1>{project.name}</h1><p><span><MapPin size={16} />{project.site}</span><span><Building2 size={16} />{project.client}</span></p>
     </div>
     <div className="project-hero-progress"><span>Overall delivery</span><strong>{project.progress}%</strong><Progress value={project.progress} /></div>
   </section>;

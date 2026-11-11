@@ -1483,3 +1483,22 @@ Finance and QS share the same add/edit/clear remark action and display saved rem
 - Approval by another authorized user posts one Fleet fuel record in a transaction with its odometer reading and any selected project cost or Fuel float payment. Rejections retain the reason. Project-linked submissions follow project company changes.
 - Added a Reminders page for all signed-in users. One-time reminders can target self, other active accounts, or both. Recipients see them on Dashboard, and due reminders appear in the notification bell and the live in-app banner.
 - Local verification on Node 20: backend suite passed 389 tests with 4 skipped, including private photo upload/read, review and posting, project company transfer, and reminder recipient visibility and delivery. Frontend suite passed 41 tests and the production build completed. Physical-phone camera behavior was not exercised. No production deployment or live database writes were performed.
+
+### 2026-11-12 — Long project titles in the detail header
+
+Moved the project action buttons, title and status badges, and delivery progress into the header's responsive layout. The header grows with the full title, wraps long words when needed, and stacks the delivery card below the title on small screens.
+
+Reproduced the overlap in a local Chrome layout fixture and verified the corrected header with short, long, and unbroken titles at 320, 390, 767, 768, 900, 1440, and 1971 pixels. The frontend tests, production build, and diff checks passed. No deployment or live database write.
+
+### 2026-11-12 — Progress claims company overview
+
+Progress Claims opens on All projects and lists draft and submitted applications plus certified claims with an unpaid balance for the selected company. Each row shows its project and retains the existing detail and document actions. Selecting a project shows its valuation BOQ versions and full claims history.
+
+Verified the overview, project filter, detail action, and full claim workflow in the browser fixture at 390px and 1440px. Frontend tests (41), production build, and diff checks passed. No deployment or live database write.
+
+### 2026-11-12 — SiteOps search and responsive credit reminder cards
+
+- Expanded the top-bar search to existing Projects, Quotations, BOQs, Client Invoices, Retention and Progress Claims across the operating companies, alongside scanned-document OCR. Searches include relevant references, names, item descriptions and remarks. Added record filters, ranked results and pagination. Completed projects, released retentions and saved versions are included under their existing read permissions.
+- Search results open the matching record or version in its company. Older invoice links request priority in the existing register and open payments and the PDF action. The Project Commercial view can browse its linked records by project ID.
+- Replaced dashboard credit payment reminder bars with responsive rectangular cards. Supplier, invoice, amount, due date, frequency and existing acknowledgement/rescheduling actions remain available.
+- Node 20 backend suite passed 390 tests with four skipped. Frontend suite passed 41 tests and the production build completed. Chrome fixtures verified search and cross-company links at 320, 390 and 1440px, progress claim links at 390 and 1440px, and the credit reminder grid from 320 to 1920px at six widths. Desktop and mobile reminder layouts were also visually checked. No deployment or live database write.

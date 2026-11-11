@@ -427,7 +427,7 @@ test('dashboard missing checkouts count employees once, respect scope and clear 
   const summary=(await call(hr,'GET','/dashboard/queue?companyId=1')).body.missingCheckouts;
   assert.equal(summary.employeeCount,before.employeeCount+1);assert.equal(summary.recordCount,before.recordCount+2);
   const detail=await call(hr,'GET','/dashboard/missing-checkouts?companyId=1');
-  assert.equal(detail.status,200,`${JSON.stringify(detail.body)} ${serverOutput.slice(-2500)}`);
+  assert.equal(detail.status,200,`${JSON.stringify(detail.body)} ${serverOutput.split('\n').filter(line=>/error|sqlState|sqlMessage|ER_/i.test(line)).slice(-12).join('\n')}`);
   const rows=detail.body.records.filter(row=>Number(row.employeeId)===Number(ids[0]));
   assert.equal(rows.length,2);assert.ok(!detail.body.records.some(row=>Number(row.employeeId)===Number(ids[1])));
   for(const row of rows){
@@ -1919,6 +1919,10 @@ test('quotation revisions preserve the original and finalization is independentl
   assert.equal(revised.body.revisionNumber, 1);
   assert.equal(revised.body.revisedFromId, created.body.id);
   assert.equal(revised.body.reference, created.body.reference);
+  const versions=await call(owner,'GET','/search?type=quotation&q='+encodeURIComponent(created.body.reference));
+  assert.equal(versions.status,200);
+  assert.deepEqual(versions.body.results.map(row=>[row.id,row.version]),[[revised.body.id,1],[created.body.id,0]]);
+
   const original = await call(owner, 'GET', `/qs/quotations/${created.body.id}`);
   assert.equal(Number(original.body.total), 354);
   assert.equal(Number(revised.body.total), 590);
@@ -6838,4 +6842,50 @@ test('personal reminders stay private and notify each selected account once', as
   await call(recipient,'POST',`/notifications/${received[0].id}/read`);
   assert.ok(!(await bell(recipient)).some(row=>row.id===received[0].id));
   assert.equal((await list(recipient,'?scope=mine')).notified,1);
+});
+
+test('global record search finds commercial records and enforces source permissions', async () => {
+  const owner=await login(), store=await login('store@gkuc.lk');
+  const create=async(path,body)=>{
+    const response=await call(owner,'POST',path,body);
+    assert.equal(response.status,201,JSON.stringify(response.body));
+    return response.body;
+  };
+  const project=await create('/projects',{companyId:2,name:'Searchneedle Bridge Works',client:'Searchneedle Client',manager:'Project Manager',site:'Bridge Site',stage:'Planning'});
+  const boq=await create('/boq',{projectId:project.id,title:'Bridge estimate',items:[{category:'Material',description:'Searchneedle galvanised plate',unit:'item',quantity:2,rate:100}]});
+  assert.equal((await call(owner,'PATCH','/boq/'+boq.id,{status:'Approved'})).status,200);
+  const quote=await create('/qs/quotations',{boqId:boq.id,markupPercent:0,vatPercent:0});
+  const invoice=await create('/receivables/invoices',{companyId:2,title:'Searchneedle office invoice',invoiceDate:'2040-02-01',documentType:'Invoice',taxTreatment:'Exempt',items:[{description:'Searchneedle office work',quantity:1,rate:100}]});
+  const retention=await create('/qs/retentions',{projectId:project.id,description:'Bridge hold',notes:'Searchneedle historical remark',amount:50,heldFrom:'2040-02-01',releaseDate:'2040-03-01'});
+  assert.equal((await call(owner,'POST','/qs/retentions/'+retention.id+'/release',{amount:50})).body.status,'Released');
+  const schedule=await create('/progress-claims/schedules',{projectId:project.id,source:'QS prepared',revisionReason:'Search valuation',items:[{code:'B1',description:'Bridge construction',unit:'item',quantity:2,rate:100}]});
+  assert.equal((await call(owner,'PATCH','/progress-claims/schedules/'+schedule.id,{status:'Internally approved',reference:'QA approved valuation'})).status,204);
+  const claim=await create('/progress-claims',{scheduleId:schedule.id,applicationDate:'2040-02-28',periodFrom:'2040-02-01',periodTo:'2040-02-28',quantities:{B1:1}});
+  const search=async(token,params)=>{
+    const result=await call(token,'GET','/search?'+new URLSearchParams(params));
+    assert.equal(result.status,200,JSON.stringify(result.body));
+    return result.body.results;
+  };
+  const results=await search(owner,{q:'Searchneedle'});
+  for (const [type,id] of Object.entries({project:project.id,quotation:quote.id,boq:boq.id,invoice:invoice.id,retention:retention.id,claim:claim.id})) {
+    const row=results.find(row=>row.type===type && row.id===id);
+    assert.ok(row,type);
+    assert.equal(row.companyId,2);
+    assert.match(row.path,type==='project'?new RegExp('/'+id+'$'):new RegExp('record='+id+'$'));
+  }
+  assert.deepEqual(await search(owner,{q:'historical remark',type:'retention',status:'Released'}).then(rows=>rows.map(row=>row.id)),[retention.id]);
+  assert.deepEqual(await search(owner,{q:'Searchneedle',companyId:1}),[]);
+  assert.deepEqual(await search(owner,{q:'Searchneedle',type:'invoice',to:'2039-12-31'}),[]);
+  const items=await search(owner,{q:'galvanised bridge',type:'boq',status:'Approved',project:'Bridge Works'});
+  assert.deepEqual(items.map(row=>row.id),[boq.id]);
+  const linked=await search(owner,{projectId:project.id});
+  assert.deepEqual(new Set(linked.map(row=>row.type)),new Set(['boq','quotation','retention','claim']));
+  const exact=await search(owner,{q:quote.reference});
+  assert.equal(exact[0].type,'quotation');
+  assert.equal(exact[0].id,quote.id);
+  assert.deepEqual(await search(store,{q:'Searchneedle',type:'invoice'}),[]);
+  assert.deepEqual(await search(owner,{q:'Searchneedle %',type:'boq'}),[]);
+  assert.equal((await call(owner,'GET','/search?q=Searchneedle&from=2040-02-31')).status,400);
+  const selected=await call(owner,'GET','/receivables/invoices?companyId=2&record='+invoice.id);
+  assert.equal(selected.body[0].id,invoice.id);
 });

@@ -20,18 +20,45 @@ try{
     const page=await browser.newPage({viewport:{width,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
     let records=[{id:1,employeeId:1,name:'Employee One',workDate:'2026-10-20'},{id:2,employeeId:1,name:'Employee One',workDate:'2026-10-21'},
       {id:3,employeeId:2,name:'Employee Two',workDate:'2026-10-22'}].map(row=>({...row,employeeCode:'EMP-'+row.employeeId,in:'07:30:00',out:null,state:'On site',workLocation:'Office',site:'Head office',source:'Biometric'}));
+    let reminders=Array.from({length:8},(_,index)=>({id:index+1,supplier:index===0?'Supplier with a particularly long name for wrapping':'Supplier '+index,invoiceNo:'CR-'+index,description:'Credit purchase',outstanding:35000,dueDate:'2026-10-28',frequency:index===0?'Once':'Daily'}));
     const result=()=>({employeeCount:new Set(records.map(row=>row.employeeId)).size,recordCount:records.length,records,offset:0,hasMore:false,shiftEnd:'16:30'});
     await page.route('**/api/**',route=>{
       const req=route.request(),url=new URL(req.url());
+      if(req.method()==='POST' && url.pathname.includes('/credit-reminders/')){
+        reminders=reminders.filter(row=>row.id!==Number(url.pathname.split('/').at(-2)));
+        return route.fulfill({json:{updated:true}});
+      }
       if(req.method()==='PATCH'){
         const body=req.postDataJSON();assert.equal(body.checkOut,'16:30');assert.ok(body.reason.length>5);
         records=records.filter(row=>row.id!==Number(url.pathname.split('/').at(-1)));return route.fulfill({json:{updated:true}});
       }
-      return route.fulfill({json:url.pathname.endsWith('/queue')?{work:[],sheets:[],claims:[],invoicesDue:[],missingCheckouts:result()}:result()});
+      return route.fulfill({json:url.pathname.endsWith('/queue')?{work:[],sheets:[],claims:[],invoicesDue:[],missingCheckouts:result(),creditReminders:reminders}:result()});
     });
     const base='http://127.0.0.1:'+server.httpServer.address().port;
     await page.goto(base+'/__checkout?test');
     await page.getByText('2 employees not checked out',{exact:true}).waitFor();
+    const cards=page.locator('.credit-reminder-card');
+    assert.equal(await cards.count(),8);
+    if (width===1440) {
+      let prior=0;
+      for (const viewport of [320,390,600,900,1440,1920]) {
+        await page.setViewportSize({width:viewport,height:1000});
+        const layout=await cards.evaluateAll(elements=>{
+          const boxes=elements.map(element=>element.getBoundingClientRect());
+          return {columns:boxes.filter(box=>box.top===boxes[0].top).length,fits:boxes.every(box=>box.left>=0&&box.right<=innerWidth)};
+        });
+        assert.ok(layout.fits,viewport+'px card overflow');
+        assert.ok(layout.columns>=prior,viewport+'px column count');
+        if(viewport===320||viewport===390) assert.equal(layout.columns,1);
+        if(viewport===1920) assert.ok(layout.columns>=4);
+        prior=layout.columns;
+      }
+      await page.setViewportSize({width,height:1000});
+    }
+    await page.getByRole('button',{name:'Acknowledge',exact:true}).click();
+    await page.getByRole('button',{name:'Acknowledge',exact:true}).waitFor({state:'detached'});
+    assert.equal(await cards.count(),7);
+    assert.equal(await page.getByRole('button',{name:'Remind me daily',exact:true}).count(),7);
     await page.screenshot({path:'/tmp/gkuc-dashboard-checkouts-'+width+'.png'});
     await page.getByRole('button',{name:'Resolve immediately',exact:true}).click();
     await page.getByText('2 employees · 3 overdue records',{exact:true}).waitFor();

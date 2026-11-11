@@ -550,3 +550,16 @@ body:has(.workflow-page) .modal-backdrop{z-index:1200}
 .po-item-fields label{display:grid;gap:6px;min-width:0}
 .po-item-fields :is(input,select){width:100%;min-width:0;max-width:100%;box-sizing:border-box}
 @media(max-width:640px){.po-item-fields{grid-template-columns:minmax(0,1fr)}}
+
+.credit-reminders { margin-bottom:18px; }
+.credit-reminders h3 { margin:0 0 10px; }
+.credit-reminders-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,250px),1fr));gap:12px; }
+.credit-reminder-card {
+  display:flex;flex-direction:column;gap:5px;min-width:0;padding:12px 14px;
+  border:1px solid #e3ad73;border-left:3px solid #b75d12;border-radius:8px;
+  background:#fff3e7;color:#77420e;overflow-wrap:anywhere;
+}
+.credit-reminder-heading { display:flex;align-items:flex-start;gap:8px; }
+.credit-reminder-heading svg { flex:none; }
+.credit-reminder-card p { margin:0;font-size:12px;line-height:1.45; }
+.credit-reminder-card button { align-self:flex-start;margin-top:auto;max-width:100%;white-space:normal; }

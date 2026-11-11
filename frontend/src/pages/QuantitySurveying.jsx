@@ -19,15 +19,36 @@ import { tenderSteps } from '../workflow-paths.js';
 /* The bills already on the system, so this tab shows what exists as well as how to add. */
 function BoqList({ companyId }) {
   const [boqs, setBoqs] = useState([]);
-  const load=()=>api(`/boq?companyId=${companyId}`).then(setBoqs).catch(() => setBoqs([]));
+  const [detail, setDetail] = useState(null);
+  const [error, setError] = useState('');
+  const open = async id => {
+    setError('');
+    try { setDetail(await api('/boq/' + id)); }
+    catch (failure) { setError(failure.message); }
+  };
+  const load = () => api('/boq?companyId=' + companyId).then(setBoqs).catch(() => setBoqs([]));
   useLiveList(load);
-  useEffect(()=>{load();},[companyId]);
-  if (!boqs.length) return null;
-  return <Table title="Bills of quantities" columns={['Reference', 'Project', 'Title', 'Total', 'Status']}
-    rows={boqs.map(boq => [boq.reference, boq.project, boq.title, rupees(boq.total),
-      <Badge key="s" tone={boq.status === 'Approved' ? 'on-track' : 'watch'}>{boq.status}</Badge>])} />;
+  useEffect(() => {
+    setDetail(null);
+    load();
+    const record = Number(new URLSearchParams(window.location.search).get('record'));
+    if (record > 0) open(record);
+  }, [companyId]);
+  return <>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <Table title="Bills of quantities" columns={['Reference','Project','Title','Total','Status']}
+      template="minmax(140px,1fr) minmax(150px,1fr) minmax(170px,1fr) 125px 110px">
+      {boqs.map(boq => <Row key={boq.id}>
+        <div><button type="button" className="task-record-link" onClick={() => open(boq.id)}>{boq.reference}</button><small>v{boq.version}</small></div>
+        <span>{boq.project}</span><span>{boq.title}</span><strong>{rupees(boq.total)}</strong>
+        <Badge tone={boq.status === 'Approved' ? 'on-track' : 'watch'}>{boq.status}</Badge>
+      </Row>)}
+    </Table>
+    {detail && <BoqDetail boq={detail} close={() => setDetail(null)} />}
+  </>;
 }
-import { BoqForm } from './Projects.jsx';
+
+import { BoqDetail, BoqForm } from './Projects.jsx';
 
 const TABS = ['Cost control', 'Quotations', 'Bills of quantities', 'Progress claims', 'Tenders', 'Retention', 'Subcontractors', 'Fuel submissions'];
 const QS_SECTIONS = {
