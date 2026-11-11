@@ -1522,6 +1522,21 @@ router.post('/retentions', auth, permit('qs.retention','finance.manage'), valida
   res.status(201).json(await getOne(`${retentionSelect} WHERE r.id=?`, [result.insertId]));
 }));
 
+router.patch('/retentions/:id/remark', auth, permit('qs.retention','finance.manage'), validate(z.object({
+  notes: z.string().trim().max(600)
+})), wrap(async (req, res) => {
+  const updated = await transaction(async connection => {
+    const [[before]] = await connection.execute('SELECT id,notes FROM retentions WHERE id=? FOR UPDATE', [req.params.id]);
+    if (!before) return null;
+    const notes = req.body.notes || null;
+    await connection.execute('UPDATE retentions SET notes=? WHERE id=?', [notes, before.id]);
+    await audit(connection, req.user.id, 'UPDATE', 'retention', before.id, before, { notes }, req.ip);
+    return { id: before.id, notes };
+  });
+  if (!updated) return res.status(404).json({ error: 'Retention not found' });
+  res.json(updated);
+}));
+
 router.post('/retentions/:id/release', auth, permit('qs.retention','finance.manage'), validate(z.object({
   amount: z.number().positive(),
   notes: z.string().max(600).optional()

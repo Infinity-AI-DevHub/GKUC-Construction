@@ -55,8 +55,8 @@ function Banner({ item, onDismiss, onOpen }) {
             raised by the app itself — a document that would not open, a record that was
             gone — was never stored there, so offering the link sent people to look for
             something that was not going to be in the list. */}
-        {onOpen && item.id ? <button type="button" className="banner-link" onClick={() => { onOpen(); close(); }}>
-          Open the notification centre
+        {onOpen && item.id ? <button type="button" className="banner-link" onClick={() => { onOpen(item); close(); }}>
+          {item.referenceType === 'personal_reminder' ? 'Open reminders' : 'Open the notification centre'}
         </button> : null}
       </div>
       <button type="button" className="banner-close" onClick={close} aria-label="Dismiss">

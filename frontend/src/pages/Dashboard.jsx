@@ -1,3 +1,4 @@
+import {DashboardReminders} from './Reminders.jsx';
 import React from 'react';
 import { AlertTriangle, Boxes, CheckCircle2, ChevronRight, FileText, Truck } from 'lucide-react';
 import { Avatar, Badge, PanelTitle } from '../ui.jsx';
@@ -34,6 +35,7 @@ export default function Dashboard({ data, go, user, can, companyId, onViewAlerts
   const managementOverview = can.has('projects.view') && can.has('finance.view');
 
   return <div className="reference-dashboard">
+    <DashboardReminders go={go} />
     <MyWorkToday user={user} can={can} go={go} data={data} companyId={companyId} />
     {managementOverview && <>
     <div className="reference-welcome">

@@ -1,0 +1,7 @@
+.fuel-submissions { padding: 1rem; }
+.fuel-submissions header,.fuel-submission-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.75rem; }
+.fuel-submission-row { padding:.9rem 0; border-top:1px solid var(--line,#dbe3ea); }
+.fuel-submission-row p { margin:.3rem 0; }
+.fuel-photo-view,.fuel-photo-options { display:grid; gap:.75rem; min-width:0; }
+.fuel-photo-view img { max-width:100%; max-height:65vh; object-fit:contain; }
+.fuel-photo-options input { width:100%; min-width:0; }

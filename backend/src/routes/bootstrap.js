@@ -31,7 +31,7 @@ router.get('/', auth, wrap(async (req, res) => {
   const gated = (keys, run) => (keys.some(key => can(req, key)) ? run() : Promise.resolve([]));
 
   const [companies, projects, tasks, attendance, materials, fleet, reports, employees, departments, equipment,
-    suppliers, purchaseRequests, boqs, milestones, notifications, finance, inquiries, weekly] = await Promise.all([
+    suppliers, purchaseRequests, boqs, milestones, notifications, reminderNotifications, finance, inquiries, weekly] = await Promise.all([
     query('SELECT id,code,name FROM companies WHERE active=1 ORDER BY id'),
     gated(['projects.view','site.reports','finance.reports','finance.managementAccounts','finance.dailyExpenses','finance.expectedOutflows','finance.invoice','qs.retention','finance.manage'], () => can(req,'projects.view') ? query(`SELECT p.*,p.company_id companyId,p.client_id clientId,p.manager_employee_id managerEmployeeId,
       CASE WHEN p.manager_employee_id IS NOT NULL THEN me.name ELSE p.manager END manager,COALESCE(d.name,p.client) client,c.name company,c.code companyCode FROM projects p
@@ -105,6 +105,8 @@ router.get('/', auth, wrap(async (req, res) => {
         ORDER BY (c.snoozed_until>NOW()),FIELD(c.severity,'Critical','Warning','Info'),c.due_at LIMIT 40`,
         [req.user.id,req.user.id,...perms,Number(perms.includes('admin.notifications'))]);
     })(),
+    query(`SELECT id,title,message,created_at createdAt FROM notifications
+      WHERE user_id=? AND reference_type='personal_reminder' AND status='Delivered' ORDER BY id DESC LIMIT 20`, [req.user.id]),
     gated(['finance.view','finance.manage','finance.reports','finance.managementAccounts'], () => query(`SELECT p.id projectId,p.company_id companyId,p.name project,p.budget,
       ${spendSql('p')} expenses,
       COALESCE((SELECT SUM(i.amount) FROM incomes i WHERE i.project_id=p.id),0) income
@@ -153,6 +155,7 @@ router.get('/', auth, wrap(async (req, res) => {
       boqs,
       milestones,
       notifications,
+      reminderNotifications,
       finance,
       inquiries,
       dashboard: {

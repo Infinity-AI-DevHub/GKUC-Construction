@@ -1,3 +1,4 @@
+import {deliverDueReminders} from './lib/personal-reminders.js';
 import {projectDeadline} from './lib/project-deadlines.js';
 import { maintenanceReminder } from './lib/vehicle-maintenance.js';
 import { pool, query, spendSql, today, transaction } from './db.js';
@@ -756,6 +757,10 @@ export function startAlertScheduler(intervalMinutes = Number(process.env.ALERT_I
   timer.unref();
   const taskTimer=setInterval(()=>runTaskReminderScan().catch(error=>console.error('Task reminders failed',error)),60000);
   taskTimer.unref();
+  const deliver = () => deliverDueReminders().catch(error => console.error('Personal reminders failed', error));
+  deliver();
+  const reminderTimer = setInterval(deliver, 60000);
+  reminderTimer.unref();
   return timer;
 }
 

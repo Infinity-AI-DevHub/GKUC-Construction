@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
+import { post } from './api.js';
 import { Badge } from './ui.jsx';
 
 const PREVIEW_COUNT = 6;
@@ -17,7 +18,7 @@ const when = value => {
  * The alert bell and its dropdown. Shown in the top bar on small screens and in the
  * navigation bar on desktop, so the count is always visible without opening a page.
  */
-export default function NotificationBell({ notifications, reload, onViewAll, placement = 'bar' }) {
+export default function NotificationBell({ notifications, reminders = [], reload, onViewAll, onViewReminders, placement = 'bar' }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef(null);
 
@@ -42,18 +43,37 @@ export default function NotificationBell({ notifications, reload, onViewAll, pla
     onViewAll();
   };
 
+  const viewReminder = async id => {
+    setOpen(false);
+    onViewReminders();
+    try {
+      await post(`/notifications/${id}/read`);
+      await reload();
+    } catch {
+      // Keep the notification unread if acknowledgement fails.
+    }
+  };
+
+  const attentionLabel = `${openCases.length} open cases, ${reminders.length} unread reminders`;
   return <div className={`bell-wrap ${placement}`} ref={wrap}>
-    <button className="alert-button" aria-label={`${openCases.length} open cases`} aria-expanded={open}
-      title={`${openCases.length} open cases`} onClick={() => setOpen(current => !current)}>
-      <Bell size={18} /><span>Cases</span>{openCases.length > 0 && <i />}
+    <button className="alert-button" aria-label={attentionLabel} aria-expanded={open}
+      title={attentionLabel} onClick={() => setOpen(current => !current)}>
+      <Bell size={18} /><span>Notifications</span>{(openCases.length > 0 || reminders.length > 0) && <i />}
     </button>
 
     {open && <div className="bell-menu">
       <div className="bell-menu-head">
-        <h2>Cases requiring action</h2>
+        <h2>Notifications</h2>
       </div>
 
       <div className="bell-menu-list">
+        {reminders.slice(0, PREVIEW_COUNT).map(reminder => <button className="bell-item"
+          key={`reminder-${reminder.id}`} onClick={() => viewReminder(reminder.id)}>
+          <Badge tone="low">Reminder</Badge>
+          <strong>{reminder.title}</strong>
+          <small>{when(reminder.createdAt)}</small>
+          <p>{reminder.message}</p>
+        </button>)}
         {preview.map(alert => (
           <button className="bell-item" key={alert.id} onClick={viewAll}>
             <Badge tone={severityTone(alert.severity)}>{alert.severity}</Badge>
@@ -63,7 +83,7 @@ export default function NotificationBell({ notifications, reload, onViewAll, pla
             <p>{alert.message}</p>
           </button>
         ))}
-        {!preview.length && <p className="bell-empty">Nothing needs attention.</p>}
+        {!preview.length && !reminders.length && <p className="bell-empty">Nothing needs attention.</p>}
       </div>
 
       <button className="bell-menu-foot" onClick={viewAll}>

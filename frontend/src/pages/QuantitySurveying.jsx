@@ -1,3 +1,4 @@
+import FuelSubmissions from './FuelSubmissions.jsx';
 import QuotationIdentityChoices,{defaultQuotationVisibility} from '../QuotationIdentityChoices.jsx';
 import Retention from './Retention.jsx';
 import DocumentPrintOptions,{printedQuotationNumber} from '../DocumentPrintOptions.jsx';
@@ -28,8 +29,9 @@ function BoqList({ companyId }) {
 }
 import { BoqForm } from './Projects.jsx';
 
-const TABS = ['Cost control', 'Quotations', 'Bills of quantities', 'Progress claims', 'Tenders', 'Retention', 'Subcontractors'];
+const TABS = ['Cost control', 'Quotations', 'Bills of quantities', 'Progress claims', 'Tenders', 'Retention', 'Subcontractors', 'Fuel submissions'];
 const QS_SECTIONS = {
+  'Fuel submissions': {icon:ClipboardList,caption:'Fuel review',description:'View submitted and reviewed vehicle fuel entries.'},
   'Progress claims':{icon:FileText,caption:'Applications & certificates',description:'Valuation BOQs, measured applications and client-certified payments.'},
   'Cost control': { icon: ChartNoAxesCombined, caption: 'Daily costs & forecasts', description: 'Keep the daily site ledger, approved costs and commercial outlook connected.' },
   Quotations: { icon: FileText, caption: 'Client pricing & templates', description: 'Prepare, review and share client-ready quotations, with reusable wording in one place.' },
@@ -40,8 +42,10 @@ const QS_SECTIONS = {
 };
 
 /** PID v3 §3.3 — one connected thread from first estimate to final account. */
-export default function QuantitySurveying({ data, reload, can, companyId, company }) {
-  const [tab, setTab] = useState(() => TABS.find(section => slug(section) === window.location.pathname.split('/')[2]) || TABS[0]);
+export default function QuantitySurveying({ user, data, reload, can, companyId, company }) {
+  const canViewFuel = ['qs.view','qs.costControl','fuel.view','fuel.review','fuel.submit'].some(key => can.has(key));
+  const tabs = TABS.filter(section => section !== 'Fuel submissions' || canViewFuel);
+  const [tab, setTab] = useState(() => tabs.find(section => slug(section) === window.location.pathname.split('/')[2]) || TABS[0]);
   const [open, setOpen] = useState('');
 
   const actions = {
@@ -57,13 +61,14 @@ export default function QuantitySurveying({ data, reload, can, companyId, compan
     <div className="qs-layout">
       <aside className="qs-navigation" aria-label="Quantity surveying sections">
         <div className="qs-navigation-title"><Layers size={17} /><span>Commercial desk</span></div>
-        <nav>{TABS.filter(section=>section!=='Progress claims'||['qs.view','qs.boq','qs.approve'].some(key=>can.has(key))).map(section => { const Icon=QS_SECTIONS[section].icon; return <button type="button" key={section} className={tab===section?'is-active':''} aria-current={tab===section?'page':undefined} onClick={()=>setTab(section)}><span className="qs-nav-icon"><Icon size={19}/></span><span><strong>{section}</strong><small>{QS_SECTIONS[section].caption}</small></span><ChevronRight size={14}/></button>; })}</nav>
+        <nav>{tabs.filter(section=>section!=='Progress claims'||['qs.view','qs.boq','qs.approve'].some(key=>can.has(key))).map(section => { const Icon=QS_SECTIONS[section].icon; return <button type="button" key={section} className={tab===section?'is-active':''} aria-current={tab===section?'page':undefined} onClick={()=>setTab(section)}><span className="qs-nav-icon"><Icon size={19}/></span><span><strong>{section}</strong><small>{QS_SECTIONS[section].caption}</small></span><ChevronRight size={14}/></button>; })}</nav>
         <div className="qs-navigation-note"><ShieldCheck size={19}/><strong>One connected workflow</strong><p>Estimate. Quote. Review.<br/>Track every project cost.</p></div>
       </aside>
       <div className="qs-content" key={tab}>
         {tab !== 'Cost control' && <header className="qs-section-intro"><span>Commercial management</span><h2>{tab}</h2><p>{QS_SECTIONS[tab].description}</p></header>}
 
     <>
+    {tab === 'Fuel submissions' && canViewFuel && <FuelSubmissions key={companyId} {...{can,companyId,user,reload}} />}
     {tab === 'Cost control' && <CostControl projects={data.projects} can={can} />}
     {tab === 'Progress claims' && ['qs.view','qs.boq','qs.approve'].some(key=>can.has(key)) && <ProgressClaims companyId={companyId} can={can}/>}
     {tab === 'Quotations' && <Quotations can={can} reload={reload} companyId={companyId} />}

@@ -627,3 +627,19 @@ Additive fields preserve merged destination/date/balance on floats and first ori
 PettyCashMerge.jsx provides choose/preview/confirm, explicit combined name/reason and stale-preview recovery. Archived cards show the destination and balance at merge, with read-only history and Open shared account. Pending QS station-fuel choices resolve historical float IDs to their current active destination on validation/review, retaining the saved original selection and creating any new actual payment on the destination only. Entry IDs and fuel/supplier/MD/payroll recovery foreign keys are unchanged. No automatic consolidation or live merge occurs from a code change.
 
 The float entries API supports a validated beforeDate/beforeId cursor with stable descending date/ID ordering. FloatLedger loads 300 rows at a time and appends older history, so merging does not make older records inaccessible through the existing first-page limit.
+
+### Retention remarks
+
+The shared Finance and QS Retention screen displays the existing retention notes as remarks. Users with `qs.retention` or `finance.manage` can add, edit, or clear a remark through `PATCH /qs/retentions/:id/remark`, including after release. The endpoint updates the notes field and records the change in the same transaction. A release with a blank remark keeps the saved text.
+
+### Vehicle fuel submission and approval
+
+The authenticated `/fuel-submissions` API stores company-scoped submissions, optional project references and optional private photo metadata. A recorder with `fuel.submit` can choose shared active vehicles and view their own submissions. Department read access and `fuel.view` expose the shared queue. `fuel.review` allows approval or rejection by a user other than the submitter. The Fuel Recorder role is provisioned once with submit access and can be edited through Access Control.
+
+Approval locks the submission and uses the same posting transaction as direct Fleet fuel entry. The actual odometer reading is required before posting. One approval creates one fuel record and odometer reading, with a project expense or a shared Fuel float movement when the corresponding selection applies. Rejections preserve a reason and history. Project-linked submissions move with the project on company transfer. Photos are served through the authorized submission route using the configured local or object storage driver.
+
+### Personal reminders
+
+The authenticated `/reminders` API stores one-time reminders and individual recipient records. The recipient directory exposes active account names and IDs. Only the creator and selected recipients can read a reminder. Dashboard lists reminders addressed to the signed-in user.
+
+The alert scheduler checks due times every minute. It records one targeted in-app notification per recipient and marks that recipient notified in the same transaction. The realtime event goes to that recipient, and unread reminder notifications persist in the bell for users who were signed out. Due times are stored in UTC and entered and displayed in Sri Lanka time.

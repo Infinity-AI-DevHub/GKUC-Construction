@@ -1,3 +1,4 @@
+import FuelSubmissions from './FuelSubmissions.jsx';
 import {notice} from '../notices.js';
 import React, { useEffect, useRef, useState } from 'react';
 import { RecordScopeProvider } from '../record-scope.jsx';
@@ -24,6 +25,7 @@ import WorkforceMap from './WorkforceMap.jsx';
 const TABS = [
   ['Employees', ['hr.view', 'hr.manage']],
   ['Hiring',['hr.hiring']],
+  ['Fuel submissions',['hr.view','hr.manage','fuel.view','fuel.review']],
   ['Insurance',['hr.insurance']],
   ['Workforce map', ['hr.view', 'hr.manage', 'hr.attendance']],
   ['Attendance', ['hr.manage', 'hr.attendance']],
@@ -40,13 +42,13 @@ const TABS = [
   ['Departments', ['hr.view', 'hr.manage']]
 ];
 const TAB_GROUPS = [
-  { label: 'Team', tabs: ['Employees', 'Hiring', 'Insurance', 'Performance', 'Departments'] },
+  { label: 'Team', tabs: ['Employees', 'Fuel submissions', 'Hiring', 'Insurance', 'Performance', 'Departments'] },
   { label: 'Time & availability', tabs: ['Workforce map', 'Attendance', 'Attendance register', 'Biometric import', 'Leave', 'Leave register', 'Leave settings'] },
   { label: 'Pay', tabs: ['Overtime', 'Payroll', 'Payroll Inputs', 'Payroll settings'] }
 ];
 
 /** PID 2.2 — one record per employee covering profile, attendance, leave and overtime. */
-export default function People({ data, allData, reload, can, companies, companyId, company, employeeSearchRequest }) {
+export default function People({ user, data, allData, reload, can, companies, companyId, company, employeeSearchRequest }) {
   /* Offering a tab the server will refuse only sends somebody into an error they can do
      nothing about, so each is shown against the permissions it actually needs. */
   const tabs = allowedTabs(TABS, can);
@@ -91,6 +93,7 @@ export default function People({ data, allData, reload, can, companies, companyI
   return <RecordScopeProvider scope={['Payroll', 'Payroll settings', 'Payroll Inputs'].includes(tab) ? { kind: 'company', name: company?.name || 'the selected company', id: companyId } : { kind: 'shared' }}><Page title="People" subtitle="Employee records, live workforce presence, leave and overtime."
     action={actions[tab] || null} onAction={() => setOpen(tab)}>
     <Tabs tabs={tabs} active={tab} onChange={setTab} groups={TAB_GROUPS} />
+    {tab === 'Fuel submissions' && <FuelSubmissions key={companyId} {...{can,companyId,user,reload}} />}
 
     {tab === 'Employees' && <Employees data={data} can={can} reload={reload} onOpen={openEmployee} onImport={() => setOpen('Employee import')} focusRequest={employeeSearchRequest} />}
     {tab === 'Hiring' && <Hiring companies={companies} companyId={companyId} reload={reload} />}

@@ -359,3 +359,9 @@ Mr. Gihan's personal spending is a separate Finance register linked to original 
 ### 2026-11-10 — explicitly merge former company-specific petty accounts
 
 User confirmed old Fuel balances were separately recorded because shared floats were unavailable and requested consolidation. Combine existing ledger movements into one active same-category float; do not invent funding/expense adjustments or delete the old accounts. Preserve original payer company and historical membership, archive sources, and require preview/reason before a deliberate merge. This extends the prior shared-float implementation with a manual consolidation action, without merging balances automatically.
+
+### 2026-11-11 — independent fuel review and personal reminders
+
+Use a shared fuel submission queue across departments. Separate submission, queue visibility and review permissions. Require another authorized user to review the entry and post approved fuel through the existing Fleet posting transaction. Store optional receipt photos privately.
+
+Personal reminders are scheduled in-app deliveries to explicitly selected active accounts, with self available as a recipient. Dashboard visibility and notification delivery are per recipient.

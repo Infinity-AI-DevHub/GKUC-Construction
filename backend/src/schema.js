@@ -3151,6 +3151,18 @@ async function seedAccessControl() {
     await query("INSERT IGNORE INTO role_permissions(role_id,permission_key) SELECT role_id,'transport.view' FROM role_permissions WHERE permission_key='hr.insurance'");
     await query("INSERT INTO permission_catalogue_migrations(permission_key) VALUES('hr-fleet-view-v1')");
   }
+  await transaction(async connection => {
+    const [migration] = await connection.execute(
+      "INSERT IGNORE INTO permission_catalogue_migrations(permission_key) VALUES ('fuel-recorder-role-v1')"
+    );
+    if (!migration.affectedRows) return;
+    const [role] = await connection.execute(
+      "INSERT IGNORE INTO roles(name,description) VALUES ('Fuel Recorder','Submit vehicle fuel entries for approval')"
+    );
+    if (role.affectedRows) await connection.execute(
+      "INSERT INTO role_permissions(role_id,permission_key) VALUES (?,'fuel.submit')", [role.insertId]
+    );
+  });
   for (const role of systemRoles) {
     for (const permission of PERMISSIONS) {
       await query('INSERT IGNORE INTO role_permissions (role_id,permission_key) VALUES (?,?)', [role.id, permission.key]);
@@ -3722,5 +3734,32 @@ export async function migrate() {
   await migrateEmployeeOtRates({query, transaction});
   await createEmployeeReadViews(query);
   await seedWorkMethods();
+  await query(`CREATE TABLE IF NOT EXISTS fuel_submissions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    vehicle_id BIGINT UNSIGNED NOT NULL, company_id TINYINT UNSIGNED NOT NULL,
+    project_id BIGINT UNSIGNED NULL, submitted_by BIGINT UNSIGNED NOT NULL, client_ref CHAR(36) NOT NULL,
+    details JSON NOT NULL, photo JSON NULL,
+    status ENUM('Pending','Approved','Rejected') NOT NULL DEFAULT 'Pending',
+    fuel_record_id BIGINT UNSIGNED NULL UNIQUE,
+    reviewed_by BIGINT UNSIGNED NULL, review_note VARCHAR(500) NULL,
+    reviewed_at DATETIME NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_fuel_submission_retry(submitted_by,client_ref),
+    INDEX idx_fuel_submission_company(company_id,status,id),
+    FOREIGN KEY(vehicle_id) REFERENCES fleet(id), FOREIGN KEY(company_id) REFERENCES companies(id),
+    FOREIGN KEY(project_id) REFERENCES projects(id),
+    FOREIGN KEY(submitted_by) REFERENCES users(id), FOREIGN KEY(reviewed_by) REFERENCES users(id),
+    FOREIGN KEY(fuel_record_id) REFERENCES fuel_records(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS personal_reminders (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    created_by BIGINT UNSIGNED NOT NULL, title VARCHAR(180) NOT NULL, message VARCHAR(1000) NOT NULL DEFAULT '',
+    due_at DATETIME NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(created_by) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
+  await query(`CREATE TABLE IF NOT EXISTS personal_reminder_recipients (
+    reminder_id BIGINT UNSIGNED NOT NULL, user_id BIGINT UNSIGNED NOT NULL, notified_at DATETIME NULL,
+    PRIMARY KEY(reminder_id,user_id), INDEX idx_personal_reminder_recipient(user_id,reminder_id),
+    FOREIGN KEY(reminder_id) REFERENCES personal_reminders(id), FOREIGN KEY(user_id) REFERENCES users(id)
+  ) ENGINE=InnoDB`);
   await seedAccessControl();
 }

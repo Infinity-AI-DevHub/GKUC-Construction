@@ -6400,11 +6400,18 @@ test('Finance and QS share one retention register and Finance manages it without
   const created=await call(finance,'POST','/qs/retentions',body);assert.equal(created.status,201,JSON.stringify(created.body));
   for(const token of [finance,qs]){const list=await call(token,'GET','/qs/retentions?companyId=1');assert.equal(list.status,200);assert.equal(list.body.filter(r=>r.id===created.body.id).length,1);}
   const other=await call(finance,'GET','/qs/retentions?companyId=2');assert.ok(!other.body.some(r=>r.id===created.body.id));
+  const remarkPath = `/qs/retentions/${created.body.id}/remark`;
+  assert.equal((await call(store,'PATCH',remarkPath,{notes:'Blocked'})).status,403);
+  assert.equal((await call(finance,'PATCH',remarkPath,{notes:'x'.repeat(601)})).status,400);
+  assert.equal((await call(finance,'PATCH',remarkPath,{notes:'Awaiting final inspection'})).status,200);
   assert.equal((await call(finance,'POST',`/qs/retentions/${created.body.id}/release`,{amount:400})).status,200);
   const shared=(await call(qs,'GET','/qs/retentions?companyId=1')).body.find(r=>r.id===created.body.id);
   assert.equal(Number(shared.releasedAmount),400);assert.equal(shared.status,'Partially released');
+  assert.equal(shared.notes,'Awaiting final inspection');
   assert.equal((await call(qs,'POST',`/qs/retentions/${created.body.id}/release`,{amount:600})).status,200);
   assert.equal((await call(finance,'POST',`/qs/retentions/${created.body.id}/release`,{amount:1})).status,409);
+  const cleared = await call(qs,'PATCH',remarkPath,{notes:''});
+  assert.equal(cleared.status,200);assert.equal(cleared.body.notes,null);
   const [[saved]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.retentions WHERE description=?`,[description]);assert.equal(Number(saved.n),1);
  }finally{if(prior.length)await admin.query(`INSERT IGNORE INTO ${testDatabase}.role_permissions(role_id,permission_key) VALUES (?,'qs.retention')`,[user.role_id]);}
 });
@@ -6730,4 +6737,105 @@ test('repeated petty cash merges retain first origins, MD payment links and old 
  const md=(await call(owner,'GET',`/finance/md-personal-expenses?from=${date}&to=${date}`)).body;assert.equal(md.total,100);assert.equal(md.rows[0].pettyCashEntryId,personal.body.id);
  const [[entry]]=await admin.query(`SELECT float_id,original_float_id,company_id FROM ${testDatabase}.petty_cash_entries WHERE id=?`,[personal.body.id]);assert.equal(entry.float_id,ids[2]);assert.equal(entry.original_float_id,ids[1]);assert.equal(entry.company_id,2);
  const [[count]]=await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.petty_cash_entries WHERE float_id=?`,[ids[2]]);assert.equal(count.n,4);
+});
+
+test('fuel submissions keep photos private and post fuel only on authorized approval', async () => {
+  const owner = await login();
+  const finance = await login('finance@gkuc.lk');
+  const [[otherUser]] = await admin.query(`SELECT id,role_id,role FROM ${testDatabase}.users WHERE email='supervisor@gkuc.lk'`);
+  const [[storeUser]] = await admin.query(`SELECT id,role_id,role FROM ${testDatabase}.users WHERE email='store@gkuc.lk'`);
+  const [[role]] = await admin.query(`SELECT id FROM ${testDatabase}.roles WHERE name='Fuel Recorder'`);
+  await admin.query(`UPDATE ${testDatabase}.users SET role_id=?,role='Fuel Recorder' WHERE id IN (?,?)`, [role.id,storeUser.id,otherUser.id]);
+  try {
+    const outsider = await login('supervisor@gkuc.lk');
+    const recorder = await login('store@gkuc.lk');
+    const options = await call(recorder,'GET','/fuel-submissions/options?companyId=2');
+    assert.equal(options.status,200);
+    assert.deepEqual(options.body.floats,[]);
+    const vehicleId = options.body.vehicles[0].id;
+    const [[vehicle]] = await admin.query(`SELECT odometer FROM ${testDatabase}.fleet WHERE id=?`, [vehicleId]);
+    const count = async () => (await admin.query(`SELECT COUNT(*) n FROM ${testDatabase}.fuel_records WHERE vehicle_id=?`,[vehicleId]))[0][0].n;
+    const initialCount = await count();
+    const project = await call(owner,'POST','/projects',{companyId:2,name:'Fuel submission transfer QA',client:'Fuel QA',manager:'Project Manager',site:'Fuel QA',stage:'Mid-way'});
+    assert.equal(project.status,201,JSON.stringify(project.body));
+    const details = {clientRef:crypto.randomUUID(),companyId:2,projectId:project.body.id,vehicleId,fuelDate:today(),litres:12.25,cost:4200.50};
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV4kAAAAASUVORK5CYII=','base64');
+    const form = new FormData();
+    form.append('details',JSON.stringify(details));
+    form.append('file',new Blob([png],{type:'image/png'}),'fuel.png');
+    const submitted = await fetch(`${base}/fuel-submissions`,{method:'POST',headers:{authorization:`Bearer ${recorder}`},body:form});
+    const saved = await submitted.json();
+    assert.equal(submitted.status,201,JSON.stringify(saved));
+    const id = saved.id;
+    assert.equal(await count(),initialCount);
+    assert.equal((await call(recorder,'POST','/fuel-submissions',details)).body.id,id);
+    const list = await call(finance,'GET','/fuel-submissions?companyId=2');
+    assert.ok(list.body.some(row=>row.id===id && row.status==='Pending' && row.hasPhoto));
+    assert.ok(!(await call(finance,'GET','/fuel-submissions?companyId=1')).body.some(row=>row.id===id));
+    const photo = token => fetch(`${base}/fuel-submissions/${id}/photo`,{headers:{authorization:`Bearer ${token}`}});
+    const permittedPhoto = await photo(recorder);
+    assert.equal(permittedPhoto.status,200);
+    assert.deepEqual(Buffer.from(await permittedPhoto.arrayBuffer()),png);
+    assert.equal((await photo(outsider)).status,404);
+    assert.ok(!(await call(outsider,'GET','/fuel-submissions?companyId=2')).body.some(row=>row.id===id));
+    const review = (token,body) => call(token,'POST',`/fuel-submissions/${id}/review`,body);
+    assert.equal((await review(recorder,{decision:'Approved',odometer:999999})).status,403);
+    assert.equal((await review(owner,{decision:'Approved'})).status,400);
+    assert.equal(await count(),initialCount);
+    assert.equal((await call(owner,'PATCH',`/projects/${project.body.id}`,{companyId:1})).status,200);
+    assert.ok((await call(finance,'GET','/fuel-submissions?companyId=1')).body.some(row=>row.id===id));
+    const approved = await review(owner,{decision:'Approved',odometer:Math.max(1,Number(vehicle.odometer)+1)});
+    assert.equal(approved.status,200,JSON.stringify(approved.body));
+    assert.ok(approved.body.fuelRecordId);
+    const [[fuel]] = await admin.query(`SELECT company_id,project_id FROM ${testDatabase}.fuel_records WHERE id=?`,[approved.body.fuelRecordId]);
+    assert.equal(fuel.company_id,1);
+    assert.equal(fuel.project_id,project.body.id);
+    assert.equal((await review(owner,{decision:'Approved'})).status,409);
+    assert.equal(await count(),initialCount+1);
+    const rejected = await call(recorder,'POST','/fuel-submissions',{...details,companyId:1,clientRef:crypto.randomUUID()});
+    assert.equal(rejected.status,201);
+    assert.equal((await call(owner,'POST',`/fuel-submissions/${rejected.body.id}/review`,{decision:'Rejected',note:'Duplicate receipt'})).status,200);
+    assert.equal(await count(),initialCount+1);
+  } finally {
+    for (const user of [storeUser,otherUser]) {
+      await admin.query(`UPDATE ${testDatabase}.users SET role_id=?,role=? WHERE id=?`,[user.role_id,user.role,user.id]);
+    }
+  }
+});
+
+test('personal reminders stay private and notify each selected account once', async () => {
+  const creator = await login('store@gkuc.lk');
+  const recipient = await login('finance@gkuc.lk');
+  const outsider = await login('hr@gkuc.lk');
+  const creatorId = (await call(creator,'GET','/auth/me')).body.user.id;
+  const recipientId = (await call(recipient,'GET','/auth/me')).body.user.id;
+  const directory = await call(creator,'GET','/reminders/recipients');
+  assert.ok(directory.body.some(user=>user.id===recipientId));
+  const saved = await call(creator,'POST','/reminders',{
+    title:'Check tomorrow’s delivery',message:'Call the supplier',dueAt:new Date(Date.now()+3600000).toISOString(),
+    recipientIds:[creatorId,recipientId,recipientId]
+  });
+  assert.equal(saved.status,201,JSON.stringify(saved.body));
+  const {id} = saved.body;
+  const list = async (token,suffix='') => (await call(token,'GET',`/reminders${suffix}`)).body.find(row=>row.id===id);
+  assert.equal((await list(creator)).recipients.length,2);
+  assert.equal((await list(recipient,'?scope=mine')).notified,0);
+  assert.equal(await list(outsider),undefined);
+  await admin.query(`UPDATE ${testDatabase}.personal_reminders SET due_at=UTC_TIMESTAMP()-INTERVAL 1 SECOND WHERE id=?`,[id]);
+  const delivery = spawnSync(process.execPath,['--input-type=module','-e',
+    "import {deliverDueReminders} from './src/lib/personal-reminders.js'; import {pool} from './src/db.js'; try {await deliverDueReminders(); await deliverDueReminders();} finally {await pool.end();}"],{
+    env:{...process.env,DB_NAME:testDatabase},encoding:'utf8',timeout:15000
+  });
+  assert.equal(delivery.status,0,delivery.stderr);
+  const notifications = async token => (await call(token,'GET','/notifications')).body.filter(row=>row.referenceType==='personal_reminder' && Number(row.referenceId)===id);
+  assert.equal((await notifications(creator)).length,1);
+  const received = await notifications(recipient);
+  assert.equal(received.length,1);
+  assert.deepEqual(await notifications(outsider),[]);
+  const bell = async token => (await call(token,'GET','/bootstrap')).body.data.reminderNotifications;
+  assert.ok((await bell(recipient)).some(row=>row.id===received[0].id));
+  assert.ok(!(await bell(outsider)).some(row=>row.id===received[0].id));
+  await call(recipient,'POST',`/notifications/${received[0].id}/read`);
+  assert.ok(!(await bell(recipient)).some(row=>row.id===received[0].id));
+  assert.equal((await list(recipient,'?scope=mine')).notified,1);
 });

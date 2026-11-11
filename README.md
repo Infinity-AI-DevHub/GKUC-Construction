@@ -521,3 +521,9 @@ Personal payment details can include an optional Paid by name, separately from t
 ### Combining old company-specific floats
 
 Finance → Petty cash → **Merge accounts** combines selected active floats of the same category into one chosen shared account. Preview each balance and the combined total, name the shared account and enter a reason. Original movements move under the active account without creating cash/expense entries; old accounts are archived and available using **Show merged accounts / history**. Company attribution, entry IDs and linked fuel, supplier, MD and payroll records remain intact. The action is manual, not a startup auto-merge.
+
+## Fuel submissions and reminders
+
+Assign the editable **Fuel Recorder** role in Administration → Access Control to give a user a phone-friendly fuel submission form. Grant **Approve or reject fuel submissions** to the roles responsible for reviewing them. Staff with the relevant department access can open the shared queue in Fleet, Finance, Quantity Surveying, People or Projects.
+
+Any signed-in user can open **Reminders** and schedule a one-time reminder for themselves, other active users, or both. Recipients can see upcoming reminders on their Dashboard and receive an in-app notification when a reminder is due.
