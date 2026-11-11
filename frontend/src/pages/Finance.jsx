@@ -19,6 +19,7 @@ import VehicleExpenseReport from './VehicleExpenseReport.jsx';
 import VatSchedules from './VatSchedules.jsx';
 import ProgressClaims from './ProgressClaims.jsx';
 import { DailySheetDetail } from './CostControl.jsx';
+import {useRegisterScroll,useRegisterView} from '../register-view.js';
 import { RecordScopeProvider } from '../record-scope.jsx';
 
 const TABS = ['Financial reports','Fuel submissions','Management accounts','Cash comparison','Vehicle expenses','Expected outflows','Invoices','Retention','Progress claims','Daily cost review','Budget monitoring','Bills','Credit cards','VAT ledger','VAT clearance','Cheques','Bonds','Petty cash','Expenses','Income','Credit purchases','Supplier invoices','Supplier statements','Categories','MD Personal Expenses'];
@@ -110,7 +111,7 @@ export default function Finance({ user, data, reload, can, companyId, company })
     {tab === 'MD Personal Expenses'&&<MdPersonalExpenses data={data}/>}
     {tab === 'Petty cash' && <PettyCash data={data} can={can} companyId={companyId} />}
     {tab === 'Expenses' && <div className="expenses-workspace">
-      {can.has('finance.dailyExpenses') && <DailyExpenses companyId={companyId} company={company} can={featureCan('finance.dailyExpenses')} />}
+      {can.has('finance.dailyExpenses') && <DailyExpenses key={user.id+':'+companyId} userId={user.id} companyId={companyId} company={company} can={featureCan('finance.dailyExpenses')} />}
       {can.has('finance.manage') && <section className="expenses-ledger-section" aria-label="Project expense ledger">
         <h2>Project expense ledger</h2>
         <p>Recorded project costs, including unpaid expenses. Recording payment details updates the existing expense without creating another cost.</p>
@@ -119,8 +120,8 @@ export default function Finance({ user, data, reload, can, companyId, company })
     </div>}
     {tab === 'Income' && <Income companyId={companyId} />}
     {tab === 'Progress claims' && <ProgressClaims companyId={companyId} can={can}/>}
-    {tab === 'Supplier invoices' && <Invoices key="invoices" can={can} refresh={refresh} companyId={companyId} />}
-    {tab === 'Credit purchases' && <Invoices key="credit" creditOnly can={can} refresh={refresh} companyId={companyId} />}
+    {tab === 'Supplier invoices' && <Invoices key={'invoices-'+companyId} userId={user.id} can={can} refresh={refresh} companyId={companyId} />}
+    {tab === 'Credit purchases' && <Invoices key={'credit-'+companyId} userId={user.id} creditOnly can={can} refresh={refresh} companyId={companyId} />}
     {tab === 'Supplier statements' && <SupplierStatements companyId={companyId} />}
     {tab === 'Categories' && <Categories companyId={companyId} />}
 
@@ -271,17 +272,24 @@ function Income({ companyId }) {
 const INVOICE_COLUMNS = ['Invoice','Supplier','Order','Due date','Net / VAT','Total','Outstanding','Status',''];
 const INVOICE_TEMPLATE = 'minmax(130px,1fr) minmax(160px,1.2fr) 130px 120px 140px 125px 130px 120px 110px';
 
-function Invoices({ can, refresh, companyId, creditOnly=false }) {
-  const [rows, setRows] = useState([]);
+function Invoices({ can, refresh, companyId, creditOnly=false, userId }) {
+  const [rows,setRows] = useState([]);
+  const [ready,setReady] = useState(false);
   const [paying, setPaying] = useState(null);
   const [error, setError] = useState('');
   const link = new URLSearchParams(window.location.search);
   const linked = creditOnly ? 0 : Number(link.get('record')), paymentId = Number(link.get('payment'));
   const [payment,setPayment] = useState(null);
-  const load = () => api(`/purchasing/invoices?companyId=${companyId}`).then(result=>setRows(result.filter(row=>Number(row.id)===linked || (creditOnly?Boolean(row.creditDescription):!row.creditDescription)))).catch(failure => {setRows([]);setError(failure.message);});
+  const load = () => api(`/purchasing/invoices?companyId=${companyId}`).then(result=>setRows(result.filter(row=>Number(row.id)===linked || (creditOnly?Boolean(row.creditDescription):!row.creditDescription)))).then(()=>setReady(true)).catch(failure => {setRows([]);setError(failure.message);});
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
 
+  const [view,updateView]=useRegisterView('gkuc:supplier-invoices:'+userId+':'+companyId+':'+creditOnly,{search:'',status:''});
+  useRegisterScroll('gkuc:supplier-invoice-scroll:'+userId+':'+companyId+':'+creditOnly,ready,Boolean(linked));
+  const visibleRows=rows.filter(row=>Number(row.id)===linked || (
+    (!view.status || row.status===view.status) &&
+    [row.invoiceNo,row.supplier,row.orderReference,row.creditDescription].some(value=>String(value||'').toLowerCase().includes(view.search.trim().toLowerCase()))
+  ));
   const approveException = async row => {
     const reason = await askText(`This supplier invoice has no purchase order or goods receipt. Explain why payment may proceed for ${row.invoiceNo}:`);
     if (!reason) return;
@@ -299,14 +307,14 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
   const template = creditOnly ? 'minmax(170px,1.4fr) 130px 120px 140px 125px 130px 120px 200px' : INVOICE_TEMPLATE;
   const columns = creditOnly ? INVOICE_COLUMNS.filter(column => column !== 'Supplier') : INVOICE_COLUMNS;
   const supplierGroups = new Map();
-  if (creditOnly) for (const row of rows) {
+  if (creditOnly) for (const row of visibleRows) {
     const key = row.supplierId != null ? `supplier-${row.supplierId}` : `name-${row.supplier || ''}`;
     if (!supplierGroups.has(key)) supplierGroups.set(key, { key, name: row.supplier || 'Unknown supplier', rows: [] });
     supplierGroups.get(key).rows.push(row);
   }
-  const groups = creditOnly && rows.length
+  const groups = creditOnly && visibleRows.length
     ? [...supplierGroups.values()].sort((a,b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }))
-    : [{ key: 'all', name: creditOnly ? 'Credit purchases' : 'Supplier invoices', rows }];
+    : [{ key: 'all', name: creditOnly ? 'Credit purchases' : 'Supplier invoices', rows:visibleRows }];
   useEffect(()=>{
     if(linked) document.getElementById('supplier-invoice-'+linked)?.scrollIntoView({block:'center'});
   },[rows,linked]);
@@ -329,6 +337,13 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
       </Row>;
   return <>
     {error && <p className="form-error">{error}</p>}
+    <div className="progress-claim-toolbar">
+      <label>Find supplier, invoice or order<input type="search" value={view.search}
+        onChange={event=>updateView('search',event.target.value)} /></label>
+      <label>Status<select value={view.status} onChange={event=>updateView('status',event.target.value)}>
+        <option value="">All statuses</option>{['Unpaid','Partially paid','Paid'].map(status=><option key={status}>{status}</option>)}
+      </select></label>
+    </div>
     <div className="supplier-credit-groups">
       {groups.map(group => <Table key={group.key} columns={columns} template={template} title={group.name}
         tools={creditOnly && group.rows.length ? <div className="supplier-credit-summary"><span>{group.rows.length} {group.rows.length === 1 ? 'purchase' : 'purchases'}</span><strong>Outstanding {rupees(group.rows.reduce((sum,row) => sum + Number(row.amount) - Number(row.paidAmount),0))}</strong>{can.supplierPay && group.rows.some(row=>row.status!=='Paid') && <button type="button" className="status-button" onClick={()=>setPaying({invoices:group.rows.filter(row=>row.status!=='Paid')})}>Pay supplier</button>}</div> : null}

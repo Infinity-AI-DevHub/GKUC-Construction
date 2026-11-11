@@ -14,8 +14,9 @@ async function operate(mode,action){
   try{return await new Promise((resolve,reject)=>{
     const transaction=db.transaction('drafts',mode);
     const request=action(transaction.objectStore('drafts'));
-    request.onsuccess=()=>resolve(request.result);
-    request.onerror=()=>reject(request.error);
+    transaction.oncomplete=()=>resolve(request.result);
+    transaction.onerror=()=>reject(transaction.error);
+    transaction.onabort=()=>reject(transaction.error || new Error('Draft could not be saved.'));
   });}finally{db.close();}
 }
 

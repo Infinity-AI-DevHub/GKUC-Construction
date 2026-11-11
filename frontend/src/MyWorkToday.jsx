@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowUpRight, CalendarClock, ChevronLeft, ChevronRight, ClipboardCheck, CornerDownLeft, Handshake, PencilLine } from 'lucide-react';
-import { api, onDataChanged, patch, post } from './api.js';
+import { api, onDataChanged, patch, post, rupeesExact } from './api.js';
 import { Modal,Row,Table } from './ui.jsx';
 import AttendanceCorrection from './pages/AttendanceCorrection.jsx';
 
@@ -61,7 +61,18 @@ export function buildWorkQueues({ data, queue, can, user }) {
   for (const item of queue.work || []) {
     const card = { ...item, key: `${item.kind}-${item.id}` };
     if (['purchase-request','order-approval','leave','overtime','attendance','integrity'].includes(item.kind)) needsApproval.push(card);
-    else if (['approved-request','purchase-order','invoice-verification','offboarding-assets','offboarding-store','offboarding-vehicle','offboarding-access','offboarding-payroll','payroll-step','project-start','project-closeout','accepted-quotation','onboarding','daily-site-close','low-stock','client-followup','milestone','tender','tender-document','insurance','vehicle-renewal','returned-cheque','retention','bond','company-compliance'].includes(item.kind)) dueToday.push(card);
+    else if (['supplier-followup','approved-request','purchase-order','invoice-verification','offboarding-assets','offboarding-store','offboarding-vehicle','offboarding-access','offboarding-payroll','payroll-step','project-start','project-closeout','accepted-quotation','onboarding','daily-site-close','low-stock','client-followup','milestone','tender','tender-document','insurance','vehicle-renewal','returned-cheque','retention','bond','company-compliance'].includes(item.kind)) dueToday.push(card);
+  }
+  for (const item of queue.fuel || []) {
+    const pending=item.status==='Pending';
+    const card={
+      key:'fuel-'+item.id, title:item.vehicle+' · '+item.registration,
+      detail:pending?'Fuel submission':item.reviewNote,
+      owner:pending?(item.assignedTo||'Fuel reviewers'):user.name,
+      deadline:pending?item.reviewDue:null, createdAt:pending?item.createdAt:item.reviewedAt,
+      action:pending?'Review fuel entry':'Fix and resubmit', href:'/fuel-submissions?record='+item.id
+    };
+    (pending?needsApproval:returned).push(card);
   }
   const urgency = (a, b) => {
     const left = datePart(a.deadline) || '9999-12-31';
@@ -103,6 +114,7 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
   }, [companyId,user.id,(user.permissions||[]).join('|')]);
   const groups = useMemo(() => buildWorkQueues({ data, queue, can, user }), [data, queue, can, user]);
   const open = item => {
+    if (item.href) {window.location.assign(item.href);return;}
     if (['offboarding-access','offboarding-payroll','offboarding-store','offboarding-vehicle'].includes(item.kind)) {
       api(`/employees/${item.target[2]}/offboarding`).then(result => {setClearance({item,result});setClearanceNote('');setClearanceError('');}).catch(failure => setClearanceError(failure.message));
       return;
@@ -127,23 +139,50 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
     window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
   };
 
+  const quickActions=[
+    [can.has('fuel.submit'),'Record fuel','/fuel-submissions?new=1'],
+    [can.has('site.reports'),'Site Today','/site-today'],
+    [can.has('finance.pay'),'Pay supplier','/finance/supplier-invoices'],
+    [can.has('finance.dailyExpenses'),'Record office payment','/finance/daily-expenses?new=1']
+  ].filter(([allowed])=>allowed);
+  const creditGroups=new Map();
+  for (const reminder of queue.creditReminders||[]) {
+    const key=reminder.supplierId??reminder.supplier;
+    if (!creditGroups.has(key)) creditGroups.set(key,[]);
+    creditGroups.get(key).push(reminder);
+  }
+  const actOnCredit=async (id,action)=>{
+    try { await post('/dashboard/credit-reminders/'+id+'/'+action,{}); await load(); }
+    catch (failure) { setError(failure.message); }
+  };
+  const creditDetails=reminder=><div className="credit-reminder-detail" key={reminder.id}>
+    <p>{[reminder.invoiceNo,reminder.description].filter(Boolean).join(' · ')}</p>
+    <p><strong>{rupeesExact(reminder.outstanding)}</strong> outstanding · Due {reminder.dueDate||'not set'}</p>
+    <p>Owner: {reminder.assignedTo||'Unassigned'} · {reminder.frequency}</p>
+    <div className="row-actions">
+      {(can.has('finance.pay')||can.has('finance.view'))&&<a className="status-button" href={'/finance/supplier-invoices?record='+reminder.id}>Open invoice</a>}
+      {!reminder.assignedTo&&<button type="button" className="secondary" onClick={()=>actOnCredit(reminder.id,'claim')}>Take ownership</button>}
+      <button type="button" className="secondary" onClick={()=>actOnCredit(reminder.id,'snooze')}>Snooze until tomorrow</button>
+      <button type="button" className="primary" onClick={()=>actOnCredit(reminder.id,'acknowledge')}>{reminder.frequency==='Once'?'Acknowledge':'Remind me '+reminder.frequency.toLowerCase()}</button>
+    </div>
+  </div>;
   return <section className="my-work-today" aria-labelledby="my-work-title">
     <div className="my-work-heading"><div><span className="my-work-kicker">Your starting point</span>
       <h2 id="my-work-title">My work today</h2><p>{user.role || 'Your role'} · live records you can act on</p></div></div>
-    {error && <p className="form-error" role="alert">Some work queues could not load: {error}</p>}
+    {!!quickActions.length && <nav className="my-work-quick-actions" aria-label="Quick actions">
+      {quickActions.map(([,label,href])=><a key={href} className="secondary" href={href}>{label}<ArrowUpRight size={14}/></a>)}
+    </nav>}
+    {error && <p className="form-error"  role="alert">Some work queues could not load: {error}</p>}
     {clearanceError && !clearance && <p className="form-error" role="alert">{clearanceError}</p>}
     {!!queue.creditReminders?.length && <section className="credit-reminders" aria-labelledby="credit-reminders-title">
       <h3 id="credit-reminders-title">Credit payment reminders</h3>
       <div className="credit-reminders-grid">
-        {queue.creditReminders.map(reminder => <article key={reminder.id} className="credit-reminder-card">
-          <div className="credit-reminder-heading"><AlertTriangle size={18} aria-hidden="true"/><strong>{reminder.supplier}</strong></div>
-          <p>{[reminder.invoiceNo,reminder.description].filter(Boolean).join(' · ')}</p>
-          <p><strong>LKR {Number(reminder.outstanding).toLocaleString('en-LK',{minimumFractionDigits:2})}</strong> outstanding</p>
-          <p>Due {reminder.dueDate} · {reminder.frequency}</p>
-          <button type="button" className="primary" onClick={async()=>{
-            try { await post('/dashboard/credit-reminders/'+reminder.id+'/acknowledge',{}); await load(); }
-            catch (failure) { setError(failure.message); }
-          }}>{reminder.frequency==='Once'?'Acknowledge':'Remind me '+reminder.frequency.toLowerCase()}</button>
+        {[...creditGroups.entries()].map(([key,reminders])=><article key={key} className="credit-reminder-card">
+          <div className="credit-reminder-heading"><AlertTriangle size={18} aria-hidden="true"/><strong>{reminders[0].supplier}</strong></div>
+          {reminders.length===1 ? creditDetails(reminders[0]) : <details>
+            <summary>{reminders.length} invoices · {rupeesExact(reminders.reduce((total,row)=>total+Number(row.outstanding),0))} outstanding{reminders[0].dueDate&&' · Earliest due '+reminders[0].dueDate}</summary>
+            {reminders.map(creditDetails)}
+          </details>}
         </article>)}
       </div>
     </section>}

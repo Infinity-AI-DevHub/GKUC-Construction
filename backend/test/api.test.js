@@ -2320,7 +2320,10 @@ test('repeated alerts remain one actionable case with access controls and eviden
     assert.equal((await call('', 'GET',`/notification-cases/${first.id}`)).status,401);
     assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'resolve',note:'Checked'})).status,400);
     assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'acknowledge'})).status,200);
-    assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'assign'})).status,200);
+    assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'claim'})).status,200);
+    const snoozed=await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'snooze',until:new Date(Date.now()+86400000).toISOString()});
+    assert.equal(snoozed.status,200);
+    assert.ok(snoozed.body.snoozedUntil);
     assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,{action:'start'})).status,200);
     assert.equal((await call(owner,'POST',`/notification-cases/${first.id}/actions`,
       {action:'resolve',note:'Client paid outside system; recorded separately',evidence:'BANK-CASE-QA'})).status,200);
@@ -4935,6 +4938,14 @@ test('credit purchase reminders are targeted, recurring, company scoped and stop
   assert.equal((await reminders(site)).some(row=>row.id===id),false);
   assert.equal((await reminders(owner,2)).some(row=>row.id===id),false);
   assert.equal((await call(site,'POST',`/dashboard/credit-reminders/${id}/acknowledge`,{})).status,404);
+  assert.equal((await call(site,'POST',`/dashboard/credit-reminders/${id}/claim`,{})).status,404);
+  assert.equal((await call(owner,'POST',`/dashboard/credit-reminders/${id}/claim`,{})).status,204);
+  assert.ok((await reminders(owner)).find(row=>row.id===id).assignedTo);
+  assert.equal((await call(owner,'POST',`/dashboard/credit-reminders/${id}/snooze`,{})).status,204);
+  assert.ok(!(await reminders(owner)).some(row=>row.id===id));
+  await admin.query(`UPDATE ${testDatabase}.supplier_credit_reminder_users SET snoozed_until='2000-01-01' WHERE invoice_id=?`,[id]);
+  assert.ok((await reminders(owner)).some(row=>row.id===id));
+
   assert.equal((await call(owner,'POST',`/dashboard/credit-reminders/${id}/acknowledge`,{})).status,204);
   assert.equal((await reminders(owner)).some(row=>row.id===id),false);
   assert.equal((await call(owner,'POST',`/dashboard/credit-reminders/${id}/acknowledge`,{})).status,404);
@@ -6782,6 +6793,12 @@ test('fuel submissions keep photos private and post fuel only on authorized appr
     assert.deepEqual(Buffer.from(await permittedPhoto.arrayBuffer()),png);
     assert.equal((await photo(outsider)).status,404);
     assert.ok(!(await call(outsider,'GET','/fuel-submissions?companyId=2')).body.some(row=>row.id===id));
+    const queue = async (token,companyId) => (await call(token,'GET','/dashboard/queue?companyId='+companyId)).body.fuel;
+    assert.ok((await queue(owner,2)).some(row=>row.id===id&&row.reviewDue));
+    assert.ok(!(await queue(recorder,2)).some(row=>row.id===id));
+    assert.equal((await call(recorder,'POST','/fuel-submissions/'+id+'/claim')).status,403);
+    assert.equal((await call(owner,'POST','/fuel-submissions/'+id+'/claim')).status,204);
+    assert.ok((await queue(owner,2)).some(row=>row.id===id&&row.assignedTo));
     const review = (token,body) => call(token,'POST',`/fuel-submissions/${id}/review`,body);
     assert.equal((await review(recorder,{decision:'Approved',odometer:999999})).status,403);
     assert.equal((await review(owner,{decision:'Approved'})).status,400);
@@ -6796,9 +6813,27 @@ test('fuel submissions keep photos private and post fuel only on authorized appr
     assert.equal(fuel.project_id,project.body.id);
     assert.equal((await review(owner,{decision:'Approved'})).status,409);
     assert.equal(await count(),initialCount+1);
-    const rejected = await call(recorder,'POST','/fuel-submissions',{...details,companyId:1,clientRef:crypto.randomUUID()});
-    assert.equal(rejected.status,201);
+    const returnedForm=new FormData();
+    returnedForm.append('details',JSON.stringify({...details,companyId:1,clientRef:crypto.randomUUID()}));
+    returnedForm.append('file',new Blob([png],{type:'image/png'}),'returned.png');
+    const originalResponse=await fetch(`${base}/fuel-submissions`,{method:'POST',headers:{authorization:`Bearer ${recorder}`},body:returnedForm});
+    assert.equal(originalResponse.status,201);
+    const rejected={body:await originalResponse.json()};
     assert.equal((await call(owner,'POST',`/fuel-submissions/${rejected.body.id}/review`,{decision:'Rejected',note:'Duplicate receipt'})).status,200);
+    assert.ok((await queue(recorder,1)).some(row=>row.id===rejected.body.id&&row.reviewNote==='Duplicate receipt'));
+    const retry={...details,companyId:1,clientRef:crypto.randomUUID(),replacesId:rejected.body.id,litres:10};
+    assert.equal((await call(outsider,'POST','/fuel-submissions',retry)).status,404);
+    const replacement=await call(recorder,'POST','/fuel-submissions',retry);
+    assert.equal(replacement.status,201,JSON.stringify(replacement.body));
+    assert.equal((await call(recorder,'POST','/fuel-submissions',retry)).body.id,replacement.body.id);
+    assert.equal((await call(recorder,'POST','/fuel-submissions',{...retry,clientRef:crypto.randomUUID()})).status,409);
+    const revised=(await call(recorder,'GET','/fuel-submissions?companyId=1')).body.find(row=>row.id===replacement.body.id);
+    assert.equal(revised.previousDetails.litres,12.25);
+    const inherited=await fetch(`${base}/fuel-submissions/${replacement.body.id}/photo`,{headers:{authorization:`Bearer ${recorder}`}});
+    assert.deepEqual(Buffer.from(await inherited.arrayBuffer()),png);
+
+    assert.ok(!(await queue(recorder,1)).some(row=>row.id===rejected.body.id));
+
     assert.equal(await count(),initialCount+1);
   } finally {
     for (const user of [storeUser,otherUser]) {
@@ -6880,6 +6915,8 @@ test('global record search finds commercial records and enforces source permissi
   assert.deepEqual(items.map(row=>row.id),[boq.id]);
   const linked=await search(owner,{projectId:project.id});
   assert.deepEqual(new Set(linked.map(row=>row.type)),new Set(['boq','quotation','retention','claim']));
+  assert.equal((await search(owner,{type:'quotation',recordId:quote.id}))[0].id,quote.id);
+  assert.ok((await search(owner,{type:'quotation',companyId:2})).some(row=>row.id===quote.id));
   const exact=await search(owner,{q:quote.reference});
   assert.equal(exact[0].type,'quotation');
   assert.equal(exact[0].id,quote.id);

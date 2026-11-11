@@ -142,6 +142,7 @@ export function searchExpression(term) {
 
 const documentSearchFilters = z.object({
   q:z.string().trim().max(120).default(''),
+  attachmentId:z.coerce.number().int().positive().optional(),
   companyId:z.coerce.number().int().positive().optional(),
   projectId:z.coerce.number().int().positive().optional(),
   project:z.string().trim().min(1).max(180).optional(),
@@ -151,23 +152,24 @@ const documentSearchFilters = z.object({
 router.get('/search/documents', auth, wrap(async (req, res) => {
   const parsed = documentSearchFilters.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({error:'Enter at least three characters and valid document filters.'});
-  const {q:term,companyId,projectId,project,from,to} = parsed.data;
-  if (term.length<3) return res.json({term,results:[],note:'Type at least three characters'});
+  const {q:term,attachmentId,companyId,projectId,project,from,to} = parsed.data;
+  if (!attachmentId && term.length<3) return res.json({term,results:[],note:'Type at least three characters'});
   if (from && to && from>to) return res.status(400).json({error:'Choose a start date before or on the end date.'});
   const readable = Object.entries(READERS).filter(([,keys])=>keys.some(key=>can(req,key))).map(([type])=>type);
   if (!readable.length) return res.json({term,results:[]});
 
   const {usable,expression} = searchExpression(term);
   const like = value=>'%'+value.replace(/[!%_]/g,'!$&')+'%';
-  const terms = term.split(/\s+/).map(like);
+  const terms = term ? term.split(/\s+/).map(like) : [];
   const names = terms.map(()=> "CONCAT_WS(' ',a.title,a.filename,a.category) LIKE ? ESCAPE '!'").join(' AND ');
   const textMatch = expression ? 'MATCH(t.content) AGAINST (? IN BOOLEAN MODE)' : '0';
   const conditions = [
     `a.owner_type IN (${readable.map(()=>'?').join(',')})`,
     '(p.id IS NULL OR p.active=1)',
-    `(${textMatch} OR (${names}))`
+    ...(term ? [`(${textMatch} OR (${names}))`] : [])
   ];
   const params = [...readable,...(expression?[expression]:[]),...terms];
+  if (attachmentId) { conditions.push('a.id=?'); params.push(attachmentId); }
   if (companyId) { conditions.push('COALESCE(p.company_id,cc.company_id)=?'); params.push(companyId); }
   if (projectId) { conditions.push('p.id=?'); params.push(projectId); }
   if (project) { conditions.push("p.name LIKE ? ESCAPE '!'"); params.push(like(project)); }

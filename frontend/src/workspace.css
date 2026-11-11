@@ -563,3 +563,15 @@ body:has(.workflow-page) .modal-backdrop{z-index:1200}
 .credit-reminder-heading svg { flex:none; }
 .credit-reminder-card p { margin:0;font-size:12px;line-height:1.45; }
 .credit-reminder-card button { align-self:flex-start;margin-top:auto;max-width:100%;white-space:normal; }
+
+.my-work-quick-actions { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+.my-work-quick-actions a { display:inline-flex;align-items:center;gap:6px;text-decoration:none; }
+.credit-reminder-card details summary { cursor:pointer; }
+.credit-reminder-detail { display:grid;gap:5px; }
+.credit-reminder-card details .credit-reminder-detail { padding:8px 0; border-top:1px solid #e3ad73; }
+.credit-reminder-detail .row-actions { display:flex;flex-wrap:wrap;gap:6px; }
+
+.bell-case-actions { display:flex;flex-wrap:wrap;gap:5px;margin-top:6px; }
+.bell-case-actions button { padding:5px 8px;min-height:32px;font-size:11px; }
+.docsearch-recent { padding:12px; }
+.docsearch-recent h3 { margin:0 0 5px; }

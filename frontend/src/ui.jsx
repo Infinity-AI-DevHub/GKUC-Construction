@@ -308,7 +308,7 @@ export function Row({ template, children, onClick, id, className = '' }) {
  * Wraps a create/edit form in a modal and handles the submit lifecycle, so each module
  * describes only its fields and the request to send.
  */
-export function FormModal({ title, close, label, onSubmit, children, wide = false, scope, repeat = false }) {
+export function FormModal({ title, close, label, onSubmit, children, wide = false, scope, repeat = false, onSaveDraft }) {
   const recordScope = useRecordScope(scope);
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
@@ -325,7 +325,7 @@ export function FormModal({ title, close, label, onSubmit, children, wide = fals
     setFieldErrors({});
     const form = new FormData(formElement);
     try {
-      await onSubmit(Object.fromEntries(form.entries()), form);
+      if (await onSubmit(Object.fromEntries(form.entries()), form) === false) return;
       if (again) { formElement.reset(); setNotice('Saved. Enter the next record when ready.'); formElement.querySelector('input:not([type=hidden]),select,textarea')?.focus(); }
       else close();
       showScopeSaved(recordScope);
@@ -342,6 +342,13 @@ export function FormModal({ title, close, label, onSubmit, children, wide = fals
     <EntityForm onSubmit={submit} error={error} fieldErrors={fieldErrors} errorRef={errorRef}>
       {notice && <p className="form-note wide" role="status">{notice}</p>}
       {children}
+      {onSaveDraft && <div className="wide"><button type="button" className="secondary" disabled={busy} onClick={async event=>{
+        const values=Object.fromEntries(new FormData(event.currentTarget.form).entries());
+        setBusy(true);setError('');
+        try { await onSaveDraft(values); }
+        catch (failure) { setError(failure.message); }
+        finally { setBusy(false); }
+      }}>Save draft on this device</button></div>}
       <FormButtons close={close} label={label} busy={busy} repeat={repeat} />
     </EntityForm>
   </Modal>;

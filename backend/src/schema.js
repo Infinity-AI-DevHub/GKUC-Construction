@@ -3625,6 +3625,8 @@ export async function migrate() {
     frequency ENUM('Once','Daily','Weekly','Monthly') NOT NULL,
     FOREIGN KEY(invoice_id) REFERENCES supplier_invoices(id) ON DELETE CASCADE
   ) ENGINE=InnoDB`);
+  await addColumn('supplier_credit_reminders','assigned_to','BIGINT UNSIGNED NULL');
+  await addForeignKey('supplier_credit_reminders','fk_credit_reminder_owner','CONSTRAINT fk_credit_reminder_owner FOREIGN KEY(assigned_to) REFERENCES users(id)');
   await query(`CREATE TABLE IF NOT EXISTS supplier_credit_reminder_users (
     invoice_id BIGINT UNSIGNED NOT NULL,
     user_id BIGINT UNSIGNED NOT NULL,
@@ -3633,6 +3635,7 @@ export async function migrate() {
     FOREIGN KEY(invoice_id) REFERENCES supplier_credit_reminders(invoice_id) ON DELETE CASCADE,
     FOREIGN KEY(user_id) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await addColumn('supplier_credit_reminder_users','snoozed_until','DATE NULL');
   await addColumn('employees', 'deactivated_by', 'BIGINT UNSIGNED NULL');
   await addColumn('projects','billing_route',"VARCHAR(30) NOT NULL DEFAULT 'Quotation and invoice'");
   await modifyColumn('client_invoices','document_type',"ENUM('Tax Invoice','Invoice','Payment Certificate') NOT NULL DEFAULT 'Tax Invoice'");
@@ -3750,6 +3753,11 @@ export async function migrate() {
     FOREIGN KEY(submitted_by) REFERENCES users(id), FOREIGN KEY(reviewed_by) REFERENCES users(id),
     FOREIGN KEY(fuel_record_id) REFERENCES fuel_records(id)
   ) ENGINE=InnoDB`);
+  await addColumn('fuel_submissions','replaces_id','BIGINT UNSIGNED NULL');
+  await addIndex('fuel_submissions','uq_fuel_submission_replaces','UNIQUE INDEX uq_fuel_submission_replaces(replaces_id)');
+  await addForeignKey('fuel_submissions','fk_fuel_submission_replaces','CONSTRAINT fk_fuel_submission_replaces FOREIGN KEY(replaces_id) REFERENCES fuel_submissions(id)');
+  await addColumn('fuel_submissions','assigned_to','BIGINT UNSIGNED NULL');
+  await addForeignKey('fuel_submissions','fk_fuel_submission_assignee','CONSTRAINT fk_fuel_submission_assignee FOREIGN KEY(assigned_to) REFERENCES users(id)');
   await query(`CREATE TABLE IF NOT EXISTS personal_reminders (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     created_by BIGINT UNSIGNED NOT NULL, title VARCHAR(180) NOT NULL, message VARCHAR(1000) NOT NULL DEFAULT '',

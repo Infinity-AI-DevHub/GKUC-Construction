@@ -32,7 +32,7 @@ const sources = {
   invoice: {
     permissions:finance, from:'client_invoices i LEFT JOIN projects p ON p.id=i.project_id',
     record:'i', company:'i.company_id', reference:'i.reference', title:'i.title', client:'i.client', project:'p.name',
-    date:'i.invoice_date', status:'i.status', visible:activeProject,
+    date:'i.invoice_date', status:'i.status', overdue:"i.due_date<CURDATE() AND i.net_payable>i.paid_amount AND i.status NOT IN ('Draft','Cancelled')", visible:activeProject,
     items:'client_invoice_items line WHERE line.invoice_id=i.id', path:()=>'/finance/invoices'
   },
   retention: {
@@ -53,13 +53,13 @@ const sources = {
     permissions:['finance.view','finance.pay'],
     from:'supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN purchase_orders o ON o.id=i.order_id LEFT JOIN projects p ON p.id=o.project_id LEFT JOIN supplier_credit_reminders cr ON cr.invoice_id=i.id',
     record:'i', company:'i.company_id', reference:'i.invoice_no', title:'s.name', client:'NULL', project:'p.name',
-    date:'i.invoice_date', status:'i.status', extra:'o.reference,cr.description,i.amount', visible:activeProject, amount:'i.amount',
+    date:'i.invoice_date', status:'i.status', overdue:'i.due_date<CURDATE() AND i.amount>i.paid_amount', extra:'o.reference,cr.description,i.amount', visible:activeProject, amount:'i.amount',
     path:row=>'/finance/supplier-invoices?record='+row.id
   },
   operatingBill: {
     permissions:['finance.view','finance.manage'], from:'operating_bills b LEFT JOIN projects p ON p.id=b.project_id',
     record:'b', company:'b.company_id', reference:'b.reference', title:'b.provider', client:'NULL', project:'p.name',
-    date:'b.bill_date', status:'b.status', extra:'b.bill_type,b.account_number,b.notes,b.payment_reference,b.total_amount', visible:activeProject, amount:'b.total_amount',
+    date:'b.bill_date', status:'b.status', overdue:"b.due_date<CURDATE() AND b.status='Unpaid'", extra:'b.bill_type,b.account_number,b.notes,b.payment_reference,b.total_amount', visible:activeProject, amount:'b.total_amount',
     path:row=>'/finance/bills?record='+row.id
   },
   supplierPayment: {
@@ -148,6 +148,8 @@ const sources = {
 const calendarDay = z.string().date().optional();
 const filters = z.object({
   q:z.string().trim().max(120).default(''), type:z.enum(Object.keys(sources)).optional(),
+  recordId:z.coerce.number().int().positive().optional(),
+  throughPage:z.coerce.number().int().min(1).max(20).optional(),
   companyId:z.coerce.number().int().positive().optional(),
   projectId:z.coerce.number().int().positive().optional(),
   project:z.string().trim().min(1).max(180).optional(),
@@ -160,8 +162,10 @@ const literal = value => value.replace(/[!%_]/g,'!$&');
 router.get('/',auth,wrap(async(req,res)=>{
   const parsed = filters.safeParse(req.query);
   if (!parsed.success) throw fail(400,'Enter a search term and valid filters.');
-  const {q,type,companyId,projectId,project,from,to,status,page} = parsed.data;
-  if (q.length<2 && (!projectId || q.length)) throw fail(400,'Enter at least two characters.');
+  const {q,type,recordId,throughPage,companyId,projectId,project,from,to,status,page} = parsed.data;
+  if (recordId && !type) throw fail(400,'Choose a record type.');
+  const hasFilters=type||companyId||projectId||project||from||to||status;
+  if (!recordId && (q.length===1 || (!q && !hasFilters))) throw fail(400,'Enter at least two characters.');
   if (from && to && from > to) throw fail(400,'Choose a start date before or on the end date.');
   const terms = q ? [...new Set(q.split(/\s+/))] : [];
   if (terms.length > 10) throw fail(400,'Use up to ten search words.');
@@ -173,12 +177,14 @@ router.get('/',auth,wrap(async(req,res)=>{
     const conditions = source.shared ? ['1=1'] : [source.allowUnassigned ? `(co.active=1 OR ${source.company} IS NULL)` : 'co.active=1'];
     const args = [];
     if (source.visible) conditions.push(source.visible);
+    if (recordId) { conditions.push(source.record+'.id=?'); args.push(recordId); }
     if (companyId && !source.shared) { conditions.push(source.allowUnassigned ? `(co.id=? OR ${source.company} IS NULL)` : 'co.id=?'); args.push(companyId); }
     if (projectId) { conditions.push('p.id=?'); args.push(projectId); }
     if (project) { conditions.push(`${source.project} LIKE ? ESCAPE '!'`); args.push(`%${literal(project)}%`); }
     if (from) { conditions.push(`DATE(${source.date})>=?`); args.push(from); }
     if (to) { conditions.push(`DATE(${source.date})<=?`); args.push(to); }
-    if (status) { conditions.push(`${source.status}=?`); args.push(status); }
+    if (status?.toLowerCase()==='overdue' && source.overdue) conditions.push(source.overdue);
+    else if (status) { conditions.push(`${source.status}=?`); args.push(status); }
     for (const term of terms) {
       const pattern = `%${literal(term)}%`;
       const header = `CONCAT_WS(' ',${fields}) LIKE ? ESCAPE '!'`;
@@ -198,11 +204,12 @@ router.get('/',auth,wrap(async(req,res)=>{
     params.push(q,...references.map(()=>`${literal(q)}%`),...args);
   }
   if (!selects.length) return res.json({results:[],hasMore:false});
+  const limit = pageSize * (page===1 ? throughPage||1 : 1);
   const rows = await query(`SELECT * FROM (${selects.join(' UNION ALL ')}) hits
-    ORDER BY relevance,recordDate DESC,type,id DESC LIMIT ${pageSize+1} OFFSET ${(page-1)*pageSize}`, params);
+    ORDER BY relevance,recordDate DESC,type,id DESC LIMIT ${limit+1} OFFSET ${(page-1)*pageSize}`, params);
   res.json({
-    hasMore:rows.length>pageSize,
-    results:rows.slice(0,pageSize).map(({relevance,...row})=>{
+    hasMore:rows.length>limit,
+    results:rows.slice(0,limit).map(({relevance,...row})=>{
       const path = sources[row.type].path(row,req);
       return {...row,path:row.type==='project'||path.includes('?')?path:`${path}?record=${row.id}`};
     })

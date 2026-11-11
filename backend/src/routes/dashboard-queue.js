@@ -1,27 +1,42 @@
 import { Router } from 'express';
 import { query, transaction, audit } from '../db.js';
-import { auth, can, permit, wrap } from '../lib/http.js';
+import { auth, can, fail, permit, wrap } from '../lib/http.js';
+import {publishChange} from '../lib/realtime.js';
 import {missingCheckouts} from '../lib/missing-checkouts.js';
 
 const router = Router();
 
-router.post('/credit-reminders/:id/acknowledge',auth,wrap(async(req,res)=>{
+router.post('/credit-reminders/:id/:action',auth,wrap(async(req,res)=>{
   const id=Number(req.params.id);
   if(!Number.isSafeInteger(id)||id<1)return res.status(400).json({error:'Invalid reminder.'});
+  const {action}=req.params;
+  if (!['acknowledge','snooze','claim'].includes(action)) throw fail(404,'Reminder action not found.');
+  const day="DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+05:30'))";
   const found=await transaction(async connection=>{
-    const [rows]=await connection.execute(`SELECT r.frequency,u.next_date FROM supplier_credit_reminder_users u
-      JOIN supplier_credit_reminders r ON r.invoice_id=u.invoice_id
-      WHERE u.invoice_id=? AND u.user_id=? AND u.next_date<=DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+05:30')) FOR UPDATE`,[id,req.user.id]);
-    if(!rows.length)return false;
-    const frequency=rows[0].frequency;
-    const interval={Daily:'1 DAY',Weekly:'1 WEEK',Monthly:'1 MONTH'}[frequency];
-    await connection.execute(`UPDATE supplier_credit_reminder_users SET next_date=${interval?
-      `DATE_ADD(DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+05:30')),INTERVAL ${interval})`:'NULL'}
-      WHERE invoice_id=? AND user_id=?`,[id,req.user.id]);
-    await audit(connection,req.user.id,'ACKNOWLEDGE_CREDIT_REMINDER','supplier_invoice',id,null,{frequency},req.ip);
+    const [rows]=await connection.execute(`SELECT r.frequency,owner.id owner
+      FROM supplier_credit_reminder_users u JOIN supplier_credit_reminders r ON r.invoice_id=u.invoice_id
+      JOIN supplier_invoices i ON i.id=r.invoice_id LEFT JOIN users owner ON owner.id=r.assigned_to AND owner.active=1
+      WHERE u.invoice_id=? AND u.user_id=? AND i.amount>i.paid_amount AND u.next_date<=${day}
+      AND (u.snoozed_until IS NULL OR u.snoozed_until<=${day}) FOR UPDATE`,[id,req.user.id]);
+    if (!rows.length) return false;
+    const {frequency,owner}=rows[0];
+    if (action==='claim') {
+      if (owner && Number(owner)!==Number(req.user.id)) throw fail(409,'Someone else already owns this follow-up.');
+      if (owner) return true;
+      await connection.execute('UPDATE supplier_credit_reminders SET assigned_to=? WHERE invoice_id=?',[req.user.id,id]);
+    } else if (action==='snooze') {
+      await connection.execute(`UPDATE supplier_credit_reminder_users SET snoozed_until=DATE_ADD(${day},INTERVAL 1 DAY)
+        WHERE invoice_id=? AND user_id=?`,[id,req.user.id]);
+    } else {
+      const interval={Daily:'1 DAY',Weekly:'1 WEEK',Monthly:'1 MONTH'}[frequency];
+      await connection.execute(`UPDATE supplier_credit_reminder_users SET snoozed_until=NULL,next_date=${interval?
+        `DATE_ADD(${day},INTERVAL ${interval})`:'NULL'} WHERE invoice_id=? AND user_id=?`,[id,req.user.id]);
+    }
+    await audit(connection,req.user.id,action.toUpperCase()+'_CREDIT_REMINDER','supplier_invoice',id,null,{frequency},req.ip);
     return true;
   });
   if(!found)return res.status(404).json({error:'No due reminder assigned to you.'});
+  publishChange('dashboard');
   res.status(204).end();
 }));
 
@@ -196,14 +211,38 @@ router.get('/queue', auth, wrap(async (req, res) => {
       AND NOT EXISTS(SELECT 1 FROM daily_reports r WHERE r.project_id=p.id AND r.report_date=a.work_date)
       GROUP BY p.id,a.work_date ORDER BY a.work_date LIMIT 60`,[companyId],r=>({kind:'daily-site-close',id:`${r.id}-${r.deadline}`,title:`Close site day · ${r.project}`,detail:`Attendance exists for ${r.deadline}, but the daily report is missing`,owner:r.owner,deadline:r.deadline,createdAt:r.createdAt,risk:'Work, issues and materials may not be captured',action:'Complete site report',escalation:'Project management',target:['Daily reports',null,r.id],workDate:r.deadline}))
   ]);
+  await add(can(req,'finance.pay'),`SELECT i.id,i.invoice_no invoiceNo,s.name supplier,i.amount-i.paid_amount outstanding,
+    i.created_at createdAt,DATE_FORMAT(i.due_date,'%Y-%m-%d') deadline,owner.name assignedTo
+    FROM supplier_invoices i JOIN suppliers s ON s.id=i.supplier_id
+    LEFT JOIN purchase_orders po ON po.id=i.order_id LEFT JOIN projects p ON p.id=po.project_id
+    LEFT JOIN supplier_credit_reminders r ON r.invoice_id=i.id LEFT JOIN users owner ON owner.id=r.assigned_to AND owner.active=1
+    WHERE i.company_id=? AND i.due_date<=CURDATE() AND i.amount>i.paid_amount AND (p.id IS NULL OR p.active=1)
+      AND NOT EXISTS (SELECT 1 FROM supplier_credit_reminder_users u WHERE u.invoice_id=i.id AND u.user_id=? AND u.next_date IS NOT NULL)
+    ORDER BY i.due_date,i.id LIMIT 60`,[companyId,req.user.id],row=>({
+    kind:'supplier-followup',id:row.id,title:row.invoiceNo+' · '+row.supplier,
+    detail:'LKR '+row.outstanding+' outstanding',owner:row.assignedTo||'Finance payables',
+    deadline:row.deadline,createdAt:row.createdAt,action:'Open supplier invoice',
+    href:'/finance/supplier-invoices?record='+row.id
+  }));
   const checkoutSummary=['hr.view','hr.manage','hr.attendance'].some(key=>can(req,key))?await missingCheckouts(companyId):null;
-  const creditReminders=await query(`SELECT i.id,i.invoice_no invoiceNo,s.name supplier,r.description,r.frequency,
+  const creditReminders=await query(`SELECT i.id,i.invoice_no invoiceNo,s.id supplierId,s.name supplier,r.description,r.frequency,owner.name assignedTo,
     DATE_FORMAT(i.due_date,'%Y-%m-%d') dueDate,i.amount-i.paid_amount outstanding
     FROM supplier_credit_reminder_users u JOIN supplier_credit_reminders r ON r.invoice_id=u.invoice_id
     JOIN supplier_invoices i ON i.id=r.invoice_id JOIN suppliers s ON s.id=i.supplier_id
+    LEFT JOIN users owner ON owner.id=r.assigned_to AND owner.active=1
     WHERE u.user_id=? AND i.company_id=? AND i.amount>i.paid_amount
-    AND u.next_date<=DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+05:30')) ORDER BY i.due_date,i.id`,[req.user.id,companyId]);
-  res.json({ sheets: sheets.filter(sheet => sheet.status === 'Submitted' ? financeReview || qsReview : qsReview), claims, invoicesDue, work,missingCheckouts:checkoutSummary,creditReminders });
+    AND u.next_date<=DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+05:30'))
+    AND (u.snoozed_until IS NULL OR u.snoozed_until<=DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','+05:30'))) ORDER BY i.due_date,i.id`,[req.user.id,companyId]);
+  const fuel=can(req,'fuel.review')||can(req,'fuel.submit') ? await query(`SELECT s.id,s.status,s.review_note reviewNote,
+    f.vehicle,f.registration,owner.name assignedTo,s.created_at createdAt,s.reviewed_at reviewedAt,
+    DATE_FORMAT(DATE_ADD(s.created_at,INTERVAL 1 DAY),'%Y-%m-%d') reviewDue
+    FROM fuel_submissions s JOIN fleet f ON f.id=s.vehicle_id
+    LEFT JOIN users owner ON owner.id=s.assigned_to AND owner.active=1
+    WHERE s.company_id=? AND ((?=1 AND s.status='Pending' AND s.submitted_by<>?
+      AND (owner.id IS NULL OR owner.id=?)) OR (?=1 AND s.status='Rejected' AND s.submitted_by=?
+      AND NOT EXISTS (SELECT 1 FROM fuel_submissions next WHERE next.replaces_id=s.id)))
+    ORDER BY s.created_at LIMIT 80`,[companyId,Number(can(req,'fuel.review')),req.user.id,req.user.id,Number(can(req,'fuel.submit')),req.user.id]) : [];
+  res.json({ sheets: sheets.filter(sheet => sheet.status === 'Submitted' ? financeReview || qsReview : qsReview), claims, invoicesDue, work,missingCheckouts:checkoutSummary,creditReminders,fuel });
 }));
 
 router.get('/missing-checkouts',auth,permit('hr.view','hr.manage','hr.attendance'),wrap(async(req,res)=>{

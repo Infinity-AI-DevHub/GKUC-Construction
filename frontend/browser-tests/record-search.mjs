@@ -6,7 +6,7 @@ const source=`import React from 'react';import {createRoot} from 'react-dom/clie
 import DocumentSearch from '/src/DocumentSearch.jsx';
 import '/src/styles.css';import '/src/theme.css';import '/src/reference.css';import '/src/responsive.css';import '/src/workspace.css';
 const project=location.search.includes('project')?{id:4,name:'Bridge Works'}:null;
-createRoot(document.getElementById('root')).render(React.createElement(DocumentSearch,{open:true,onClose:()=>{},project,companies:[{id:2,name:'GKUC Readymix'}]}));`;
+createRoot(document.getElementById('root')).render(React.createElement(DocumentSearch,{open:true,onClose:()=>{},project,userId:91,companies:[{id:2,name:'GKUC Readymix'}]}));`;
 const server=await createServer({root:new URL('..',import.meta.url).pathname,server:{host:'127.0.0.1',port:0},plugins:[{
   name:'record-search-fixture',resolveId:path=>path==='/__record-search.js'?id:null,load:path=>path===id?source:null,
   configureServer(dev){dev.middlewares.use(async(req,res,next)=>{
@@ -56,6 +56,13 @@ try {
     assert.equal(queries.at(-1).get('companyId'),'2');
     await page.getByText('Scanned bridge plan',{exact:true}).waitFor();
     assert.equal(scanQueries.at(-1).get('companyId'),'2');
+    await page.getByLabel('Save this search as').fill('Readymix bridge');
+    await page.getByRole('button',{name:'Save filter',exact:true}).click();
+    await page.getByLabel('Company').selectOption('');
+    await page.getByLabel('Saved filters').selectOption('');
+    await page.getByLabel('Saved filters').selectOption('Readymix bridge');
+    await page.getByText('BOQ-42 · Bridge works',{exact:true}).waitFor();
+    assert.equal(await page.getByLabel('Company').inputValue(),'2');
     await page.getByRole('button',{name:'Load more records'}).click();
     await page.getByText('BOQ-OLD · Bridge works',{exact:true}).waitFor();
     assert.equal(queries.at(-1).get('page'),'2');
@@ -63,6 +70,13 @@ try {
     await page.getByRole('button',{name:/BOQ-42/}).click();
     await page.waitForURL('**/quantity-surveying/bills-of-quantities?record=21');
     assert.equal(await page.evaluate(()=>localStorage.getItem('gkuc:company-id')),'2');
+    await page.goto(base+'/__record-search?global');
+    assert.equal(await page.getByRole('searchbox',{name:'Search SiteOps'}).inputValue(),'bridge');
+    assert.equal(await page.getByLabel('Company').inputValue(),'2');
+    await page.waitForResponse(response=>response.url().includes('throughPage=2'));
+    await page.getByRole('searchbox',{name:'Search SiteOps'}).clear();
+    await page.getByRole('heading',{name:'Recently opened'}).waitFor();
+    await page.getByRole('button',{name:'BOQ-42 · BOQ',exact:true}).waitFor();
     await page.goto(base+'/__record-search?project');
     await page.getByText('BOQ-42 · Bridge works',{exact:true}).waitFor();
     assert.equal(queries.at(-1).get('projectId'),'4');

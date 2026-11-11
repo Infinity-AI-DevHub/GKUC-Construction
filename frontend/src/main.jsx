@@ -348,8 +348,15 @@ function App() {
 
   const banners = useBanners();
   const [live, setLive] = useState(false);
-  const [searching, setSearching] = useState(false);
-  const [searchProject, setSearchProject] = useState(null);
+  const [searching,setSearching] = useState(false);
+  const [searchProject,setSearchProject] = useState(null);
+  useEffect(()=>{
+    const search=history.state?.siteOpsSearch;
+    if (user?.id && search?.userId===user.id) {
+      setSearchProject(search.project);
+      setSearching(true);
+    }
+  },[user?.id]);
   const [peopleSearchRequest, setPeopleSearchRequest] = useState(0);
   /*
    * Shown once, the first time somebody signs in. Held here rather than read straight from
@@ -430,6 +437,7 @@ function App() {
       await token.clear();
       setUser(null);
       setData(null);
+      setSearching(false);setSearchProject(null);
       goTo('Dashboard');
     }
   };
@@ -514,6 +522,23 @@ function App() {
   /* Declared above the page map, which now references it: the dashboard's alert card offers
      a way through to the full notification centre. */
   const openNotifications = () => goTo('Administration', 'Notifications');
+  const notificationRecordTypes={project:'project',supplier_invoice:'supplierBill',operating_bill:'operatingBill',client_invoice:'invoice',
+    invoice:'invoice',retention:'retention',fleet:'vehicle',vehicle:'vehicle'};
+  const openNotification = async alert => {
+    const type=notificationRecordTypes[alert.referenceType];
+    if (type && Number(alert.referenceId)>0) {
+      const {results}=await api('/search?'+new URLSearchParams({type,recordId:alert.referenceId}));
+      if (results[0]) {
+        const record=results[0], company=record.targetCompanyId||record.companyId;
+        if (company) localStorage.setItem('gkuc:company-id',String(company));
+        window.location.assign(record.path);
+        return;
+      }
+    }
+    if (can.has('admin.notifications')) window.location.assign('/administration/notifications?case='+alert.id);
+    else throw new Error('This record is unavailable with your current access.');
+  };
+
 
   const content = {
     Dashboard: <Dashboard {...shared} go={goTo} onViewAlerts={openNotifications} />,
@@ -549,13 +574,13 @@ function App() {
       title={live ? 'Live — updates arrive as they happen' : 'Reconnecting to live updates…'}>
       <DocumentSearchButton onOpen={() => {setSearchProject(null);setSearching(true);}} />
       <SoundToggle />
-      <NotificationBell notifications={data.notifications} reminders={data.reminderNotifications} reload={reload} onViewAll={openNotifications} onViewReminders={() => goTo('Reminders')} placement={placement} />
+      <NotificationBell notifications={data.notifications} reminders={data.reminderNotifications} reload={reload} onViewAll={can.has('admin.notifications')?openNotifications:undefined} onOpenCase={openNotification} canOpenCase={alert=>Boolean(notificationRecordTypes[alert.referenceType]||can.has('admin.notifications'))} onViewReminders={() => goTo('Reminders')} placement={placement} />
     </span>
   );
 
   return <div className="app">
     <Banners items={banners.items} onDismiss={banners.dismiss} onOpen={item => item.referenceType === 'personal_reminder' ? goTo('Reminders') : openNotifications()} />
-    <DocumentSearch key={searchProject?.id || 0} project={searchProject} open={searching} onClose={() => setSearching(false)} companies={companies}
+    <DocumentSearch key={user.id+':'+(searchProject?.id || 0)} userId={user.id} project={searchProject} open={searching} onClose={() => {history.replaceState({...history.state,siteOpsSearch:null},'');setSearching(false);}} companies={companies}
       onEmployeeSearch={activePage === 'People' ? () => setPeopleSearchRequest(request => request + 1) : undefined} />
     {tourOpen && <Tour user={user} can={can} onNavigate={goTo}
       onClose={() => { setTourOpen(false); setUser(current => ({ ...current, tourSeenAt: new Date().toISOString() })); }} />}

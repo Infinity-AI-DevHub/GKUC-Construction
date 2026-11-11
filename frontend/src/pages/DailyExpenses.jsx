@@ -1,17 +1,26 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, post, rupees, todayInput, onDataChanged } from '../api.js';
 import { Field, FormModal, SelectField } from '../ui.jsx';
+import {useRegisterScroll,useRegisterView} from '../register-view.js';
 
-export default function DailyExpenses({ companyId, company, can }) {
+export default function DailyExpenses({ companyId, company, can, userId }) {
   const link = new URLSearchParams(window.location.search);
   const linkedDate = link.get('date'), linkedEntry = link.get('entry');
-  const [date, setDate] = useState(()=>/^\d{4}-\d{2}-\d{2}$/.test(linkedDate||'')?linkedDate:todayInput());
+  const [view,updateView]=useRegisterView('gkuc:daily-expenses:'+userId+':'+companyId,{
+    date:todayInput(),location:'all',method:'all',search:''
+  });
+  const [selectedDate,setSelectedDate]=useState(()=>/^\d{4}-\d{2}-\d{2}$/.test(linkedDate||'')?linkedDate:null);
+  const date=selectedDate||view.date;
+  const setDate=value=>{setSelectedDate(null);updateView('date',value);};
+  const {location,method,search}=linkedEntry&&selectedDate?{location:'all',method:'all',search:''}:view;
+  const setFilter=(field,value)=>{
+    if (selectedDate) {updateView('date',selectedDate);setSelectedDate(null);}
+    updateView(field,value);
+  };
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
-  const [location, setLocation] = useState('all');
-  const [method, setMethod] = useState('all');
-  const [search, setSearch] = useState('');
-  const [addingOffice,setAddingOffice]=useState(false);
+  useRegisterScroll('gkuc:daily-expenses-scroll:'+userId+':'+companyId,Boolean(data),Boolean(linkedEntry||link.get('new')));
+  const [addingOffice,setAddingOffice]=useState(()=>can.finance&&link.get('new')==='1');
   const [mdPersonal,setMdPersonal]=useState(false);
   const [categories,setCategories]=useState([]);
   const load=()=>api(`/finance/daily-expenses?companyId=${companyId}&date=${date}`).then(setData);
@@ -45,7 +54,7 @@ export default function DailyExpenses({ companyId, company, can }) {
     {error && <p className="form-error" role="alert">{error}</p>}
     {!data ? <p className="empty-state">Loading this day's recorded payments…</p> : <>
       <div className="daily-expenses-summary"><article><span>Company</span><strong>{data.company.name}</strong></article><article><span>Payments recorded</span><strong>{data.entries.length}</strong></article><article><span>Amount paid</span><strong>{rupees(data.total)}</strong></article><article><span>Site / office locations</span><strong>{new Set(data.entries.map(row=>row.location)).size}</strong></article></div>
-      <section className="daily-expenses-filters"><label>Location<select value={location} onChange={event=>setLocation(event.target.value)}><option value="all">All sites and office</option><option value="office">Head office</option>{[...new Map([...data.entries,...(data.fundingEntries||[])].filter(row=>row.projectId).map(row=>[String(row.projectId),row.location])).entries()].map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label><label>Payment method<select value={method} onChange={event=>setMethod(event.target.value)}><option value="all">All methods</option>{[...new Set([...data.entries,...(data.fundingEntries||[])].map(row=>row.paymentMethod))].map(value=><option key={value}>{value}</option>)}</select></label><label>Find payee, category or reference<input value={search} onChange={event=>setSearch(event.target.value)} placeholder="Search this day" /></label></section>
+      <section className="daily-expenses-filters"><label>Location<select value={location} onChange={event=>setFilter('location',event.target.value)}><option value="all">All sites and office</option><option value="office">Head office</option>{[...new Map([...data.entries,...(data.fundingEntries||[])].filter(row=>row.projectId).map(row=>[String(row.projectId),row.location])).entries()].map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label><label>Payment method<select value={method} onChange={event=>setFilter('method',event.target.value)}><option value="all">All methods</option>{[...new Set([...data.entries,...(data.fundingEntries||[])].map(row=>row.paymentMethod))].map(value=><option key={value}>{value}</option>)}</select></label><label>Find payee, category or reference<input value={search} onChange={event=>setFilter('search',event.target.value)} placeholder="Search this day" /></label></section>
       <section className="daily-expenses-chart"><h3>Where payments went</h3>{groups.map(row=><div key={row.name}><span>{row.name} <small>({row.count})</small></span><i><b style={{width:`${Math.max(3,row.amount/max*100)}%`}} /></i><strong>{rupees(row.amount)}</strong></div>)}{!groups.length && <p>No recorded payments match these filters.</p>}</section>
       <section className="daily-expenses-register"><div><h3>Payment register</h3><strong>{rupees(entries.reduce((sum,row)=>sum+Number(row.amount),0))} in current view</strong></div><div className="report-table-scroll"><table><thead><tr>{['Company','Location','Category','Payee','Payment method','Source','Reference / description','Amount'].map(label=><th key={label}>{label}</th>)}</tr></thead><tbody>{entries.map(row=><tr key={row.key} id={'payment-'+row.key} className={date===linkedDate&&linkedEntry===row.key?'linked-record':''}><td>{data.company.name}</td><td>{row.location}</td><td>{row.category}</td><td>{row.payee}</td><td>{row.paymentMethod}<small>{row.paymentSource}</small></td><td>{row.source}</td><td><a href={row.sourceUrl}>{row.reference}</a><small>{row.description}</small></td><td>{rupees(row.amount)}</td></tr>)}{!entries.length && <tr><td colSpan="8">No payment records match this day and these filters.</td></tr>}</tbody></table></div></section>
       <section className="daily-expenses-register petty-funding-register"><div><h3>Petty cash funding</h3><strong>{rupees(fundingEntries.reduce((sum,row)=>sum+Number(row.amount),0))} added in current view</strong></div>
