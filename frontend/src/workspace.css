@@ -575,3 +575,15 @@ body:has(.workflow-page) .modal-backdrop{z-index:1200}
 .bell-case-actions button { padding:5px 8px;min-height:32px;font-size:11px; }
 .docsearch-recent { padding:12px; }
 .docsearch-recent h3 { margin:0 0 5px; }
+
+.labour-boq-allocation { grid-column:1/-1;display:grid;gap:10px;min-width:0;padding:12px;border:1px solid #d8e3eb;border-radius:10px;background:#fff; }
+.labour-boq-allocation h3,.labour-boq-allocation p { margin:0; }
+.labour-boq-row { display:grid;grid-template-columns:minmax(0,2fr) minmax(85px,1fr) auto auto;align-items:end;gap:8px;padding:10px 0;border-top:1px solid #e4ebf1; }
+.labour-boq-row output { padding:8px 0;font-weight:700;white-space:nowrap; }
+.labour-boq-row .form-error,.labour-boq-quotation { grid-column:1/-1; }
+.labour-boq-quotation summary { cursor:pointer; }
+@media(max-width:650px) {
+  .labour-boq-row { grid-template-columns:minmax(0,1fr) auto; }
+  .labour-boq-row > label:first-child { grid-column:1/-1; }
+  .labour-boq-row > button { justify-self:start; }
+}

@@ -659,3 +659,7 @@ The dashboard queue adds pending fuel reviews and returned entries, and supplier
 Fuel forms can save explicit drafts with the receipt in device IndexedDB, scoped by user, company and returned entry. Offline submission saves the draft for a deliberate retry when connectivity is available. Quick actions follow existing permissions. Supplier credit reminders group by supplier, with individual invoice links, an audited owner and per-recipient snooze until the next Sri Lanka calendar day. Alert cases can be claimed atomically and snoozed for 24 hours from the bell.
 
 Search keeps query, filters and scroll in the browser session and saves named filters and recent record identifiers per account on the device. Recent records are looked up again through the existing permissions before display. Supplier invoice and daily expense registers remember filters and scroll per account and company. Linked records take precedence over saved register filters.
+
+### Employee labour allocation entry
+
+In QS Daily Cost, an employee labour block shares the employee, completed tasks, classification, description and receipt reference. It can contain multiple BOQ allocations, each with its own hours and optional quotation recovery. The form previews each allocation using the saved HR day basis and existing reservations, and submits one existing daily-cost API line per allocation. The server recalculates and validates the allocations before accepting the sheet.

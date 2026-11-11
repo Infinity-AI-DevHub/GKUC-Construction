@@ -1516,3 +1516,9 @@ Verified the overview, project filter, detail action, and full claim workflow in
 - Search restores query, filters and scroll and offers named saved filters and permission-checked recent records. Supplier invoices and Daily Expenses remember their filter and scroll state.
 - Grouped credit reminders by supplier and added invoice links, ownership and per-recipient snooze. Added claim, 24-hour snooze and supported record links to the notification bell.
 - Backend suite passed 391 tests with four skipped. Four focused tests passed after extending the receipt inheritance check. Frontend suite passed 41 tests and the build passed. Chrome fixtures checked fuel draft, offline retry, evidence and correction at 390px and 1440px, search state and saved filters at 320px, 390px and 1440px, and dashboard grouping and existing reminder actions. No live deployment or database writes.
+
+### 2026-11-12 — Multiple BOQ items in one employee labour block
+
+QS can select the employee once, then add BOQ items with individual hours and optional quotation recovery. The form displays item costs and prevents submitting more than the available worked hours. Each allocation uses the existing daily-cost line contract so Finance receives separate BOQ costs and the server remains authoritative.
+
+Chrome fixtures at 390px and 1440px verified two allocations from one employee block, exact LKR 880.00 and LKR 1,320.00 previews, over-allocation prevention, and the submitted line payload. Two labour calculation tests, the focused returned-manpower API test, 41 frontend tests, the production build and diff checks passed. No deployment or live database writes.

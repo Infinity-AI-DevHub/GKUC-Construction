@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, BarChart3, CircleDollarSign, FileSpreadsheet, Plus, Trash2, TrendingDown, TrendingUp, WalletCards } from 'lucide-react';
-import { api, openDocument, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
+import { api, openDocument, patch, post, rupees, rupeesExact, shortDate, slug, todayInput } from '../api.js';
 import { Badge, Field, FormModal, SelectField, Summary, TextArea } from '../ui.jsx';
 import EmployeeMultiSelect from '../EmployeeMultiSelect.jsx';
 import { suggestedCost } from '../cost-suggestion.js';
@@ -96,6 +96,34 @@ export default function CostControl({ projects, can }) {
   </div>;
 }
 
+const blankAllocation = () => ({key:crypto.randomUUID(),boqItemId:'',labourHours:'',quotationItemId:'',quotedRecovery:''});
+const isEmployeeLabour = line => line.source==='Labour' && Boolean(line.employeeId);
+const labourMoney = value => Math.round((value+Number.EPSILON)*100)/100;
+
+function previewAllocations(lines,days,date) {
+  const employeeTotals=new Map();
+  return lines.map(line=>{
+    if (!isEmployeeLabour(line)) return [];
+    const day=days[line.employeeId];
+    if (day?.date!==date || !day.value || day.value.blockedReason) return [];
+    const basis=day.value;
+    let total=employeeTotals.get(String(line.employeeId))||{hours:number(basis.reservedHours),cost:number(basis.reservedAmount)};
+    const previews=line.allocations.map(row=>{
+      const hours=Number(row.labourHours);
+      if (!Number.isFinite(hours)||hours<=0) return {amount:null};
+      const next=Math.round((total.hours+hours)*1000)/1000;
+      if (next>basis.workedHours+0.00001) return {amount:null,error:'Combined allocations exceed the worked hours available.'};
+      const cost=labourMoney(basis.dailyPay*next/basis.workedHours);
+      const amount=labourMoney(cost-total.cost);
+      if (amount<=0) return {amount:null,error:'This split is less than one cent. Enter more hours.'};
+      total={hours:next,cost};
+      return {amount};
+    });
+    employeeTotals.set(String(line.employeeId),total);
+    return previews;
+  });
+}
+
 export function ExpenseForm({ projectId, items, initial, close, reload, onImport }) {
   const [options, setOptions] = useState(null);
   const [loadError, setLoadError] = useState('');
@@ -104,7 +132,9 @@ export function ExpenseForm({ projectId, items, initial, close, reload, onImport
   const [labourDays,setLabourDays] = useState({});
   const [lines, setLines] = useState(initial?.lines?.map(line => ({source:line.source,costType:line.cost_type,
     taskIds:(line.taskIds || [line.task_id]).map(Number),boqItemId:line.boq_item_id || '',description:line.description,quantity:line.quantity || '',
-    unit:line.unit || '',unitRate:line.unit_rate ?? '',amount:line.amount,employeeId:line.employee_id || '',labourHours:line.labour_hours ?? '',
+    unit:line.unit || '',unitRate:line.unit_rate ?? '',amount:line.amount,employeeId:line.employee_id || '',
+    allocations:line.source==='Labour'&&line.employee_id ? [{...blankAllocation(),boqItemId:line.boq_item_id||'',
+      labourHours:line.labour_hours??'',quotationItemId:line.quotation_item_id||'',quotedRecovery:line.quoted_recovery||''}] : [],
     vehicleId:line.vehicle_id || '',fuelOrigin:line.fuel_origin || '',fuelRecordId:line.fuel_record_id || '',
     fuelFloatId:line.fuel_float_id || '',odometer:line.odometer || '',stationMode:line.fuel_record_id?'Existing':'New',
     reserveMaterialId:line.reserve_material_id || '',quotationItemId:line.quotation_item_id || '',
@@ -116,25 +146,49 @@ export function ExpenseForm({ projectId, items, initial, close, reload, onImport
     const selected=[...new Set(lines.filter(line=>line.source==='Labour'&&line.employeeId).map(line=>line.employeeId))];
     let active=true;
     Promise.all(selected.map(employeeId=>api(`/boq/cost-control/labour-day?employeeId=${employeeId}&workDate=${workDate}`)
-      .then(value=>[employeeId,{value}]).catch(error=>[employeeId,{error:error.message}]))).then(rows=>{ if(active)setLabourDays(Object.fromEntries(rows)); });
+      .then(value=>[employeeId,{value,date:workDate}]).catch(error=>[employeeId,{error:error.message,date:workDate}]))).then(rows=>{ if(active)setLabourDays(Object.fromEntries(rows)); });
     return ()=>{active=false;};
   },[workDate,lines.map(line=>`${line.source}:${line.employeeId}`).join('|')]);
   const update = (index, changes) => setLines(previous => previous.map((line, at) => at === index ? { ...line, ...changes } : line));
   const id = value => value ? Number(value) : null;
+  const previews=previewAllocations(lines,labourDays,workDate);
+  const limit=100;
+  const entryCount=lines.reduce((count,line)=>count+(isEmployeeLabour(line)?line.allocations.length:1),0);
   return <><FormModal title="Submit daily project costs" close={close} label="Send to Finance for review" wide onSubmit={async values => {
     if (!options) throw new Error(loadError || 'Wait for the project work and cost options to load.');
     if (!options.tasks.some(task => task.status === 'Completed')) throw new Error('Record or select completed work before submitting project costs.');
     if (lines.some(line => !line.taskIds.length)) throw new Error('Select at least one completed work task for every cost line.');
-    await post('/boq/cost-control/daily-sheets', { projectId, workDate:values.workDate, notes:values.notes || null,
-      lines: lines.map(line => ({ taskIds:line.taskIds, boqItemId:id(line.boqItemId), source:line.source,
-        costType:line.costType, description:line.description.trim(), quantity:line.quantity ? Number(line.quantity) : null,
-        unit:line.unit || null, unitRate:line.unitRate === '' || line.unitRate == null ? null : Number(line.unitRate),
-        amount:Number(line.amount), employeeId:id(line.employeeId), labourHours:line.labourHours === '' || line.labourHours == null ? null : Number(line.labourHours), vehicleId:id(line.vehicleId),
-        fuelOrigin:line.source === 'Fuel' ? line.fuelOrigin || null : null,
-        fuelRecordId:id(line.fuelRecordId), fuelFloatId:id(line.fuelFloatId),odometer:id(line.odometer),
-        reserveMaterialId:id(line.reserveMaterialId),
-        quotationItemId:id(line.quotationItemId), quotedRecovery:Number(line.quotedRecovery || 0),
-        reference:line.reference || null })) }); await reload();
+    if (entryCount>limit) throw new Error('A daily cost sheet can include up to 100 cost entries.');
+    const payload=lines.flatMap((line,index)=>{
+      const common={
+        taskIds:line.taskIds,source:line.source,costType:line.costType,description:line.description.trim(),
+        reference:line.reference||null
+      };
+      if (isEmployeeLabour(line)) {
+        const day=labourDays[line.employeeId];
+        if (day?.date!==workDate) throw new Error('Wait for HR labour details for cost line '+(index+1)+'.');
+        if (day.error || day.value?.blockedReason) throw new Error(day.error||day.value.blockedReason);
+        if (line.costType==='Unexpected') throw new Error('Choose Expected or Variation for employee labour allocated to BOQ items.');
+        return line.allocations.map((row,position)=>{
+          const preview=previews[index][position];
+          if (!row.boqItemId || !preview?.amount) {
+            throw new Error(preview?.error||'Choose a BOQ item and enter its hours for cost line '+(index+1)+'.');
+          }
+          return {...common,boqItemId:id(row.boqItemId),employeeId:id(line.employeeId),
+            labourHours:Number(row.labourHours),amount:preview.amount,
+            quotationItemId:id(row.quotationItemId),quotedRecovery:Number(row.quotedRecovery||0)};
+        });
+      }
+      return {...common,boqItemId:id(line.boqItemId),quantity:line.quantity ? Number(line.quantity) : null,
+        unit:line.unit||null,unitRate:line.unitRate===''||line.unitRate==null?null:Number(line.unitRate),
+        amount:Number(line.amount),employeeId:null,vehicleId:id(line.vehicleId),
+        fuelOrigin:line.source==='Fuel'?line.fuelOrigin||null:null,
+        fuelRecordId:id(line.fuelRecordId),fuelFloatId:id(line.fuelFloatId),odometer:id(line.odometer),
+        reserveMaterialId:id(line.reserveMaterialId),quotationItemId:id(line.quotationItemId),
+        quotedRecovery:Number(line.quotedRecovery||0)};
+    });
+    await post('/boq/cost-control/daily-sheets',{projectId,workDate:values.workDate,notes:values.notes||null,lines:payload});
+    await reload();
   }}>
     {!initial && <div className="cost-import-callout wide"><FileSpreadsheet size={22} /><div><strong>Adding work already kept in Excel?</strong><span>Upload the existing workbook, review every detected line, correct it, and only then send it to Finance.</span></div><button className="secondary" type="button" onClick={onImport}>Import existing Excel</button></div>}
     <p className="form-note wide">For employee labour, enter allocation hours to split that day’s saved earned pay across BOQ items. The cost is calculated from HR attendance, approved OT and late deductions. Finance reviews this sheet before costs are posted.</p>
@@ -154,11 +208,14 @@ export function ExpenseForm({ projectId, items, initial, close, reload, onImport
         </fieldset>
       </div>
       {options && !options.tasks.some(task => task.status === 'Completed') && <p className="form-note">No completed work is available yet. Use “Record completed task” to add the work and its employees without leaving this form.</p>}
-      <label>Category *<select value={line.source} onChange={event => update(index,{source:event.target.value,employeeId:'',vehicleId:'',fuelOrigin:'',fuelRecordId:'',fuelFloatId:'',odometer:'',reserveMaterialId:'',amount:''})}>{SOURCES.map(source => <option key={source}>{source}</option>)}</select></label>
+      <label>Category *<select value={line.source} onChange={event => update(index,{source:event.target.value,employeeId:'',allocations:[],vehicleId:'',fuelOrigin:'',fuelRecordId:'',fuelFloatId:'',odometer:'',reserveMaterialId:'',amount:''})}>{SOURCES.map(source => <option key={source}>{source}</option>)}</select></label>
       <label>Cost classification<select value={line.costType} onChange={event => update(index,{costType:event.target.value,boqItemId:'',quotationItemId:'',quotedRecovery:''})}>{['Expected','Variation','Unexpected'].map(type => <option key={type}>{type}</option>)}</select></label>
       <label>What was used or paid for *<input value={line.description} required minLength={2} onChange={event => update(index,{description:event.target.value})} /></label>
-      {line.source === 'Labour' && <><label>Employee (optional)<select value={line.employeeId || ''} onChange={event => update(index,{employeeId:event.target.value,labourHours:'',amount:''})}><option value="">Unassigned labour cost</option>{options?.employees.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
-        {line.employeeId && <LabourAllocation line={line} day={labourDays[line.employeeId]} update={changes=>update(index,changes)} />}</>}
+      {line.source === 'Labour' && <><label>Employee (optional)<select value={line.employeeId || ''} onChange={event => update(index,{employeeId:event.target.value,amount:'',
+        allocations:event.target.value?[{...blankAllocation(),boqItemId:line.boqItemId||'',quotationItemId:line.quotationItemId||'',quotedRecovery:line.quotedRecovery||''}]:[]})}><option value="">Unassigned labour cost</option>{options?.employees.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
+        {line.employeeId && <LabourAllocation line={line} day={labourDays[line.employeeId]?.date===workDate?labourDays[line.employeeId]:null}
+          items={items} quotationItems={options?.quotationItems||[]} previews={previews[index]}
+          canAdd={entryCount<limit} update={allocations=>update(index,{allocations})} />}</>}
       {line.source === 'Vehicle' && <><label>Vehicle *<select aria-label={`Vehicle for cost line ${index+1}`} required value={line.vehicleId || ''} onChange={event=>update(index,{vehicleId:event.target.value})}><option value="">Choose vehicle…</option>{options?.vehicles.map(vehicle=><option key={vehicle.id} value={vehicle.id}>{vehicle.vehicle} · {vehicle.registration}</option>)}</select></label><p className="form-note">Vehicle hire, transport and other non-fuel costs. Record fuel through the Fuel category.</p></>}
       {line.source === 'Fuel' && <><label>Fuel source *<select required value={line.fuelOrigin || ''} onChange={event => update(index,{fuelOrigin:event.target.value,fuelRecordId:'',fuelFloatId:'',reserveMaterialId:'',amount:'',quantity:'',vehicleId:''})}><option value="">Choose source…</option><option>Station</option><option>Reserve</option></select></label>
         {line.fuelOrigin === 'Station' && <><label>Station record<select value={line.stationMode || 'New'} onChange={event => update(index,{stationMode:event.target.value,fuelRecordId:'',fuelFloatId:'',vehicleId:'',amount:'',quantity:'',odometer:''})}><option value="New">New purchase — Finance will post it</option><option value="Existing">Already recorded in Fleet</option></select></label>
@@ -166,31 +223,59 @@ export function ExpenseForm({ projectId, items, initial, close, reload, onImport
         </>}
         {line.fuelOrigin === 'Reserve' && <><label>Vehicle *<select required value={line.vehicleId || ''} onChange={event => update(index,{vehicleId:event.target.value})}><option value="">Choose vehicle…</option>{options?.vehicles.map(vehicle => <option key={vehicle.id} value={vehicle.id}>{vehicle.vehicle} · {vehicle.registration}</option>)}</select></label><label>Fuel reserve item *<select required value={line.reserveMaterialId || ''} onChange={event => { const material=options.reserves.find(item => String(item.id) === event.target.value); update(index,{reserveMaterialId:event.target.value,unit:'litres',unitRate:material?.unitCost || 0,amount:line.quantity ? Number((number(line.quantity)*number(material?.unitCost)).toFixed(2)) : ''}); }}><option value="">Choose stocked fuel…</option>{options?.reserves.map(material => <option key={material.id} value={material.id}>{material.name} · {material.stock} {material.unit} available · {rupees(material.unitCost)}/L</option>)}</select></label></>}
       </>}
-      {line.costType !== 'Unexpected' && <label>BOQ item (optional)<select value={line.boqItemId || ''} onChange={event => update(index,{boqItemId:event.target.value})}><option value="">No BOQ item</option>{items.map(item => <option value={item.id} key={item.id}>{item.boqReference} · {item.description}</option>)}</select></label>}
+      {!isEmployeeLabour(line) && line.costType !== 'Unexpected' && <label>BOQ item (optional)<select value={line.boqItemId || ''} onChange={event => update(index,{boqItemId:event.target.value})}><option value="">No BOQ item</option>{items.map(item => <option value={item.id} key={item.id}>{item.boqReference} · {item.description}</option>)}</select></label>}
       {line.source !== 'Labour' && !(line.fuelOrigin === 'Station' && line.stationMode === 'Existing') && <><label>{line.source==='Fuel'?'Litres *':'Quantity'}<input type="number" required={line.source==='Fuel'} min="0.001" step="0.001" value={line.quantity || ''} onChange={event => { const quantity=event.target.value; update(index,{quantity,amount:line.source === 'Fuel' && line.fuelOrigin === 'Reserve' ? Number((number(quantity)*number(line.unitRate)).toFixed(2)) : line.amount}); }} /></label><label>Unit<input value={line.unit || ''} onChange={event => update(index,{unit:event.target.value})} placeholder="m³, kg, day" /></label><label>Unit rate (LKR)<input type="number" min="0" step="0.01" value={line.unitRate ?? ''} readOnly={line.source==='Fuel'&&line.fuelOrigin==='Reserve'} onChange={event => { const unitRate=event.target.value; update(index,{unitRate,amount:line.source === 'Fuel' && line.fuelOrigin === 'Reserve' ? Number((number(line.quantity)*number(unitRate)).toFixed(2)) : line.amount}); }} /></label></>}
-      <CostAmountField line={line} index={index} update={update} />
+      {!isEmployeeLabour(line) && <CostAmountField line={line} index={index} update={update} />}
       <label>Receipt / reference<input value={line.reference || ''} onChange={event => update(index,{reference:event.target.value})} /></label>
-      {line.costType !== 'Unexpected' && <><label>Accepted quotation item<select value={line.quotationItemId || ''} onChange={event => update(index,{quotationItemId:event.target.value,quotedRecovery:''})}><option value="">No quoted recovery assigned</option>{options?.quotationItems.map(item => <option key={item.id} value={item.id}>{item.reference} · {item.description} · {rupees(item.amount)}</option>)}</select></label>{line.quotationItemId && <label>Quoted recovery allocated to this day (LKR)<input type="number" min="0" step="0.01" value={line.quotedRecovery || ''} onChange={event => update(index,{quotedRecovery:event.target.value})} /></label>}</>}
+      {!isEmployeeLabour(line) && line.costType !== 'Unexpected' && <><label>Accepted quotation item<select value={line.quotationItemId || ''} onChange={event => update(index,{quotationItemId:event.target.value,quotedRecovery:''})}><option value="">No quoted recovery assigned</option>{options?.quotationItems.map(item => <option key={item.id} value={item.id}>{item.reference} · {item.description} · {rupees(item.amount)}</option>)}</select></label>{line.quotationItemId && <label>Quoted recovery allocated to this day (LKR)<input type="number" min="0" step="0.01" value={line.quotedRecovery || ''} onChange={event => update(index,{quotedRecovery:event.target.value})} /></label>}</>}
     </div>)}<button className="secondary" type="button" onClick={() => setLines(old => [...old,{source:'Material',costType:'Expected',taskIds:[],description:'',amount:''}])}><Plus size={14} /> Add cost line</button></div>
   </FormModal>{taskEditor && options && <CompletedTaskForm projectId={projectId} employees={options.employees}
-    task={taskEditor.task} defaultDate={initial?.work_date || todayInput()} close={() => setTaskEditor(null)}
+    task={taskEditor.task} defaultDate={workDate} close={() => setTaskEditor(null)}
     saved={async task => { await loadOptions(); setLines(previous => previous.map((line,index) => index === taskEditor.lineIndex ? {...line,taskIds:[...new Set([...line.taskIds,Number(task.id)])]} : line)); setTaskEditor(null); }} />}</>;
 }
 
-function LabourAllocation({ line, day, update }) {
-  if (!day) return <p className="form-note">Reading HR attendance and payroll basis…</p>;
-  if (day.error) return <p className="form-error">{day.error}</p>;
-  const basis=day.value;
-  const applyHours=value=>{
-    const labourHours=value === '' ? '' : Number(value);
-    const amount=Number.isFinite(labourHours) ? Math.round(labourHours * Number(basis.hourlyCost) * 100) / 100 : '';
-    update({labourHours,amount,quantity:labourHours,unit:'hour',unitRate:Number(basis.hourlyCost).toFixed(2)});
-  };
-  return <section className="form-note wide"><strong>HR labour basis</strong><br />
-    Worked {basis.workedHours} h · earned pay {rupees(basis.dailyPay)} · {rupees(basis.hourlyCost)} / hour<br />
-    <small>Basic {rupees(basis.basic)} + OT {rupees(basis.overtime)} − late deduction {rupees(basis.lateDeduction)}. Remaining unallocated: {basis.remainingHours} h / {rupees(basis.remainingAmount)}.</small>
-    <label>Hours for this BOQ item *<input type="number" required min="0.001" max={basis.remainingHours} step="0.001" value={line.labourHours} onChange={event=>applyHours(event.target.value)} /></label>
-    <small>Cost for this line: {line.labourHours ? rupees(line.amount) : 'Enter hours'}.</small>
+function LabourAllocation({line,day,items,quotationItems,previews,canAdd,update}) {
+  const rows=line.allocations;
+  const basis=day?.value;
+  const updateRow=(key,changes)=>update(rows.map(row=>row.key===key?{...row,...changes}:row));
+  const amount=previews.reduce((sum,row)=>sum+(row.amount||0),0);
+  const hours=rows.reduce((sum,row)=>sum+number(row.labourHours),0);
+  const complete=rows.every((row,index)=>row.boqItemId&&previews[index]?.amount);
+  return <section className="labour-boq-allocation" aria-label="Employee BOQ allocations">
+    <h3>Allocate hours to BOQ items</h3>
+    {!day && <p className="form-note" role="status">Reading HR attendance and payroll basis…</p>}
+    {(day?.error||basis?.blockedReason) && <p className="form-error" role="alert">{day?.error||basis.blockedReason}</p>}
+    {basis && <p className="form-note">
+      Worked {basis.workedHours} h · earned pay {rupeesExact(basis.dailyPay)} · available {basis.remainingHours} h<br />
+      <small>Basic {rupeesExact(basis.basic)} + OT {rupeesExact(basis.overtime)} − late deduction {rupeesExact(basis.lateDeduction)}.</small>
+    </p>}
+    {line.costType==='Unexpected' && <p className="form-error">Choose Expected or Variation to allocate labour to BOQ items.</p>}
+    {rows.map((row,index)=><div key={row.key} className="labour-boq-row">
+      <label>BOQ item {index+1} *<select required value={row.boqItemId} onChange={event=>updateRow(row.key,{boqItemId:event.target.value})}>
+        <option value="">Choose BOQ item…</option>
+        {items.map(item=><option value={item.id} key={item.id}>{item.boqReference} · {item.description}</option>)}
+      </select></label>
+      <label>Hours for item {index+1} *<input type="number" required min="0.001" max={Math.min(999.999,basis?.remainingHours??999.999)} step="0.001"
+        value={row.labourHours} onChange={event=>updateRow(row.key,{labourHours:event.target.value})} /></label>
+      <output aria-label={'Cost for item '+(index+1)}>{previews[index]?.amount!=null?rupeesExact(previews[index].amount):'—'}</output>
+      {rows.length>1 && <button type="button" className="status-button" onClick={()=>update(rows.filter(item=>item.key!==row.key))}>
+        Remove item {index+1}
+      </button>}
+      {previews[index]?.error && <p className="form-error" role="alert">{previews[index].error}</p>}
+      {quotationItems.length>0 && <details className="labour-boq-quotation" open={row.quotationItemId?true:undefined}>
+        <summary>Quotation recovery for item {index+1}</summary>
+        <label>Accepted quotation item<select value={row.quotationItemId||''} onChange={event=>updateRow(row.key,{quotationItemId:event.target.value,quotedRecovery:''})}>
+          <option value="">No quoted recovery assigned</option>
+          {quotationItems.map(item=><option key={item.id} value={item.id}>{item.reference} · {item.description} · {rupees(item.amount)}</option>)}
+        </select></label>
+        {row.quotationItemId&&<label>Recovery for this day (LKR)<input type="number" min="0" step="0.01"
+          value={row.quotedRecovery||''} onChange={event=>updateRow(row.key,{quotedRecovery:event.target.value})} /></label>}
+      </details>}
+    </div>)}
+    <div className="row-actions">
+      <button type="button" className="secondary" disabled={!canAdd} onClick={()=>update([...rows,blankAllocation()])}><Plus size={14}/> Add BOQ item</button>
+      <strong>{Number(hours.toFixed(3))} h allocated · {complete?rupeesExact(amount):'Complete the allocations'}</strong>
+    </div>
   </section>;
 }
 
