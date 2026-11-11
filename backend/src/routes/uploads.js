@@ -140,40 +140,54 @@ export function searchExpression(term) {
   };
 }
 
+const documentSearchFilters = z.object({
+  q:z.string().trim().max(120).default(''),
+  companyId:z.coerce.number().int().positive().optional(),
+  projectId:z.coerce.number().int().positive().optional(),
+  project:z.string().trim().min(1).max(180).optional(),
+  from:z.string().date().optional(), to:z.string().date().optional()
+});
+
 router.get('/search/documents', auth, wrap(async (req, res) => {
-  const term = String(req.query.q || '').trim();
-  if (term.length < 3) return res.json({ term, results: [], note: 'Type at least three characters' });
+  const parsed = documentSearchFilters.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({error:'Enter at least three characters and valid document filters.'});
+  const {q:term,companyId,projectId,project,from,to} = parsed.data;
+  if (term.length<3) return res.json({term,results:[],note:'Type at least three characters'});
+  if (from && to && from>to) return res.status(400).json({error:'Choose a start date before or on the end date.'});
+  const readable = Object.entries(READERS).filter(([,keys])=>keys.some(key=>can(req,key))).map(([type])=>type);
+  if (!readable.length) return res.json({term,results:[]});
 
-  /* Permission per owner type, mirroring what the attachment listing itself allows. */
-  const readable = Object.entries(READERS)
-    .filter(([, keys]) => keys.some(key => req.user.permissions.includes(key)))
-    .map(([type]) => type);
-  if (!readable.length) return res.json({ term, results: [] });
+  const {usable,expression} = searchExpression(term);
+  const like = value=>'%'+value.replace(/[!%_]/g,'!$&')+'%';
+  const terms = term.split(/\s+/).map(like);
+  const names = terms.map(()=> "CONCAT_WS(' ',a.title,a.filename,a.category) LIKE ? ESCAPE '!'").join(' AND ');
+  const textMatch = expression ? 'MATCH(t.content) AGAINST (? IN BOOLEAN MODE)' : '0';
+  const conditions = [
+    `a.owner_type IN (${readable.map(()=>'?').join(',')})`,
+    '(p.id IS NULL OR p.active=1)',
+    `(${textMatch} OR (${names}))`
+  ];
+  const params = [...readable,...(expression?[expression]:[]),...terms];
+  if (companyId) { conditions.push('COALESCE(p.company_id,cc.company_id)=?'); params.push(companyId); }
+  if (projectId) { conditions.push('p.id=?'); params.push(projectId); }
+  if (project) { conditions.push("p.name LIKE ? ESCAPE '!'"); params.push(like(project)); }
+  if (from) { conditions.push('DATE(a.created_at)>=?'); params.push(from); }
+  if (to) { conditions.push('DATE(a.created_at)<=?'); params.push(to); }
 
-  const { usable, expression } = searchExpression(term);
-  if (!expression) {
-    return res.json({
-      term, results: [],
-      note: `Use a word of at least ${MIN_INDEXED_WORD} letters or numbers`
-    });
-  }
-
-  /* The excerpt is centred on the first real word, since the whole term as typed —
-     punctuation and all — may not appear in the text verbatim. */
-  const anchor = usable[0];
-
-  const rows = await query(
-    `SELECT a.id,a.owner_type ownerType,a.owner_id ownerId,a.filename,a.title,a.mime,
-       t.source,t.pages,t.characters,
-       MATCH(t.content) AGAINST (? IN BOOLEAN MODE) score,
-       SUBSTRING(t.content, GREATEST(1, LOCATE(?, t.content) - 90), 260) excerpt
-     FROM attachment_text t JOIN visible_attachments a ON a.id=t.attachment_id
-     WHERE a.owner_type IN (${readable.map(() => '?').join(',')})
-       AND MATCH(t.content) AGAINST (? IN BOOLEAN MODE)
-     ORDER BY score DESC LIMIT 50`,
-    [expression, anchor, ...readable, expression]);
-
-  res.json({ term, results: rows });
+  const rows = await query(`SELECT a.id,a.owner_type ownerType,a.owner_id ownerId,a.filename,a.title,a.mime,
+      t.source,t.pages,t.characters,DATE(a.created_at) recordDate,p.name project,c.name company,
+      ${textMatch} score,${expression?"SUBSTRING(t.content,GREATEST(1,LOCATE(?,t.content)-90),260)":"NULL"} excerpt
+    FROM visible_attachments a LEFT JOIN attachment_text t ON t.attachment_id=a.id
+    LEFT JOIN tasks ta ON a.owner_type='task' AND ta.id=a.owner_id
+    LEFT JOIN daily_reports r ON a.owner_type='report' AND r.id=a.owner_id
+    LEFT JOIN progress_claims pc ON a.owner_type='progress_certificate' AND pc.id=a.owner_id
+    LEFT JOIN company_compliance_records cc ON a.owner_type='company_compliance' AND cc.id=a.owner_id
+    LEFT JOIN projects p ON p.id=CASE a.owner_type WHEN 'project' THEN a.owner_id ELSE COALESCE(ta.project_id,r.project_id,pc.project_id) END
+    LEFT JOIN companies c ON c.id=COALESCE(p.company_id,cc.company_id)
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY (a.filename=? OR a.title=?) DESC,score DESC,a.id DESC LIMIT 50`,
+  [...(expression?[expression,usable[0]]:[]),...params,term,term]);
+  res.json({term,results:rows});
 }));
 
 router.get('/file/:id', auth, wrap(async (req, res) => {

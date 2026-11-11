@@ -4,7 +4,7 @@ import Retention from './Retention.jsx';
 import React, { useEffect, useState } from 'react';
 import { CircleDollarSign, TrendingUp, Wallet } from 'lucide-react';
 import { api, patch, post, rupees, shortDate, slug, todayInput } from '../api.js';
-import { askText, Badge, Field, FormModal, Page, Progress, Row, SelectField, Summary, Table, Tabs, useLiveList } from '../ui.jsx';
+import { askText, Badge, Field, FormModal, Modal, Page, Progress, Row, SelectField, Summary, Table, Tabs, useLiveList } from '../ui.jsx';
 import { useOptions } from '../options.js';
 import { Bonds, ClientInvoices, PettyCash } from '../Receivables.jsx';
 import FinanceReports from './FinanceReports.jsx';
@@ -33,9 +33,9 @@ const TAB_PERMISSIONS = {
   'VAT ledger':['finance.vatSchedules'], 'VAT clearance':['finance.vatClearance'],
   'Supplier statements':['finance.supplierStatements'], 'Daily cost review':['finance.costReview'],
   'Budget monitoring':['finance.view'], Invoices:['finance.view','finance.invoice'], Cheques:['finance.invoice'],
-  Bonds:['finance.invoice'], 'Petty cash':['finance.manage'], Bills:['finance.manage'],
+  Bonds:['finance.invoice'], 'Petty cash':['finance.manage'], Bills:['finance.view','finance.manage'],
   'Credit cards':['finance.manage'], Expenses:['finance.manage','finance.dailyExpenses'], Income:['finance.manage'],
-  'Supplier invoices':['finance.pay'], 'Credit purchases':['finance.pay'], Categories:['finance.manage']
+  'Supplier invoices':['finance.view','finance.pay'], 'Credit purchases':['finance.pay'], Categories:['finance.manage']
 };
 const TAB_GROUPS = [
   { label: 'Overview & review', tabs: ['Fuel submissions', 'Financial reports', 'Management accounts', 'Cash comparison', 'Vehicle expenses', 'Daily cost review', 'Budget monitoring'] },
@@ -147,12 +147,14 @@ function DailyCostReview({ companyId, can }) {
 function Bills({data,can,companyId,open,close}){
   const [rows,setRows]=useState([]),[paying,setPaying]=useState(null);
   const load=()=>api(`/finance/bills?companyId=${companyId}`).then(setRows).catch(()=>setRows([]));useLiveList(load);useEffect(()=>{load();},[companyId]);
+  const linked = Number(new URLSearchParams(window.location.search).get('record'));
+  useEffect(()=>{ if(linked) document.getElementById('operating-bill-'+linked)?.scrollIntoView({block:'center'}); },[rows,linked]);
   const template='130px minmax(180px,1.4fr) minmax(140px,1fr) 120px 130px 120px 110px';
   return <><div className="attendance-summary"><Summary label="Unpaid bills" value={rows.filter(r=>r.status==='Unpaid').length} icon={Wallet}/>
     <Summary label="Due within 5 days" value={rows.filter(r=>r.status==='Unpaid'&&r.daysUntil>=0&&r.daysUntil<=5).length} icon={CircleDollarSign}/>
     <Summary label="Overdue" value={rows.filter(r=>r.status==='Unpaid'&&r.daysUntil<0).length} icon={TrendingUp}/></div>
     <Table columns={['Type','Provider / reference','Project','Due','Total','Status','']} template={template} title="Electricity, water and operating bills" empty="No operating bills for this company yet. Record a bill when the provider's statement is received." emptyAction={can.finance ? () => document.querySelector('.page-heading .primary')?.click() : undefined} emptyActionLabel="Record a bill">
-      {rows.map(r=><Row template={template} key={r.id}><Badge tone={slug(r.billType)}>{r.billType}</Badge><div><strong>{r.provider}</strong><small>{r.reference}</small></div>
+      {rows.map(r=><Row template={template} key={r.id} id={'operating-bill-'+r.id} className={linked===Number(r.id)?'linked-record':''}><Badge tone={slug(r.billType)}>{r.billType}</Badge><div><strong>{r.provider}</strong><small>{r.reference}</small></div>
         <span>{r.project||'Company office'}</span><span className={r.status==='Unpaid'&&r.daysUntil<0?'overdue':''}>{shortDate(r.dueDate)}</span><strong>{rupees(r.totalAmount)}</strong>
         <Badge tone={slug(r.status)}>{r.status}</Badge>{can.finance&&r.status==='Unpaid'?<button className="status-button" onClick={()=>setPaying(r)}>Pay</button>:<span>—</span>}</Row>)}</Table>
     {open&&<BillForm data={data} companyId={companyId} close={close} reload={load}/>} {paying&&<BillPayment bill={paying} close={()=>setPaying(null)} reload={load}/>}</>;
@@ -273,7 +275,10 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
   const [rows, setRows] = useState([]);
   const [paying, setPaying] = useState(null);
   const [error, setError] = useState('');
-  const load = () => api(`/purchasing/invoices?companyId=${companyId}`).then(result=>setRows(result.filter(row=>creditOnly?Boolean(row.creditDescription):!row.creditDescription))).catch(failure => {setRows([]);setError(failure.message);});
+  const link = new URLSearchParams(window.location.search);
+  const linked = creditOnly ? 0 : Number(link.get('record')), paymentId = Number(link.get('payment'));
+  const [payment,setPayment] = useState(null);
+  const load = () => api(`/purchasing/invoices?companyId=${companyId}`).then(result=>setRows(result.filter(row=>Number(row.id)===linked || (creditOnly?Boolean(row.creditDescription):!row.creditDescription)))).catch(failure => {setRows([]);setError(failure.message);});
   useLiveList(load);
   useEffect(() => { load(); }, [companyId]);
 
@@ -302,7 +307,13 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
   const groups = creditOnly && rows.length
     ? [...supplierGroups.values()].sort((a,b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }))
     : [{ key: 'all', name: creditOnly ? 'Credit purchases' : 'Supplier invoices', rows }];
-  const renderInvoice = row => <Row template={template} key={row.id}>
+  useEffect(()=>{
+    if(linked) document.getElementById('supplier-invoice-'+linked)?.scrollIntoView({block:'center'});
+  },[rows,linked]);
+  useEffect(()=>{
+    if(linked && paymentId) api('/purchasing/invoices/'+linked+'/payments/'+paymentId).then(setPayment).catch(failure=>setError(failure.message));
+  },[linked,paymentId]);
+  const renderInvoice = row => <Row template={template} key={row.id} id={'supplier-invoice-'+row.id} className={linked===Number(row.id)?'linked-record':''}>
         <div><strong>{row.invoiceNo}</strong>{row.creditDescription&&<small>Credit · {row.creditDescription} · {row.reminderFrequency} reminders</small>}</div>
         {!creditOnly && <span>{row.supplier}</span>}
         <span>{row.orderReference || '—'}</span>
@@ -325,6 +336,11 @@ function Invoices({ can, refresh, companyId, creditOnly=false }) {
         {group.rows.map(renderInvoice)}
       </Table>)}
     </div>
+    {payment && <Modal title={'Supplier payment · '+payment.invoiceNo} close={()=>setPayment(null)}>
+      <dl><dt>Supplier</dt><dd>{payment.supplier}</dd><dt>Amount</dt><dd>{rupees(payment.amount)}</dd>
+        <dt>Date</dt><dd>{shortDate(payment.paidDate)}</dd><dt>Method</dt><dd>{payment.method}</dd>
+        <dt>Reference</dt><dd>{payment.reference||'—'}</dd><dt>Paying company</dt><dd>{payment.company}</dd></dl>
+    </Modal>}
     {paying && <PaymentForm {...paying} companyId={companyId} close={() => setPaying(null)}
       reload={async () => { await load(); await refresh(); }} />}
   </>;

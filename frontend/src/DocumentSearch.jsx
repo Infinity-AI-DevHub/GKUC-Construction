@@ -1,11 +1,15 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {Search, FileText, X, Loader2} from 'lucide-react';
-import {api, openAttachment, shortDate} from './api.js';
+import {api, openAttachment, rupeesExact, shortDate} from './api.js';
 
 const types = {
   project:'Project', quotation:'Quotation', boq:'BOQ', invoice:'Invoice',
-  retention:'Retention', claim:'Progress claim', scan:'Scanned document'
+  retention:'Retention', claim:'Progress claim', supplierBill:'Supplier bill', operatingBill:'Operating bill',
+  supplierPayment:'Supplier payment', clientPayment:'Client payment', officePayment:'Office payment', pettyPayment:'Petty cash payment',
+  projectPayment:'Direct project payment', siteReport:'Site report',
+  vehicle:'Vehicle', fuel:'Fuel record', maintenance:'Vehicle maintenance', vehicleDocument:'Vehicle compliance',
+  vehicleRenewal:'Vehicle renewal', scan:'Scanned document'
 };
 const initialFilters = {type:'',companyId:'',project:'',status:'',from:'',to:''};
 const empty = {records:[],scans:[],hasMore:false,page:1};
@@ -22,7 +26,7 @@ export default function DocumentSearch({open,onClose,companies=[],onEmployeeSear
   const text = term.trim();
   const scansOnly = filters.type==='scan';
   const minimum = scansOnly?3:2;
-  const ready = text.length>=minimum || (Boolean(project) && !text);
+  const ready = text.length>=minimum || (!scansOnly && Boolean(project) && !text);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -55,10 +59,12 @@ export default function DocumentSearch({open,onClose,companies=[],onEmployeeSear
       const fields = Object.entries(filters).filter(([,value])=>value.trim());
       const params = new URLSearchParams([['q',text],['page',String(page)],...fields]);
       if (project) params.set('projectId',String(project.id));
-      const includeScans = !project && text.length>=3 && (scansOnly || fields.length===0);
+      const includeScans = text.length>=3 && (scansOnly || (!filters.type && !filters.status));
+      const scanParams = new URLSearchParams(params);
+      for (const key of ['page','type','status']) scanParams.delete(key);
       const [records,scans] = await Promise.allSettled([
         scansOnly ? null : api('/search?' + params),
-        includeScans && page===1 ? api('/uploads/search/documents?q=' + encodeURIComponent(text)) : null
+        includeScans && page===1 ? api('/uploads/search/documents?' + scanParams) : null
       ]);
       if (!active) return;
       setFound(previous => ({
@@ -75,10 +81,11 @@ export default function DocumentSearch({open,onClose,companies=[],onEmployeeSear
   if (!open) return null;
   const update = (key,value) => {
     setFound(empty); setPage(1); setError('');
-    setFilters(current=>key==='type'&&value==='scan'?{...initialFilters,type:value}:{...current,[key]:value});
+    setFilters(current=>key==='type'&&value==='scan'?{...current,type:value,status:''}:{...current,[key]:value});
   };
   const openRecord = row => {
-    localStorage.setItem('gkuc:company-id',String(row.companyId));
+    const company = row.targetCompanyId || row.companyId;
+    if (company) localStorage.setItem('gkuc:company-id',String(company));
     window.location.assign(row.path);
   };
 
@@ -98,18 +105,18 @@ export default function DocumentSearch({open,onClose,companies=[],onEmployeeSear
           <div className="docsearch-filters">
             <label>Record type<select value={filters.type} onChange={event=>update('type',event.target.value)}>
               <option value="">{project?'All linked records':'All records and scans'}</option>
-              {Object.entries(types).filter(([key])=>!project||!['project','scan'].includes(key)).map(([key,label])=><option key={key} value={key}>{label}</option>)}
+              {Object.entries(types).filter(([key])=>!project||key!=='project').map(([key,label])=><option key={key} value={key}>{label}</option>)}
             </select></label>
-            {!scansOnly && <>
+            <>
               <label>Company<select value={filters.companyId} onChange={event=>update('companyId',event.target.value)}>
                 <option value="">All companies</option>
                 {companies.map(company=><option key={company.id} value={company.id}>{company.name}</option>)}
               </select></label>
               <label>Project<input value={filters.project} maxLength={180} onChange={event=>update('project',event.target.value)} /></label>
-              <label>Status<input value={filters.status} maxLength={40} onChange={event=>update('status',event.target.value)} /></label>
+              {!scansOnly && <label>Status<input value={filters.status} maxLength={40} onChange={event=>update('status',event.target.value)} /></label>}
               <label>From<input type="date" value={filters.from} onChange={event=>update('from',event.target.value)} /></label>
               <label>To<input type="date" value={filters.to} onChange={event=>update('to',event.target.value)} /></label>
-            </>}
+            </>
             {onEmployeeSearch && <button type="button" className="secondary" onClick={()=>{onClose();onEmployeeSearch();}}>Search employee register</button>}
           </div>
           {!ready && <p className="docsearch-hint">Enter at least {minimum} characters.</p>}
@@ -120,7 +127,7 @@ export default function DocumentSearch({open,onClose,companies=[],onEmployeeSear
             <span className="docsearch-icon"><FileText size={17} /></span>
             <span className="docsearch-body">
               <strong>{[row.reference,row.title!==row.reference&&row.title].filter(Boolean).join(' · ')}</strong>
-              <small>{[types[row.type],row.version!=null&&'Version '+row.version,row.company,row.status,row.recordDate&&shortDate(row.recordDate)].filter(Boolean).join(' · ')}</small>
+              <small>{[types[row.type],row.version!=null&&'Version '+row.version,row.company,row.status,row.amount!=null&&rupeesExact(row.amount),row.recordDate&&shortDate(row.recordDate)].filter(Boolean).join(' · ')}</small>
               <small>{[row.project!==row.title&&row.project,row.client].filter(Boolean).join(' · ')}</small>
             </span>
           </button>)}
@@ -131,7 +138,7 @@ export default function DocumentSearch({open,onClose,companies=[],onEmployeeSear
             <span className="docsearch-icon"><FileText size={17} /></span>
             <span className="docsearch-body">
               <strong>{row.title||row.filename}</strong>
-              <small>Scanned document · {row.filename}</small>
+              <small>{['Scanned document',row.filename,row.company,row.project,row.recordDate&&shortDate(row.recordDate)].filter(Boolean).join(' · ')}</small>
               {row.excerpt && <em>…{row.excerpt.replace(/\s+/g,' ').trim()}…</em>}
             </span>
           </button>)}

@@ -530,4 +530,4 @@ Any signed-in user can open **Reminders** and schedule a one-time reminder for t
 
 ## Find old records
 
-Open **Search SiteOps** from the top bar to look up projects, quotations, BOQs, invoices, retentions, progress claims, and scanned documents. Search by reference, client, project, or a few words from the record. Filter structured results by company, project, type, status, or date. In a project's **Commercial** tab, use **Find linked records** to browse the accessible records attached to that project.
+Open **Search SiteOps** from the top bar to look up projects, quotations, BOQs, invoices, retentions, progress claims, supplier and operating bills, payments, daily site reports, fleet records, and scanned documents. Search by reference, client, project, or a few words from the record. Filter records by company, project, type, status, or date. For scanned attachments, search the filename, title or extracted text and filter by upload date or linked company and project. In a project's **Commercial** tab, use **Find linked records** to browse the accessible records attached to that project.

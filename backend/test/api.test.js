@@ -6889,3 +6889,70 @@ test('global record search finds commercial records and enforces source permissi
   const selected=await call(owner,'GET','/receivables/invoices?companyId=2&record='+invoice.id);
   assert.equal(selected.body[0].id,invoice.id);
 });
+
+test('expanded search finds historical payables, site reports, fleet history and document metadata', async () => {
+  const owner=await login();
+  const role=await call(owner,'POST','/access/roles',{name:'Search limited test',permissions:['store.view']});
+  assert.equal(role.status,201);
+  const account={email:'search.limited.test@gkuc.lk',password:'AccessCheck!2026'};
+  assert.equal((await call(owner,'POST','/users',{...account,name:'Search Limited Test',roleId:role.body.id})).status,201);
+  const loginLimited=await call('','POST','/auth/login',account);
+  assert.equal(loginLimited.status,200);
+  const store=loginLimited.body.token;
+  const project=await call(owner,'POST','/projects',{companyId:2,name:'Searchwide Bridge',client:'QA Client',manager:'Project Manager',site:'QA site',stage:'Planning'});
+  assert.equal(project.status,201);
+  const projectId=project.body.id;
+  const [supplier]=await admin.query(`INSERT INTO ${testDatabase}.suppliers(name) VALUES ('Searchwide Aggregates')`);
+  const [invoice]=await admin.query(`INSERT INTO ${testDatabase}.supplier_invoices(company_id,supplier_id,invoice_no,amount,invoice_date,recorded_by)
+    VALUES (2,?,'SW-BILL-007',175,'2041-01-01',1)`,[supplier.insertId]);
+  const [payment]=await admin.query(`INSERT INTO ${testDatabase}.supplier_payments(invoice_id,payment_company_id,amount,paid_date,method,reference,created_by)
+    VALUES (?,1,175,'2041-01-02','Bank transfer','SW-PAY-008',1)`,[invoice.insertId]);
+  const [report]=await admin.query(`INSERT INTO ${testDatabase}.daily_reports(project_id,supervisor,report_date,workforce,work_completed,issue,weather,created_by)
+    VALUES (?,'QA Supervisor','2041-01-03',3,'Searchwide shuttering work','Drainage blockage','Rain',1)`,[projectId]);
+  const [vehicle]=await admin.query(`INSERT INTO ${testDatabase}.fleet(vehicle,registration,status,renewal_type,due_date)
+    VALUES ('Searchwide truck','SW-TRUCK-1','Available','Insurance','2042-01-01')`);
+  const vehicleId=vehicle.insertId;
+  const [fuel]=await admin.query(`INSERT INTO ${testDatabase}.fuel_records(vehicle_id,company_id,project_id,fuel_date,litres,cost,odometer,created_by)
+    VALUES (?,2,?,'2040-01-01',20,1000,100,1)`,[vehicleId,projectId]);
+  await admin.query(`INSERT INTO ${testDatabase}.fuel_records(vehicle_id,company_id,project_id,fuel_date,litres,cost,odometer,created_by) VALUES ?`,
+    [Array.from({length:50},(_,index)=>[vehicleId,2,projectId,'2041-01-01',20,1000,101+index,1])]);
+  const [maintenance]=await admin.query(`INSERT INTO ${testDatabase}.vehicle_maintenance(vehicle_id,company_id,project_id,service_date,description,cost,created_by)
+    VALUES (?,2,?,'2041-01-04','Searchwide bearing replacement',250,1)`,[vehicleId,projectId]);
+  const [scan]=await admin.query(`INSERT INTO ${testDatabase}.attachments(owner_type,owner_id,storage_key,url,filename,title,mime,size_bytes,uploaded_by)
+    VALUES ('report',?,'test/searchwide','/not-served','searchwide-scan.pdf','Searchwide QA record','application/pdf',100,1)`,[report.insertId]);
+  const search=async (token,params,endpoint='/search')=>{
+    const result=await call(token,'GET',endpoint+'?'+new URLSearchParams(params));
+    assert.equal(result.status,200,JSON.stringify(result.body));
+    return result.body.results;
+  };
+  const [bill]=await search(owner,{q:'SW-BILL-007',type:'supplierBill'});
+  assert.equal(bill.path,'/finance/supplier-invoices?record='+invoice.insertId);
+  const [paid]=await search(owner,{q:'SW-PAY-008',type:'supplierPayment',companyId:1});
+  assert.equal(paid.targetCompanyId,2);
+  assert.equal(paid.path,'/finance/supplier-invoices?record='+invoice.insertId+'&payment='+payment.insertId);
+  assert.deepEqual(await search(store,{q:'SW-PAY-008',type:'supplierPayment'}),[]);
+  const detailPath='/purchasing/invoices/'+invoice.insertId+'/payments/'+payment.insertId;
+  assert.equal((await call(owner,'GET',detailPath)).body.invoiceNo,'SW-BILL-007');
+  assert.equal((await call(store,'GET',detailPath)).status,403);
+  assert.equal((await search(owner,{q:'shuttering blockage',type:'siteReport'}))[0].id,report.insertId);
+  assert.equal((await search(owner,{q:'SW-TRUCK-1',type:'vehicle',companyId:2}))[0].id,vehicleId);
+  assert.equal((await search(owner,{q:'bearing replacement',type:'maintenance'}))[0].id,maintenance.insertId);
+  assert.equal((await search(owner,{q:'SW-TRUCK-1',type:'fuel',to:'2040-01-02'}))[0].id,fuel.insertId);
+  const standard=(await call(owner,'GET','/fleet/'+vehicleId)).body;
+  const linked=(await call(owner,'GET','/fleet/'+vehicleId+'?fuel='+fuel.insertId)).body;
+  assert.equal(linked.linkedFuelRecord.id,fuel.insertId);
+  assert.deepEqual(linked.running,standard.running);
+  assert.equal(linked.fuel.length,50);
+  const scanEndpoint='/uploads/search/documents';
+  const files=await search(owner,{q:'searchwide-scan',companyId:2,project:'Searchwide'},scanEndpoint);
+  assert.deepEqual(files.map(row=>row.id),[scan.insertId]);
+  assert.equal(files[0].source,null);
+  assert.deepEqual(await search(owner,{q:'searchwide-scan',companyId:1},scanEndpoint),[]);
+  assert.deepEqual(await search(store,{q:'searchwide-scan'},scanEndpoint),[]);
+  assert.equal((await call(owner,'PATCH','/access/roles/'+role.body.id+'/permissions',{permission:'finance.view',granted:true})).status,200);
+  const viewer=(await call('','POST','/auth/login',account)).body.token;
+  assert.equal((await search(viewer,{q:'SW-BILL-007',type:'supplierBill'}))[0].id,invoice.insertId);
+  assert.deepEqual(await search(viewer,{q:'SW-PAY-008',type:'supplierPayment'}),[]);
+  assert.equal((await call(viewer,'GET',detailPath)).status,403);
+
+});
