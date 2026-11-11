@@ -85,8 +85,38 @@ try{
     await page.getByRole('button',{name:'Record payment',exact:true}).click();await page.locator('[name=amount]').fill('1000');
     await page.getByRole('button',{name:'Record payment',exact:true}).last().click();
     assert.equal(data.claims[0].paidAmount,1000);
-    await page.goto(base+'/__progress?readonly');await page.getByLabel('Progress claim project',{exact:true}).selectOption('1');
+    data.projects.push({id:2,name:'Bridge project',billingRoute:'Progress claims'});
+    const certified=data.claims[0];
+    data.claims.push(
+      {...certified,id:2,reference:'IPA-QA-2',project_id:2,project:'Bridge project',status:'Submitted'},
+      {...certified,id:3,reference:'IPA-QA-3',paidAmount:certified.netPayable},
+      {...certified,id:4,reference:'IPA-QA-4',status:'Withdrawn'},
+      {...certified,id:5,reference:'IPA-QA-5',status:'Draft'}
+    );
+    certified.project='Drainage project';
+    await page.goto(base+'/__progress?readonly');
+    const projectFilter=page.getByLabel('Progress claim project',{exact:true});
+    await page.getByText('Ongoing progress claims',{exact:true}).waitFor();
+    await page.getByText('IPA-QA-2',{exact:true}).waitFor();
+    await page.getByText('Bridge project',{exact:true}).last().waitFor();
+    assert.equal(await projectFilter.inputValue(),'');
+    assert.equal(await page.getByText('IPA-QA-1',{exact:true}).count(),1);
+    assert.equal(await page.getByText('IPA-QA-5',{exact:true}).count(),1);
+    assert.equal(await page.getByText('IPA-QA-3',{exact:true}).count(),0);
+    assert.equal(await page.getByText('IPA-QA-4',{exact:true}).count(),0);
+    await page.getByRole('button',{name:'Open',exact:true}).first().click();
+    await page.getByRole('heading',{name:'IPA-QA-1 · Certified',exact:true}).waitFor();
+    await page.keyboard.press('Escape');
+    await projectFilter.selectOption('1');
+    await page.getByText('IPA-QA-3',{exact:true}).waitFor();
+    assert.equal(await page.getByText('IPA-QA-4',{exact:true}).count(),1);
+    assert.equal(await page.getByText('IPA-QA-2',{exact:true}).count(),0);
+    await projectFilter.selectOption('');
+    await page.getByText('IPA-QA-2',{exact:true}).waitFor();
     assert.equal(await page.getByRole('button',{name:'New interim application',exact:true}).count(),0);
+    await page.goto(base+'/__progress?readonly&record=3');
+    await page.getByRole('heading',{name:'IPA-QA-3 · Certified',exact:true}).waitFor();
+    assert.equal(await projectFilter.inputValue(),'1');
     assert.deepEqual(errors,[]);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.close();
     console.log(width+': BOQ approval, application, independent certification, optional invoice, partial payment and read-only controls passed');
   }

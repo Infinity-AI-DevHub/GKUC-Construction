@@ -32,7 +32,7 @@ const TAB_PERMISSIONS = {
   'Vehicle expenses':['finance.vehicleExpenses'], 'Expected outflows':['finance.expectedOutflows'],
   'VAT ledger':['finance.vatSchedules'], 'VAT clearance':['finance.vatClearance'],
   'Supplier statements':['finance.supplierStatements'], 'Daily cost review':['finance.costReview'],
-  'Budget monitoring':['finance.view'], Invoices:['finance.invoice'], Cheques:['finance.invoice'],
+  'Budget monitoring':['finance.view'], Invoices:['finance.view','finance.invoice'], Cheques:['finance.invoice'],
   Bonds:['finance.invoice'], 'Petty cash':['finance.manage'], Bills:['finance.manage'],
   'Credit cards':['finance.manage'], Expenses:['finance.manage','finance.dailyExpenses'], Income:['finance.manage'],
   'Supplier invoices':['finance.pay'], 'Credit purchases':['finance.pay'], Categories:['finance.manage']

@@ -132,15 +132,21 @@ export default function MyWorkToday({ user, can, go, data, companyId }) {
       <h2 id="my-work-title">My work today</h2><p>{user.role || 'Your role'} · live records you can act on</p></div></div>
     {error && <p className="form-error" role="alert">Some work queues could not load: {error}</p>}
     {clearanceError && !clearance && <p className="form-error" role="alert">{clearanceError}</p>}
-    {(queue.creditReminders||[]).map(reminder=><div key={reminder.id} className="my-work-checkout-warning" role="status">
-      <AlertTriangle size={24}/><div><strong>Credit payment reminder · {reminder.supplier}</strong>
-        <p>{reminder.invoiceNo} · {reminder.description}</p>
-        <p>LKR {Number(reminder.outstanding).toLocaleString('en-LK',{minimumFractionDigits:2})} outstanding · Due {reminder.dueDate} · {reminder.frequency}</p></div>
-      <button type="button" className="primary" onClick={async()=>{
-        try{await post(`/dashboard/credit-reminders/${reminder.id}/acknowledge`,{});await load();}
-        catch(failure){setError(failure.message);}
-      }}>{reminder.frequency==='Once'?'Acknowledge':`Remind me ${reminder.frequency.toLowerCase()}`}</button>
-    </div>)}
+    {!!queue.creditReminders?.length && <section className="credit-reminders" aria-labelledby="credit-reminders-title">
+      <h3 id="credit-reminders-title">Credit payment reminders</h3>
+      <div className="credit-reminders-grid">
+        {queue.creditReminders.map(reminder => <article key={reminder.id} className="credit-reminder-card">
+          <div className="credit-reminder-heading"><AlertTriangle size={18} aria-hidden="true"/><strong>{reminder.supplier}</strong></div>
+          <p>{[reminder.invoiceNo,reminder.description].filter(Boolean).join(' · ')}</p>
+          <p><strong>LKR {Number(reminder.outstanding).toLocaleString('en-LK',{minimumFractionDigits:2})}</strong> outstanding</p>
+          <p>Due {reminder.dueDate} · {reminder.frequency}</p>
+          <button type="button" className="primary" onClick={async()=>{
+            try { await post('/dashboard/credit-reminders/'+reminder.id+'/acknowledge',{}); await load(); }
+            catch (failure) { setError(failure.message); }
+          }}>{reminder.frequency==='Once'?'Acknowledge':'Remind me '+reminder.frequency.toLowerCase()}</button>
+        </article>)}
+      </div>
+    </section>}
     {checkoutAccess&&queue.missingCheckouts?.employeeCount>0&&<div className="my-work-checkout-warning" role="status">
       <AlertTriangle size={24}/><div><strong>{queue.missingCheckouts.employeeCount} employee{queue.missingCheckouts.employeeCount===1?'':'s'} not checked out</strong>
       <p>{queue.missingCheckouts.recordCount} overdue attendance record{queue.missingCheckouts.recordCount===1?'':'s'} need immediate review. Today is included after {queue.missingCheckouts.shiftEnd} (Sri Lanka time).</p></div>

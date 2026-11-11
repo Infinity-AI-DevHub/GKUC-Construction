@@ -40,10 +40,11 @@ export function ClientInvoices({ data, can, companyId }) {
   const openedFromLink = useRef(false);
   const [error, setError] = useState('');
 
+  const linkedRecord = Number(new URLSearchParams(window.location.search).get('record'));
   const load = () => Promise.all([
-    api(`/receivables/invoices?companyId=${companyId}`).then(rows => {
+    api('/receivables/invoices?' + new URLSearchParams({companyId,...(linkedRecord > 0 ? {record:linkedRecord} : {})})).then(rows => {
       setInvoices(rows);
-      const id = Number(new URLSearchParams(window.location.search).get('record'));
+      const id = linkedRecord;
       const invoice = rows.find(row => Number(row.id) === id);
       if (!openedFromLink.current && id && invoice) { openedFromLink.current = true; setSelected(invoice); }
     }).catch(() => setInvoices([])),
@@ -170,6 +171,8 @@ function InvoicePayments({ invoice, close, onPayment, canRecord }) {
   return <Modal title={`${invoice.reference} — payments`} close={close} wide>
     {numberEdit&&<NumberEdit type="RCPT" record={{id:numberEdit.id,reference:numberEdit.receiptNumber}} close={()=>setNumberEdit(null)} reload={async()=>setDetail(await api(`/receivables/invoices/${invoice.id}`))}/>}
     <div className="invoice-payments-dialog">
+    <div className="row-actions"><button type="button" className="secondary"
+      onClick={() => openDocument('/receivables/invoices/'+invoice.id+'/document')}>View invoice PDF</button></div>
     {error && <p className="form-error">{error}</p>}
     <WorkflowChecklist title="Client invoice & collection" steps={clientCollectionSteps(invoice, detail?.receipts || [])} />
     <div className="attendance-summary">

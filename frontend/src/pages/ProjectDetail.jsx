@@ -21,7 +21,7 @@ const TAB_GROUPS = [
 ];
 
 /** A project is a workspace, not a form dialog: every operational record converges here. */
-export default function ProjectDetail({ projectId, data, close, reload, can, companies, setCompanyId, navigate }) {
+export default function ProjectDetail({ projectId, data, close, reload, can, companies, setCompanyId, navigate, onSearchProject }) {
   const [tab, setTab] = useState(TABS[0]);
   const [project, setProject] = useState(null);
   const [adding, setAdding] = useState('');
@@ -54,7 +54,10 @@ export default function ProjectDetail({ projectId, data, close, reload, can, com
     {tab === 'Activity & issues' && <ProjectActivity project={project} can={can} refresh={refresh} onAdd={setAdding} onEditTask={setEditingTask} />}
     {tab === 'Reports' && <ProjectReports project={project} />}
     {tab === 'Programme' && <Programme project={project} can={can} refresh={refresh} onAdd={() => setAdding('milestone')} />}
-    {tab === 'Commercial' && <Commercial project={project} />}
+    {tab === 'Commercial' && <>
+      {onSearchProject && <div><button type="button" className="secondary" onClick={() => onSearchProject(project)}>Find linked records</button></div>}
+      <Commercial project={project} />
+    </>}
     {tab === 'Subcontractors' && <ProjectSubcontractors project={project} can={can} onAdd={()=>setAdding('rate')} onAward={()=>setAdding('award')} />}
     {tab === 'Team' && <Team project={project} can={can} onAdd={() => setAdding('team')} onManage={() => setAdding('manager')} />}
     {tab === 'Gallery' && <section className="workspace-surface"><ProjectGallery projectId={project.id} canManage={can.gallery} /></section>}

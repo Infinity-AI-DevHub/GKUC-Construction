@@ -116,6 +116,8 @@ router.get('/receivables/invoices', auth, permit('finance.view', 'finance.invoic
   async (req, res, next) => {
     try {
       const companyId = companyParam(req);
+      const recordId = Number(req.query.record);
+      const linked = Number.isSafeInteger(recordId) && recordId > 0;
       res.json(await query(`
         SELECT i.id,i.reference,i.project_id projectId,COALESCE(p.name,'No project') project,
                i.company_id companyId,i.client_id clientId,i.client,i.kind,i.document_type documentType,i.title,
@@ -131,7 +133,8 @@ router.get('/receivables/invoices', auth, permit('finance.view', 'finance.invoic
           LEFT JOIN projects p ON p.id=i.project_id
           JOIN users u ON u.id=i.created_by
          WHERE (i.project_id IS NULL OR p.active=1) ${companyId ? 'AND i.company_id=?' : ''}
-         ORDER BY i.id DESC LIMIT 300`, companyId ? [companyId] : []));
+         ORDER BY ${linked ? '(i.id=?) DESC,' : ''} i.id DESC LIMIT 300`,
+      [...(companyId ? [companyId] : []), ...(linked ? [recordId] : [])]));
     } catch (error) { next(error); }
   });
 

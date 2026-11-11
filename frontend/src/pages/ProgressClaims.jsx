@@ -11,22 +11,35 @@ export default function ProgressClaims({companyId,can}){
   const request=useRef(0);
   const load=()=>{const current=++request.current;return api(`/progress-claims?companyId=${companyId}`).then(result=>{if(current===request.current){setData(result);setError('');}}).catch(failure=>{if(current===request.current)setError(failure.message);});};
   useEffect(()=>{setProjectId('');setForm(null);setData({projects:[],schedules:[],claims:[]});load();return()=>{request.current++;};},[companyId]);useLiveList(load);
+  const openedFromLink=useRef(false);
+  useEffect(()=>{
+    const id=Number(new URLSearchParams(window.location.search).get('record'));
+    if (!id || openedFromLink.current) return;
+    const claim=data.claims.find(row=>Number(row.id)===id);
+    if (!claim) return;
+    openedFromLink.current=true;
+    if (data.projects.some(row=>Number(row.id)===Number(claim.project_id))) setProjectId(String(claim.project_id));
+    setForm({type:'detail',id:claim.id});
+  },[data]);
   const allowed=key=>can.has(key);
   const schedules=data.schedules.filter(row=>Number(row.project_id)===Number(projectId));
   const latest=schedules[0];
   const claims=data.claims.filter(row=>Number(row.project_id)===Number(projectId));
+  const visibleClaims=projectId?claims:data.claims.filter(row=>
+    row.status==='Draft'||row.status==='Submitted'||
+    (row.status==='Certified'&&Number(row.netPayable||0)>Number(row.paidAmount||0))
+  );
   const previous=claims.find(row=>row.status==='Certified')?.certified_items||[];
   const project=data.projects.find(row=>Number(row.id)===Number(projectId));
   return <div className="workspace-stack progress-claims">
     {error&&<p className="form-error" role="alert">{error}</p>}
     <div className="progress-claim-toolbar">
-      <label>Project<select aria-label="Progress claim project" value={projectId} onChange={event=>setProjectId(event.target.value)}><option value="">Choose project</option>{data.projects.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
+      <label>Project<select aria-label="Progress claim project" value={projectId} onChange={event=>setProjectId(event.target.value)}><option value="">All projects</option>{data.projects.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
       {project&&<span>Billing route: {project.billingRoute}</span>}
       {projectId&&allowed('qs.boq')&&<button className="secondary" onClick={()=>setForm({type:'schedule',base:latest})}>{latest?'Revise valuation BOQ':'Create valuation BOQ'}</button>}
       {latest&&latest.status!=='Draft'&&allowed('qs.boq')&&<button className="primary" onClick={()=>setForm({type:'application'})}>New interim application</button>}
     </div>
-    {projectId&&<>
-      <Table title="Valuation BOQ versions" columns={['Version','Source','Contract','Approval','Reference','Actions']} template="90px 140px minmax(140px,1fr) 160px minmax(160px,1fr) 180px">
+    {projectId&&<Table title="Valuation BOQ versions" columns={['Version','Source','Contract','Approval','Reference','Actions']} template="90px 140px minmax(140px,1fr) 160px minmax(160px,1fr) 180px">
         {schedules.map(row=><Row key={row.id} template="90px 140px minmax(140px,1fr) 160px minmax(160px,1fr) 180px">
           <strong>v{row.version_no}</strong><span>{row.source}</span><span>{row.contract_reference||'Not supplied'}</span><Badge>{row.status}</Badge><span>{row.agreement_reference||row.internal_reference||'Not client agreed'}</span>
           <div className="progress-schedule-actions">{row.id===latest?.id&&allowed('qs.approve')&&row.status!=='Client agreed'&&<button className="secondary" onClick={()=>setForm({type:'approval',schedule:row})}>{row.status==='Draft'?'Approve internally':'Record client agreement'}</button>}
@@ -35,17 +48,17 @@ export default function ProgressClaims({companyId,can}){
               <button type="button" className="icon-button" title={`Delete valuation BOQ v${row.version_no}`} aria-label={`Delete valuation BOQ v${row.version_no}`} onClick={()=>setForm({type:'delete-schedule',schedule:row})}><Trash2 size={16}/></button>}
           </div>
         </Row>)}
-      </Table>
-      <Table title="Interim applications and certificates" columns={['Application / period','Claimed','Certified payable','Received','Outstanding','Status','Documents']} template="minmax(210px,1fr) 135px 145px 135px 135px 110px 190px">
-        {claims.map(row=><Row key={row.id} template="minmax(210px,1fr) 135px 145px 135px 135px 110px 190px">
-          <span><strong>{row.reference}</strong><small>{row.period_from} to {row.period_to}</small></span><span>{rupees(row.submitted_amount)}</span>
+    </Table>}
+    <Table title={projectId?'Interim applications and certificates':'Ongoing progress claims'}
+      empty={projectId?'No progress claims for this project.':'No ongoing progress claims for this company.'} columns={['Application / period','Claimed','Certified payable','Received','Outstanding','Status','Documents']} template="minmax(210px,1fr) 135px 145px 135px 135px 110px 190px">
+        {visibleClaims.map(row=><Row key={row.id} template="minmax(210px,1fr) 135px 145px 135px 135px 110px 190px">
+          <span><strong>{row.reference}</strong>{!projectId&&<small>{row.project}</small>}<small>{row.period_from} to {row.period_to}</small></span><span>{rupees(row.submitted_amount)}</span>
           <span>{row.status==='Certified'?rupees(row.netPayable):'Not certified'}</span><span>{rupees(row.paidAmount||0)}</span><span>{rupees(Number(row.netPayable||0)-Number(row.paidAmount||0))}</span><span><Badge>{row.status}</Badge>{row.status==='Certified'&&<small>{row.approvedProofs||0} approved proof file(s)</small>}</span>
           <div className="row-actions"><button className="secondary" onClick={()=>setForm({type:'detail',id:row.id})}>Open</button>
             <button className="icon-button" title="Print interim payment application" aria-label={`Print application ${row.reference}`} onClick={()=>openPrintDocument(`/progress-claims/${row.id}/document?type=application`)}><Printer size={16}/></button>
             <button className="icon-button" title="Print application covering letter" aria-label={`Print letter ${row.reference}`} onClick={()=>openPrintDocument(`/progress-claims/${row.id}/document?type=letter`)}><Printer size={16}/></button>{row.status==='Certified'&&<button className="secondary" onClick={()=>openPrintDocument(`/progress-claims/${row.id}/document?type=payment-request`)}>Print payment request</button>}</div>
         </Row>)}
-      </Table>
-    </>}
+    </Table>
     {form?.type==='schedule'&&<ScheduleForm projectId={Number(projectId)} base={form.base} editing={form.editing} companyId={companyId} close={()=>setForm(null)} reload={load}/>}
     {form?.type==='delete-schedule'&&<FormModal title={`Delete valuation BOQ v${form.schedule.version_no}?`} close={()=>setForm(null)} label="Delete valuation BOQ" onSubmit={async values=>{
       await api(`/progress-claims/schedules/${form.schedule.id}`,{method:'DELETE',body:JSON.stringify({reason:values.reason})});await load();

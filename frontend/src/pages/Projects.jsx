@@ -15,7 +15,7 @@ const PROJECT_STAGES = ['Not started', 'Mid-way', 'Completed'];
 const healthTone = health => (health === 'Completed' ? 'completed' : health === 'On track' ? 'on-track' : health === 'At risk' ? 'at-risk' : 'watch');
 
 /** PID 2.4 / 2.5 — projects, their milestones, and the estimates the budget comes from. */
-export default function Projects({ user, data, reload, can, companyId, company, companies, setCompanyId, navigate }) {
+export default function Projects({ user, data, reload, can, companyId, company, companies, setCompanyId, navigate, onSearchProject }) {
   const tabs=TABS.filter(section=>section!=='Clients'||can.has('clients.view'));
   const [selectedTab, setTab] = useState(window.location.pathname.startsWith('/projects/clients/') ? 'Clients' : TABS.find(section=>slug(section)===decodeURIComponent(window.location.pathname.split('/')[2]||'')) || TABS[0]);
   const tab=tabs.includes(selectedTab)?selectedTab:tabs[0];
@@ -49,7 +49,7 @@ export default function Projects({ user, data, reload, can, companyId, company, 
     Variations: null, Inquiries: 'Log inquiry'
   }[tab];
 
-  if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} companies={companies} setCompanyId={setCompanyId} reload={reload} close={closeProject} navigate={navigate} />;
+  if (detailId) return <ProjectDetail projectId={detailId} data={data} can={can} companies={companies} setCompanyId={setCompanyId} reload={reload} close={closeProject} navigate={navigate} onSearchProject={onSearchProject} />;
 
   return <RecordScopeProvider scope={tab === 'Clients' ? { kind: 'shared' } : { kind: 'company', name: company?.name || 'the selected company', id: companyId }}><Page title="Projects" subtitle={`Monitor progress, cost, and site health for ${company?.name || 'the selected company'}.`}
     action={!showDeleted && can.projects ? actionFor : null} onAction={() => setOpen(tab)}
@@ -243,7 +243,7 @@ function BoqWording({ boq, close, reload }) {
   </FormModal>;
 }
 
-function BoqDetail({ boq, close, decide, can, edit }) {
+export function BoqDetail({ boq, close, decide, can = {}, edit }) {
   const groups = groupBoqItems(boq.items);
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}>
     <div className="modal">

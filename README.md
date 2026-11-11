@@ -527,3 +527,7 @@ Finance → Petty cash → **Merge accounts** combines selected active floats of
 Assign the editable **Fuel Recorder** role in Administration → Access Control to give a user a phone-friendly fuel submission form. Grant **Approve or reject fuel submissions** to the roles responsible for reviewing them. Staff with the relevant department access can open the shared queue in Fleet, Finance, Quantity Surveying, People or Projects.
 
 Any signed-in user can open **Reminders** and schedule a one-time reminder for themselves, other active users, or both. Recipients can see upcoming reminders on their Dashboard and receive an in-app notification when a reminder is due.
+
+## Find old records
+
+Open **Search SiteOps** from the top bar to look up projects, quotations, BOQs, invoices, retentions, progress claims, and scanned documents. Search by reference, client, project, or a few words from the record. Filter structured results by company, project, type, status, or date. In a project's **Commercial** tab, use **Find linked records** to browse the accessible records attached to that project.
