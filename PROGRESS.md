@@ -1483,3 +1483,9 @@ Finance and QS share the same add/edit/clear remark action and display saved rem
 - Approval by another authorized user posts one Fleet fuel record in a transaction with its odometer reading and any selected project cost or Fuel float payment. Rejections retain the reason. Project-linked submissions follow project company changes.
 - Added a Reminders page for all signed-in users. One-time reminders can target self, other active accounts, or both. Recipients see them on Dashboard, and due reminders appear in the notification bell and the live in-app banner.
 - Local verification on Node 20: backend suite passed 389 tests with 4 skipped, including private photo upload/read, review and posting, project company transfer, and reminder recipient visibility and delivery. Frontend suite passed 41 tests and the production build completed. Physical-phone camera behavior was not exercised. No production deployment or live database writes were performed.
+
+### 2026-11-12 — Long project titles in the detail header
+
+Moved the project action buttons, title and status badges, and delivery progress into the header's responsive layout. The header grows with the full title, wraps long words when needed, and stacks the delivery card below the title on small screens.
+
+Reproduced the overlap in a local Chrome layout fixture and verified the corrected header with short, long, and unbroken titles at 320, 390, 767, 768, 900, 1440, and 1971 pixels. The frontend tests, production build, and diff checks passed. No deployment or live database write.

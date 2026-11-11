@@ -120,14 +120,16 @@ function ProjectRateForm({projectId,close,reload}){const [subs,setSubs]=useState
 function ProjectHero({ project, close, onEdit, onDelete }) {
   return <section className="project-hero">
     <img src="/construction-site.jpg" alt="" className="project-hero-image" /><div className="project-hero-shade" />
-    <button className="project-back" onClick={close}><ArrowLeft size={17} />All projects</button>
-    {(onEdit || onDelete) && <div className="project-hero-actions">
-      {onDelete && <button className="secondary project-delete-button" onClick={onDelete}><Trash2 size={15} />Delete project</button>}
-      {onEdit && <button className="secondary project-edit-button" onClick={onEdit}>Edit project</button>}
-    </div>}
+    <div className="project-hero-toolbar">
+      <button className="project-back" onClick={close}><ArrowLeft size={17} />All projects</button>
+      {(onEdit || onDelete) && <div className="project-hero-actions">
+        {onDelete && <button className="secondary project-delete-button" onClick={onDelete}><Trash2 size={15} />Delete project</button>}
+        {onEdit && <button className="secondary project-edit-button" onClick={onEdit}>Edit project</button>}
+      </div>}
+    </div>
     <div className="project-hero-content">
       <div className="project-kicker"><Badge tone={project.health === 'Completed' ? 'completed' : project.health === 'On track' ? 'on-track' : project.health === 'At risk' ? 'at-risk' : 'watch'}>{project.health}</Badge><span>{project.company} · {project.stage}</span></div>
-      <Badge tone={projectDeliveryStatus(project)==='Completed'?'completed':'watch'}>{projectDeliveryStatus(project)}</Badge><h1>{project.name}</h1><p><MapPin size={16} />{project.site}<span /><Building2 size={16} />{project.client}</p>
+      <Badge tone={projectDeliveryStatus(project)==='Completed'?'completed':'watch'}>{projectDeliveryStatus(project)}</Badge><h1>{project.name}</h1><p><span><MapPin size={16} />{project.site}</span><span><Building2 size={16} />{project.client}</span></p>
     </div>
     <div className="project-hero-progress"><span>Overall delivery</span><strong>{project.progress}%</strong><Progress value={project.progress} /></div>
   </section>;
