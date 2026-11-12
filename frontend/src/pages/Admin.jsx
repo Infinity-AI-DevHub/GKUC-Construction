@@ -285,7 +285,7 @@ function UserForm({ close, reload }) {
   const employee=employees.find(row=>String(row.id)===employeeId);
   const term=search.trim().toLowerCase();
   const visible=employees.filter(row=>row===employee ||
-    [row.name,row.code,row.designation,row.workerType,row.payrollCategory].some(value=>String(value||'').toLowerCase().includes(term)));
+    [row.name,row.code,row.designation,row.workerType,row.payrollCategory,row.status].some(value=>String(value||'').toLowerCase().includes(term)));
 
   return <FormModal title="Add user" close={close} label="Create user" onSubmit={async values => {
     if (!ready) throw new Error('Load the employee profiles and access roles before creating a user.');
@@ -301,13 +301,13 @@ function UserForm({ close, reload }) {
     <p className="form-note wide">Link an existing employee or create a new profile. The access role controls what the user can do in SiteOps.</p>
     {error && <div className="wide"><p className="form-error" role="alert">{error}</p><button type="button" className="secondary" onClick={load}>Retry</button></div>}
     <label className="wide">Find an existing employee
-      <input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Name, employee code, trade or payroll category"/>
+      <input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Name, employee code, trade, payroll category or status"/>
     </label>
     <label className="wide">Employee profile
       <select name="employeeId" disabled={!ready} value={employeeId} onChange={event=>setEmployeeId(event.target.value)}>
         <option value="">{ready?'Create a new profile or match by email':'Loading employee profiles…'}</option>
         {visible.map(row=><option key={row.id} value={row.id}>
-          {[row.name,row.code,row.designation,row.payrollCategory].filter(Boolean).join(' · ')}
+          {[row.name,row.code,row.designation,row.payrollCategory,row.status].filter(Boolean).join(' · ')}
         </option>)}
       </select>
     </label>

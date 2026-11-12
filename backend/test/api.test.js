@@ -7000,13 +7000,15 @@ test('employee login accounts can link every payroll category and create a new s
   assert.ok(role);
   const password='EmployeeTest!2026';
   const categories=['Site labourer','Driver','Supervisor','Office employee','Custom'];
+  const statuses=['On leave','Suspended','Left','Active','Active'];
   for (const [index,payrollCategory] of categories.entries()) {
+    const status=statuses[index];
     const workerType=payrollCategory==='Office employee'?'Office':'Site';
     const code='LOGIN-TYPE-'+index, name='Account type QA '+index, email='login-type-'+index+'@example.com';
     const [profile]=await admin.query(`INSERT INTO ${testDatabase}.employees
-      (code,name,designation,worker_type,payroll_category,daily_rate) VALUES (?,?,?,?,?,?)`,[code,name,payrollCategory,workerType,payrollCategory,1500]);
+      (code,name,designation,worker_type,payroll_category,daily_rate,status) VALUES (?,?,?,?,?,?,?)`,[code,name,payrollCategory,workerType,payrollCategory,1500,status]);
     const options=(await call(owner,'GET','/users/employee-options')).body;
-    assert.ok(options.some(row=>row.id===profile.insertId&&row.payrollCategory===payrollCategory));
+    assert.ok(options.some(row=>row.id===profile.insertId&&row.payrollCategory===payrollCategory&&row.status===status));
     const created=await call(owner,'POST','/users',{name,email,password,roleId:role.id,employeeId:profile.insertId});
     assert.equal(created.status,201,JSON.stringify(created.body));
     assert.equal(created.body.employeeId,profile.insertId);
@@ -7014,11 +7016,12 @@ test('employee login accounts can link every payroll category and create a new s
     assert.equal(signedIn.status,200);
     assert.deepEqual((await call(signedIn.body.token,'GET','/auth/me')).body.user.permissions,[]);
     assert.equal((await call(signedIn.body.token,'GET','/users/employee-options')).status,403);
-    const [[linked]]=await admin.query(`SELECT worker_type,payroll_category,daily_rate,user_id FROM ${testDatabase}.employees WHERE id=?`,[profile.insertId]);
+    const [[linked]]=await admin.query(`SELECT worker_type,payroll_category,daily_rate,user_id,status FROM ${testDatabase}.employees WHERE id=?`,[profile.insertId]);
     assert.equal(linked.worker_type,workerType);
     assert.equal(linked.payroll_category,payrollCategory);
     assert.equal(Number(linked.daily_rate),1500);
     assert.equal(linked.user_id,created.body.id);
+    assert.equal(linked.status,status);
     assert.ok(!(await call(owner,'GET','/users/employee-options')).body.some(row=>row.id===profile.insertId));
   }
   const created=await call(owner,'POST','/users',{
