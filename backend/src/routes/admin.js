@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { audit, getOne, hashPassword, pool, query, transaction, verifyPassword } from '../db.js';
 import { auth, can, fail, permissionsFor, permit, validate, wrap } from '../lib/http.js';
+import { PAYROLL_CATEGORIES } from '../lib/payroll-policy.js';
 import { PRIVILEGED_KEYS } from '../lib/permissions.js';
 import { passwordProblems, strongPassword } from '../lib/passwords.js';
 import { runAlertScan } from '../alerts.js';
@@ -148,7 +149,7 @@ router.get('/users/roles', auth, permit('admin.users', 'admin.roles'), wrap(asyn
   res.json(await query('SELECT id,name,description FROM roles ORDER BY is_system DESC, name'))));
 
 router.get('/users/employee-options', auth, permit('admin.users'), wrap(async (_req, res) =>
-  res.json(await query("SELECT id,code,name,email FROM visible_employees WHERE user_id IS NULL AND status='Active' ORDER BY name"))));
+  res.json(await query("SELECT id,code,name,email,designation,worker_type workerType,payroll_category payrollCategory FROM visible_employees WHERE user_id IS NULL AND status='Active' ORDER BY name,code"))));
 
 router.get('/users/employee-links', auth, permit('admin.users'), wrap(async (_req, res) =>
   res.json(await query('SELECT id,code,name,user_id userId,status FROM visible_employees ORDER BY name'))));
@@ -193,7 +194,9 @@ router.post('/users', auth, permit('admin.users'), validate(z.object({
   password: strongPassword,
   roleId: z.number().int().positive(),
   employeeId: z.number().int().positive().optional(),
-  employmentStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  employmentStartDate: z.string().date().optional(),
+  workerType: z.enum(['Office','Site']).optional(),
+  payrollCategory: z.enum(PAYROLL_CATEGORIES).optional()
 })), wrap(async (req, res) => {
   const body = req.body;
   const role = await getOne('SELECT id,name FROM roles WHERE id=?', [body.roleId]);
@@ -213,10 +216,12 @@ router.post('/users', auth, permit('admin.users'), validate(z.object({
     if (employeeId) {
       await connection.query('UPDATE employees SET user_id=? WHERE id=?', [result.insertId, employeeId]);
     } else {
+      const workerType = body.workerType || 'Office';
+      const payrollCategory = body.payrollCategory || (workerType==='Site'?'Site labourer':'Office employee');
       const [employee] = await connection.query(`INSERT INTO employees
         (code,name,email,user_id,designation,join_date,worker_type,payroll_category)
-        VALUES (?,?,?,?,?,?,'Office','Office employee')`,
-      [`USR-${result.insertId}`, body.name, body.email.toLowerCase(), result.insertId, role.name, body.employmentStartDate || null]);
+        VALUES (?,?,?,?,?,?,?,?)`,
+      [`USR-${result.insertId}`, body.name, body.email.toLowerCase(), result.insertId, role.name, body.employmentStartDate || null, workerType, payrollCategory]);
       employeeId = employee.insertId;
       await audit(connection, req.user.id, 'CREATE', 'employee', employeeId, null, { name: body.name, userId: result.insertId }, req.ip);
     }

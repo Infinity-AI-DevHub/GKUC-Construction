@@ -6993,3 +6993,39 @@ test('expanded search finds historical payables, site reports, fleet history and
   assert.equal((await call(viewer,'GET',detailPath)).status,403);
 
 });
+
+test('employee login accounts can link every payroll category and create a new site profile', async () => {
+  const owner=await login();
+  const role=(await call(owner,'GET','/users/roles')).body.find(row=>row.name==='Employee');
+  assert.ok(role);
+  const password='EmployeeTest!2026';
+  const categories=['Site labourer','Driver','Supervisor','Office employee','Custom'];
+  for (const [index,payrollCategory] of categories.entries()) {
+    const workerType=payrollCategory==='Office employee'?'Office':'Site';
+    const code='LOGIN-TYPE-'+index, name='Account type QA '+index, email='login-type-'+index+'@example.com';
+    const [profile]=await admin.query(`INSERT INTO ${testDatabase}.employees
+      (code,name,designation,worker_type,payroll_category,daily_rate) VALUES (?,?,?,?,?,?)`,[code,name,payrollCategory,workerType,payrollCategory,1500]);
+    const options=(await call(owner,'GET','/users/employee-options')).body;
+    assert.ok(options.some(row=>row.id===profile.insertId&&row.payrollCategory===payrollCategory));
+    const created=await call(owner,'POST','/users',{name,email,password,roleId:role.id,employeeId:profile.insertId});
+    assert.equal(created.status,201,JSON.stringify(created.body));
+    assert.equal(created.body.employeeId,profile.insertId);
+    const signedIn=await call('','POST','/auth/login',{email,password});
+    assert.equal(signedIn.status,200);
+    assert.deepEqual((await call(signedIn.body.token,'GET','/auth/me')).body.user.permissions,[]);
+    assert.equal((await call(signedIn.body.token,'GET','/users/employee-options')).status,403);
+    const [[linked]]=await admin.query(`SELECT worker_type,payroll_category,daily_rate,user_id FROM ${testDatabase}.employees WHERE id=?`,[profile.insertId]);
+    assert.equal(linked.worker_type,workerType);
+    assert.equal(linked.payroll_category,payrollCategory);
+    assert.equal(Number(linked.daily_rate),1500);
+    assert.equal(linked.user_id,created.body.id);
+    assert.ok(!(await call(owner,'GET','/users/employee-options')).body.some(row=>row.id===profile.insertId));
+  }
+  const created=await call(owner,'POST','/users',{
+    name:'New Site Profile QA',email:'new-site-profile@example.com',password,roleId:role.id,
+    workerType:'Site',payrollCategory:'Driver',employmentStartDate:'2026-11-01'
+  });
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const [[profile]]=await admin.query(`SELECT worker_type,payroll_category,DATE_FORMAT(join_date,'%Y-%m-%d') startDate FROM ${testDatabase}.employees WHERE id=?`,[created.body.employeeId]);
+  assert.deepEqual({...profile},{worker_type:'Site',payroll_category:'Driver',startDate:'2026-11-01'});
+});

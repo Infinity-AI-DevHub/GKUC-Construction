@@ -1522,3 +1522,9 @@ Verified the overview, project filter, detail action, and full claim workflow in
 QS can select the employee once, then add BOQ items with individual hours and optional quotation recovery. The form displays item costs and prevents submitting more than the available worked hours. Each allocation uses the existing daily-cost line contract so Finance receives separate BOQ costs and the server remains authoritative.
 
 Chrome fixtures at 390px and 1440px verified two allocations from one employee block, exact LKR 880.00 and LKR 1,320.00 previews, over-allocation prevention, and the submitted line payload. Two labour calculation tests, the focused returned-manpower API test, 41 frontend tests, the production build and diff checks passed. No deployment or live database writes.
+
+### 2026-11-12 — Login setup for any employee type
+
+Administration Add user now searches active, unlinked employee profiles by name, code, trade, type or payroll category, fills the selected profile's name and email, and keeps account permissions independent of HR classification. New profiles can be created as Office or Site with the chosen payroll category. The initial Employee access role has no module grants and is editable in Access Control.
+
+Verified login and preserved payroll settings across all five payroll categories, creation of a new Site/Driver profile, and role authorization. Backend suite passed 392 tests with four skipped. Frontend tests (41), production build, and Chrome account creation and relinking at 390px and 1440px passed. No deployment or live database writes.

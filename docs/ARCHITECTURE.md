@@ -663,3 +663,7 @@ Search keeps query, filters and scroll in the browser session and saves named fi
 ### Employee labour allocation entry
 
 In QS Daily Cost, an employee labour block shares the employee, completed tasks, classification, description and receipt reference. It can contain multiple BOQ allocations, each with its own hours and optional quotation recovery. The form previews each allocation using the saved HR day basis and existing reservations, and submits one existing daily-cost API line per allocation. The server recalculates and validates the allocations before accepting the sheet.
+
+### Employee login setup
+
+Administration → Add user searches eligible existing employee profiles by name, code, trade and payroll category. Linking uses the selected profile ID and keeps its employment and pay settings. For a new profile, the existing account creation endpoint accepts the Office/Site type and a payroll category. Legacy requests without those fields retain the Office defaults. Access roles remain independent of employee type and payroll category. The initial Employee access role has no module grants and can be edited through Access Control.
