@@ -1528,3 +1528,9 @@ Chrome fixtures at 390px and 1440px verified two allocations from one employee b
 Administration Add user now searches active, unlinked employee profiles by name, code, trade, type or payroll category, fills the selected profile's name and email, and keeps account permissions independent of HR classification. New profiles can be created as Office or Site with the chosen payroll category. The initial Employee access role has no module grants and is editable in Access Control.
 
 Verified login and preserved payroll settings across all five payroll categories, creation of a new Site/Driver profile, and role authorization. Backend suite passed 392 tests with four skipped. Frontend tests (41), production build, and Chrome account creation and relinking at 390px and 1440px passed. No deployment or live database writes.
+
+### 2026-11-12 — Show all employment statuses in Add user
+
+Administration Add user lists unlinked profiles from the current employee register regardless of employment status. The options show and can be searched by status. Account creation keeps the employee's existing status and access role selection remains explicit.
+
+The two focused account API tests passed, including listing, linking and login for Active, On leave, Suspended and Left profiles. Chrome account flows passed at 390px and 1440px, as did 41 frontend tests, the production build and diff checks. No deployment or live database writes.

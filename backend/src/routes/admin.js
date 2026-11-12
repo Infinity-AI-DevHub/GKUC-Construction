@@ -149,7 +149,7 @@ router.get('/users/roles', auth, permit('admin.users', 'admin.roles'), wrap(asyn
   res.json(await query('SELECT id,name,description FROM roles ORDER BY is_system DESC, name'))));
 
 router.get('/users/employee-options', auth, permit('admin.users'), wrap(async (_req, res) =>
-  res.json(await query("SELECT id,code,name,email,designation,worker_type workerType,payroll_category payrollCategory FROM visible_employees WHERE user_id IS NULL AND status='Active' ORDER BY name,code"))));
+  res.json(await query("SELECT id,code,name,email,designation,worker_type workerType,payroll_category payrollCategory,status FROM visible_employees WHERE user_id IS NULL ORDER BY name,code"))));
 
 router.get('/users/employee-links', auth, permit('admin.users'), wrap(async (_req, res) =>
   res.json(await query('SELECT id,code,name,user_id userId,status FROM visible_employees ORDER BY name'))));

@@ -23,7 +23,7 @@ try{
       let body=url.pathname.endsWith('employee-links')?[{id:1,name:'Old Profile',code:'EMP-1',userId:7,status:'Active'},{id:2,name:'Existing HR Profile',code:'EMP-2',userId:null,status:'Active'}]:[{id:7,name:'Existing Account',email:'account@example.com'}];
       if(url.pathname.endsWith('/users/roles')) body=[{id:1,name:'Employee'}];
       if(url.pathname.endsWith('/users/employee-options')) body=[
-        {id:3,name:'Existing Labourer',code:'EMP-3',designation:'Mason',workerType:'Site',payrollCategory:'Site labourer'},
+        {id:3,name:'Existing Labourer',code:'EMP-3',designation:'Mason',workerType:'Site',payrollCategory:'Site labourer',status:'On leave'},
         {id:4,name:'Existing Driver',code:'EMP-4',workerType:'Site',payrollCategory:'Driver'}
       ];
       if(mode==='create'&&route.request().method()==='POST'){
@@ -36,7 +36,8 @@ try{
     await page.goto('http://127.0.0.1:'+server.httpServer.address().port+'/__link?'+mode);
     if(mode==='create'){
       await page.getByRole('button',{name:'Add user'}).click();
-      await page.getByLabel('Find an existing employee').fill('labourer');
+      await page.getByLabel('Find an existing employee').fill('On leave');
+      await page.getByRole('option',{name:/Existing Labourer.*On leave/}).waitFor({state:'attached'});
       await page.getByLabel('Employee profile').selectOption('3');
       assert.equal(await page.getByLabel('Full name').inputValue(),'Existing Labourer');
       assert.equal(await page.getByLabel('Payroll category').count(),0);
