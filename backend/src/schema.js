@@ -3163,6 +3163,14 @@ async function seedAccessControl() {
       "INSERT INTO role_permissions(role_id,permission_key) VALUES (?,'fuel.submit')", [role.insertId]
     );
   });
+  await transaction(async connection => {
+    const [migration] = await connection.execute(
+      "INSERT IGNORE INTO permission_catalogue_migrations(permission_key) VALUES ('employee-login-role-v1')"
+    );
+    if (migration.affectedRows) await connection.execute(
+      "INSERT IGNORE INTO roles(name,description) VALUES ('Employee','Basic sign-in for any employee type. Add permissions in Access Control as needed.')"
+    );
+  });
   for (const role of systemRoles) {
     for (const permission of PERMISSIONS) {
       await query('INSERT IGNORE INTO role_permissions (role_id,permission_key) VALUES (?,?)', [role.id, permission.key]);

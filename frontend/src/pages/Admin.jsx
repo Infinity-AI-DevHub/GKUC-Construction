@@ -270,27 +270,60 @@ function AuditLog() {
 }
 
 function UserForm({ close, reload }) {
-  const [roles, setRoles] = useState([]);
-  const [employees, setEmployees] = useState([]);
-  useEffect(() => { api('/users/employee-options').then(setEmployees).catch(() => setEmployees([])); }, []);
-  useEffect(() => { api('/users/roles').then(setRoles).catch(() => setRoles([])); }, []);
+  const [roles,setRoles] = useState([]);
+  const [employees,setEmployees] = useState([]);
+  const [employeeId,setEmployeeId] = useState('');
+  const [search,setSearch] = useState('');
+  const [workerType,setWorkerType] = useState('Office');
+  const [category,setCategory] = useState('Office employee');
+  const [error,setError] = useState('');
+  const [ready,setReady] = useState(false);
+  const load = () => Promise.all([api('/users/employee-options'),api('/users/roles')]).then(([profiles,accessRoles])=>{
+    setEmployees(profiles);setRoles(accessRoles);setReady(true);setError('');
+  }).catch(failure=>setError(failure.message));
+  useEffect(()=>{load();},[]);
+  const employee=employees.find(row=>String(row.id)===employeeId);
+  const term=search.trim().toLowerCase();
+  const visible=employees.filter(row=>row===employee ||
+    [row.name,row.code,row.designation,row.workerType,row.payrollCategory].some(value=>String(value||'').toLowerCase().includes(term)));
+
   return <FormModal title="Add user" close={close} label="Create user" onSubmit={async values => {
-    await post('/users', {
-      name: values.name, email: values.email, password: values.password, roleId: Number(values.roleId),
-      ...(values.employeeId ? { employeeId: Number(values.employeeId) } : {}),
-      ...(values.employmentStartDate ? { employmentStartDate: values.employmentStartDate } : {})
+    if (!ready) throw new Error('Load the employee profiles and access roles before creating a user.');
+    await post('/users',{
+      name:values.name,email:values.email,password:values.password,roleId:Number(values.roleId),
+      ...(employee ? {employeeId:Number(employee.id)} : {
+        workerType,payrollCategory:category,
+        ...(values.employmentStartDate ? {employmentStartDate:values.employmentStartDate} : {})
+      })
     });
     await reload();
   }}>
-    <p className="form-note wide">Creates system access and an employee profile. Select an existing employee to avoid creating another profile. For a new employee, HR should complete their personal details and pay settings in People before payroll.</p>
-    <SelectField name="employeeId" label="Employee profile" required={false} wide options={[
-      ['', 'Create a new profile (or match the same email)'], ...employees.map(employee => [employee.id, `${employee.name} — ${employee.code}`])
-    ]} />
-    <Field name="name" label="Full name" />
-    <Field name="email" label="Email" type="email" />
-    <Field name="employmentStartDate" label="Employment start date (new profile only)" type="date" required={false} />
+    <p className="form-note wide">Link an existing employee or create a new profile. The access role controls what the user can do in SiteOps.</p>
+    {error && <div className="wide"><p className="form-error" role="alert">{error}</p><button type="button" className="secondary" onClick={load}>Retry</button></div>}
+    <label className="wide">Find an existing employee
+      <input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Name, employee code, trade or payroll category"/>
+    </label>
+    <label className="wide">Employee profile
+      <select name="employeeId" disabled={!ready} value={employeeId} onChange={event=>setEmployeeId(event.target.value)}>
+        <option value="">{ready?'Create a new profile or match by email':'Loading employee profiles…'}</option>
+        {visible.map(row=><option key={row.id} value={row.id}>
+          {[row.name,row.code,row.designation,row.payrollCategory].filter(Boolean).join(' · ')}
+        </option>)}
+      </select>
+    </label>
+    <Field key={'name-'+employeeId} name="name" label="Full name" defaultValue={employee?.name} />
+    <Field key={'email-'+employeeId} name="email" label="Login email" type="email" defaultValue={employee?.email||''} />
+    {!employee && <>
+      <label>Employee type<select value={workerType} onChange={event=>{
+        const type=event.target.value;setWorkerType(type);setCategory(type==='Site'?'Site labourer':'Office employee');
+      }}><option value="Office">Office employee</option><option value="Site">Site worker</option></select></label>
+      <label>Payroll category<select value={category} onChange={event=>setCategory(event.target.value)}>
+        {['Office employee','Site labourer','Driver','Supervisor','Custom'].map(value=><option key={value}>{value}</option>)}
+      </select></label>
+      <Field name="employmentStartDate" label="Employment start date (new profile)" type="date" required={false} />
+    </>}
     <TemporaryPasswordField />
-    <SelectField name="roleId" label="Role" options={roles.map(role => [role.id, role.name])} />
+    <SelectField name="roleId" label="Access role" options={[[ '', 'Choose access role…'],...roles.map(role=>[role.id,role.name])]} />
   </FormModal>;
 }
 
