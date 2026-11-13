@@ -567,7 +567,7 @@ function PaymentForm({ invoice, invoices, companyId, close, reload }) {
       </div>)}<strong>Total payment: {rupees(total)}</strong>
     </fieldset>
     <label>Payment source<select value={source} onChange={event=>setSource(event.target.value)}><option>Direct</option><option>Petty cash</option></select></label>
-    {source==='Petty cash'?<><SelectField name="floatId" label="Petty cash account" options={floats.filter(row=>row.active!==0).map(row=>[row.id,`${row.name} · ${rupees(row.balance)} available`])} />{floatError&&<p className="form-error">{floatError}</p>}</>:<SelectField name="method" label="Method" options={payMethods.filter(method=>method!=='Cheque')} />}
+    {source==='Petty cash'?<><SelectField name="floatId" label="Petty cash account" options={floats.filter(row=>row.active!==0).map(row=>[row.id,`${row.name} · balance ${rupees(row.balance)}`])} />{floatError&&<p className="form-error">{floatError}</p>}</>:<SelectField name="method" label="Method" options={payMethods.filter(method=>method!=='Cheque')} />}
     <Field name="paidDate" label="Paid on" type="date" defaultValue={todayInput()} />
     <Field name="reference" label="Reference" required={false} />
     <Field name="bankChangeReason" label="If supplier bank details changed recently, how were they independently verified?" required={false} wide />

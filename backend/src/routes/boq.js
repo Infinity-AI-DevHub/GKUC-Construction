@@ -520,7 +520,7 @@ router.post('/cost-control/daily-sheets', auth, permit("qs.costControl"), valida
             if (used) throw costError('That Fleet fuel record is already on a daily cost sheet.', 409);
           } else {
             if (!line.fuelFloatId || !line.quantity || !line.odometer)
-              throw costError('A new station fuel purchase needs a funded fuel float, litres and vehicle odometer.');
+              throw costError('A new station fuel purchase needs an active fuel float, litres and vehicle odometer.');
             const [[fuelFloat]] = await connection.execute(`SELECT active.id FROM petty_cash_floats old JOIN petty_cash_floats active ON active.id=COALESCE(old.merged_into_id,old.id)
               WHERE old.id=? AND active.account_type='Fuel' AND active.active=1`,[line.fuelFloatId]);
             if (!fuelFloat) throw costError('Choose an active shared fuel float.');
@@ -608,9 +608,6 @@ router.post('/cost-control/daily-sheets/:id/review', auth, permit("finance.costR
               WHERE old.id=? AND active.account_type='Fuel' AND active.active=1 FOR UPDATE`,[line.fuel_float_id]);
             if (!fuelFloat)
               throw costError('The chosen shared fuel float is no longer active. Return the sheet to QS.',409);
-            const [[{balance}]] = await connection.execute('SELECT COALESCE(SUM(amount),0) balance FROM petty_cash_entries WHERE float_id=?',[fuelFloat.id]);
-            if (Number(balance)+.001<Number(line.amount))
-              throw costError(`${fuelFloat.name} has only LKR ${Number(balance).toLocaleString('en-LK')} available. Top up the fuel float or return this sheet.`,409);
             const [[vehicle]] = await connection.execute('SELECT vehicle,registration,driver,odometer FROM fleet WHERE id=? FOR UPDATE',[line.vehicle_id]);
             if (!vehicle || Number(line.odometer)<Number(vehicle.odometer))
               throw costError('The vehicle odometer changed since QS submitted this fuel purchase. Return the sheet for correction.',409);

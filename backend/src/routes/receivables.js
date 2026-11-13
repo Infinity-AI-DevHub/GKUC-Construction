@@ -444,6 +444,74 @@ router.post('/receivables/preview', auth, permit('finance.invoice'),
     } catch (error) { next(error); }
   });
 
+const invoiceDetailColumns = {
+  title:'title', placeOfSupply:'place_of_supply', deliveryDate:'delivery_date', paymentMode:'payment_mode',
+  buyerTin:'buyer_tin', buyerVatNumber:'buyer_vat_number', buyerAddress:'buyer_address', buyerPhone:'buyer_phone', notes:'notes'
+};
+const invoiceDetailOptions = ['supplierTin','supplierVatNumber','bankDetails','additionalNotes'];
+const draftInvoiceDetails = z.object({
+  title:z.string().trim().min(1).max(200),
+  placeOfSupply:z.string().trim().max(300), deliveryDate:z.string().date().or(z.literal('')),
+  paymentMode:z.enum(['','Cheque','Cash','Bank transfer','Card','Other']),
+  buyerTin:z.string().trim().max(100), buyerVatNumber:z.string().trim().max(100),
+  buyerAddress:z.string().trim().max(500), buyerPhone:z.string().trim().max(40),
+  notes:z.string().trim().max(1000), supplierTin:z.string().trim().max(100),
+  supplierVatNumber:z.string().trim().max(100), bankDetails:z.string().trim().max(2000),
+  additionalNotes:z.string().trim().max(2000)
+}).partial().strict();
+
+router.get('/receivables/invoices/:id/draft-details',auth,permit('finance.invoice'),async(req,res,next)=>{
+  try {
+    const row=await getOne('SELECT * FROM client_invoices WHERE id=?',[req.params.id]);
+    if (!row) throw fail(404,'That invoice was not found');
+    if (row.status!=='Draft') throw fail(409,'Only draft invoices can be edited.');
+    const options=invoiceOptions(row.invoice_options);
+    const {company}=await documentContext(getOne,row.company_id);
+    const supplier=options.presentation?.company||company;
+    const buyer=options.presentation?.client;
+    res.json({
+      ...Object.fromEntries(Object.entries(invoiceDetailColumns).map(([key,column])=>[key,row[column]??''])),
+      buyerTin:buyer?.tin||row.buyer_tin||'', buyerVatNumber:buyer?.vatNumber||row.buyer_vat_number||'',
+      buyerAddress:buyer?.billingAddress||row.buyer_address||'', buyerPhone:buyer?.phone||row.buyer_phone||'',
+      supplierTin:options.supplierTin??supplier.tin??'', supplierVatNumber:options.supplierVatNumber??supplier.vatNumber??'',
+      bankDetails:(options.bankDetails??(options.presentation?.bank ? [
+        options.presentation.bank.label,options.presentation.bank.bankName,options.presentation.bank.branch,
+        options.presentation.bank.accountName,options.presentation.bank.accountNumber,options.presentation.bank.swiftCode
+      ].filter(Boolean).join('\n') : supplier.bankDetails))||'',
+      additionalNotes:options.additionalNotes||''
+    });
+  } catch(error){next(error);}
+});
+
+router.patch('/receivables/invoices/:id/draft-details',auth,permit('finance.invoice'),validate(draftInvoiceDetails),async(req,res,next)=>{
+  try {
+    await transaction(async connection=>{
+      const [[row]]=await connection.execute('SELECT * FROM client_invoices WHERE id=? FOR UPDATE',[req.params.id]);
+      if (!row) throw fail(404,'That invoice was not found');
+      if (row.status!=='Draft') throw fail(409,'Only draft invoices can be edited.');
+      const before=invoiceOptions(row.invoice_options);
+      const options={...before};
+      const fields=Object.keys(req.body);
+      if (!fields.length) return;
+      for (const key of invoiceDetailOptions) if (key in req.body) options[key]=req.body[key];
+      const identity={buyerTin:'tin',buyerVatNumber:'vatNumber',buyerAddress:'billingAddress',buyerPhone:'phone'};
+      if (options.presentation?.client) {
+        const client={...options.presentation.client};
+        for (const [key,field] of Object.entries(identity)) if (key in req.body) client[field]=req.body[key];
+        options.presentation={...options.presentation,client};
+      }
+      const columns=fields.filter(key=>Object.hasOwn(invoiceDetailColumns,key));
+      const assignments=columns.map(key=>invoiceDetailColumns[key]+'=?');
+      await connection.execute('UPDATE client_invoices SET '+[...assignments,'invoice_options=?'].join(',')+' WHERE id=?',
+        [...columns.map(key=>req.body[key]||null),JSON.stringify(options),row.id]);
+      await audit(connection,req.user.id,'EDIT_DRAFT_DETAILS','client_invoice',row.id,
+        Object.fromEntries(fields.map(key=>[key,invoiceDetailColumns[key]?row[invoiceDetailColumns[key]]:before[key]??null])),req.body,req.ip);
+    });
+    publishChange('receivables',{});
+    res.status(204).end();
+  } catch(error){next(error);}
+});
+
 // Presentation can be changed without rewriting issued amounts or payment history.
 router.put('/receivables/invoices/:id/columns', auth, permit('finance.invoice'), validate(invoiceColumnsSchema), async (req, res, next) => {
   try {
@@ -531,7 +599,8 @@ router.post('/receivables/invoices/:id/issue', auth, permit('finance.invoice'),
       const invoice = await getOne('SELECT * FROM client_invoices WHERE id=?', [req.params.id]);
       if (!invoice) throw fail(404, 'That invoice was not found');
       if (invoice.status !== 'Draft') throw fail(409, 'That invoice has already been issued');
-      await query("UPDATE client_invoices SET status='Issued', issued_at=NOW() WHERE id=?", [req.params.id]);
+      const issued=await query("UPDATE client_invoices SET status='Issued', issued_at=NOW() WHERE id=? AND status='Draft'", [req.params.id]);
+      if (!issued.affectedRows) throw fail(409,'That invoice has already been issued');
       await audit(pool, req.user.id, 'ISSUE', 'client_invoice', req.params.id,
         { status: 'Draft' }, { status: 'Issued' }, req.ip);
       publishChange('receivables', {});
@@ -990,8 +1059,10 @@ router.post('/receivables/petty-cash/:id/entries', auth, permit('finance.manage'
             if(req.body.amount>remaining+.001)throw fail(400,`This worker’s daily salary rate is LKR ${money(dailyRate)}. LKR ${money(given)} has already been advanced on this date, so no more than LKR ${money(Math.max(0,remaining))} can be given.`);
           }
         }
-        const [[{balance}]]=await connection.execute('SELECT COALESCE(SUM(amount),0) balance FROM petty_cash_entries WHERE float_id=?',[req.params.id]);
-        if(signed<0&&Number(balance)+signed<-.001)throw fail(400,`The float only holds ${money(balance)}. Record a top-up before spending more.`);
+        if (req.body.kind === 'Return') {
+          const [[{balance}]] = await connection.execute('SELECT COALESCE(SUM(amount),0) balance FROM petty_cash_entries WHERE float_id=?',[req.params.id]);
+          if (Number(balance)+signed<-.001) throw fail(400,'Return an amount within the cash held in this float.');
+        }
         const [entry]=await connection.execute(
           `INSERT INTO petty_cash_entries (float_id,kind,amount,entry_date,description,category,project_id,employee_id,payee,recorded_by,company_id,client_ref,request_hash)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,

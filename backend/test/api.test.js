@@ -2526,7 +2526,7 @@ test('Finance review links station fuel once and charges reserve fuel to stock, 
   assert.equal(balance,4000,'review never charges the fuel float again');
   const newStation=await call(qs,'POST','/boq/cost-control/daily-sheets',{
     projectId:1,workDate:today(),lines:[{taskId,source:'Fuel',costType:'Expected',
-      description:'New tipper diesel purchase',amount:500,quantity:5,unit:'litres',
+      description:'New tipper diesel purchase',amount:4500,quantity:5,unit:'litres',
       vehicleId:vehicle.body.id,fuelOrigin:'Station',fuelFloatId:floatId,odometer:120}]
   });
   assert.equal(newStation.status,201,JSON.stringify(newStation.body));
@@ -2540,7 +2540,7 @@ test('Finance review links station fuel once and charges reserve fuel to stock, 
   floatId=destination.body.id;
   const newStationReview=await call(owner,'POST',`/boq/cost-control/daily-sheets/${newStation.body.id}/review`,{decision:'Approved'});
   assert.equal(newStationReview.status,200,JSON.stringify(newStationReview.body));
-  assert.equal(Number((await call(owner,'GET','/receivables/petty-cash?companyId=1')).body.find(row=>row.id===floatId).balance),3500,
+  assert.equal(Number((await call(owner,'GET','/receivables/petty-cash?companyId=1')).body.find(row=>row.id===floatId).balance),-500,
     'Finance approval posts the new station purchase once');
   const newFuelExpenses=(await call(owner,'GET','/finance/expenses?projectId=1')).body;
   assert.equal(newFuelExpenses.filter(row=>row.originType==='fuel_record'&&row.description==='New tipper diesel purchase').length,1);
@@ -2561,7 +2561,7 @@ test('Finance review links station fuel once and charges reserve fuel to stock, 
   assert.equal(Number(stocked.stock),20);
   const newExpenses=(await call(owner,'GET','/finance/expenses?projectId=1')).body;
   assert.equal(newExpenses.filter(row=>row.originType==='daily_cost_line'&&row.description==='Unexpected reserve diesel usage').length,1);
-  assert.equal(Number((await call(owner,'GET','/receivables/petty-cash?companyId=1')).body.find(row=>row.id===floatId).balance),3500);
+  assert.equal(Number((await call(owner,'GET','/receivables/petty-cash?companyId=1')).body.find(row=>row.id===floatId).balance),-500);
 });
 
 test('returned manpower costs can be corrected, but a day salary cannot be charged twice',async()=>{
@@ -2675,7 +2675,7 @@ test('invoice receipts cannot post twice and preserve the actual payment method'
   assert.equal(Number(posted[0].invoiceId), Number(invoice.body.id));
 });
 
-test('concurrent petty-cash spends cannot overdraw the float or duplicate project cost', async () => {
+test('petty cash spend can go negative and concurrent retries do not duplicate project cost', async () => {
   const owner = await login();
   const opened = await call(owner, 'POST', '/receivables/petty-cash', {
     name: `Audit float ${Date.now()}`, accountType: 'Office expenses', holderName: 'Finance desk', projectId: 1,
@@ -2685,11 +2685,16 @@ test('concurrent petty-cash spends cannot overdraw the float or duplicate projec
   const path = `/receivables/petty-cash/${opened.body.id}/entries`;
   assert.equal((await call(owner, 'POST', path, { kind: 'Top up', amount: 2000, entryDate: today(),
     description: 'Opening float' })).status, 201);
-  const spend = { kind: 'Spend', amount: 1500, entryDate: today(), description: `Audit fuel ${Date.now()}` };
+  const spend = { kind: 'Spend', amount: 2500, entryDate: today(), description: `Audit fuel ${Date.now()}`,clientRef:crypto.randomUUID() };
   const results = await Promise.all([1, 2].map(() => call(owner, 'POST', path, spend)));
-  assert.deepEqual(results.map(result => result.status).sort(), [201, 400]);
+  assert.deepEqual(results.map(result => result.status).sort(), [200, 201]);
   const entries = (await call(owner, 'GET', path)).body;
   assert.equal(entries.filter(row => row.kind === 'Spend' && row.description === spend.description).length, 1);
+  const balances=(await call(owner,'GET','/receivables/petty-cash')).body;
+  assert.equal(Number(balances.find(row=>row.id===opened.body.id).balance),-500);
+  assert.equal((await call(owner,'POST',path,{kind:'Return',amount:1,entryDate:today(),description:'No cash held to return'})).status,400);
+  assert.equal((await call(owner,'POST',path,{kind:'Top up',amount:700,entryDate:today(),description:'Settle the shortfall'})).status,201);
+  assert.equal(Number((await call(owner,'GET','/receivables/petty-cash')).body.find(row=>row.id===opened.body.id).balance),200);
   const expense = (await call(owner, 'GET', '/finance/expenses?projectId=1')).body
     .filter(row => row.description === `Petty cash — ${spend.description}`);
   assert.equal(expense.length, 1);
@@ -4191,7 +4196,7 @@ test('fleet fuel accepts optional float and litres without cash movements',async
   assert.equal((await call(owner,'GET',`/fleet/${created.body.id}`)).body.running.litresPer100Km,null);
 });
 
-test('fleet fuel draws one funded float movement and one project expense without double entry', async () => {
+test('fleet fuel draws one float movement below zero and one project expense without double entry', async () => {
   const owner = await login();
   const transport = await login('transport@gkuc.lk');
   const opened = await call(owner, 'POST', '/receivables/petty-cash', {
@@ -4219,19 +4224,16 @@ test('fleet fuel draws one funded float movement and one project expense without
   const path = `/fleet/${vehicle.body.id}/fuel`;
   const fuel = cost => ({ fuelFloatId: floatId, projectId: 1, fuelDate: today(), litres: 20,
     cost, odometer: 120, vendor: 'Test fuel station' });
-  const overdraw = await call(transport, 'POST', path, fuel(16000));
-  assert.equal(overdraw.status, 409);
-  assert.match(overdraw.body.error, /15,000/);
-  const saved = await call(transport, 'POST', path, fuel(12000));
+  const saved = await call(transport, 'POST', path, fuel(16000));
   assert.equal(saved.status, 201, JSON.stringify(saved.body));
 
   const ledger = await call(owner, 'GET', entriesPath);
   const linked = ledger.body.filter(row => row.fuelRecordId === saved.body.id);
   assert.equal(linked.length, 1);
   assert.equal(linked[0].vehicleId, vehicle.body.id);
-  assert.equal(Number(linked[0].amount), -12000);
+  assert.equal(Number(linked[0].amount), -16000);
   const floats = await call(owner, 'GET', '/receivables/petty-cash?companyId=1');
-  assert.equal(Number(floats.body.find(row => row.id === floatId).balance), 3000);
+  assert.equal(Number(floats.body.find(row => row.id === floatId).balance), -1000);
   const expenses = (await call(owner, 'GET', '/finance/expenses?projectId=1')).body;
   assert.equal(expenses.filter(row => row.originType === 'fuel_record' && row.description.includes('Float-linked test truck')).length, 1);
   assert.equal(expenses.filter(row => row.originType === 'petty_cash' && row.description.includes('Float-linked test truck')).length, 0);
@@ -4239,21 +4241,20 @@ test('fleet fuel draws one funded float movement and one project expense without
   const dailyFuel=daily.entries.filter(row=>row.reference===`Fleet fuel #${saved.body.id}`);
   assert.equal(dailyFuel.length,1,'Fleet, petty cash and project cost resolve to one daily payment');
   assert.equal(dailyFuel[0].payee,'Test fuel station');
-  assert.equal((await call(transport, 'POST', path, fuel(4000))).status, 409);
   const concurrent = await Promise.all([1, 2].map(() => call(transport, 'POST', path, {
     ...fuel(2000), odometer: 130
   })));
-  assert.deepEqual(concurrent.map(result => result.status).sort(), [201, 409]);
+  assert.deepEqual(concurrent.map(result => result.status).sort(), [201, 201]);
   const balanceAfter = (await call(owner, 'GET', '/receivables/petty-cash?companyId=1')).body
     .find(row => row.id === floatId).balance;
-  assert.equal(Number(balanceAfter), 1000);
+  assert.equal(Number(balanceAfter), -5000);
   const monthly=await call(transport,'GET',`/fleet/monthly-report?companyId=1&period=${today().slice(0,7)}`);
   assert.equal(monthly.status,200);
   const vehicleMonth=monthly.body.rows.find(row=>row.vehicleId===vehicle.body.id&&row.projectId===1);
-  assert.equal(vehicleMonth.fuelLitres,40);
-  assert.equal(vehicleMonth.fuelCost,14000);
+  assert.equal(vehicleMonth.fuelLitres,60);
+  assert.equal(vehicleMonth.fuelCost,20000);
   assert.equal(vehicleMonth.distanceKm,10);
-  assert.equal(vehicleMonth.costPerKm,1400);
+  assert.equal(vehicleMonth.costPerKm,2000);
 
   const otherCompany = await call(owner, 'POST', '/receivables/petty-cash', {
     companyId: 2, name: `Other company fuel ${Date.now()}`, accountType: 'Fuel',
@@ -6524,7 +6525,7 @@ test('supplier batch payments settle selected credits through direct or petty ca
   const saved=await call(finance,'POST','/purchasing/invoices',{companyId:1,supplierId:supplier.body.id,invoiceNo:`BATCH-${stamp}-${i}`,amount:1000+i*10,invoiceDate:today(),dueDate:shift(10),creditReminder:{description:'Credit work',startDate:today(),frequency:'Once',userIds:[1]}});assert.equal(saved.status,201,JSON.stringify(saved.body));invoices.push(saved.body.id);
   assert.equal((await call(owner,'POST',`/purchasing/invoices/${saved.body.id}/payment-exception`,{reason:'Independent review of supplier credit evidence'})).status,204);
  }
- const float=await call(owner,'POST','/receivables/petty-cash',{companyId:2,name:`Batch petty ${stamp}`,accountType:'Office expenses',holderName:'Cashier',openingBalance:500,openingDate:today()});assert.equal(float.status,201,JSON.stringify(float.body));
+ const float=await call(owner,'POST','/receivables/petty-cash',{companyId:2,name:`Batch petty ${stamp}`,accountType:'Office expenses',holderName:'Cashier',openingBalance:300,openingDate:today()});assert.equal(float.status,201,JSON.stringify(float.body));
  const cashBefore=(await call(finance,'GET',`/finance/cash-comparison?companyId=1&period=${today().slice(0,7)}`)).body.current.payments;
  const payload={companyId:1,supplierId:supplier.body.id,clientRef:`batch-${stamp}-direct`,source:'Direct',paidDate:today(),method:'Cash',items:[{invoiceId:invoices[0],amount:100},{invoiceId:invoices[1],amount:200}]};
  const direct=await call(finance,'POST','/purchasing/supplier-payments/batch',payload);assert.equal(direct.status,201,JSON.stringify(direct.body));assert.equal(direct.body.payments.length,2);
@@ -6532,12 +6533,12 @@ test('supplier batch payments settle selected credits through direct or petty ca
  assert.equal((await call(finance,'POST','/purchasing/supplier-payments/batch',{...payload,items:[{invoiceId:invoices[0],amount:1}]})).status,409);
  const petty={...payload,clientRef:`batch-${stamp}-petty`,source:'Petty cash',floatId:float.body.id,items:[{invoiceId:invoices[0],amount:150},{invoiceId:invoices[2],amount:250}]};
  const paid=await call(finance,'POST','/purchasing/supplier-payments/batch',petty);assert.equal(paid.status,201,JSON.stringify(paid.body));assert.equal((await call(finance,'POST','/purchasing/supplier-payments/batch',petty)).status,200);
- const floats=(await call(owner,'GET','/receivables/petty-cash?companyId=1')).body;assert.equal(Number(floats.find(row=>row.id===float.body.id).balance),100);
+ const floats=(await call(owner,'GET','/receivables/petty-cash?companyId=1')).body;assert.equal(Number(floats.find(row=>row.id===float.body.id).balance),-100);
  const [[count]]=await admin.query(`SELECT COUNT(*) n,SUM(amount) amount FROM ${testDatabase}.supplier_payments WHERE invoice_id IN (?,?,?)`,invoices);assert.equal(Number(count.n),4);assert.equal(Number(count.amount),700);
  const [[entries]]=await admin.query(`SELECT COUNT(*) n,SUM(amount) amount FROM ${testDatabase}.petty_cash_entries WHERE float_id=? AND kind='Spend'`,[float.body.id]);assert.equal(Number(entries.n),2);assert.equal(Number(entries.amount),-400);
  const daily=(await call(finance,'GET',`/finance/daily-expenses?companyId=1&date=${today()}`)).body;const related=daily.entries.filter(row=>row.payee===`Batch credit supplier ${stamp}`);assert.equal(related.length,4);assert.equal(related.reduce((sum,row)=>sum+row.amount,0),700,'petty-linked supplier payments appear only once');
  const cashAfter=(await call(finance,'GET',`/finance/cash-comparison?companyId=1&period=${today().slice(0,7)}`)).body.current.payments;assert.equal(cashAfter-cashBefore,700,'cash comparison excludes duplicate linked supplier payments');
- const failed=await call(finance,'POST','/purchasing/supplier-payments/batch',{...petty,clientRef:`batch-${stamp}-failure`,items:[{invoiceId:invoices[0],amount:101}]});assert.equal(failed.status,409);
+ const failed=await call(finance,'POST','/purchasing/supplier-payments/batch',{...petty,clientRef:`batch-${stamp}-failure`,items:[{invoiceId:invoices[0],amount:1001}]});assert.equal(failed.status,409);
  const rollback=await call(finance,'POST','/purchasing/supplier-payments/batch',{...payload,clientRef:`batch-${stamp}-rollback`,items:[{invoiceId:invoices[0],amount:1},{invoiceId:invoices[1],amount:99999}]});assert.equal(rollback.status,409);
  const [[balance]]=await admin.query(`SELECT paid_amount FROM ${testDatabase}.supplier_invoices WHERE id=?`,[invoices[0]]);assert.equal(Number(balance.paid_amount),250,'failed batch rolls all rows back');
  assert.equal((await call(finance,'POST','/purchasing/supplier-payments/batch',{...payload,clientRef:`batch-${stamp}-scope`,companyId:2})).status,400);
@@ -6691,7 +6692,7 @@ test('shared petty cash attributes each movement to its company and MD register 
  const receipt=new FormData();receipt.append('file',new Blob(['receipt evidence'],{type:'text/plain'}),'receipt.txt');
  const upload=await fetch(`${base}/uploads/md_personal_expense/${selected.id}`,{method:'POST',headers:{Authorization:`Bearer ${owner}`},body:receipt});assert.equal(upload.status,201,await upload.text());
  assert.equal((await call(store,'GET',`/uploads/md_personal_expense/${selected.id}`)).status,403);
- const overdraw=await call(owner,'POST',path,{...personal,clientRef:`MD-OVERDRAW-${stamp}`,amount:12000});assert.equal(overdraw.status,400);assert.equal((await call(owner,'GET','/receivables/petty-cash')).body.find(f=>f.id===id).balance,before);
+ const overdraw=await call(owner,'POST',path,{...personal,clientRef:`MD-OVERDRAW-${stamp}`,amount:12000});assert.equal(overdraw.status,201);assert.equal((await call(owner,'GET','/receivables/petty-cash')).body.find(f=>f.id===id).balance,-800);
  assert.equal((await call(owner,'POST',path,{...personal,clientRef:`MD-PROJECT-${stamp}`,projectId:1})).status,400);
 });
 
@@ -7031,4 +7032,32 @@ test('employee login accounts can link every payroll category and create a new s
   assert.equal(created.status,201,JSON.stringify(created.body));
   const [[profile]]=await admin.query(`SELECT worker_type,payroll_category,DATE_FORMAT(join_date,'%Y-%m-%d') startDate FROM ${testDatabase}.employees WHERE id=?`,[created.body.employeeId]);
   assert.deepEqual({...profile},{worker_type:'Site',payroll_category:'Driver',startDate:'2026-11-01'});
+});
+
+test('draft invoice print details can be changed and cleared before issue',async()=>{
+  const finance=await login('finance@gkuc.lk'),store=await login('store@gkuc.lk');
+  const saved=await call(finance,'POST','/receivables/invoices',{
+    companyId:1,title:'Draft print details',documentType:'Tax Invoice',taxTreatment:'Standard',
+    invoiceDate:today(),placeOfSupply:'Original supply location',items:[{description:'Work item',quantity:1,rate:100}]
+  });
+  assert.equal(saved.status,201,JSON.stringify(saved.body));
+  const invoicePath='/receivables/invoices/'+saved.body.id;
+  const path=invoicePath+'/draft-details';
+  assert.equal((await call(store,'PATCH',path,{placeOfSupply:'Denied'})).status,403);
+  const changes={placeOfSupply:'Revised supply location',buyerTin:'QA-BUYER-TIN',buyerVatNumber:'QA-BUYER-VAT',
+    supplierTin:'QA-SUPPLIER-TIN',supplierVatNumber:'QA-SUPPLIER-VAT',notes:'QA invoice details'};
+  assert.equal((await call(finance,'PATCH',path,changes)).status,204);
+  const details=(await call(finance,'GET',path)).body;
+  for (const [key,value] of Object.entries(changes)) assert.equal(details[key],value);
+  const document=async()=> (await fetch(base+invoicePath+'/document',{headers:{authorization:'Bearer '+finance}})).text();
+  const printed=await document();
+  for (const value of Object.values(changes)) assert.ok(printed.includes(value),value);
+  assert.equal((await call(finance,'PATCH',path,{buyerVatNumber:'',supplierTin:'',placeOfSupply:''})).status,204);
+  const cleared=await document();
+  assert.doesNotMatch(cleared,/QA-BUYER-VAT|QA-SUPPLIER-TIN|Revised supply location|Original supply location/);
+  assert.match(cleared,/QA-SUPPLIER-VAT/);
+  assert.equal((await call(finance,'PATCH',path,{gross:0})).status,400);
+  assert.equal((await call(finance,'POST',invoicePath+'/issue')).status,204);
+  assert.equal((await call(finance,'PATCH',path,{buyerTin:'After issue'})).status,409);
+  assert.equal(Number((await call(finance,'GET',invoicePath)).body.net_payable),118);
 });

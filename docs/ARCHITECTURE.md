@@ -610,7 +610,7 @@ Petty cash floats are now shared resources rather than company-owned payment acc
 
 Ledger entry creation, opening funding, Fleet fuel, QS station purchases and supplier batch payments all save entry company. Fleet/QS fuel records also save their actual payment company immediately. Daily Expenses/funding, Finance reporting, Cash comparison and management cash projections scope individual entries, not float owners; supplier and fuel/project mirrors are still counted once. A default project is a convenience only; each normal payment must match its selected company's project. The updated form explicitly submits no project for office spending. Shared scopes are displayed in Finance.
 
-Nullable unique petty entry client_ref and request_hash allow safe movement retries; same-user identical requests replay, changed requests fail. Existing float locks and insufficient-funds checks remain transactional. Office direct payments keep their unique company/reference guard and now use one transaction for payment, optional personal metadata and audit.
+Nullable unique petty entry client_ref and request_hash allow safe movement retries; same-user identical requests replay, changed requests fail. Float locks and return-of-cash checks remain transactional. Recorded spending may leave a signed negative float balance. Office direct payments keep their unique company/reference guard and now use one transaction for payment, optional personal metadata and audit.
 
 `md_personal_expenses` holds category/notes and exactly one original petty_cash_entry_id or office_payment_id, with unique source links and foreign keys. Amount/date/payer/payee/reference/recorded-by are read from that payment, never duplicated as another expense. Its router is installed beneath `/finance`: GET `/md-personal-expenses`, `/payments`, `/document`, `/export.xlsx`; POST `/link`; PUT `/:id` for category/notes. All require `finance.manage`. Existing petty entry and office payment APIs accept mdPersonal/personalCategory/personalNotes to link atomically. Personal petty cash must be an unallocated Office expenses spend, not fuel, payroll, supplier settlement or an already-posted project cost. No personal project-cost row is generated. Existing payments can be linked without changing their cash movement. No repayment/debt model is created.
 
@@ -667,3 +667,13 @@ In QS Daily Cost, an employee labour block shares the employee, completed tasks,
 ### Employee login setup
 
 Administration → Add user searches unlinked employee profiles in the current employee register by name, code, trade, payroll category and status. All employment statuses appear with their labels. Linking uses the selected profile ID and keeps its employment and pay settings. For a new profile, the existing account creation endpoint accepts the Office/Site type and a payroll category. Legacy requests without those fields retain the Office defaults. Access roles remain independent of employee type and payroll category. The initial Employee access role has no module grants and can be edited through Access Control.
+
+### Negative petty-cash balances
+
+An authorized Spend can leave its float balance below zero. Direct float spending, supplier settlements, Fleet fuel and QS station-fuel approvals record the original payment through their existing transactions. The shared account balance remains the signed sum of movements. A later top-up offsets the shortfall. Return of cash still requires cash held in the float.
+
+### Tax invoice boxes
+
+Tax invoice rendering places the invoice date and number in separate boxes below the letterhead. The supplier and purchaser boxes use the saved names, tax IDs, multiline addresses and telephone numbers. Delivery and supply information follow in compact boxes, and additional information uses the saved invoice text. Date and number print options apply to their respective boxes.
+
+Draft invoice print details use an invoice-scoped read and patch endpoint for Finance invoice users. The patch locks the draft and audits edits to supply, purchaser and supplier identifiers, and related print fields. Empty optional values clear the invoice snapshot, and supplier tax overrides apply only to that document. The endpoint rejects changes after issue and accepts only the specified print fields.

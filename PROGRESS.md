@@ -1534,3 +1534,21 @@ Verified login and preserved payroll settings across all five payroll categories
 Administration Add user lists unlinked profiles from the current employee register regardless of employment status. The options show and can be searched by status. Account creation keeps the employee's existing status and access role selection remains explicit.
 
 The two focused account API tests passed, including listing, linking and login for Active, On leave, Suspended and Left profiles. Chrome account flows passed at 390px and 1440px, as did 41 frontend tests, the production build and diff checks. No deployment or live database writes.
+
+### 2026-11-12 — Allow negative petty-cash spending balances
+
+Float spending can now leave a negative balance through direct movements, supplier payments, Fleet fuel and QS station fuel posting. The register and ledger display signed balances. Later top-ups reduce the shortfall. Cash returns still require cash held, and invoice, fuel and employee advance validations continue to apply.
+
+The full backend suite passed 392 tests with four skipped, including overdraw, retry, top-up, and payment posting coverage. Frontend tests (41), the production build, and Chrome verification of the LKR 2,000 − LKR 2,500 = −LKR 500 display at 390px and 1440px passed. No deployment or live database writes.
+
+### 2026-11-13 — Compact tax invoice layout
+
+Enlarged the Tax Invoice title and moved its date and reference into separate boxes below the letterhead. Replaced the expanded client directory information with compact Supplier and Invoice for boxes, then placed delivery, supply and payment details underneath. Saved invoice information appears in its own box when entered.
+
+Verified 15 document layout and invoice option tests and visually checked a rendered one-page A4 fixture. No deployment or live database writes.
+
+### 2026-11-13 — Edit draft invoice print details
+
+Finance can edit and clear optional invoice-specific print details before issue, including place of supply and supplier/purchaser TIN and VAT numbers. The form saves to the draft and View / PDF reads the updated values. Changes are audited and locked against invoice issue. Client and company master data and invoice amounts are unaffected.
+
+Two focused invoice API tests, 41 frontend tests, the frontend production build and diff checks passed. No live deployment or database writes.

@@ -72,7 +72,7 @@ router.get('/', auth, permit('transport.view','transport.manage'), wrap(async (_
     maintenanceSchedules: schedules.filter(row => Number(row.vehicleId) === Number(vehicle.id)).map(row => maintenanceDue(row,vehicle.odometer)) })));
 }));
 
-/* Vehicles and funded fuel floats are shared; each payment keeps its selected company. */
+/* Vehicles and fuel floats are shared; each payment keeps its selected company. */
 router.get('/fuel-floats', auth, permit('transport.view','transport.manage'), wrap(async (req, res) => {
   const companyId = Number(req.query.companyId);
   if (!Number.isInteger(companyId) || companyId < 1) return res.status(400).json({ error: 'Choose a company to see its fuel floats' });
