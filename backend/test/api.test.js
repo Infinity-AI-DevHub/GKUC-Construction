@@ -7103,3 +7103,24 @@ test('full project report exports linked history and respects module permissions
   const pdfBytes = Buffer.from(await pdf.arrayBuffer());
   assert.equal(pdfBytes.subarray(0, 5).toString(), '%PDF-');
 });
+
+test('alert scan refreshes an existing case for an oversized project name', async () => {
+  const owner = await login();
+  const name = 'Road improvement ' + '🚧'.repeat(900);
+  await admin.query(`UPDATE ${testDatabase}.projects SET name=?,budget=1,actual=2 WHERE id=1`, [name]);
+  await admin.query(`INSERT INTO ${testDatabase}.alert_cases
+    (case_key,audience,severity,title,message,reference_type,reference_id,due_at,last_seen_at)
+    VALUES ('budget:1','finance.view','Warning','Old title','Old message','project','1',
+      DATE_ADD(NOW(), INTERVAL 1 DAY),DATE_SUB(NOW(), INTERVAL 2 DAY))
+    ON DUPLICATE KEY UPDATE title='Old title',last_seen_at=DATE_SUB(NOW(), INTERVAL 2 DAY)`);
+  assert.equal((await call(owner, 'GET', '/bootstrap')).status, 200);
+  const [[alert]] = await admin.query(`SELECT title,severity,CHAR_LENGTH(title) titleLength,
+    DATE(last_seen_at)=CURDATE() refreshed FROM ${testDatabase}.alert_cases WHERE case_key='budget:1'`);
+  assert.match(alert.title, /^Budget exceeded — Road improvement /);
+  assert.match(alert.title, /🚧…$/u);
+  assert.equal(alert.titleLength, 180);
+  assert.equal(alert.severity, 'Critical');
+  assert.equal(alert.refreshed, 1);
+  const [[project]] = await admin.query(`SELECT name FROM ${testDatabase}.projects WHERE id=1`);
+  assert.equal(project.name, name);
+});

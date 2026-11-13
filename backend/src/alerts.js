@@ -22,6 +22,15 @@ import { insuranceReminderDate } from './lib/insurance-reminders.js';
 
 export const ALERT_WINDOW_DAYS = Number(process.env.ALERT_WINDOW_DAYS || 30);
 
+// Match the VARCHAR limits shared by alert cases and notifications. Count
+// Unicode code points so clipping never splits a supplementary character.
+const fitAlertText = (value, limit) => {
+  const characters = Array.from(value);
+  return characters.length <= limit ? value : characters.slice(0, limit - 1).join('') + '…';
+};
+const alertTitle = value => fitAlertText(value, 180);
+const alertMessage = value => fitAlertText(value, 1000);
+
 /*
  * Records an alert, puts it on the screens that should see it, and sends it out.
  *
@@ -35,6 +44,8 @@ export const ALERT_WINDOW_DAYS = Number(process.env.ALERT_WINDOW_DAYS || 30);
  * re-notify and does not re-send.
  */
 const raise = async alert => {
+  const title = alertTitle(alert.title);
+  const message = alertMessage(alert.message);
   const stamp = today();
   const caseKey = alert.caseKey || (alert.key?.endsWith(`:${stamp}`)
     ? alert.key.slice(0, -stamp.length - 1) : alert.key);
@@ -45,7 +56,7 @@ const raise = async alert => {
   const [caseInsert] = await pool.execute(`INSERT IGNORE INTO alert_cases
     (case_key,user_id,audience,severity,title,message,reference_type,reference_id,due_at)
     VALUES (?,?,?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL ? HOUR))`,
-  [caseKey,alert.userId || null,alert.audience || null,alert.severity || 'Info',alert.title,alert.message,
+  [caseKey,alert.userId || null,alert.audience || null,alert.severity || 'Info',title,message,
     alert.referenceType || null,String(alert.referenceId ?? ''),slaHours]);
   const freshCase = Boolean(caseInsert.insertId);
   const existing = freshCase ? {id:caseInsert.insertId,state:'New'} : (await query(
@@ -55,7 +66,7 @@ const raise = async alert => {
   if (!freshCase) await query(`UPDATE alert_cases SET title=?,message=?,severity=?,
     occurrence_count=occurrence_count+IF(DATE(last_seen_at)<CURDATE(),1,0),last_seen_at=NOW()
     ${reopen ? ",state='New',resolved_at=NULL,resolution_note=NULL,resolution_evidence=NULL,escalated_at=NULL,due_at=DATE_ADD(NOW(),INTERVAL ? HOUR)" : ''}
-    WHERE id=?`,[alert.title,alert.message,alert.severity || 'Info',...(reopen?[slaHours]:[]),existing.id]);
+    WHERE id=?`,[title,message,alert.severity || 'Info',...(reopen?[slaHours]:[]),existing.id]);
   if (freshCase || reopen) await query(`INSERT INTO alert_case_events(case_id,action,note) VALUES (?,?,?)`,
     [existing.id,freshCase?'Created':'Reopened',freshCase?'Alert first detected':'Condition remains after resolution']);
   if (!freshCase && !reopen) return null;
@@ -63,7 +74,7 @@ const raise = async alert => {
     `INSERT IGNORE INTO notifications (user_id,audience,channel,severity,title,message,status,reference_type,reference_id,dedupe_key)
      VALUES (?,?,?,?,?,?,'Queued',?,?,?)`,
     [alert.userId || null, alert.audience || null, alert.channel || 'In-app', alert.severity || 'Info',
-      alert.title, alert.message, alert.referenceType || null, String(alert.referenceId ?? ''),
+      title, message, alert.referenceType || null, String(alert.referenceId ?? ''),
       `${caseKey}:case:${existing.id}:${reopen ? stamp : 'new'}`]
   );
   /* Already raised today. Nothing new to announce and nothing new to send. */
@@ -74,8 +85,8 @@ const raise = async alert => {
     user_id: alert.userId || null,
     audience: alert.audience || null,
     severity: alert.severity || 'Info',
-    title: alert.title,
-    message: alert.message
+    title,
+    message
   };
 
   /* On screen immediately, addressed exactly as the notification itself is. */
@@ -567,7 +578,7 @@ export async function escalateOverdueCases() {
     if (!updated.affectedRows) continue;
     await query(`INSERT INTO alert_case_events(case_id,action,note) VALUES (?,'Escalated',?)`,
       [item.id,'Response deadline passed']);
-    const title=`Escalated case #${item.id} — ${item.title}`;
+    const title=alertTitle(`Escalated case #${item.id} — ${item.title}`);
     const message=`Case #${item.id} passed its response deadline. Review ownership and next action.`;
     const result=await query(`INSERT IGNORE INTO notifications
       (audience,channel,severity,title,message,status,reference_type,reference_id,dedupe_key)
@@ -799,8 +810,8 @@ export async function runProjectDeadlineScan(stamp=today()){
  for(const project of projects){const due=projectDeadline(project,stamp);if(!due)continue;
   for(const user of users){
    const severity=due.remaining<0?'Warning':'Info';
-   const title=`Project ${due.remaining<0?'overdue':'completion reminder'} — ${project.name}`;
-   const message=`${project.name} is scheduled to finish on ${due.end}. ${due.remaining<0?`${Math.abs(due.remaining)} day(s) overdue.`:`${due.remaining} day(s) remaining.`} Review progress, complete the project or record an extension if needed.`;
+   const title=alertTitle(`Project ${due.remaining<0?'overdue':'completion reminder'} — ${project.name}`);
+   const message=`${fitAlertText(project.name, 800)} is scheduled to finish on ${due.end}. ${due.remaining<0?`${Math.abs(due.remaining)} day(s) overdue.`:`${due.remaining} day(s) remaining.`} Review progress, complete the project or record an extension if needed.`;
    // Recurring programme reminders are deliveries, not unresolved escalation cases.
    const result=await query(`INSERT IGNORE INTO notifications
     (user_id,channel,severity,title,message,status,reference_type,reference_id,dedupe_key)

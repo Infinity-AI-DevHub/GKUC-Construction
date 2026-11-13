@@ -1580,3 +1580,13 @@ queries with JSON_EXTRACT and JSON_UNQUOTE to address the MariaDB parse error.
 The focused local MySQL API test passed for both history sections, PDF generation,
 project isolation and permissions. MariaDB support for the functions was verified
 against its documentation. No production verification, deployment or live writes.
+
+### 2026-11-13 — Keep oversized alert text within database limits
+
+Scanner alerts now fit the existing title and message columns before creating
+or refreshing a case and before sending a notification. Escalation and project
+deadline notifications also fit those limits. Shortened text ends with an
+ellipsis and the original project record retains its full name.
+
+The focused local MySQL API test passed for refreshing an existing budget case
+with a long Unicode project name. No schema migration, deployment or live writes.
