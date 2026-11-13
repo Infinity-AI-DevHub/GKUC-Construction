@@ -1572,3 +1572,11 @@ invoice lines, stage and task history, project isolation and restricted access.
 Verified a nine-page A4 fixture, including visual checks of the summary and first
 detail page. All 41 frontend tests and the production build passed. Original
 attachments are indexed by metadata. No deployment or live database writes.
+
+### 2026-11-13 — Project report MariaDB compatibility
+
+Replaced the MySQL JSON shorthand in both project progress and task status history
+queries with JSON_EXTRACT and JSON_UNQUOTE to address the MariaDB parse error.
+The focused local MySQL API test passed for both history sections, PDF generation,
+project isolation and permissions. MariaDB support for the functions was verified
+against its documentation. No production verification, deployment or live writes.
