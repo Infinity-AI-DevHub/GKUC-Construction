@@ -1,5 +1,8 @@
 import {moveProjectCompany} from '../lib/project-company.js';
 import {installProjectDeadlines,projectDate} from './project-deadlines.js';
+import { loadProjectReport } from '../lib/project-report-data.js';
+import { projectReportDocument } from '../lib/project-report-document.js';
+import { sendDocument } from '../lib/document-pdf.js';
 import { projectCompletion } from '../lib/project-completion.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -390,6 +393,15 @@ router.patch('/milestones/:id', auth, permit('projects.manage'), validate(z.obje
  * PID 2.4 "Completion Reports" and section 3 step 10 — the close-out pack, generated
  * from what the system already holds rather than compiled by hand at the end.
  */
+router.get('/:id/report/document', auth, permit('projects.view'), wrap(async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (!/^[1-9]\d*$/.test(req.params.id) || !Number.isSafeInteger(projectId)) throw fail(400, 'Choose a valid project.');
+  const report = await loadProjectReport(projectId, req.user.permissions);
+  if (!report) throw fail(404, 'Project not found.');
+  res.setHeader('Cache-Control', 'no-store');
+  return sendDocument(req, res, projectReportDocument({ ...report, preparedBy: req.user.name }), `project-${projectId}-full-report.pdf`);
+}));
+
 router.get('/:id/completion', auth, permit('projects.view'), wrap(async (req, res) => {
   const project = await getOne(`SELECT p.*,c.name company FROM projects p
     JOIN companies c ON c.id=p.company_id WHERE p.id=? AND p.active=1`, [req.params.id]);

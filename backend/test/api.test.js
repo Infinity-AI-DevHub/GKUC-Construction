@@ -7061,3 +7061,45 @@ test('draft invoice print details can be changed and cleared before issue',async
   assert.equal((await call(finance,'PATCH',path,{buyerTin:'After issue'})).status,409);
   assert.equal(Number((await call(finance,'GET',invoicePath)).body.net_payable),118);
 });
+
+test('full project report exports linked history and respects module permissions', async () => {
+  const owner = await login();
+  const supervisor = await login('supervisor@gkuc.lk');
+  const request = (token, suffix = '', id = 1) => fetch(`${base}/projects/${id}/report/document${suffix}`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  await admin.query(`INSERT INTO ${testDatabase}.quotations_client
+    (reference,boq_id,client_name,title,quote_date,subtotal,total,prepared_by)
+    VALUES ('REPORT-QUOTE',1,'Fixture client','Historical BOQ quotation','2025-01-01',120,120,1)`);
+  const [invoice] = await admin.query(`INSERT INTO ${testDatabase}.client_invoices
+    (reference,project_id,client,title,invoice_date,gross,net_payable,status,created_by)
+    VALUES ('REPORT-INVOICE',1,'Fixture client','Historical invoice','2025-01-01',120,120,'Issued',1)`);
+  await admin.query(`INSERT INTO ${testDatabase}.client_invoice_items (invoice_id,description,quantity,rate,amount)
+    VALUES (?,'Fixture invoice line',1,120,120)`, [invoice.insertId]);
+  await admin.query(`INSERT INTO ${testDatabase}.audit_logs (user_id,action,entity,entity_id,before_json,after_json)
+    VALUES (1,'UPDATE','project','1',JSON_OBJECT('progress',25),JSON_OBJECT('progress',68)),
+           (1,'UPDATE','task','1',JSON_OBJECT('status','Not started'),JSON_OBJECT('status','In progress','statusReason','Fixture work began'))`);
+  const response = await request(owner);
+  assert.equal(response.status, 200, response.ok ? '' : (await response.text()) + serverOutput.slice(-2500));
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const html = await response.text();
+  for (const marker of ['Project summary', 'Project details', 'Grade 30 concrete supply', 'REPORT-QUOTE',
+    'Fixture invoice line', 'Recorded cost', 'Daily site reports', 'Attendance records', 'Previous progress', 'Fixture work began', 'Infinity AI']) assert.ok(html.includes(marker), marker);
+  assert.ok(html.indexOf('Project summary') < html.indexOf('Project details'));
+  const otherProject = await request(owner, '', 2);
+  assert.equal(otherProject.status, 200);
+  assert.doesNotMatch(await otherProject.text(), /REPORT-INVOICE|REPORT-QUOTE/);
+  const restricted = await request(supervisor);
+  assert.equal(restricted.status, 200);
+  const restrictedHtml = await restricted.text();
+  assert.match(restrictedHtml, /Sections restricted by your access permissions/);
+  assert.doesNotMatch(restrictedHtml, /REPORT-INVOICE|Fixture invoice line|Recorded cost/);
+  assert.equal((await request('invalid')).status, 401);
+  assert.equal((await request(owner, '', 'invalid')).status, 400);
+  assert.equal((await request(owner, '', 999999)).status, 404);
+  const pdf = await request(owner, '?download=pdf');
+  assert.equal(pdf.status, 200, pdf.ok ? '' : await pdf.text());
+  assert.match(pdf.headers.get('content-disposition'), /attachment; filename="project-1-full-report.pdf"/);
+  const pdfBytes = Buffer.from(await pdf.arrayBuffer());
+  assert.equal(pdfBytes.subarray(0, 5).toString(), '%PDF-');
+});
