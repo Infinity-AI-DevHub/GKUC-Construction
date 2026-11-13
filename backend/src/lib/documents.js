@@ -96,6 +96,15 @@ function stylesheet(design) {
   .head .piece[data-piece=docTitle]{grid-area:title;font-size:19px!important;
     font-weight:800!important;line-height:1.15!important;color:${design.accent}!important;
     letter-spacing:2px;text-transform:uppercase}
+  .head.tax-invoice-head .piece[data-piece=docTitle]{font-size:28px!important;align-self:center}
+  .tax-invoice-boxes{margin:10px 0 14px}
+  .tax-invoice-meta{margin:0 0 8px}
+  .tax-invoice-boxes .parties,.tax-invoice-meta .parties{gap:12px;margin:0 0 8px}
+  .tax-invoice-boxes .parties:last-child{margin-bottom:0}
+  .tax-invoice-boxes .party,.tax-invoice-meta .party{padding:7px 9px;border-radius:0}
+  .tax-invoice-boxes .party:empty,.tax-invoice-meta .party:empty{visibility:hidden}
+  .tax-invoice-boxes .party p{margin:0 0 3px}
+  .tax-invoice-boxes .party p:last-child,.tax-invoice-meta .party p{margin-bottom:0}
   .head .piece[data-piece=reference]{grid-area:reference}
   .head .piece[data-piece=docDate]{grid-area:date}
   .head .piece img{max-width:100%;height:auto;max-height:60px;object-fit:contain;display:block}
@@ -236,7 +245,8 @@ function letterhead(company, heading, reference, date, design = DEFAULT_DESIGN, 
     docDate: `<strong>Date:</strong> ${escape(longDate(date))}`
   };
 
-  const pieces = header.elements.filter(element => element.show).map(element => {
+  const isTaxInvoice = heading === 'Tax Invoice';
+  const pieces = header.elements.filter(element => element.show && !(isTaxInvoice && ['reference','docDate'].includes(element.id))).map(element => {
     const body = element.custom ? escape(element.text) : contents[element.id];
     if (body === undefined || body === '') return '';
     const align = element.align === 'centre' ? 'center' : element.align;
@@ -249,7 +259,7 @@ function letterhead(company, heading, reference, date, design = DEFAULT_DESIGN, 
       style="color:${element.colour};text-align:${align};${type}">${body}</div>`;
   }).join('\n    ');
 
-  return `<div class="head${header.rule ? ' ruled' : ''}" data-block="letterhead">
+  return `<div class="head${isTaxInvoice ? ' tax-invoice-head' : ''}${header.rule ? ' ruled' : ''}" data-block="letterhead">
     ${pieces}
   </div>`;
 }
@@ -452,6 +462,37 @@ export function quotationDocument({ company, quotation, items, bankAccount, sett
     blocks.parties=blocks.parties.replace(/<p><strong>Prepared by:<\/strong>[\s\S]*?<\/p>/,'');
     const details=[['Date of delivery',invoiceDetails.deliveryDate?longDate(invoiceDetails.deliveryDate):''],['Place of supply',invoiceDetails.placeOfSupply],['Payment due',invoiceDetails.dueDate?longDate(invoiceDetails.dueDate):''],['Mode of payment',invoiceDetails.paymentMode]];
     blocks.parties=blocks.parties.replace('<h3>Details</h3>',`<h3>Details</h3>${details.filter(([,value])=>value).map(([label,value])=>`<p><strong>${label}:</strong> ${escape(value)}</p>`).join('')}`);
+    if (documentHeading === 'Tax Invoice') {
+      const field = (label, value) => value ? `<p><strong>${label}:</strong> ${escape(value)}</p>` : '';
+      const address = value => value ? `<p><strong>Address:</strong><br>${lines(String(value).replace(/,\s*/g,'\n')).join('<br>')}</p>` : '';
+      const box = content => `<div class="party">${content}</div>`;
+      const pair = (left,right) => left || right ? `<div class="parties">${box(left)}${box(right)}</div>` : '';
+      const purchaser = [
+        recipientShow.tin !== false && field('Purchaser TIN',recipient?.tin || quotation.clientTin),
+        recipientShow.vatNumber !== false && field('VAT registration',recipient?.vatNumber || quotation.clientVatNumber),
+        recipientShow.name !== false && field('Purchaser name',recipient?.name || quotation.clientName),
+        recipientShow.billingAddress !== false && address(recipient?.billingAddress || quotation.clientAddress),
+        recipientShow.phone !== false && field('Telephone',recipient?.phone || quotation.clientPhone)
+      ].filter(Boolean).join('');
+      const supplier = [
+        issuerShow.tin !== false && field('Supplier TIN',issuer.tin),
+        issuerShow.vatNumber !== false && field('VAT registration',issuer.vatNumber),
+        issuerShow.name !== false && field('Supplier name',issuer.name),
+        issuerShow.address !== false && address(issuer.address),
+        issuerShow.telephone !== false && field('Telephone',issuer.telephone)
+      ].filter(Boolean).join('');
+      const information = [quotation.notes,quotation.additionalNotes].filter(value=>String(value||'').trim());
+      const metadata = pair(print.date && quotation.quoteDate ? field('Date of invoice',longDate(quotation.quoteDate)) : '',field('Tax invoice no',quotation.reference));
+      if (metadata) blocks.letterhead += `<div class="tax-invoice-meta">${metadata}</div>`;
+      blocks.parties = `<div class="tax-invoice-boxes" data-block="parties">
+        ${pair('<h3>Supplier</h3>'+supplier,'<h3>Invoice for</h3>'+purchaser)}
+        ${pair(field('Date of delivery',invoiceDetails.deliveryDate ? longDate(invoiceDetails.deliveryDate) : ''),field('Place of supply',invoiceDetails.placeOfSupply))}
+        ${pair(field('Mode of payment',invoiceDetails.paymentMode),field('Payment due',invoiceDetails.dueDate ? longDate(invoiceDetails.dueDate) : ''))}
+        ${print.notes && information.length ? box(`<p><strong>Additional information:</strong><br>${information.flatMap(lines).join('<br>')}</p>`) : ''}
+      </div>`;
+      blocks.notes = methods.length ? `<div class="terms" data-block="notes"><h4>Method</h4>
+        ${methods.map(method=>`<p><strong>${escape(method.name)}</strong></p><ul>${method.steps.map(step=>`<li>${step}</li>`).join('')}</ul>`).join('')}</div>` : '';
+    }
     blocks.subject=quotation.title?`<h3 class="subject" data-block="subject">${escape(quotation.title)}</h3>`:'';
     blocks.table=blocks.table.replace(/<tfoot>[\s\S]*?<\/tfoot>/,invoiceDetails.totals);
     blocks.words=`<p class="words" data-block="words"><strong>Total amount in words:</strong> ${escape(amountInWords(invoiceDetails.netPayable))}</p>`;
@@ -488,8 +529,12 @@ export function invoiceDocument({ company, invoice, items, settings, design }) {
     presentation={...presentation,company:{...presentation.company,address:String(presentation.company?.address || '').replace(/,\s*/g,'\n')},client:{...presentation.client,billingAddress:String(presentation.client?.billingAddress || '').replace(/,\s*/g,'\n')}};
     if(options.bankDetails!==null&&options.bankDetails!==undefined){presentation={...presentation,company:{...presentation.company,bankDetails:options.bankDetails},bank:null};}
   }
+  const supplier = {};
+  if (options.supplierTin!==undefined) supplier.tin=options.supplierTin;
+  if (options.supplierVatNumber!==undefined) supplier.vatNumber=options.supplierVatNumber;
+  if (presentation?.company) presentation={...presentation,company:{...presentation.company,...supplier}};
   const creator=options.creator;
-  return quotationDocument({company:{...company,address:String(company.address || '').replace(/,\s*/g,'\n'),bankDetails:options.bankDetails??company.bankDetails},settings,design,
+  return quotationDocument({company:{...company,...supplier,address:String(company.address || '').replace(/,\s*/g,'\n'),bankDetails:options.bankDetails??company.bankDetails},settings,design,
     invoice:{...invoice,totals,netPayable:net},
     quotation:{reference:invoice.reference,quoteDate:invoice.invoiceDate,title:invoice.title,clientName:invoice.client,
       clientTin:invoice.buyerTin,clientVatNumber:invoice.buyerVatNumber,clientAddress:String(invoice.buyerAddress || '').replace(/,\s*/g,'\n'),clientPhone:invoice.buyerPhone,

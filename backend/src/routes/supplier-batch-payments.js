@@ -32,9 +32,6 @@ export function installSupplierBatchPayments(router){
     if(b.source==='Petty cash'){
       const [[row]]=await connection.execute('SELECT * FROM petty_cash_floats WHERE id=? AND active=1 FOR UPDATE',[b.floatId]);float=row;
       if(!float||float.account_type==='Salary advance')throw fail(400,'Choose an active expense petty cash account for this company.');
-      const [[balance]]=await connection.execute('SELECT COALESCE(SUM(amount),0) amount FROM petty_cash_entries WHERE float_id=?',[float.id]);
-      const total=items.reduce((sum,item)=>sum+Math.round(item.amount*100),0)/100;
-      if(total>Number(balance.amount)+.001)throw fail(409,'The petty cash account has insufficient funds.');
     }
     const [[supplier]]=await connection.execute('SELECT name,bank_changed_at FROM suppliers WHERE id=? AND active=1',[b.supplierId]);
     if(!supplier)throw fail(400,'Choose an active supplier.');

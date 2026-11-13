@@ -1,7 +1,5 @@
 import {audit} from '../db.js';
 
-const money = amount => `LKR ${Number(amount || 0).toLocaleString('en-LK', { maximumFractionDigits: 2 })}`;
-
 export async function postFuelRecord(connection, vehicleId, body, userId, ip) {
     const [[vehicle]]=await connection.execute('SELECT * FROM fleet WHERE id=? FOR UPDATE',[vehicleId]);
     if(!vehicle)throw Object.assign(new Error('Vehicle not found'),{status:404});
@@ -23,11 +21,6 @@ export async function postFuelRecord(connection, vehicleId, body, userId, ip) {
     companyId ||= fuelFloat?.companyId||null;
     const [[company]]=companyId?await connection.execute('SELECT id FROM companies WHERE id=? AND active=1',[companyId]):[[null]];
     if(!company)throw Object.assign(new Error('Choose an active operating company.'),{status:400});
-    if(fuelFloat){
-    const [[{balance}]]=await connection.execute('SELECT COALESCE(SUM(amount),0) balance FROM petty_cash_entries WHERE float_id=?',[fuelFloat.id]);
-    if(Number(body.cost)>Number(balance)+0.001)throw Object.assign(new Error(
-      `The ${fuelFloat.name} fuel float has ${money(balance)} available. Top it up in Finance or enter an amount within the balance.`),{status:409});
-    }
     const [result]=await connection.execute(`INSERT INTO fuel_records
       (vehicle_id,company_id,project_id,fuel_date,litres,cost,odometer,driver,created_by) VALUES (?,?,?,?,?,?,?,?,?)`,
       [vehicle.id,companyId,projectId,body.fuelDate,body.litres??null,body.cost,body.odometer,body.driver||vehicle.driver,userId]);

@@ -660,14 +660,14 @@ function FuelForm({ data, vehicle, close, reload }) {
     <label>Fuel float (optional)<select name="fuelFloatId" value={fuelFloatId}
       onChange={event => setFuelFloatId(event.target.value)}>
       <option value="">No fuel float</option>
-      {floats.map(float => <option key={float.id} value={float.id}>{float.name} — {rupees(float.balance)} available</option>)}
+      {floats.map(float => <option key={float.id} value={float.id}>{float.name} — balance {rupees(float.balance)}</option>)}
     </select></label>
     {!floats.length && <p className="form-note wide">No shared fuel float is available. You can save without one; no petty cash payment will be created.</p>}
-    {selectedFloat && <p className="form-note wide">Available in this float: {rupees(selectedFloat.balance)}. The amount entered below cannot exceed it.</p>}
+    {selectedFloat && <p className="form-note wide">Current float balance: {rupees(selectedFloat.balance)}. This purchase can take the balance below zero.</p>}
     <SelectField name="projectId" label="Charge to project" required={false} options={[["",'Not project-specific'], ...data.projects.filter(project=>Number(project.companyId)===Number(data.companyId)).map(project => [project.id, project.name])]} defaultValue={vehicle?.projectId||''}/>
     <Field name="fuelDate" label="Date" type="date" defaultValue={todayInput()} />
     <Field name="litres" label="Litres (optional)" required={false} type="number" step="any" min="0" />
-    <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" max={selectedFloat ? Number(selectedFloat.balance) : undefined} />
+    <Field name="cost" label="Cost (LKR)" type="number" step="any" min="0" />
     <Field name="vendor" label="Fuel station / payee" required={false} placeholder="Where the fuel was bought" />
     <Field name="odometer" label="Odometer" type="number" min={vehicle?.odometer||1} defaultValue={vehicle?.odometer||''} />
   </FormModal>;

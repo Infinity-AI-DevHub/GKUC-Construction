@@ -276,3 +276,5 @@ Salary advance floats may be funded/used across both companies. Each advance exp
 ### 2026-11-10 — petty-float consolidation and salary advances
 
 Only same-category floats can merge. A Salary advance merge preserves every entry ID, employee, date, amount and company and keeps salary_advance_recoveries references intact. No new advance/recovery is created, no policy is changed and no Draft/Approved/Paid salary is recalculated. Archived account ledgers retain historical membership; payroll continues to read the original employee-linked advances through their active same-category destination.
+
+A recorded salary advance can leave the petty-cash float balance negative. The employee's daily-rate limit, payroll-company validation and recovery rules continue to apply.

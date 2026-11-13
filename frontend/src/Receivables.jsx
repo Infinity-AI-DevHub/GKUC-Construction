@@ -4,7 +4,7 @@ import BondImport from './BondImport.jsx';
 import DocumentPrintOptions from './DocumentPrintOptions.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Landmark, TriangleAlert, Wallet, PencilLine, Trash2 } from 'lucide-react';
-import { api, openDocument, post, rupees,rupeesExact, shortDate, slug, todayInput } from './api.js';
+import { api, openDocument, patch, post, rupees,rupeesExact, shortDate, slug, todayInput } from './api.js';
 import {
   Badge, EmptyState, Field, FormModal, WorkflowForm, Modal, Row, SelectField, Summary, Table, TextArea, useLiveList
 } from './ui.jsx';
@@ -36,6 +36,7 @@ export function ClientInvoices({ data, can, companyId }) {
   const [receipting, setReceipting] = useState(null);
   const [selected, setSelected] = useState(null);
   const [columnInvoice, setColumnInvoice] = useState(null);
+  const [draftInvoice,setDraftInvoice] = useState(null);
   const [numberEdit,setNumberEdit]=useState(null);
   const openedFromLink = useRef(false);
   const [error, setError] = useState('');
@@ -134,6 +135,7 @@ export function ClientInvoices({ data, can, companyId }) {
       <AgeingTable rows={ageing.rows} />
     </> : null}
 
+    {draftInvoice && <DraftInvoiceDetails invoice={draftInvoice} close={()=>setDraftInvoice(null)} reload={load} />}
     {columnInvoice && <DocumentPrintOptions kind="invoice" id={columnInvoice.id} reference={columnInvoice.reference} close={() => setColumnInvoice(null)} reload={load} />}
     {raising && <CertificateForm data={data} companyId={companyId} close={() => setRaising(false)} reload={load} />}
     {planning && <BillingPlanForm quotations={acceptedQuotes.filter(quote => !quote.billingPlanId)} close={() => setPlanning(false)} reload={load} />}
@@ -161,6 +163,47 @@ export function ClientInvoices({ data, can, companyId }) {
       setReceipting(selected); setSelected(null);
     }} canRecord={can.invoice} />}
   </>;
+}
+
+function DraftInvoiceDetails({invoice,close,reload}) {
+  const [details,setDetails]=useState(null);
+  const [error,setError]=useState('');
+  const path='/receivables/invoices/'+invoice.id;
+  useEffect(()=>{
+    let active=true;
+    api(path+'/draft-details').then(value=>{if(active)setDetails(value);})
+      .catch(failure=>{if(active)setError(failure.message);});
+    return ()=>{active=false;};
+  },[path]);
+  return <FormModal title={invoice.reference+' · Edit invoice details'} label="Save invoice details" close={close} wide
+    onSubmit={async values=>{
+      if (!details) throw new Error('Invoice details are unavailable.');
+      const changes=Object.fromEntries(Object.entries(details)
+        .filter(([key,value])=>Object.hasOwn(values,key)&&values[key]!==value)
+        .map(([key])=>[key,values[key]]));
+      if (Object.keys(changes).length) await patch(path+'/draft-details',changes);
+      await reload();
+    }}>
+    {error && <p className="form-error wide" role="alert">{error}</p>}
+    {!error && !details && <p className="wide" role="status">Loading invoice details…</p>}
+    {details && <>
+      <p className="form-note wide">Clear an optional field to remove it from this invoice. Save your changes, then open View / PDF to check the printout before issuing.</p>
+      <Field name="title" label="Invoice title" defaultValue={details.title} wide />
+      <Field name="placeOfSupply" label="Place of supply" defaultValue={details.placeOfSupply} required={false} />
+      <Field name="deliveryDate" label="Date of delivery" type="date" defaultValue={details.deliveryDate} required={false} />
+      <SelectField name="paymentMode" label="Mode of payment" defaultValue={details.paymentMode}
+        options={[[ '', 'Not specified'],'Cheque','Cash','Bank transfer','Card','Other']} required={false} />
+      <Field name="buyerPhone" label="Purchaser telephone" defaultValue={details.buyerPhone} required={false} />
+      <Field name="buyerTin" label="Purchaser TIN" defaultValue={details.buyerTin} required={false} />
+      <Field name="buyerVatNumber" label="Purchaser VAT number" defaultValue={details.buyerVatNumber} required={false} />
+      <Field name="supplierTin" label="Supplier TIN" defaultValue={details.supplierTin} required={false} />
+      <Field name="supplierVatNumber" label="Supplier VAT number" defaultValue={details.supplierVatNumber} required={false} />
+      <TextArea name="buyerAddress" label="Purchaser address" defaultValue={details.buyerAddress} required={false} />
+      <TextArea name="notes" label="Invoice notes" defaultValue={details.notes} required={false} />
+      <TextArea name="additionalNotes" label="Additional information" defaultValue={details.additionalNotes} required={false} />
+      <TextArea name="bankDetails" label="Bank details" defaultValue={details.bankDetails} required={false} />
+    </>}
+  </FormModal>;
 }
 
 function InvoicePayments({ invoice, close, onPayment, canRecord }) {
@@ -794,7 +837,7 @@ function PettyCashAccounts({ data, can, companyId }) {
         const accounts = floats.filter(float => float.accountType === type&&Number(float.active)!==0);
         return <article key={type} className={`petty-account ${slug(type)}`}>
           <span>{type}</span>
-          <strong>{rupees(accounts.reduce((sum, float) => sum + Number(float.balance), 0))}</strong>
+          <strong>{rupeesExact(accounts.reduce((sum, float) => sum + Number(float.balance), 0))}</strong>
           <small>{accounts.length} active float{accounts.length === 1 ? '' : 's'} · shared across both companies</small>
         </article>;
       })}
@@ -807,8 +850,8 @@ function PettyCashAccounts({ data, can, companyId }) {
           <Badge tone={slug(float.accountType)}>{float.accountType}</Badge>
           <strong>{float.name}</strong>
           <small>{float.holderName}{float.project ? ` · ${float.project}` : ''}</small>
-          <b className={float.mergedIntoId?'':low ? 'overdue' : ''}>{float.mergedIntoId?`Merged into ${float.mergedIntoName}`:rupees(float.balance)}</b>
-          <small>{float.mergedIntoId?`Balance at merge: ${rupeesExact(float.mergedBalance)} · open history`:low ? 'Running low — needs topping up' : `Planned amount ${rupees(float.ceiling)}`}</small>
+          <b className={float.mergedIntoId?'':low ? 'overdue' : ''}>{float.mergedIntoId?`Merged into ${float.mergedIntoName}`:rupeesExact(float.balance)}</b>
+          <small>{float.mergedIntoId?`Balance at merge: ${rupeesExact(float.mergedBalance)} · open history`:Number(float.balance)<0 ? 'Negative balance' : low ? 'Running low — needs topping up' : `Planned amount ${rupees(float.ceiling)}`}</small>
         </button>;
       })}
       {!floats.length && <EmptyState>No petty cash floats have been opened.</EmptyState>}
@@ -838,7 +881,7 @@ function FloatForm({ data, companyId, close, reload, float=null }) {
     <Field name="ceiling" label="Planned float amount (LKR)" type="number" step="0.01" min="0" defaultValue={float?.ceiling||0}/>
     <Field name="lowAt" label="Low-balance warning at (LKR, optional)" required={false} type="number" step="0.01" min="0" placeholder="Optional" defaultValue={float?.lowAt||''}/>
     {!float&&<><Field name="openingBalance" label="Opening cash balance (LKR)" type="number" step="0.01" min="0" defaultValue="0"/><Field name="openingDate" label="Opening balance date" type="date" defaultValue={todayInput()}/></>}
-    <p className="form-note wide">{float?`Current cash balance is ${rupees(float.balance)}. Editing the planned amount does not change cash in hand. Use Record a movement to top up, return cash or record an adjustment.`:'Opening cash is recorded as an opening top-up in this account’s ledger. The planned amount is a target, not the cash balance. You can create multiple accounts in each category.'}</p>
+    <p className="form-note wide">{float?`Current cash balance is ${rupeesExact(float.balance)}. Editing the planned amount does not change cash in hand. Use Record a movement to top up, return cash or record an adjustment.`:'Opening cash is recorded as an opening top-up in this account’s ledger. The planned amount is a target, not the cash balance. You can create multiple accounts in each category.'}</p>
   </FormModal>;
 }
 
@@ -853,7 +896,7 @@ function FloatLedger({ float, data, can, companyId,close, reload,onOpen }) {
   const older=async()=>{const last=entries.at(-1);if(!last)return;setLoadingOlder(true);try{const rows=await api(`/receivables/petty-cash/${float.id}/entries?beforeDate=${last.entryDate}&beforeId=${last.id}`);setEntries(current=>[...current,...rows.filter(r=>!current.some(e=>e.id===r.id))]);setHasMore(rows.length===300);setHistoryError('');}catch(e){setHistoryError(e.message);}finally{setLoadingOlder(false);}};
   useLiveList(load);
 
-  return <Modal title={float.mergedIntoId?`${float.name} — merged account history`:`${float.name} — ${rupees(float.balance)} in hand`} close={close} wide>
+  return <Modal title={float.mergedIntoId?`${float.name} — merged account history`:`${float.name} — ${rupeesExact(float.balance)} balance`} close={close} wide>
     {float.mergedIntoId&&<p className="form-note">Merged into {float.mergedIntoName}; balance at merge {rupeesExact(float.mergedBalance)}. Original movements remain below. <button className="secondary" onClick={()=>onOpen(float.mergedIntoId)}>Open shared account</button></p>}
     <div className="petty-ledger-heading"><Badge tone={slug(float.accountType)}>{float.accountType}</Badge>
       <span>{float.mergedIntoId?'Read-only history. Open the shared account for new funding or payments.':float.accountType === 'Fuel'
