@@ -1552,3 +1552,9 @@ Verified 15 document layout and invoice option tests and visually checked a rend
 Finance can edit and clear optional invoice-specific print details before issue, including place of supply and supplier/purchaser TIN and VAT numbers. The form saves to the draft and View / PDF reads the updated values. Changes are audited and locked against invoice issue. Client and company master data and invoice amounts are unaffected.
 
 Two focused invoice API tests, 41 frontend tests, the frontend production build and diff checks passed. No live deployment or database writes.
+
+### 2026-11-13 — Tax invoice supply details and compact letterhead
+
+Tax Invoice PDFs use a one-line letterhead address and a shared phone and email line. Date of Supply uses the existing saved delivery date, editable during creation and on drafts. The date and place boxes sit together above the always-visible Additional Information box. Mode of Payment appears after the amount in words.
+
+Verified the layout in a rendered sample PDF and passed 15 focused document tests, frontend tests, and the frontend build. No deployment or live database writes.

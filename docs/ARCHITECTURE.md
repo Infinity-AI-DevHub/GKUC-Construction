@@ -674,6 +674,6 @@ An authorized Spend can leave its float balance below zero. Direct float spendin
 
 ### Tax invoice boxes
 
-Tax invoice rendering places the invoice date and number in separate boxes below the letterhead. The supplier and purchaser boxes use the saved names, tax IDs, multiline addresses and telephone numbers. Delivery and supply information follow in compact boxes, and additional information uses the saved invoice text. Date and number print options apply to their respective boxes.
+Tax invoice rendering places the invoice date and number in separate boxes below the letterhead. The supplier and purchaser boxes use the saved names, tax IDs, multiline addresses and telephone numbers. The letterhead uses one address line and a shared contact line for the configured phone and email. Date of Supply uses the existing invoice delivery date field, editable during creation and on drafts. Date of Supply and Place of Supply appear side by side, above an Additional Information box that remains visible when empty. Mode of Payment appears below the totals and amount in words. Date and number print options apply to their respective boxes.
 
 Draft invoice print details use an invoice-scoped read and patch endpoint for Finance invoice users. The patch locks the draft and audits edits to supply, purchaser and supplier identifiers, and related print fields. Empty optional values clear the invoice snapshot, and supplier tax overrides apply only to that document. The endpoint rejects changes after issue and accepts only the specified print fields.

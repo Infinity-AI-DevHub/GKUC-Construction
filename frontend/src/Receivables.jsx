@@ -153,7 +153,7 @@ export function ClientInvoices({ data, can, companyId }) {
       <Field name="invoiceDate" label="Invoice date" type="date" defaultValue={todayInput()} />
       <SelectField name="numberChoice" label="Invoice numbering" options={['Invoice sequence / custom number','Quotation number']} />
       <Field name="reference" label="Custom invoice number (optional)" required={false} />
-      <Field name="deliveryDate" label="Date of delivery" type="date" required={false} />
+      <Field name="deliveryDate" label="Date of supply / delivery" type="date" required={false} />
       <Field name="placeOfSupply" label="Place of supply" required={false} />
       <SelectField name="paymentMode" label="Expected payment mode" options={['Bank transfer','Cheque','Cash','Card','Other']} />
       <TextArea name="notes" label="Additional information" required={false} />
@@ -190,7 +190,7 @@ function DraftInvoiceDetails({invoice,close,reload}) {
       <p className="form-note wide">Clear an optional field to remove it from this invoice. Save your changes, then open View / PDF to check the printout before issuing.</p>
       <Field name="title" label="Invoice title" defaultValue={details.title} wide />
       <Field name="placeOfSupply" label="Place of supply" defaultValue={details.placeOfSupply} required={false} />
-      <Field name="deliveryDate" label="Date of delivery" type="date" defaultValue={details.deliveryDate} required={false} />
+      <Field name="deliveryDate" label="Date of supply / delivery" type="date" defaultValue={details.deliveryDate} required={false} />
       <SelectField name="paymentMode" label="Mode of payment" defaultValue={details.paymentMode}
         options={[[ '', 'Not specified'],'Cheque','Cash','Bank transfer','Card','Other']} required={false} />
       <Field name="buyerPhone" label="Purchaser telephone" defaultValue={details.buyerPhone} required={false} />
@@ -514,7 +514,7 @@ function CertificateForm({ data, companyId, close, reload }) {
       const value=event.target.value;setInvoiceDate(value);
       if(value>'2025-09-30'&&terms.taxTreatment==='SVAT')setTerm('taxTreatment','Standard');
     }}/></label>
-    <Field name="deliveryDate" label="Date of delivery" type="date" required={false} />
+    <Field name="deliveryDate" label={documentType==='Tax Invoice'?'Date of supply':'Date of delivery'} type="date" required={false} />
     <Field name="placeOfSupply" label="Place of supply" required={false} placeholder="Enter place of supply (optional)" />
     <SelectField name="paymentMode" label="Expected payment mode" options={['Bank transfer', 'Cheque', 'Cash', 'Card', 'Other']} />
     <Field name="dueDate" label="Payment due" type="date" required={false} />
