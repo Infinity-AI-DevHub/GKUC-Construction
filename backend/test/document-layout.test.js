@@ -181,13 +181,13 @@ test('quotation pagination is verified at one, two and three A4 pages with one f
 });
 
 test('invoice uses quotation blocks with creator signature and saved details',()=>{
- const html=invoiceDocument({company:{name:'Supplier',address:'First, Second, Third',bankDetails:'Old bank'},invoice:{reference:'INV-NEW',invoiceDate:'2026-11-09',documentType:'Tax Invoice',taxTreatment:'Standard',vatRate:18,gross:100,vatAmount:18,netPayable:118,client:'Buyer',buyerAddress:'One, Two, Three',title:'Work package',notes:'User notes only',placeOfSupply:'Entered site',invoiceOptions:{creator:{name:'Creator Name',role:'Finance / Accounts'},bankDetails:'Saved bank\nAccount 123',paymentTerms:'Payment on delivery',additionalNotes:'Final note',terms:'Saved terms',itemDetails:[{methodStatement:'Saved method'}]}},items:[{description:'Work item',quantity:1,rate:100,amount:100}]});
+ const html=invoiceDocument({company:{name:'Supplier',address:'First, Second, Third',bankDetails:'Old bank'},invoice:{reference:'INV-NEW',invoiceDate:'2026-11-09',deliveryDate:'2026-11-08',documentType:'Tax Invoice',taxTreatment:'Standard',vatRate:18,gross:100,vatAmount:18,netPayable:118,client:'Buyer',buyerAddress:'One, Two, Three',title:'Work package',notes:'User notes only',placeOfSupply:'Entered site',invoiceOptions:{creator:{name:'Creator Name',role:'Finance / Accounts'},bankDetails:'Saved bank\nAccount 123',paymentTerms:'Payment on delivery',additionalNotes:'Final note',terms:'Saved terms',itemDetails:[{methodStatement:'Saved method'}]}},items:[{description:'Work item',quantity:1,rate:100,amount:100}]});
  assert.match(html,/Invoice for/);assert.doesNotMatch(html,/data-piece="(?:reference|docDate)"/);
  assert.match(html,/tax-invoice-head/);
  assert.match(html,/Date of invoice:<\/strong> 9 November 2026[\s\S]*Tax invoice no:<\/strong> INV-NEW[\s\S]*<h3>Supplier<\/h3>[\s\S]*<h3>Invoice for<\/h3>/);
  assert.equal((html.match(/User notes only/g)||[]).length,1);
- assert.match(html,/First<br>Second<br>Third/);assert.match(html,/One<br>Two<br>Three/);
- assert.match(html,/User notes only/);assert.doesNotMatch(html,/invoice-information/);
+ assert.match(html,/First, Second, Third/);assert.match(html,/First<br>Second<br>Third/);assert.match(html,/Date of supply:<\/strong> 8 November 2026/);assert.match(html,/One<br>Two<br>Three/);
+ assert.match(html,/Additional information if any:<\/strong><br>User notes only/);
  assert.ok(html.indexOf('Work package')<html.indexOf('Item \/ surfacing'));
  for(const text of ['Saved bank<br>Account 123','Payment on delivery','Final note','Saved terms','Saved method','Creator Name','Finance \/ Accounts'])assert.ok(html.includes(text),text);
  assert.doesNotMatch(html,/Old bank/);

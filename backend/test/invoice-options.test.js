@@ -85,11 +85,14 @@ test('quotation-style invoice retains saved identity and optional purchaser TIN'
   });
   const html = render(null);
   assert.doesNotMatch(html, /Purchaser TIN:/);
-  assert.match(html, /data-piece="companyDetails"[^>]*>Saved address line 1<br>Saved address line 2/);
+  assert.match(html, /data-piece="companyDetails"[^>]*>Saved address line 1, Saved address line 2/);
   assert.match(html, /Invoice for/);
   assert.doesNotMatch(html, /Date of delivery:/);
-  assert.doesNotMatch(html, /Place of supply:/);
-  assert.doesNotMatch(html, /Additional Information if any:/);
+  assert.match(html, /Date of supply:<\/strong> \<\/p>/);
+  assert.match(html, /Place of supply:/);
+  assert.match(html, /Additional information if any:<\/strong><\/p>/);
+  assert.ok(html.indexOf('Additional information if any:') < html.indexOf('Item / surfacing'));
+  assert.ok(html.indexOf('Mode of payment:</strong> Cheque') > html.indexOf('Total amount in words:'));
   assert.match(html, /Mode of payment:<\/strong> Cheque/);
   assert.match(html, /Purchaser &lt;Company&gt;/);
   assert.match(html, /<th class="ref">Item \/ surfacing<\/th>/);
