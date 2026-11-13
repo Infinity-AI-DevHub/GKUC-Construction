@@ -1558,3 +1558,17 @@ Two focused invoice API tests, 41 frontend tests, the frontend production build 
 Tax Invoice PDFs use a one-line letterhead address and a shared phone and email line. Date of Supply uses the existing saved delivery date, editable during creation and on drafts. The date and place boxes sit together above the always-visible Additional Information box. Mode of Payment appears after the amount in words.
 
 Verified the layout in a rendered sample PDF and passed 15 focused document tests, frontend tests, and the frontend build. No deployment or live database writes.
+
+### 2026-11-13 — Full project report PDF
+
+Added a direct PDF export to the project header. The export starts with project,
+delivery and finance totals and follows with linked project registers across all
+saved dates, including commercial line items, recorded progress changes, workforce,
+materials, plant, procurement, correspondence and file metadata. It applies each
+section's source permissions and includes Infinity AI credit on every page.
+
+The focused MySQL API test passed for PDF output, historical BOQ-linked quotations,
+invoice lines, stage and task history, project isolation and restricted access.
+Verified a nine-page A4 fixture, including visual checks of the summary and first
+detail page. All 41 frontend tests and the production build passed. Original
+attachments are indexed by metadata. No deployment or live database writes.

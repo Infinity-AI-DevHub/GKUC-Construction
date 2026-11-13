@@ -677,3 +677,18 @@ An authorized Spend can leave its float balance below zero. Direct float spendin
 Tax invoice rendering places the invoice date and number in separate boxes below the letterhead. The supplier and purchaser boxes use the saved names, tax IDs, multiline addresses and telephone numbers. The letterhead uses one address line and a shared contact line for the configured phone and email. Date of Supply uses the existing invoice delivery date field, editable during creation and on drafts. Date of Supply and Place of Supply appear side by side, above an Additional Information box that remains visible when empty. Mode of Payment appears below the totals and amount in words. Date and number print options apply to their respective boxes.
 
 Draft invoice print details use an invoice-scoped read and patch endpoint for Finance invoice users. The patch locks the draft and audits edits to supply, purchaser and supplier identifiers, and related print fields. Empty optional values clear the invoice snapshot, and supplier tax overrides apply only to that document. The endpoint rejects changes after issue and accepts only the specified print fields.
+
+### Project report PDF
+
+The project header downloads an authenticated A4 PDF from
+`GET /projects/:id/report/document?download=pdf`. A database transaction reads the
+active project and its linked registers across all saved dates. The PDF starts with
+delivery and financial summary figures, then presents the dated registers and child
+line items. The cost figure uses the same basis as the project workspace.
+
+The endpoint requires `projects.view` and applies source-module permissions to
+attendance, commercial, finance, stock and other restricted sections. The report
+lists restricted sections without their counts or contents. Project and task progress
+history uses selected audit fields. The document register lists file metadata and
+keeps original attachments in their respective modules. The renderer uses the
+existing document PDF service and includes the Infinity AI footer on every page.
