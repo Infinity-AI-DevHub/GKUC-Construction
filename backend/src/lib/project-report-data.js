@@ -9,13 +9,13 @@ const groups = [
     ['Work authorisations', 'project_work_authorisations', 'authorised_at,notes', 'authorised_at'],
     ['Project stage and progress history', `audit_logs a LEFT JOIN users u ON u.id=a.user_id`,
       `a.created_at AS changed_at,u.name AS changed_by,
-        a.before_json->>'$.stage' AS previous_stage,a.after_json->>'$.stage' AS new_stage,
-        a.before_json->>'$.progress' AS previous_progress,a.after_json->>'$.progress' AS new_progress,
-        a.before_json->>'$.health' AS previous_health,a.after_json->>'$.health' AS new_health`, 'a.id', [],
+        JSON_UNQUOTE(JSON_EXTRACT(a.before_json, '$.stage')) AS previous_stage,JSON_UNQUOTE(JSON_EXTRACT(a.after_json, '$.stage')) AS new_stage,
+        JSON_UNQUOTE(JSON_EXTRACT(a.before_json, '$.progress')) AS previous_progress,JSON_UNQUOTE(JSON_EXTRACT(a.after_json, '$.progress')) AS new_progress,
+        JSON_UNQUOTE(JSON_EXTRACT(a.before_json, '$.health')) AS previous_health,JSON_UNQUOTE(JSON_EXTRACT(a.after_json, '$.health')) AS new_health`, 'a.id', [],
       `a.entity='project' AND BINARY a.entity_id=CAST(? AS BINARY) AND a.action IN ('CREATE','UPDATE')
-        AND (NOT (a.before_json->>'$.stage' <=> a.after_json->>'$.stage')
-          OR NOT (a.before_json->>'$.progress' <=> a.after_json->>'$.progress')
-          OR NOT (a.before_json->>'$.health' <=> a.after_json->>'$.health'))`],
+        AND (NOT (JSON_UNQUOTE(JSON_EXTRACT(a.before_json, '$.stage')) <=> JSON_UNQUOTE(JSON_EXTRACT(a.after_json, '$.stage')))
+          OR NOT (JSON_UNQUOTE(JSON_EXTRACT(a.before_json, '$.progress')) <=> JSON_UNQUOTE(JSON_EXTRACT(a.after_json, '$.progress')))
+          OR NOT (JSON_UNQUOTE(JSON_EXTRACT(a.before_json, '$.health')) <=> JSON_UNQUOTE(JSON_EXTRACT(a.after_json, '$.health'))))`],
     ['Completion extensions', 'project_extensions', 'reference,request_date,previous_end_date,new_end_date,reason', 'request_date'],
     ['Milestones', 'project_milestones', 'title,due_date,status,completed_at,notes', 'due_date'],
     ['Site status changes', 'site_status_log', 'from_status,to_status,effective_date,reason,created_at', 'effective_date'],
@@ -26,11 +26,11 @@ const groups = [
       ['Task attachments', 'task_attachments', 'title,kind,created_at', 'task_id', 'created_at'],
       ['Uploaded files', "visible_attachments a JOIN tasks t ON a.owner_type='task' AND t.id=a.owner_id", 'a.title,a.filename,a.category,a.created_at', 't.id', 'a.created_at'],
       ['Status history', `audit_logs a JOIN tasks t ON a.entity='task' AND BINARY a.entity_id=CAST(t.id AS BINARY)
-        AND a.after_json->>'$.status' IS NOT NULL
-        AND NOT (a.before_json->>'$.status' <=> a.after_json->>'$.status')
+        AND JSON_UNQUOTE(JSON_EXTRACT(a.after_json, '$.status')) IS NOT NULL
+        AND NOT (JSON_UNQUOTE(JSON_EXTRACT(a.before_json, '$.status')) <=> JSON_UNQUOTE(JSON_EXTRACT(a.after_json, '$.status')))
         LEFT JOIN users u ON u.id=a.user_id`,
-        `a.created_at AS changed_at,u.name AS changed_by,a.before_json->>'$.status' AS previous_status,
-          a.after_json->>'$.status' AS new_status,a.after_json->>'$.statusReason' AS reason`, 't.id', 'a.id']
+        `a.created_at AS changed_at,u.name AS changed_by,JSON_UNQUOTE(JSON_EXTRACT(a.before_json, '$.status')) AS previous_status,
+          JSON_UNQUOTE(JSON_EXTRACT(a.after_json, '$.status')) AS new_status,JSON_UNQUOTE(JSON_EXTRACT(a.after_json, '$.statusReason')) AS reason`, 't.id', 'a.id']
     ]],
     ['Daily site reports', 'daily_reports', 'id,report_date,supervisor,workforce,work_completed,issue,weather,delay_hours,created_at', 'report_date', [
       ['Report attachments', "visible_attachments a JOIN daily_reports r ON a.owner_type='report' AND r.id=a.owner_id", 'a.title,a.filename,a.category,a.created_at', 'r.id', 'a.created_at']
