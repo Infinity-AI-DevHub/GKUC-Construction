@@ -1,12 +1,12 @@
 import BoqAdjustments from './BoqAdjustments.jsx';
 import LinkedImportReview from './LinkedImportReview.jsx';
 import React, { useEffect, useState } from 'react';
-import { api } from './api.js';
+import { api, fetchDownload } from './api.js';
 
 const labels = { clients: 'Clients', subcontractors: 'Subcontractors', projects: 'Projects', boqs: 'BOQs', quotations: 'Client quotations', costs: 'Cost controls', retentions: 'Retentions' };
 const order = ['clients', 'subcontractors', 'projects', 'boqs', 'quotations', 'costs', 'retentions'];
 
-export default function ImportCentre() {
+export default function ImportCentre({ can }) {
   const [types, setTypes] = useState([]);
   const [batches, setBatches] = useState([]);
   const [kind, setKind] = useState('');
@@ -63,19 +63,43 @@ export default function ImportCentre() {
     catch (failure) { setError(failure.message); }
     finally { setBusy(false); }
   };
+  const downloadTemplate = async () => {
+    try {
+      const url = await fetchDownload(`/import-centre/templates/${kind}`);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `gkuc-historical-${kind}.xlsx`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (failure) { setError(failure.message); }
+  };
+  const moduleImports = [
+    [can.has('qs.boq'), '/quantity-surveying/bills-of-quantities', 'QS BOQ import'],
+    [can.has('qs.tender'), '/quantity-surveying/tenders', 'Tender PDF import'],
+    [can.has('subcontractors.manage'), '/quantity-surveying/subcontractors', 'Subcontractor quotation PDF import'],
+    [can.has('finance.invoice'), '/finance/bonds', 'Bank bond import'],
+    [can.has('hr.manage'), '/people/employees', 'Employee workbook import'],
+    [can.has('hr.attendance'), '/people/biometric-import', 'Biometric attendance import']
+  ].filter(([allowed]) => allowed);
   return <div className="import-centre">
     <section className="table-panel" style={{ padding: 24 }}>
       <h2>Import historical records</h2>
       <p>Upload existing records and check what SiteOps extracted before anything is created. BOQs accept any readable Excel workbook or PDF; you can correct every line and link or create the client and project during review.</p>
       <form className="form-grid" onSubmit={check}>
-        <div className="form-field"><label htmlFor="import-kind">Template</label><select id="import-kind" value={kind} onChange={event => { setKind(event.target.value); setReview(null); }}>
+        <div className="form-field"><label htmlFor="import-kind">Template</label><select id="import-kind" value={kind} onChange={event => { setKind(event.target.value); setReview(null); setFile(null); }}>
           {order.filter(id => types.some(type => type.kind === id)).map(id => <option key={id} value={id}>{labels[id]}</option>)}
         </select></div>
-        <div className="form-field"><label htmlFor="import-file">{kind === 'boqs' ? 'Excel workbook or PDF' : 'Completed Excel workbook'}</label><input id="import-file" type="file" accept={kind === 'boqs' ? '.xlsx,.pdf' : '.xlsx'} required onChange={event => setFile(event.target.files?.[0] || null)} /></div>
+        <div className="form-field"><label htmlFor="import-file">{kind === 'boqs' ? 'Excel workbook or PDF' : 'Completed Excel workbook'}</label><input key={kind} id="import-file" type="file" accept={kind === 'boqs' ? '.xlsx,.pdf' : '.xlsx'} required onChange={event => setFile(event.target.files?.[0] || null)} /></div>
         <div className="form-actions"><button className="primary" type="submit" disabled={!file || !kind || busy}>{busy ? 'Checking…' : 'Run dry check'}</button></div>
       </form>
+      {['quotations','costs','retentions'].includes(kind) && <button type="button" className="secondary" onClick={downloadTemplate}>Download current Excel template</button>}
+      {kind === 'costs' && <p className="form-note">Import expenses already recorded in your historical ledger. Use QS Cost Control for daily cost sheets and approval.</p>}
       <p className="form-note">Uploading only creates a review. For BOQs, SiteOps detects unfamiliar layouts and scanned PDFs, then lets you verify dependencies and every priced line. The linked Clients/Contacts, Projects/Project Team and BOQ Headers/Items templates preserve source-key relationships. Import clients first, then projects, then BOQs.</p>
     </section>
+    {moduleImports.length > 0 && <section className="table-panel" style={{ padding:24, marginTop:20 }}>
+      <h2>Imports in other modules</h2>
+      <ul>{moduleImports.map(([, path, name]) => <li key={path}><a href={path}>{name}</a></li>)}</ul>
+    </section>}
     {error && <p className="form-error" role="alert">{error}</p>}
     {review?.mode === 'document-review' && <DocumentReview review={review} setReview={setReview} context={context}
       busy={busy} onConfirm={confirm} />}

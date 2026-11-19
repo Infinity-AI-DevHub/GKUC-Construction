@@ -35,7 +35,7 @@ export default function Admin({ can, user, reload, companyId, initialTab = TABS[
     {tab === 'Access control' && <AccessControl user={user} />}
     {tab === 'Company' && <CompanySettings can={{...can,manage:can.companySettings}} companyId={companyId} />}
     {tab === 'Documents' && <DocumentSettings can={{...can,manage:can.documentSettings}} />}
-    {tab === 'Import centre' && <ImportCentre />}
+    {tab === 'Import centre' && <ImportCentre can={can} />}
     {tab === 'Notifications' && <Notifications can={can} reload={reload} />}
     {tab === 'Evening summary' && <EveningSummary can={can} />}
     {tab === 'Messages' && (can.messages

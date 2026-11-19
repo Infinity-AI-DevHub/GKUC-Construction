@@ -1,3 +1,6 @@
+import { projectCompletion } from '../lib/project-completion.js';
+import { commercialKinds, inspectCommercial, resolveImportCompany, saveCommercial } from '../lib/historical-commercial-import.js';
+import { writeWorkbook } from '../lib/xlsx-write.js';
 import {boqAdjustmentsSchema,calculateBoqFinancials,detectFinancialRows,detectFinancialColumns} from '../lib/boq-financials.js';
 import {isLinkedWorkbook,readLinkedWorkbook,inspectLinked} from '../lib/linked-historical-import.js';
 import {saveLinked} from '../lib/linked-historical-save.js';
@@ -20,12 +23,12 @@ const definitions = {
   boqs: { sheet: 'BOQ Headers', key: 'BOQ_CODE', required: ['PROJECT_CODE', 'ORIGINAL_REFERENCE', 'TITLE', 'STATUS', 'DECLARED_TOTAL_LKR', 'SOURCE_FILENAME'], permission: 'qs.boq' },
   quotations: { sheet: 'Quotation Headers', key: 'QUOTATION_CODE', required: ['CLIENT_CODE', 'COMPANY', 'ORIGINAL_REFERENCE', 'TITLE', 'QUOTE_DATE', 'STATUS', 'ENGAGEMENT', 'SUBTOTAL_LKR', 'TOTAL_LKR', 'SOURCE_FILENAME'], permission: 'qs.quotation' },
   costs: { sheet: 'Expenses', key: 'EXPENSE_CODE', required: ['PROJECT_CODE', 'EXPENSE_DATE', 'SOURCE', 'COST_TYPE', 'DESCRIPTION', 'AMOUNT_LKR', 'REFERENCE'], permission: 'qs.costControl' },
-  retentions: { sheet: 'Retentions', key: 'RETENTION_CODE', required: ['PROJECT_CODE', 'DESCRIPTION', 'AMOUNT_LKR', 'HELD_FROM', 'STATUS'], permission: 'qs.retention' }
+  retentions: { sheet: 'Retentions', key: 'RETENTION_CODE', required: ['PROJECT_CODE', 'DESCRIPTION', 'AMOUNT_LKR', 'HELD_FROM', 'RELEASE_DATE', 'STATUS'], permission: 'qs.retention' }
 };
-const supported = new Set(['clients', 'subcontractors', 'projects']);
+const supported = new Set(['clients', 'subcontractors', 'projects', ...commercialKinds]);
 const clean = value => String(value ?? '').trim();
-const asDate = value => typeof value === 'number' ? serialToDate(value) : clean(value).slice(0, 10);
-const validDate = value => { const date = asDate(value); return /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(`${date}T00:00:00Z`)); };
+const asDate = value => typeof value === 'number' ? serialToDate(value) : clean(value);
+const validDate = value => { const date = asDate(value); const timestamp = Date.parse(`${date}T00:00:00Z`); return /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === date; };
 const canImport = (req, kind) => Boolean(definitions[kind] && req.user.permissions.includes(definitions[kind].permission));
 const issue = (sheet, row, message) => ({ sheet, row, message });
 
@@ -86,26 +89,31 @@ function readRows(workbook, definition) {
   const missing = [definition.key, ...definition.required].filter(key => !headers.includes(key));
   if (missing.length) throw Object.assign(new Error(`${definition.sheet} is missing columns: ${missing.join(', ')}.`), { status: 422 });
   return sheet.rows.slice(headerRow + 1).map((cells, index) => ({
-    sheet: definition.sheet, row: headerRow + index + 1,
+    sheet: definition.sheet, row: headerRow + index + 2,
     data: Object.fromEntries(headers.map((header, col) => [header, cells?.[col] ?? null]).filter(([header]) => header))
   })).filter(record => Object.values(record.data).some(value => clean(value)));
 }
 
 function populatedRelatedSheets(workbook, primary) {
   return workbook.names.filter(name => !['Instructions', 'Field Guide', primary].includes(name))
-    .filter(name => workbook.sheet(name)?.rows?.slice(4).some(row => row?.some(cell => clean(cell))));
+    .filter(name => workbook.sheet(name)?.rows?.slice(1).some(row => row?.some(cell => clean(cell))));
 }
 
-async function inspect(kind, rows) {
+async function inspect(kind, rows, permissions, run = query) {
+  const one = async (sql, params) => (await run(sql, params))[0];
+  const companies = await run("SELECT id,code,name FROM companies WHERE active=1");
+  const sources = kind === 'costs' ? (await run("SELECT value FROM option_values WHERE list_key='expense.source' AND active=1")).map(row => row.value) : [];
   const definition = definitions[kind];
-  const links = await query('SELECT kind,source_code sourceCode,target_id targetId FROM historical_import_links');
+  const links = await run('SELECT kind,source_code sourceCode,target_id targetId FROM historical_import_links');
   const link = (type, code) => links.find(row => row.kind === type && row.sourceCode === code);
   const seen = new Set();
+  const commercialKeys = new Set();
   const results = [];
   for (const record of rows) {
     const data = record.data;
     const code = clean(data[definition.key]);
     const errors = [];
+    if (code.length > 120) errors.push('Migration code must be at most 120 characters.');
     if (!code) errors.push(`${definition.key} is required.`);
     for (const field of definition.required) if (!clean(data[field])) errors.push(`${field.replaceAll('_', ' ').toLowerCase()} is required.`);
     if (code && seen.has(code)) errors.push(`${code} appears more than once in this workbook.`);
@@ -118,25 +126,50 @@ async function inspect(kind, rows) {
       if (field === definition.key || !clean(data[field])) continue;
       if (!link(type, clean(data[field]))) errors.push(`${field.replaceAll('_', ' ')} ${clean(data[field])} has not been imported yet.`);
     }
+    if (link(kind, code) && !errors.length) {
+      results.push({ ...record, code, action: 'skip', errors });
+      continue;
+    }
+    let normalized;
+    if (commercialKinds.has(kind)) {
+      const checked = await inspectCommercial(kind, record, { run, link, companies, sources, asDate });
+      errors.push(...checked.errors);
+      if (kind === 'quotations' && ['Accepted','Sent'].includes(checked.data.status)) {
+        const permission = checked.data.status === 'Accepted' ? 'qs.approve' : 'qs.quotationFinalize';
+        if (!permissions.includes(permission)) errors.push(`You need ${permission} to import a ${checked.data.status} quotation.`);
+      }
+      if (kind === 'costs' && !permissions.some(key => ['finance.manage','finance.costReview'].includes(key)))
+        errors.push('Finance cost review or finance management permission is required to post historical expenses.');
+
+      normalized = checked.data;
+      const identity = kind === 'quotations' ? [normalized.reference?.toLowerCase()] :
+        kind === 'costs' ? [normalized.projectId, normalized.reference?.toLowerCase(), normalized.amount] :
+          [normalized.projectId, normalized.heldFrom, normalized.description?.toLowerCase(), normalized.amount];
+      const key = JSON.stringify(identity);
+      if (commercialKeys.has(key)) errors.push('This workbook contains another row for the same record.');
+      commercialKeys.add(key);
+    }
+    const company = kind === 'projects' ? resolveImportCompany(data.COMPANY, companies) : null;
     if (kind === 'projects') {
-      const employee = await getOne('SELECT id FROM visible_employees WHERE code=? LIMIT 1', [clean(data.PROJECT_MANAGER_EMPLOYEE_CODE)]);
+      const employee = await one('SELECT id FROM visible_employees WHERE code=? LIMIT 1', [clean(data.PROJECT_MANAGER_EMPLOYEE_CODE)]);
       if (!employee) errors.push(`Project manager ${clean(data.PROJECT_MANAGER_EMPLOYEE_CODE)} was not found. Add or correct the employee code first.`);
-      if (!['GKUC Construction','GKUC Readymix'].includes(clean(data.COMPANY))) errors.push('Company must be GKUC Construction or GKUC Readymix.');
+      if (!company) errors.push('Company must be GKUC Construction or GKUC Readymix.');
       if (!['On track','Watch','At risk'].includes(clean(data.HEALTH))) errors.push('Health must be On track, Watch or At risk.');
       if (!['Current','Completed','Archived'].includes(clean(data.STATUS))) errors.push('Status must be Current, Completed or Archived.');
-      if (!Number.isFinite(Number(data.PROGRESS_PERCENT)) || Number(data.PROGRESS_PERCENT) < 0 || Number(data.PROGRESS_PERCENT) > 100) errors.push('Progress must be from 0 to 100.');
+      if (!Number.isInteger(Number(data.PROGRESS_PERCENT)) || Number(data.PROGRESS_PERCENT) < 0 || Number(data.PROGRESS_PERCENT) > 100) errors.push('Progress must be from 0 to 100.');
       if (!validDate(data.START_DATE)) errors.push('Start date is not a valid date.');
       if (clean(data.END_DATE) && !validDate(data.END_DATE)) errors.push('End date is not a valid date.');
+      if (validDate(data.START_DATE) && validDate(data.END_DATE) && asDate(data.END_DATE) < asDate(data.START_DATE))
+        errors.push('End date cannot precede start date.');
       if (clean(data.CURRENT_BUDGET_LKR) && (!Number.isFinite(Number(data.CURRENT_BUDGET_LKR)) || Number(data.CURRENT_BUDGET_LKR) < 0)) errors.push('Current budget must be zero or a positive amount.');
     }
     let existing = link(kind, code);
-    if (!existing && kind === 'clients' && clean(data.CLIENT_NAME)) existing = await getOne('SELECT id targetId FROM clients WHERE LOWER(name)=LOWER(?) AND type=?', [clean(data.CLIENT_NAME), clean(data.CLIENT_TYPE) === 'Individual' ? 'Private' : 'Organisation']);
-    if (!existing && kind === 'subcontractors' && clean(data.NAME)) existing = await getOne('SELECT id targetId FROM subcontractors WHERE LOWER(name)=LOWER(?)', [clean(data.NAME)]);
-    if (!existing && kind === 'projects' && clean(data.PROJECT_NAME)) existing = await getOne('SELECT id targetId FROM projects WHERE LOWER(name)=LOWER(?) AND company_id=?', [clean(data.PROJECT_NAME), clean(data.COMPANY) === 'GKUC Readymix' ? 2 : 1]);
+    if (!existing && kind === 'clients' && clean(data.CLIENT_NAME)) existing = await one('SELECT id targetId FROM clients WHERE LOWER(name)=LOWER(?) AND type=?', [clean(data.CLIENT_NAME), clean(data.CLIENT_TYPE) === 'Individual' ? 'Private' : 'Organisation']);
+    if (!existing && kind === 'subcontractors' && clean(data.NAME)) existing = await one('SELECT id targetId FROM subcontractors WHERE LOWER(name)=LOWER(?)', [clean(data.NAME)]);
+    if (!existing && kind === 'projects' && clean(data.PROJECT_NAME)) existing = await one('SELECT id targetId FROM projects WHERE LOWER(name)=LOWER(?) AND company_id=?', [clean(data.PROJECT_NAME), company?.id || 0]);
     if (existing && !link(kind, code)) errors.push(`A matching ${kind.slice(0, -1)} already exists in SiteOps. Link it manually before importing to avoid a duplicate.`);
     const action = errors.length ? 'blocked' : link(kind, code) ? 'skip' : supported.has(kind) ? 'create' : 'blocked';
-    if (!supported.has(kind)) errors.push('This record type is not yet connected to its live register. It cannot be confirmed safely.');
-    results.push({ ...record, code, action, errors });
+    results.push({ ...record, code, action, errors, normalized, companyId: company?.id });
   }
   return results;
 }
@@ -144,6 +177,26 @@ async function inspect(kind, rows) {
 router.get('/types', auth, wrap(async (req, res) => res.json(Object.entries(definitions)
   .filter(([kind]) => canImport(req, kind))
   .map(([kind, definition]) => ({ kind, sheet: definition.sheet, importReady: supported.has(kind) || kind === 'boqs' })))));
+
+const quotationItems = { sheet: 'Quotation Items', key: 'QUOTATION_CODE',
+  required: ['LINE_NO','CATEGORY','DESCRIPTION','UNIT','QUANTITY','RATE_LKR','AMOUNT_LKR'] };
+const commercialColumns = {
+  quotations: ['PROJECT_CODE','BOQ_CODE','VALID_UNTIL','MARKUP_PERCENT','VAT_PERCENT','CALCULATION_MODE',
+    'MAIN_CONTRACTOR','NOTES','TERMS','PAYMENT_TERMS','ADDITIONAL_NOTES','PREPARED_BY','PREPARED_BY_DESIGNATION'],
+  costs: ['COMPANY','PAYEE','PAYMENT_METHOD','PAID_DATE'],
+  retentions: ['COMPANY','PERCENT','DEFECT_LIABILITY_ENDS','RELEASED_AMOUNT_LKR','REMARK']
+};
+
+router.get('/templates/:kind', wrap(async (req, res) => {
+  const { kind } = req.params;
+  if (!commercialKinds.has(kind) || !canImport(req, kind)) throw fail(404, 'Import template unavailable.');
+  const definition = definitions[kind];
+  const sheet = (spec, extra = []) => ({ name: spec.sheet, rows: [[spec.key, ...spec.required, ...extra]], freeze: 1 });
+  const sheets = [sheet(definition, commercialColumns[kind])];
+  if (kind === 'quotations') sheets.push(sheet(quotationItems, ['METHOD_STATEMENT']));
+  res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    .attachment(`gkuc-historical-${kind}.xlsx`).send(writeWorkbook(sheets));
+}));
 
 router.get('/review-context', auth, permit('qs.boq'), wrap(async (req, res) => {
   const [clients, projects, companies] = await Promise.all([
@@ -205,8 +258,21 @@ router.post('/dry-check', auth, wrap(async (req, res) => {
     if (buffer.length > 15 * 1024 * 1024) return res.status(413).json({ error: 'This workbook is too large. Split it into smaller periods.' });
     const workbook = readWorkbook(buffer);
     const rows = readRows(workbook, definitions[kind]);
-    const checked = await inspect(kind, rows);
-    const related = populatedRelatedSheets(workbook, definitions[kind].sheet);
+    if (!rows.length) throw fail(422, 'Add at least one data row.');
+    if (rows.length > 3000) throw fail(422, 'Import up to 3,000 records per workbook.');
+    if (kind === 'quotations') {
+      const items = readRows(workbook, quotationItems);
+      if (items.length + rows.length > 3000) throw fail(422, 'Import up to 3,000 source rows per workbook.');
+      const byCode = new Map(rows.map(row => [clean(row.data.QUOTATION_CODE), row]));
+      for (const item of items) {
+        const parent = byCode.get(clean(item.data.QUOTATION_CODE));
+        if (!parent) throw fail(422, `Quotation Items row ${item.row} has no matching header.`);
+        (parent.items ||= []).push(item);
+      }
+    }
+    const checked = await inspect(kind, rows, req.user.permissions);
+    const related = populatedRelatedSheets(workbook, definitions[kind].sheet)
+      .filter(name => kind !== 'quotations' || name !== quotationItems.sheet);
     if (related.length) for (const row of checked) {
       row.errors.push(`The ${related.join(', ')} sheet${related.length === 1 ? ' has' : 's have'} rows that this import cannot safely create yet.`);
       row.action = 'blocked';
@@ -373,16 +439,20 @@ router.post('/batches/:id/confirm', auth, wrap(async (req, res) => {
   }
   if (!supported.has(batch.kind)) return res.status(409).json({ error: 'This template is available for checking, but importing it is not yet safe. No records were changed.' });
   if (preview.rows.some(row => row.action === 'blocked')) return res.status(409).json({ error: 'Resolve every issue in the dry-check report and upload the corrected workbook first.' });
-  const checked = await inspect(batch.kind, preview.rows.map(({ sheet, row, data }) => ({ sheet, row, data })));
-  if (checked.some(row => row.action === 'blocked')) return res.status(409).json({ error: 'The data changed since the dry check. Run a new dry check before confirming.', rows: checked });
-  const created = await transaction(async connection => {
-    const locked = await connection.execute('SELECT status FROM historical_import_batches WHERE id=? FOR UPDATE', [batch.id]);
-    if (locked[0][0]?.status !== 'Review') throw Object.assign(new Error('This workbook was already imported.'), { status: 409 });
+  const result = await transaction(async connection => {
+    const run = async (sql, params = []) => (await connection.execute(sql, params))[0];
+    const [locked] = await run('SELECT status,preview_json FROM historical_import_batches WHERE id=? FOR UPDATE', [batch.id]);
+    if (locked?.status !== 'Review') throw fail(409, 'This workbook was already imported.');
+    await run('SELECT id FROM companies ORDER BY id FOR UPDATE');
+    const checked = await inspect(batch.kind, JSON.parse(locked.preview_json).rows, req.user.permissions, run);
+    if (checked.some(row => row.action === 'blocked')) throw fail(409, checked.find(row => row.action === 'blocked').errors[0]);
     let count = 0;
     for (const record of checked.filter(row => row.action === 'create')) {
       const d = record.data;
       let id;
-      if (batch.kind === 'clients') {
+      if (commercialKinds.has(batch.kind)) {
+        id = await saveCommercial(batch.kind, connection, run, record.normalized, req.user);
+      } else if (batch.kind === 'clients') {
         const [result] = await connection.execute(`INSERT INTO clients
           (type,name,registration_number,tin,vat_number,billing_address,site_address,phone,email,contact_person,active,notes)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [clean(d.CLIENT_TYPE) === 'Individual' ? 'Private' : 'Organisation', clean(d.CLIENT_NAME), clean(d.BUSINESS_REGISTRATION_NO) || null,
@@ -400,22 +470,29 @@ router.post('/batches/:id/confirm', auth, wrap(async (req, res) => {
         const [client] = await connection.execute('SELECT target_id FROM historical_import_links WHERE kind=? AND source_code=?', ['clients', clean(d.CLIENT_CODE)]);
         const [employee] = await connection.execute('SELECT id,name FROM visible_employees WHERE code=? LIMIT 1', [clean(d.PROJECT_MANAGER_EMPLOYEE_CODE)]);
         if (!client[0] || !employee[0]) throw Object.assign(new Error(`Project ${record.code} has a missing client or manager. Run the dry check again.`), { status: 409 });
+        const state = projectCompletion({
+          stage: clean(d.STATUS) === 'Completed' ? 'Completed' : clean(d.STAGE),
+          progress: Number(d.PROGRESS_PERCENT), health: clean(d.HEALTH)
+        });
         const [result] = await connection.execute(`INSERT INTO projects
-          (name,client,client_id,manager,manager_employee_id,progress,budget,health,stage,site,start_date,end_date,active,company_id)
-          SELECT ?,c.name,c.id,?,?,?,?,?,?,?,?,?,?,? FROM clients c WHERE c.id=?`,
-          [clean(d.PROJECT_NAME), employee[0].name, employee[0].id, Number(d.PROGRESS_PERCENT), Number(d.CURRENT_BUDGET_LKR || 0), clean(d.HEALTH),
-            clean(d.STAGE), clean(d.SITE_ADDRESS), asDate(d.START_DATE), d.END_DATE ? asDate(d.END_DATE) : null,
-            clean(d.STATUS) === 'Archived' ? 0 : 1, clean(d.COMPANY) === 'GKUC Readymix' ? 2 : 1, client[0].target_id]);
+          (name,client,client_id,manager,manager_employee_id,progress,budget,health,stage,site,start_date,end_date,active,company_id,site_status)
+          SELECT ?,c.name,c.id,?,?,?,?,?,?,?,?,?,?,?,? FROM clients c WHERE c.id=?`,
+          [clean(d.PROJECT_NAME), employee[0].name, employee[0].id, state.progress, Number(d.CURRENT_BUDGET_LKR || 0), state.health,
+            state.stage, clean(d.SITE_ADDRESS), asDate(d.START_DATE), d.END_DATE ? asDate(d.END_DATE) : null,
+            clean(d.STATUS) === 'Archived' ? 0 : 1, record.companyId, state.site_status || 'Active', client[0].target_id]);
         id = result.insertId;
+        if (!id) throw fail(409, 'The linked client no longer exists.');
+        await run('INSERT INTO project_manager_assignments (project_id,employee_id) VALUES (?,?)', [id,employee[0].id]);
       }
-      await connection.execute('INSERT INTO historical_import_links (kind,source_code,target_id,batch_id) VALUES (?,?,?,?)', [batch.kind, record.code, id, batch.id]);
+      await run('INSERT INTO historical_import_links (kind,source_code,target_id,batch_id,source_json) VALUES (?,?,?,?,?)',
+        [batch.kind, record.code, id, batch.id, JSON.stringify(record.items ? { ...d, items: record.items } : d)]);
       count += 1;
     }
     await connection.execute("UPDATE historical_import_batches SET status='Imported',confirmed_by=?,confirmed_at=NOW() WHERE id=?", [req.user.id, batch.id]);
     await audit(connection, req.user.id, 'IMPORT_CONFIRM', 'historical_import', batch.id, null, { kind: batch.kind, created: count, skipped: checked.length - count }, req.ip);
-    return count;
+    return { id: batch.id, status: 'Imported', created: count, skipped: checked.length - count };
   });
-  res.json({ id: batch.id, status: 'Imported', created, skipped: checked.length - created });
+  res.json(result);
 }));
 
 export default router;

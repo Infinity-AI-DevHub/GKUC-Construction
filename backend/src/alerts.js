@@ -265,6 +265,7 @@ async function creditCardAlerts(stamp,alerts){
 async function maintenanceScheduleAlerts(stamp, alerts) {
   const schedules = await query(`SELECT s.id,s.vehicle_id vehicleId,s.name,s.interval_km intervalKm,
     s.last_odometer lastOdometer,s.remind_before_km remindBeforeKm,s.active,
+    s.last_completed_date lastCompletedDate,s.interval_months intervalMonths,s.remind_before_days remindBeforeDays,
     f.vehicle,f.registration,f.odometer,f.status vehicleStatus
     FROM vehicle_maintenance_schedules s JOIN fleet f ON f.id=s.vehicle_id WHERE s.active=1 AND f.status<>'Inactive'`);
   for (const schedule of schedules) {

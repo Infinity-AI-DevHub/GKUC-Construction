@@ -278,3 +278,17 @@ Salary advance floats may be funded/used across both companies. Each advance exp
 Only same-category floats can merge. A Salary advance merge preserves every entry ID, employee, date, amount and company and keeps salary_advance_recoveries references intact. No new advance/recovery is created, no policy is changed and no Draft/Approved/Paid salary is recalculated. Archived account ledgers retain historical membership; payroll continues to read the original employee-linked advances through their active same-category destination.
 
 A recorded salary advance can leave the petty-cash float balance negative. The employee's daily-rate limit, payroll-company validation and recovery rules continue to apply.
+
+## Employee selection for manual runs (2026-11-19)
+
+Prepare payroll run asks who to include. HR can choose all eligible employees,
+one or more payroll categories, or a selection of named employees. Staff maps
+to Office employee, Labour to Site labourer. Company, payment frequency and
+effective employment dates still determine eligibility.
+
+Each saved run keeps its category or employee selection. Draft recalculation
+uses that selection. Disjoint groups can have separate runs for the same dates,
+while the employee/date overlap check prevents duplicate payroll across groups,
+companies and frequencies. Approved and paid runs retain their saved snapshots.
+The existing automatic scheduler continues to select all eligible employees for
+its company and payment frequency.

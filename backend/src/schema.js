@@ -2704,6 +2704,8 @@ async function createFleetHistoryTables() {
     FOREIGN KEY(vehicle_id) REFERENCES fleet(id),FOREIGN KEY(last_maintenance_id) REFERENCES vehicle_maintenance(id),
     FOREIGN KEY(created_by) REFERENCES users(id)
   ) ENGINE=InnoDB`);
+  await addColumn('vehicle_maintenance_schedules','interval_months','SMALLINT UNSIGNED NULL');
+  await addColumn('vehicle_maintenance_schedules','remind_before_days','SMALLINT UNSIGNED NULL');
   await addColumn('vehicle_maintenance', 'completed_schedules', 'JSON NULL');
   if (!(await columnIsNullable('fuel_records','litres')))
     await query('ALTER TABLE fuel_records MODIFY litres DECIMAL(10,2) NULL');
@@ -2810,8 +2812,11 @@ async function migrateExistingInstalls() {
   await addColumn('payroll_runs', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
   await addForeignKey('payroll_runs', 'fk_payroll_company', 'CONSTRAINT fk_payroll_company FOREIGN KEY(company_id) REFERENCES companies(id)');
   await dropIndex('payroll_runs', 'uq_payroll_period_frequency');
-  await addIndex('payroll_runs', 'uq_payroll_company_period_frequency',
-    'UNIQUE KEY uq_payroll_company_period_frequency(company_id,period_start,period_end,pay_frequency)');
+  await addColumn('payroll_runs','selection_key',"VARCHAR(64) NOT NULL DEFAULT 'all'");
+  await addColumn('payroll_runs','employee_selection','JSON NULL');
+  await addIndex('payroll_runs', 'uq_payroll_company_period_selection',
+    'UNIQUE KEY uq_payroll_company_period_selection(company_id,period_start,period_end,pay_frequency,selection_key)');
+  await dropIndex('payroll_runs','uq_payroll_company_period_frequency');
   await addColumn('payroll_policies', 'company_id', 'TINYINT UNSIGNED NOT NULL DEFAULT 1');
   await addColumn('payroll_policies', 'archive_key', 'BIGINT UNSIGNED NOT NULL DEFAULT 0');
   await addColumn('payroll_policies', 'archived_at', 'DATETIME NULL');

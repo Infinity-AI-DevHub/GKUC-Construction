@@ -267,6 +267,12 @@ in client_contact_people and are returned by the client detail API/profile. Guar
 column widening preserves long project/BOQ names and descriptions. See
 [Historical imports](HISTORICAL_IMPORTS.md) for validation, ordering and source caveats.
 
+Commercial historical workbooks add confirmed creation for quotations with lines,
+recorded project expenses and retentions. The Import Centre serves their templates
+and rechecks permissions, dependencies and duplicate keys inside the confirm
+transaction. The expense path shares Finance's ledger duplicate check. See
+[commercial workbook rules](HISTORICAL_IMPORTS.md#commercial-workbooks).
+
 ### Project deadlines and extension request letters (2026-11-05)
 
 Project creation/editing accepts a nullable end date. Optional dates can be added later;
@@ -692,3 +698,21 @@ lists restricted sections without their counts or contents. Project and task pro
 history uses selected audit fields. The document register lists file metadata and
 keeps original attachments in their respective modules. The renderer uses the
 existing document PDF service and includes the Infinity AI footer on every page.
+
+### Calendar-based vehicle maintenance reminders
+
+Maintenance schedules with an interval in months use the last completed date and
+a lead time in days. The due date clamps to the last valid day of the target
+month. The existing Fleet alert scan uses that date and starts a fresh cycle
+when selected work is logged as completed. Schedules with no month interval
+use their saved odometer settings.
+
+### Payroll employee groups
+
+Manual single-company and batch payroll endpoints accept either payroll categories
+or explicit employee IDs. Runs store employee_selection JSON and a canonical
+selection_key. Period uniqueness includes that key so disjoint groups can be
+processed separately. Generation serializes on the company and checks selected
+employees for existing overlapping payslips. Legacy runs have selection key all.
+The guarded startup migration adds these fields and replaces the old company/
+period/frequency unique index.

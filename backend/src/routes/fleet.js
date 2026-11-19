@@ -128,11 +128,20 @@ router.get('/monthly-report',auth,permit('finance.vehicleExpenses','transport.vi
 
 const scheduleSelect = `SELECT s.id,s.vehicle_id vehicleId,s.name,s.interval_km intervalKm,s.last_odometer lastOdometer,
   s.last_completed_date lastCompletedDate,s.remind_before_km remindBeforeKm,s.active,
+  s.interval_months intervalMonths,s.remind_before_days remindBeforeDays,
   f.vehicle,f.registration,f.odometer,f.status vehicleStatus FROM vehicle_maintenance_schedules s JOIN fleet f ON f.id=s.vehicle_id`;
-const scheduleSchema = z.object({ name: z.string().trim().min(2).max(120), intervalKm: z.number().int().positive().max(10000000),
-  lastOdometer: z.number().int().nonnegative(), lastCompletedDate: isoDate.nullable().optional(),
-  remindBeforeKm: z.number().int().nonnegative().default(500), active: z.boolean().default(true)
-}).refine(value => value.remindBeforeKm < value.intervalKm, { message: 'The reminder distance must be below the maintenance interval.', path: ['remindBeforeKm'] });
+const scheduleBase = z.object({ name: z.string().trim().min(2).max(120), active: z.boolean().default(true) });
+const distanceSchedule = scheduleBase.extend({
+  intervalKm: z.number().int().positive().max(10000000), lastOdometer: z.number().int().nonnegative(),
+  lastCompletedDate: z.string().date().nullable().optional(), remindBeforeKm: z.number().int().nonnegative().default(500)
+}).strict().refine(value => value.remindBeforeKm < value.intervalKm, {
+  message: 'The reminder distance must be below the maintenance interval.', path: ['remindBeforeKm']
+});
+const dateSchedule = scheduleBase.extend({
+  intervalMonths: z.number().int().min(1).max(120), lastCompletedDate: z.string().date(),
+  remindBeforeDays: z.number().int().min(0).max(365).default(7)
+}).strict();
+const scheduleSchema = z.union([dateSchedule, distanceSchedule]);
 
 router.get('/maintenance-schedules', auth, permit('transport.view','transport.manage'), wrap(async (_req,res) => {
   res.json((await query(`${scheduleSelect} ORDER BY f.registration,s.name`)).map(row => maintenanceDue(row,row.odometer)));
@@ -145,16 +154,18 @@ async function saveMaintenanceSchedule(req,res) {
     if (!vehicle) throw Object.assign(new Error('Vehicle not found'),{status:404});
     if (body.lastOdometer > Number(vehicle.odometer)) throw Object.assign(new Error('The last maintenance reading cannot exceed the current odometer.'),{status:400});
     if (body.lastCompletedDate && body.lastCompletedDate > today()) throw Object.assign(new Error('The last maintenance date cannot be in the future.'),{status:400});
+    const fields = [body.name,body.intervalKm ?? 0,body.lastOdometer ?? 0,body.lastCompletedDate || null,
+      body.remindBeforeKm ?? 0,body.active,body.intervalMonths ?? null,body.remindBeforeDays ?? null];
     let before = null;
     if (req.params.scheduleId) {
       [[before]] = await connection.execute('SELECT * FROM vehicle_maintenance_schedules WHERE id=? AND vehicle_id=? FOR UPDATE',[req.params.scheduleId,vehicle.id]);
       if (!before) throw Object.assign(new Error('Maintenance reminder not found for this vehicle.'),{status:404});
-      await connection.execute(`UPDATE vehicle_maintenance_schedules SET name=?,interval_km=?,last_odometer=?,last_completed_date=?,remind_before_km=?,active=? WHERE id=?`,
-        [body.name,body.intervalKm,body.lastOdometer,body.lastCompletedDate||null,body.remindBeforeKm,body.active, before.id]);
+      await connection.execute(`UPDATE vehicle_maintenance_schedules SET name=?,interval_km=?,last_odometer=?,last_completed_date=?,remind_before_km=?,active=?,interval_months=?,remind_before_days=? WHERE id=?`,
+        [...fields,before.id]);
     } else {
       const [created] = await connection.execute(`INSERT INTO vehicle_maintenance_schedules
-        (vehicle_id,name,interval_km,last_odometer,last_completed_date,remind_before_km,active,created_by) VALUES (?,?,?,?,?,?,?,?)`,
-        [vehicle.id,body.name,body.intervalKm,body.lastOdometer,body.lastCompletedDate||null,body.remindBeforeKm,body.active,req.user.id]);
+        (vehicle_id,name,interval_km,last_odometer,last_completed_date,remind_before_km,active,interval_months,remind_before_days,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [vehicle.id,...fields,req.user.id]);
       before = { id: created.insertId };
     }
     await audit(connection,req.user.id,req.params.scheduleId ? 'UPDATE' : 'CREATE','vehicle_maintenance_schedule',before.id,before,body,req.ip);
@@ -422,7 +433,7 @@ router.post('/:id/maintenance', auth, permit('transport.manage'), validate(z.obj
   companyId:z.number().int().positive().optional(),
   completedScheduleIds: z.array(z.number().int().positive()).max(50).default([]),
   kind:z.enum(['Service','Repair','Inspection']).default('Service'),
-  serviceDate: isoDate,
+  serviceDate: z.string().date(),
   description: z.string().min(3).max(400),
   cost: z.number().nonnegative().default(0),
   garage: z.string().max(180).optional(),
@@ -446,6 +457,8 @@ router.post('/:id/maintenance', auth, permit('transport.manage'), validate(z.obj
     const scheduleIds = [...new Set(body.completedScheduleIds)];
     const [schedules] = scheduleIds.length ? await connection.execute(`SELECT id,name,last_completed_date FROM vehicle_maintenance_schedules
       WHERE vehicle_id=? AND active=1 AND id IN (${scheduleIds.map(()=>'?').join(',')}) ORDER BY id FOR UPDATE`, [vehicle.id,...scheduleIds]) : [[]];
+    if (schedules.length && body.serviceDate > today())
+      throw Object.assign(new Error('Maintenance completion cannot be in the future.'),{status:400});
     if (schedules.length !== scheduleIds.length) throw Object.assign(new Error('Choose active maintenance reminders belonging to this vehicle.'),{status:400});
     if (schedules.some(row => row.last_completed_date && String(row.last_completed_date).slice(0,10) > body.serviceDate))
       throw Object.assign(new Error('This work predates the last completion of a selected maintenance reminder.'),{status:400});

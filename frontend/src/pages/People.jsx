@@ -117,7 +117,7 @@ export default function People({ user, data, allData, reload, can, companies, co
     {open === 'Attendance' && <AttendanceForm data={{...data,projects:allProjects}} initialDate={attendanceDate} close={() => setOpen('')} reload={reload} />}
     {open === 'Leave' && <LeaveForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Overtime' && <OvertimeForm data={data} close={() => setOpen('')} reload={reload} />}
-    {open === 'Payroll' && <PayrollForm companyId={companyId} company={company} close={() => setOpen('')} reload={reload} />}
+    {open === 'Payroll' && <PayrollForm data={data} companyId={companyId} company={company} close={() => setOpen('')} reload={reload} />}
     {open === 'Performance' && <ReviewForm data={data} close={() => setOpen('')} reload={reload} />}
     {open === 'Departments' && <DepartmentForm close={() => setOpen('')} reload={reload} />}
   </Page></RecordScopeProvider>;
@@ -323,7 +323,10 @@ function Payroll({ can, companyId }) {
       {rows.map(row => <Row template={PAYROLL_TEMPLATE} key={row.id}>
         <strong>{row.reference}</strong>
         <Badge tone="pending">{row.payFrequency}</Badge>
-        <span>{shortDate(row.periodStart)}</span>
+        <span>{shortDate(row.periodStart)}{row.employeeSelection && <small>{(() => {
+          const selected = typeof row.employeeSelection === 'string' ? JSON.parse(row.employeeSelection) : row.employeeSelection;
+          return selected.categories?.join(', ') || `${selected.employeeIds?.length} selected employees`;
+        })()}</small>}</span>
         <span>{shortDate(row.periodEnd)}</span>
         <span>{row.employees}</span>
         <strong>{rupees(row.total)}</strong>
@@ -342,7 +345,10 @@ function Payroll({ can, companyId }) {
     {detail && <PayrollDetail run={detail} close={() => setDetail(null)} />}
     {action && <FormModal title={`${action.kind==='delete'?'Delete':'Recalculate'} ${action.run.reference}?`} label={action.kind==='delete'?'Delete draft':'Recalculate draft'} close={()=>setAction(null)} onSubmit={async()=>{
       if(action.kind==='delete')await del(`/payroll/${action.run.id}`);
-      else await post('/payroll',{companyId:Number(action.run.companyId),periodStart:action.run.periodStart,periodEnd:action.run.periodEnd,payFrequency:action.run.payFrequency});
+      else {
+        const selection = typeof action.run.employeeSelection === 'string' ? JSON.parse(action.run.employeeSelection) : action.run.employeeSelection;
+        await post('/payroll',{companyId:Number(action.run.companyId),periodStart:action.run.periodStart,periodEnd:action.run.periodEnd,payFrequency:action.run.payFrequency,...selection});
+      }
       setDetail(null);await load();setAction(null);
     }}>
       <p className="wide">{shortDate(action.run.periodStart)} to {shortDate(action.run.periodEnd)} · {action.run.payFrequency} · {rupees(action.run.total)}</p>
@@ -713,12 +719,27 @@ function Performance() {
   </Table>;
 }
 
-function PayrollForm({ companyId, company, close, reload }) {
+function PayrollForm({ data, companyId, company, close, reload }) {
   const [scope,setScope]=useState('selected');
+  const [audience,setAudience]=useState('all');
+  const [categories,setCategories]=useState([]);
+  const [employeeIds,setEmployeeIds]=useState([]);
+  const [frequency,setFrequency]=useState('Monthly');
+  const [search,setSearch]=useState('');
+  const eligible = data.employees.filter(row => row.status !== 'Left' &&
+    (scope === 'both' || Number(row.payrollCompanyId) === Number(companyId)) && row.payFrequency === frequency);
+  const options = [
+    ['Office employee','Staff'],['Supervisor','Supervisors'],['Site labourer','Labour'],
+    ['Driver','Drivers'],['Custom','Custom payroll category']
+  ];
   const first = new Date();
   first.setDate(1);
   return <WorkflowForm title="Prepare payroll run" close={close} label={scope==='both'?'Build both draft runs':'Build draft run'} summary={[["Company", scope==='both'?'GKUC Construction + GKUC Readymix':company?.name || 'Selected company'], ['Run stage', 'Draft only — review before approval']]} onSubmit={async values => {
-    const result=await post(scope==='both'?'/payroll/batch':'/payroll', { ...(scope==='both'?{companyIds:[1,2]}:{companyId}), periodStart: values.periodStart, periodEnd: values.periodEnd, payFrequency: values.payFrequency });
+    if (audience === 'categories' && !categories.length) throw new Error('Choose at least one employee group.');
+    const selectedIds = employeeIds.filter(id => eligible.some(row => Number(row.id) === id));
+    if (audience === 'employees' && !selectedIds.length) throw new Error('Choose at least one employee.');
+    const selection = audience === 'categories' ? { categories } : audience === 'employees' ? { employeeIds: selectedIds } : {};
+    const result=await post(scope==='both'?'/payroll/batch':'/payroll', { ...(scope==='both'?{companyIds:[1,2]}:{companyId}), periodStart: values.periodStart, periodEnd: values.periodEnd, payFrequency: frequency, ...selection });
     if(result.review?.length)notice({title:'Payroll drafts built — zero amounts need review',message:result.review.map(row=>`${row.employee} (${row.employeeCode}): ${row.reasons.join(' ') || 'Review the salary and deductions.'}`).join(' '),severity:'Warning'});
     await reload();
   }}>
@@ -726,7 +747,26 @@ function PayrollForm({ companyId, company, close, reload }) {
     <label>Companies<select name="companyScope" value={scope} onChange={event=>setScope(event.target.value)}><option value="selected">{company?.name||'Selected company'}</option><option value="both">GKUC Construction + GKUC Readymix</option></select></label>
     <Field name="periodStart" label="Period from" type="date" defaultValue={localDate(first)} />
     <Field name="periodEnd" label="Period to" type="date" defaultValue={todayInput()} />
-    <SelectField name="payFrequency" label="Employees to pay" options={[["Daily", "Daily-paid employees"], ["Weekly", "Weekly-paid employees"], ["Monthly", "Monthly-paid employees"]]} defaultValue="Monthly" />
+    <label>Payment frequency<select value={frequency} onChange={event=>setFrequency(event.target.value)}>
+      {['Daily','Weekly','Monthly'].map(value=><option key={value}>{value}</option>)}
+    </select></label>
+    <label>Who should this payroll include?<select value={audience} onChange={event=>setAudience(event.target.value)}>
+      <option value="all">All eligible employees</option>
+      <option value="categories">Choose employee groups</option>
+      <option value="employees">Choose individual employees</option>
+    </select></label>
+    {audience === 'categories' && <fieldset className="wide"><legend>Employee groups</legend>
+      {options.map(([value,label])=><label key={value}><input type="checkbox" checked={categories.includes(value)}
+        onChange={event=>setCategories(event.target.checked?[...categories,value]:categories.filter(item=>item!==value))}/>{label}</label>)}
+    </fieldset>}
+    {audience === 'employees' && <fieldset className="wide"><legend>Employees to include</legend>
+      <input aria-label="Search payroll employees" placeholder="Search by name or employee code" value={search} onChange={event=>setSearch(event.target.value)}/>
+      <div style={{maxHeight:240,overflowY:'auto'}}>{eligible.filter(row=>`${row.name} ${row.code}`.toLowerCase().includes(search.toLowerCase())).map(row=><label key={row.id}>
+        <input type="checkbox" checked={employeeIds.includes(Number(row.id))} onChange={event=>setEmployeeIds(event.target.checked?[...employeeIds,Number(row.id)]:employeeIds.filter(id=>id!==Number(row.id)))}/>
+        {row.name} · {row.code} · {row.payrollCategory}
+      </label>)}</div>
+    </fieldset>}
+    <p className="wide">{eligible.filter(row=>audience==='all'||audience==='categories'&&categories.includes(row.payrollCategory)||audience==='employees'&&employeeIds.includes(Number(row.id))).length} employees selected for this payment frequency.</p>
     <div className="qs-form-section wide"><span>02</span><div><h3>Calculation sources</h3><p>Review the inputs used in this draft.</p></div></div>
     <p className="wide" style={{ margin: 0, fontSize: '10px', color: 'var(--muted)' }}>
       Only employees assigned to this payment frequency are included. Attendance-based Office/Site OT, approved travel OT,
