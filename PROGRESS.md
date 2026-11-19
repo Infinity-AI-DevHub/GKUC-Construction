@@ -1590,3 +1590,53 @@ ellipsis and the original project record retains its full name.
 
 The focused local MySQL API test passed for refreshing an existing budget case
 with a long Unicode project name. No schema migration, deployment or live writes.
+
+### 2026-11-13 — Rebuild desktop release packages
+
+Rebuilt the existing 1.0.6 Windows x64 installer and macOS Apple Silicon ZIP from
+the current frontend and regenerated SHA256SUMS. Both packages contain the
+project report button and 57 verified UI assets. The frontend build, 41 frontend
+tests, four desktop tests and packaged macOS login smoke test passed. The Mac ZIP
+integrity test and both checksums passed. Windows installation was not tested.
+The builds are unsigned and use the configured server for PDF generation and
+alert scans. No server deployment or live database writes.
+
+### 2026-11-13 — Update historical Import Centre
+
+Enabled quotation headers/items, historical expense ledger entries and retention
+records for preview and confirmed save. Added current downloadable templates and
+links to existing QS, Finance and HR import screens. Confirmation rechecks source
+keys, record relationships, commercial totals and permissions transactionally.
+Historical accepted quotations preserve source status and leave the project
+budget at its existing value. Project imports use current company identities,
+completion rules and manager assignment history.
+
+Six focused disposable MySQL API tests and five calculation/parser tests passed.
+The optional supplied-workbook parser fixture was skipped. All 41 frontend tests
+and the production build passed. Historical invoices, supplier settlements,
+petty cash, claims, site reports and payroll snapshots still need bulk workflows.
+No live data was imported or deployed.
+
+### 2026-11-18 — Calendar-based vehicle maintenance reminders
+
+New Fleet maintenance reminders default to a three-month interval and seven days
+of advance notice. They require a last completed date and show the next due date
+and days remaining. Existing reminders can be switched from mileage to calendar
+in the edit form. An additive schema update stores calendar settings and the
+existing alert and service-completion workflows use the chosen interval.
+
+Four maintenance unit tests and two focused disposable MySQL API tests passed.
+The 41 frontend tests, production build and diff checks passed. No deployment or
+live data changes were made.
+
+### 2026-11-19 — Select employees for payroll runs
+
+Prepare payroll run now asks who to include: all eligible employees, selected
+payroll groups, or individual employees. Groups include staff, supervisors,
+labour, drivers and Custom. Saved runs retain their selection for recalculation.
+Separate groups can use the same dates while employee overlap checks prevent
+duplicate pay. Existing approved/paid runs remain locked.
+
+Four focused disposable MySQL API tests passed for group selection, overlap
+protection, draft regeneration and company batches. The schema test, 41 frontend
+tests, frontend build and diff checks passed. No deployment or live database writes.

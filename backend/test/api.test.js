@@ -6236,7 +6236,8 @@ test('linked historical templates connect clients contacts projects team and BOQ
  projects.employeeMap={'SOURCE-MANAGER':employee.id,'SOURCE-TEAM':employee.id};projects=(await edit(projects)).body;
  assert.equal(projects.counts.blocked,0,JSON.stringify(projects.rows));assert.equal((await confirm(projects)).status,200);
  const [[project]]=await admin.query(`SELECT p.* FROM ${testDatabase}.projects p JOIN ${testDatabase}.historical_import_links l ON l.target_id=p.id AND l.kind='projects' WHERE l.source_code=?`,[projectCode]);
- assert.equal(Number(project.client_id),Number(clientLink.id));assert.equal(Number(project.company_id),2);assert.equal(project.health,'Completed');assert.equal(Number(project.budget),777);
+ assert.equal(Number(project.client_id),Number(clientLink.id));assert.equal(Number(project.company_id),2);assert.equal(project.health,'Completed');assert.equal(project.site_status,'Completed');assert.equal(Number(project.budget),777);
+ const [[manager]]=await admin.query(`SELECT employee_id FROM ${testDatabase}.project_manager_assignments WHERE project_id=?`,[project.id]);assert.equal(Number(manager.employee_id),Number(employee.id));
  const [[team]]=await admin.query(`SELECT COUNT(*) count FROM ${testDatabase}.project_team WHERE project_id=? AND employee_id=?`,[project.id,employee.id]);assert.equal(Number(team.count),1);
  const boqsBytes=workbook([['boqs',[{BOQ_CODE:boqCode,PROJECT_CODE:projectCode,ORIGINAL_REFERENCE:'Old/reference',TITLE:'Historical BOQ '+('long title '.repeat(24)),VERSION:'Rev 01',STATUS:'Approved',DOCUMENT_DATE:'2024-01-01',APPROVED_DATE:'2024-01-02',DECLARED_TOTAL_LKR:999,SOURCE_FILENAME:'source.pdf',TERMS:'Source terms'}]],['items',[{BOQ_CODE:'WRONG-KEY',LINE_NO:'1.1',CATEGORY:'Material',AREA_SECTION:'Area A',DESCRIPTION:'Long work '+('work detail '.repeat(35)),UNIT:'m3',QUANTITY:2,RATE_LKR:100,AMOUNT_LKR:200,METHOD_STATEMENT:'Method'}]]]);
  let boqs=await check('boqs',boqsBytes);assert.equal(boqs.mode,'linked-workbook');assert.equal(boqs.counts.blocked,2);
@@ -7123,4 +7124,126 @@ test('alert scan refreshes an existing case for an oversized project name', asyn
   assert.equal(alert.refreshed, 1);
   const [[project]] = await admin.query(`SELECT name FROM ${testDatabase}.projects WHERE id=1`);
   assert.equal(project.name, name);
+});
+
+test('commercial historical imports save quotations, expenses and retentions once', async () => {
+  const owner = await login();
+  const store = await login('store@gkuc.lk');
+  const [client] = await admin.query(`INSERT INTO ${testDatabase}.clients (name,type) VALUES ('Commercial fixture client','Organisation')`);
+  await admin.query(`UPDATE ${testDatabase}.projects SET client_id=? WHERE id=1`, [client.insertId]);
+  const [batch] = await admin.query(`INSERT INTO ${testDatabase}.historical_import_batches
+    (kind,filename,checksum,status,preview_json,uploaded_by) VALUES ('projects','fixture.xlsx',REPEAT('a',64),'Imported','{}',1)`);
+  await admin.query(`INSERT INTO ${testDatabase}.historical_import_links (kind,source_code,target_id,batch_id)
+    VALUES ('projects','COMM-P',1,?),('clients','COMM-C',?,?)`, [batch.insertId,client.insertId,batch.insertId]);
+  const role = await call(owner,'POST','/access/roles',{ name:'Historical quotation clerk', permissions:['admin.importCentre','qs.quotation'] });
+  assert.equal(role.status,201);
+  const loginData = { email:'historical.quote.clerk@gkuc.lk', password:'HistoricalCheck!2026' };
+  assert.equal((await call(owner,'POST','/users',{ ...loginData, name:'Historical quotation clerk',roleId:role.body.id })).status,201);
+  const signedIn = await call('', 'POST','/auth/login',loginData);
+  assert.equal(signedIn.status,200);
+  const clerk = signedIn.body.token;
+  const check = async (kind, sheets, token = owner) => {
+    const form = new FormData();
+    form.append('kind', kind);
+    form.append('file', new Blob([writeWorkbook(sheets)]), 'historical.xlsx');
+    const response = await fetch(`${base}/import-centre/dry-check`, { method:'POST', headers:{ authorization:`Bearer ${token}` },body:form });
+    const result = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(result));
+    return result;
+  };
+  const sheet = (name, record) => ({ name, rows:[Object.keys(record),Object.values(record)] });
+  const expense = { EXPENSE_CODE:'COMM-E',PROJECT_CODE:'COMM-P',EXPENSE_DATE:'2025-01-02',SOURCE:'Material',
+    COST_TYPE:'Variation',DESCRIPTION:'Historical material charge',AMOUNT_LKR:125,REFERENCE:'COMM-EXP' };
+  const bad = await check('costs', [sheet('Expenses', { ...expense, COMPANY:'GKRM' })]);
+  assert.equal(bad.counts.blocked, 1);
+  assert.equal((await call(owner,'POST',`/import-centre/batches/${bad.id}/confirm`,{})).status,409);
+  const fixtures = [
+    ['costs',[sheet('Expenses',expense)]],
+    ['retentions',[sheet('Retentions',{ RETENTION_CODE:'COMM-R',PROJECT_CODE:'COMM-P',DESCRIPTION:'Historical retention',
+      AMOUNT_LKR:100,HELD_FROM:'2025-01-02',RELEASE_DATE:'2026-01-02',STATUS:'Partially released',RELEASED_AMOUNT_LKR:20,REMARK:'Original remark' })]],
+    ['quotations',[sheet('Quotation Headers',{ QUOTATION_CODE:'COMM-Q',CLIENT_CODE:'COMM-C',PROJECT_CODE:'COMM-P',COMPANY:'GKUC Construction (Pvt) Ltd',
+      ORIGINAL_REFERENCE:'COMM-QUO',TITLE:'Historical road works',QUOTE_DATE:'2025-01-02',STATUS:'Accepted',ENGAGEMENT:'Direct',SUBTOTAL_LKR:100,TOTAL_LKR:118,VAT_PERCENT:18,SOURCE_FILENAME:'source.pdf' }),
+    sheet('Quotation Items',{ QUOTATION_CODE:'COMM-Q',LINE_NO:1,CATEGORY:'Labour',DESCRIPTION:'Road work',UNIT:'day',QUANTITY:2,RATE_LKR:50,AMOUNT_LKR:100 })]]
+  ];
+  const quoteSheets = fixtures.find(([kind]) => kind === 'quotations')[1];
+  const denied = await check('quotations',quoteSheets,clerk);
+  assert.equal(denied.counts.blocked,1);
+  assert.match(denied.rows[0].errors.join(' '),/qs\.approve/);
+  const ready = await check('quotations',quoteSheets);
+  assert.equal((await call(clerk,'POST',`/import-centre/batches/${ready.id}/confirm`,{})).status,409);
+  for (const [kind,sheets] of fixtures) {
+    const template = await fetch(`${base}/import-centre/templates/${kind}`, { headers:{ authorization:`Bearer ${owner}` } });
+    assert.equal(template.status,200);
+    assert.equal(Buffer.from(await template.arrayBuffer()).subarray(0,2).toString(),'PK');
+    const preview = await check(kind,sheets);
+    assert.equal(preview.counts.create,1,JSON.stringify(preview.rows));
+    const path = `/import-centre/batches/${preview.id}/confirm`;
+    assert.equal((await call(store,'POST',path,{})).status,403);
+    const confirmed = await call(owner,'POST',path,{});
+    assert.equal(confirmed.status,200,JSON.stringify(confirmed.body));
+    assert.equal(confirmed.body.created,1);
+    assert.equal((await call(owner,'POST',path,{})).status,409);
+    assert.equal((await check(kind,sheets)).counts.skip,1);
+  }
+  const [[quoted]] = await admin.query(`SELECT q.status,q.total,i.description FROM ${testDatabase}.quotations_client q
+    JOIN ${testDatabase}.quotation_items i ON i.quotation_id=q.id WHERE q.reference='COMM-QUO'`);
+  assert.deepEqual([quoted.status,Number(quoted.total),quoted.description],['Accepted',118,'Road work']);
+  const [[cost]] = await admin.query(`SELECT cost_type,amount FROM ${testDatabase}.expenses WHERE reference='COMM-EXP'`);
+  assert.deepEqual([cost.cost_type,Number(cost.amount)],['Variation',125]);
+  const [[retention]] = await admin.query(`SELECT released_amount,notes FROM ${testDatabase}.retentions WHERE description='Historical retention'`);
+  assert.deepEqual([Number(retention.released_amount),retention.notes],[20,'Original remark']);
+});
+
+test('fleet calendar reminders persist, notify and restart from completed work', async () => {
+  const owner = await login();
+  const vehicle = await call(owner,'POST','/fleet',{vehicle:'Calendar service vehicle',registration:`CAL-${Date.now()}`,
+    status:'Available',renewal:'Insurance',dueDate:today(),odometer:1000});
+  assert.equal(vehicle.status,201);
+  const url = `/fleet/${vehicle.body.id}`;
+  const path = url + '/maintenance-schedules';
+  const payload = {name:'Calendar service',intervalMonths:3,lastCompletedDate:'2024-01-31',remindBeforeDays:7};
+  assert.equal((await call(owner,'POST',path,{...payload,lastCompletedDate:'2024-02-30'})).status,400);
+  const saved = await call(owner,'POST',path,payload);
+  assert.equal(saved.status,201,JSON.stringify(saved.body));
+  const schedule = async () => (await call(owner,'GET',url)).body.maintenanceSchedules.find(row=>row.id===saved.body.id);
+  assert.equal((await schedule()).nextDate,'2024-04-30');
+  await call(owner,'GET','/bootstrap');
+  const [[alert]] = await admin.query(`SELECT message FROM ${testDatabase}.alert_cases WHERE case_key=?`,[`maintenance:${saved.body.id}:2024-04-30`]);
+  assert.match(alert.message,/2024-04-30/);
+  const work = await call(owner,'POST',url+'/maintenance',{companyId:1,kind:'Service',serviceDate:today(),
+    description:'Calendar service completed',odometer:1000,completedScheduleIds:[saved.body.id]});
+  assert.equal(work.status,201,JSON.stringify(work.body));
+  const upcoming = await schedule();
+  assert.equal(upcoming.lastCompletedDate,today());
+  assert.ok(upcoming.nextDate > today());
+  assert.equal(upcoming.dueSoon,false);
+});
+
+test('payroll groups create separate runs and custom selections cannot double pay employees', async () => {
+  const owner=await login();
+  const ids=[];
+  for (const [index,category] of ['Office employee','Supervisor','Site labourer'].entries()) {
+    const person=await call(owner,'POST','/employees',{code:`GROUP-${index}`,name:`Payroll group ${index}`,
+      joinDate:'2052-01-01',compensationEffectiveFrom:'2052-01-01',payrollCompanyId:1,payrollCategory:category,
+      payBasis:'Daily rate',payFrequency:'Daily',dailyRate:1600,epfEligible:false,etfEligible:false});
+    assert.equal(person.status,201,JSON.stringify(person.body));ids.push(person.body.id);
+  }
+  const period={companyId:1,periodStart:'2052-01-02',periodEnd:'2052-01-02',payFrequency:'Daily'};
+  const staff=await call(owner,'POST','/payroll',{...period,categories:['Office employee']});
+  assert.equal(staff.status,201,JSON.stringify(staff.body));
+  const supervisor=await call(owner,'POST','/payroll',{...period,categories:['Supervisor']});
+  assert.equal(supervisor.status,201,JSON.stringify(supervisor.body));
+  assert.notEqual(staff.body.id,supervisor.body.id);
+  const labour=await call(owner,'POST','/payroll',{...period,employeeIds:[ids[2]]});
+  assert.equal(labour.status,201,JSON.stringify(labour.body));
+  for(const [run,id] of [[staff,ids[0]],[supervisor,ids[1]],[labour,ids[2]]]) {
+    const detail=await call(owner,'GET',`/payroll/${run.body.id}`);
+    assert.deepEqual(detail.body.payslips.map(row=>row.employeeId),[id]);
+  }
+  const rerun=await call(owner,'POST','/payroll',{...period,categories:['Office employee']});
+  assert.equal(rerun.status,201);assert.equal(rerun.body.id,staff.body.id);
+  const conflict=await call(owner,'POST','/payroll',{...period,employeeIds:[ids[0],ids[2]]});
+  assert.equal(conflict.status,409);
+  assert.equal((await call(owner,'POST','/payroll',{...period,employeeIds:[]})).status,400);
+  assert.equal((await call(owner,'POST','/payroll',{...period,employeeIds:[999999]})).status,400);
 });

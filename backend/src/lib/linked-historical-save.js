@@ -1,3 +1,5 @@
+import { projectCompletion } from './project-completion.js';
+import { resolveImportCompany } from './historical-commercial-import.js';
 import {audit,nextReference} from '../db.js';
 import {fail} from './http.js';
 import {clean,inspectLinked,linkKind} from './linked-historical-import.js';
@@ -40,8 +42,12 @@ export async function saveLinked(connection,req,batch,preview){
    if(id){const [project]=await run('SELECT client_id FROM projects WHERE id=?',[id]);if(Number(project?.client_id)!==Number(clientId))throw fail(409,'The selected project belongs to a different client than CLIENT_CODE.');}
    else{
     const [client]=await run('SELECT name FROM clients WHERE id=?',[clientId]);if(!client)throw fail(409,'Linked client no longer exists.');
-    const result=await run(`INSERT INTO projects (name,client,client_id,manager,manager_employee_id,progress,budget,health,stage,site,start_date,end_date,active,company_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-     [clean(d.PROJECT_NAME),client.name,clientId,manager.name,manager.id,Number(d.PROGRESS_PERCENT),Number(d.CURRENT_BUDGET_LKR||0),d.STATUS==='Completed'?'Completed':clean(d.HEALTH),clean(d.STAGE),clean(d.SITE_ADDRESS),d.START_DATE,d.END_DATE||null,d.STATUS==='Archived'?0:1,d.COMPANY==='GKUC Readymix'?2:1]);id=result.insertId;
+    const company = resolveImportCompany(d.COMPANY, checked.context.companies);
+    const state = projectCompletion({ stage: d.STATUS === 'Completed' ? 'Completed' : clean(d.STAGE),
+      health: clean(d.HEALTH), progress: Number(d.PROGRESS_PERCENT) });
+    const result=await run(`INSERT INTO projects (name,client,client_id,manager,manager_employee_id,progress,budget,health,stage,site,start_date,end_date,active,company_id,site_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     [clean(d.PROJECT_NAME),client.name,clientId,manager.name,manager.id,state.progress,Number(d.CURRENT_BUDGET_LKR||0),state.health,state.stage,clean(d.SITE_ADDRESS),d.START_DATE,d.END_DATE||null,d.STATUS==='Archived'?0:1,company.id,state.site_status || 'Active']);id=result.insertId;
+    await run('INSERT INTO project_manager_assignments (project_id,employee_id) VALUES (?,?)',[id,manager.id]);
     if(d.AWARD_REFERENCE&&d.AWARD_DATE)await run('INSERT INTO project_awards (project_id,award_date,reference,notes,recorded_by) VALUES (?,?,?,?,?)',[id,d.AWARD_DATE,clean(d.AWARD_REFERENCE),clean(d.NOTES).slice(0,1000)||null,req.user.id]);
    }
   }else if(type==='team'){

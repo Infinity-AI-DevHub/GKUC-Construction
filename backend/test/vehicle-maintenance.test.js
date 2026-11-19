@@ -24,3 +24,15 @@ test('paused reminders and inactive vehicles do not notify; completions start a 
   assert.equal(reset.nextOdometer, 20100);
   assert.equal(reset.dueSoon, false);
 });
+
+test('calendar maintenance clamps month ends and alerts by days independently of mileage', () => {
+  const schedule = { id: 1, vehicleId: 2, name: 'Calendar service', active: true,
+    intervalMonths: 3, lastCompletedDate: '2024-01-31', remindBeforeDays: 7 };
+  const due = maintenanceDue(schedule, 999999, '2024-04-23');
+  assert.equal(due.nextDate, '2024-04-30');
+  assert.equal(due.daysRemaining, 7);
+  assert.equal(maintenanceReminder(schedule, '2024-04-22'), null);
+  assert.match(maintenanceReminder(schedule, '2024-04-23').message, /7 days remaining/);
+  assert.equal(maintenanceReminder(schedule, '2024-04-30').severity, 'Critical');
+  assert.match(maintenanceReminder(schedule, '2024-05-01').message, /1 day overdue/);
+});

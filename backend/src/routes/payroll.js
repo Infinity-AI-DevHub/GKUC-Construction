@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {activeSpecialRule,specialRates,specialInputFor,operatorPayrollDays} from '../lib/special-pay.js';
 import {attendanceForEmployee,salaryCalculationIssues} from '../lib/payroll-attendance-match.js';
 import { Router } from 'express';
@@ -92,7 +93,7 @@ const policySelect = `SELECT p.id,p.company_id companyId,c.name company,p.effect
  * recorded attendance and approved overtime — rather than re-entered by hand, which is
  * where payroll disputes normally start.
  */
-const select = `SELECT r.id,r.company_id companyId,c.name company,r.reference,r.period_start periodStart,r.period_end periodEnd,r.pay_frequency payFrequency,r.status,
+const select = `SELECT r.id,r.company_id companyId,c.name company,r.reference,r.period_start periodStart,r.period_end periodEnd,r.pay_frequency payFrequency,r.employee_selection employeeSelection,r.status,
   COALESCE((SELECT SUM(net_pay) FROM payslips total_slips WHERE total_slips.run_id=r.id),r.total) total,
   COALESCE((SELECT SUM(employer_cost) FROM payslips total_slips WHERE total_slips.run_id=r.id),0) employerCost,
   u.name createdBy,a.name approvedBy,r.created_at createdAt,
@@ -296,12 +297,19 @@ async function payrollSnapshot(id){
  * Builds a draft from attendance and dated policies. Reviewed OT replaces automatic
  * Office/Site hours; Travel remains a separately approved input.
  */
+const selectionFields = {
+  categories: z.array(z.enum(PAYROLL_CATEGORIES)).min(1).max(PAYROLL_CATEGORIES.length).optional(),
+  employeeIds: z.array(z.number().int().positive()).min(1).max(5000).optional()
+};
+const oneSelection = value => !(value.categories && value.employeeIds);
+const selectionConflict = { message: 'Choose categories or individual employees, using one selection method.' };
+
 router.post('/', auth, permit('hr.payroll'), validate(z.object({
   companyId: z.number().int().positive().default(1),
   periodStart: isoDate,
   periodEnd: isoDate,
-  payFrequency: z.enum(PAY_FREQUENCIES).default('Monthly')
-})), wrap(generatePayroll));
+  payFrequency: z.enum(PAY_FREQUENCIES).default('Monthly'), ...selectionFields
+}).refine(oneSelection, selectionConflict)), wrap(generatePayroll));
 
 export async function generatePayroll(req, res) {
   const { companyId, periodStart, periodEnd, payFrequency } = req.body;
@@ -317,8 +325,8 @@ export async function generatePayroll(req, res) {
 
 router.post('/batch',auth,permit('hr.payroll'),validate(z.object({
   companyIds:z.array(z.number().int().positive()).min(2).max(2).refine(ids=>new Set(ids).size===ids.length,'Select two different companies'),
-  periodStart:isoDate,periodEnd:isoDate,payFrequency:z.enum(PAY_FREQUENCIES).default('Monthly')
-})),wrap(async(req,res)=>{
+  periodStart:isoDate,periodEnd:isoDate,payFrequency:z.enum(PAY_FREQUENCIES).default('Monthly'), ...selectionFields
+}).refine(oneSelection, selectionConflict)),wrap(async(req,res)=>{
   if(req.body.periodEnd<req.body.periodStart)throw fail(400,'The period end must fall after its start');
   const ids=await transaction(async connection=>{
     const runs=[];
@@ -341,16 +349,25 @@ async function buildPayroll(req,connection){
       const getOne=async(sql,params=[])=>(await query(sql,params))[0];
       const payrollCompany=await getOne('SELECT id,name FROM companies WHERE id=? FOR UPDATE',[companyId]);
       if(!payrollCompany)throw fail(404,'Payroll company not found.');
+      let requestedEmployees;
+      if (req.body.employeeIds) {
+        const ids = [...new Set(req.body.employeeIds)];
+        requestedEmployees = await query(`SELECT id,payroll_company_id FROM visible_employees WHERE id IN (${ids.map(()=>'?').join(',')})`, ids);
+        const companies = req.body.companyIds || [companyId];
+        if (requestedEmployees.length !== ids.length || requestedEmployees.some(row=>!companies.includes(Number(row.payroll_company_id))))
+          throw fail(400,'Selected employees must belong to the chosen payroll companies.');
+      }
+      const selection = req.body.employeeIds ? { employeeIds: requestedEmployees.filter(row=>Number(row.payroll_company_id)===Number(companyId)).map(row=>Number(row.id)).sort((a,b)=>a-b) }
+        : req.body.categories ? { categories: [...new Set(req.body.categories)].sort() } : null;
+      const selectionKey = selection ? createHash('sha256').update(JSON.stringify(selection)).digest('hex') : 'all';
       const overlaps=await query('SELECT * FROM payroll_runs WHERE company_id=? AND pay_frequency=? AND period_start<=? AND period_end>=? FOR UPDATE',[companyId,payFrequency,periodEnd,periodStart]);
-      const existing=overlaps.find(row=>row.period_start===periodStart&&row.period_end===periodEnd);
-      const conflicting=overlaps.filter(row=>row.id!==existing?.id);
-      if(conflicting.length)throw fail(409,`Overlapping payroll: ${conflicting.map(row=>`${row.reference} (${payrollCompany.name}, ${row.pay_frequency}, ${row.period_start} to ${row.period_end}, ${row.status})`).join('; ')}. Delete the named Draft payroll or use its exact dates to recalculate it. Approved/paid payroll cannot be deleted.`);
+      const existing=overlaps.find(row=>row.period_start===periodStart&&row.period_end===periodEnd&&row.selection_key===selectionKey);
       if(existing)await clearDraftPayroll(connection,existing,req.user.id,'REGENERATE',req.ip);
 
       const policy = await getOne('SELECT * FROM payroll_policies WHERE archive_key=0 AND company_id=? AND effective_from<=? ORDER BY effective_from DESC,id DESC LIMIT 1', [companyId, periodEnd]);
       if (!policy) throw fail(409,'Configure a payroll policy for this period first');
 
-      const employees = await query(`SELECT e.id,e.code,e.name,e.designation,e.department_id,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,e.payroll_category,e.payroll_company_id,e.worker_type,
+      let employees = await query(`SELECT e.id,e.code,e.name,e.designation,e.department_id,e.basic_salary,e.daily_rate,e.weekly_rate,e.pay_basis,e.pay_frequency,e.payroll_category,e.payroll_company_id,e.worker_type,
           e.epf_eligible,e.etf_eligible,e.contribution_start_date,e.join_date,e.employment_type,e.allowance_eligibility,
           (SELECT COALESCE(SUM(GREATEST(0,ABS(pe.amount)-COALESCE(
               (SELECT SUM(sar.amount) FROM salary_advance_recoveries sar WHERE sar.entry_id=pe.id),0))),0)
@@ -361,6 +378,15 @@ async function buildPayroll(req,connection){
           AND COALESCE(e.compensation_effective_from,e.join_date)<=? ORDER BY e.code FOR UPDATE`,
       [periodEnd, companyId, payFrequency, periodEnd]);
 
+      if (selection?.categories) employees = employees.filter(row => selection.categories.includes(row.payroll_category));
+      if (selection?.employeeIds) {
+        const requested = selection.employeeIds;
+        const eligible = new Set(employees.map(row => Number(row.id)));
+        const companySelection = requestedEmployees.filter(row => Number(row.payroll_company_id) === Number(companyId));
+        if (companySelection.some(row => !eligible.has(Number(row.id))))
+          throw fail(400,'A selected employee is ineligible for this payment frequency or period.');
+        employees = employees.filter(row => requested.includes(Number(row.id)));
+      }
       if (!employees.length) throw fail(409,`No active ${payFrequency.toLowerCase()}-paid employees fall inside this period`);
       const employeeNames=await query('SELECT id,name FROM employees');
       const departments=await query('SELECT id,name FROM departments');
@@ -438,8 +464,8 @@ async function buildPayroll(req,connection){
 
       const reference = existing?.reference || await nextReference('PAY', 'payroll_runs');
       const [run] = existing ? [{insertId:existing.id}] : await connection.execute(
-        'INSERT INTO payroll_runs (company_id,reference,period_start,period_end,pay_frequency,policy_id,created_by) VALUES (?,?,?,?,?,?,?)',
-        [companyId, reference, periodStart, periodEnd, payFrequency, policy.id, req.user.id]);
+        'INSERT INTO payroll_runs (company_id,reference,period_start,period_end,pay_frequency,policy_id,created_by,selection_key,employee_selection) VALUES (?,?,?,?,?,?,?,?,?)',
+        [companyId, reference, periodStart, periodEnd, payFrequency, policy.id, req.user.id, selectionKey, selection ? JSON.stringify(selection) : null]);
 
       let total = 0;
       for (const employee of employees) {

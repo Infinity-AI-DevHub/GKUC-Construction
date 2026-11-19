@@ -1,3 +1,4 @@
+import { resolveImportCompany } from './historical-commercial-import.js';
 import {readWorkbook,serialToDate} from './xlsx.js';
 import {query} from '../db.js';
 import {fail} from './http.js';
@@ -32,10 +33,11 @@ export function readLinkedWorkbook(kind,buffer){
  if(!rows.length)throw fail(422,'No records found in the template.');if(rows.length>3000)throw fail(422,'Import up to 3,000 source rows at a time.');return rows;
 }
 export async function linkedContext(run=query){
- const [clients,projects,employees,categories]=await Promise.all([
+ const [clients,projects,employees,categories,companies]=await Promise.all([
   run('SELECT id,name,type FROM clients ORDER BY name'),run('SELECT id,name,company_id companyId,client_id clientId FROM projects ORDER BY name'),
-  run("SELECT id,code,name FROM visible_employees WHERE status<>'Left' ORDER BY name"),run("SELECT value FROM option_values WHERE list_key='boq.category' AND active=1 ORDER BY sort_order,id")
- ]);return {clients,projects,employees,categories:categories.map(r=>r.value)};
+  run("SELECT id,code,name FROM visible_employees WHERE status<>'Left' ORDER BY name"),run("SELECT value FROM option_values WHERE list_key='boq.category' AND active=1 ORDER BY sort_order,id"),
+  run('SELECT id,code,name FROM companies WHERE active=1')
+ ]);return {clients,projects,employees,companies,categories:categories.map(r=>r.value)};
 }
 export async function inspectLinked(kind,source,{employeeMap={}}={},run=query){
  const context=await linkedContext(run),links=await run('SELECT kind,source_code sourceCode,target_id targetId FROM historical_import_links');
@@ -44,7 +46,7 @@ export async function inspectLinked(kind,source,{employeeMap={}}={},run=query){
  const seen=new Set(),rows=source.map(record=>{
   const spec=specs[record.type];if(!spec||!groups[kind].includes(record.type))throw fail(400,'Unexpected sheet in the review.');
   const d=Object.fromEntries(spec.fields.map(k=>{const value=record.data?.[k]??'';return [k,dateFields.has(k)?sourceDate(value):typeof value==='string'?value.trim():value];}));
-  if(record.type==='projects'&&clean(d.COMPANY).toLowerCase().replaceAll(' ','')==='gkucreadymix')d.COMPANY='GKUC Readymix';
+  const company = record.type === 'projects' ? resolveImportCompany(d.COMPANY, context.companies) : null;
   const code=recordCode(record.type,d),errors=[],warnings=[];
   for(const k of spec.required)if(!clean(d[k]))errors.push(`${k} is required.`);
   if(code.length>120)errors.push('The combined source key must not exceed 120 characters.');
@@ -65,10 +67,10 @@ export async function inspectLinked(kind,source,{employeeMap={}}={},run=query){
   for(const field of ['BUSINESS_REGISTRATION_NO','TIN','VAT_NUMBER'])if(field in d)max(field,100);
   if('EMAIL'in d&&clean(d.EMAIL)&&!/^\S+@\S+\.\S+$/.test(clean(d.EMAIL)))errors.push('EMAIL is not valid.');
   if(record.type==='projects'){
-   if(!['GKUC Construction','GKUC Readymix'].includes(clean(d.COMPANY)))errors.push('Choose GKUC Construction or GKUC Readymix.');
+   if(!company)errors.push('Choose GKUC Construction or GKUC Readymix.');
    if(!['Current','Completed','Archived'].includes(clean(d.STATUS)))errors.push('STATUS must be Current, Completed or Archived.');
    if(!['On track','Watch','At risk'].includes(clean(d.HEALTH)))errors.push('HEALTH must be On track, Watch or At risk.');
-   number('PROGRESS_PERCENT',{max:100});for(const f of ['CURRENT_BUDGET_LKR','CONTRACT_VALUE_LKR'])if(clean(d[f]))number(f);
+   number('PROGRESS_PERCENT',{max:100});if(!Number.isInteger(Number(d.PROGRESS_PERCENT)))errors.push('PROGRESS_PERCENT must be a whole number.');for(const f of ['CURRENT_BUDGET_LKR','CONTRACT_VALUE_LKR'])if(clean(d[f]))number(f);
    if(!employee(d.PROJECT_MANAGER_EMPLOYEE_CODE))errors.push(`Map project manager ${clean(d.PROJECT_MANAGER_EMPLOYEE_CODE)} to a saved employee.`);
    if(d.START_DATE&&d.END_DATE&&d.END_DATE<d.START_DATE)errors.push('END_DATE precedes START_DATE.');max('SITE_ADDRESS',180);max('STAGE',150);max('AWARD_REFERENCE',120);
   }
@@ -90,10 +92,10 @@ export async function inspectLinked(kind,source,{employeeMap={}}={},run=query){
   if(existing)targetId=Number(existing.targetId);
   if(targetId&&['clients','projects'].includes(record.type)){
    const target=context[record.type].find(r=>Number(r.id)===targetId);if(!target)errors.push('Selected existing record no longer exists.');
-   if(record.type==='projects'&&target&&Number(target.companyId)!==(clean(d.COMPANY)==='GKUC Readymix'?2:1))errors.push('Selected project belongs to another company.');
+   if(record.type==='projects'&&target&&Number(target.companyId)!==Number(company?.id))errors.push('Selected project belongs to another company.');
   }else if(record.targetId&&!existing)errors.push('Existing record selection is only supported for clients and projects.');
   if(!existing&&!targetId&&record.type==='clients'&&context.clients.some(c=>c.name.toLowerCase()===clean(d.CLIENT_NAME).toLowerCase()&&c.type===(clean(d.CLIENT_TYPE)==='Individual'?'Private':'Organisation')))errors.push('A matching client exists. Select it to link this source code.');
-  if(!existing&&!targetId&&record.type==='projects'&&context.projects.some(p=>p.name.toLowerCase()===clean(d.PROJECT_NAME).toLowerCase()&&Number(p.companyId)===(clean(d.COMPANY)==='GKUC Readymix'?2:1)))errors.push('A matching project exists. Select it to link this source code.');
+  if(!existing&&!targetId&&record.type==='projects'&&context.projects.some(p=>p.name.toLowerCase()===clean(d.PROJECT_NAME).toLowerCase()&&Number(p.companyId)===Number(company?.id)))errors.push('A matching project exists. Select it to link this source code.');
   return {type:record.type,sheet:spec.sheet,row:record.row,data:d,code,targetId,errors,warnings,action:existing?'skip':targetId?'link':'create'};
  });
  const hasParent=(type,code)=>rows.some(r=>r.type===type&&r.code===clean(code))||linked(type,clean(code));
